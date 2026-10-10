@@ -284,9 +284,11 @@ fn execute(
             }
             7 => s.volume = (s.volume + step as f32 * 0.1).clamp(0., 1.),
             8 => {
-                let outfit = s.outfit;
-                *s = Settings::default();
-                s.outfit = outfit;
+                *s = Settings {
+                    outfit: s.outfit,
+                    best: s.best,
+                    ..default()
+                };
             }
             9 => {
                 exit.write(AppExit::Success);
@@ -589,7 +591,7 @@ fn render(
         m.notice.clone()
     } else if m.page == Page::Controls || m.page == Page::Wardrobe {
         format!(
-            "Up / Down / D-pad: select | Enter / A: {}\n{}-{} of {}",
+            "Scroll / arrows / D-pad: select | Enter / A: {}\n{}-{} of {}",
             if m.page == Page::Wardrobe {
                 "wear"
             } else {
@@ -601,7 +603,7 @@ fn render(
         )
     } else {
         format!(
-            "Up / Down / D-pad: select | Enter / A: choose\nLeft / Right: change | Mouse: choose\n{}",
+            "Scroll / arrows / D-pad: select | Enter / A: choose\nLeft / Right: change | Mouse: choose\n{}",
             assets.status
         )
     };

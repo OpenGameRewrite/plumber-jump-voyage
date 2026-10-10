@@ -23,7 +23,7 @@ procedural character and scenery. Choose **Let's explore** to begin. The pause
 menu includes a wardrobe with a live preview, camera sensitivity, pitch
 inversion, sound volume and saved bindings. Red map lines, white selection bars
 and a gold wardrobe frame the original course and character.
-Menus accept mouse clicks, arrow keys and gamepads.
+Menus accept mouse clicks, wheel scrolling, arrow keys and gamepads.
 
 ## Controls
 

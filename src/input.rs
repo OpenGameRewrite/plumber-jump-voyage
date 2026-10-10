@@ -1,4 +1,7 @@
-use bevy::{input::mouse::AccumulatedMouseMotion, prelude::*};
+use bevy::{
+    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    prelude::*,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -151,6 +154,7 @@ pub fn read(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
     pads: Query<(Entity, &Gamepad)>,
     settings: Res<Settings>,
     time: Res<Time<Real>>,
@@ -185,6 +189,9 @@ pub fn read(
         });
     f.nav =
         keys.just_pressed(KeyCode::ArrowDown) as i32 - keys.just_pressed(KeyCode::ArrowUp) as i32;
+    if menu.open && scroll.delta.y != 0. {
+        f.nav -= scroll.delta.y.signum() as i32;
+    }
     f.step = keys.just_pressed(KeyCode::ArrowRight) as i32
         - keys.just_pressed(KeyCode::ArrowLeft) as i32;
     f.confirm = keys.just_pressed(KeyCode::Enter);
@@ -319,6 +326,7 @@ pub fn self_check() {
     world.insert_resource(ButtonInput::<KeyCode>::default());
     world.insert_resource(ButtonInput::<MouseButton>::default());
     world.insert_resource(AccumulatedMouseMotion::default());
+    world.insert_resource(AccumulatedMouseScroll::default());
     world.insert_resource(Settings::default());
     world.insert_resource(Time::<Real>::default());
     world.insert_resource(FrameInput::default());
@@ -356,6 +364,10 @@ pub fn self_check() {
     assert!(!o.jump_held && o.throw_pressed && o.throw_held);
     world.resource_mut::<crate::ui::Menu>().open = true;
     world.run_system(system).unwrap();
+    assert_eq!(world.resource::<FrameInput>().nav, 0);
+    world.resource_mut::<AccumulatedMouseScroll>().delta.y = -1.;
+    world.run_system(system).unwrap();
+    assert_eq!(world.resource::<FrameInput>().nav, 1);
     assert_eq!(world.resource::<Orders>().direction, Vec2::ZERO);
     assert!(!world.resource::<Orders>().throw_pressed);
     world.resource_mut::<crate::ui::Menu>().open = false;
