@@ -3,6 +3,7 @@
 !/.gitignore
 !/Cargo.toml
 !/Cargo.lock
+!/rust-toolchain.toml
 !/LICENSE
 !/README.md
 !/AGENTS.md
@@ -13,6 +14,7 @@
 /tools/*
 !/tools/*.py
 !/tools/*.ps1
+!/tools/*.cs
 !/docs/
 /docs/*
 !/docs/*.md

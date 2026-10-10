@@ -7,7 +7,7 @@ license = "MIT"
 
 [features]
 default = []
-local-assets = []
+local-assets = ["bevy/bevy_audio", "bevy/wav"]
 
 [dependencies]
 bevy = { version = "=0.20.0", default-features = false, features = ["3d", "ui", "bevy_gilrs", "bevy_gltf", "png", "x11", "wayland", "default_font", "tonemapping_luts"] }

@@ -1,0 +1,152 @@
+"""Convert locally extracted Odyssey outfits using a separately installed Toolbox adapter."""
+import argparse
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import shutil
+import extract
+import importlib.util
+
+spec=importlib.util.spec_from_file_location('pack',Path(__file__).with_name('pack-glb.py'))
+packer=importlib.util.module_from_spec(spec);spec.loader.exec_module(packer)
+
+def byml(data):
+    """Read the small BYML dictionaries used by local costume metadata."""
+    if data[:2] not in (b'YB',b'BY'):raise ValueError('Expected BYML')
+    endian='<' if data[:2]==b'YB' else '>'
+    def u32(offset):return struct.unpack_from(endian+'I',data,offset)[0]
+    def count(offset):return int.from_bytes(data[offset+1:offset+4],'little' if endian=='<' else 'big')
+    def strings(offset):
+        if not offset:return []
+        if data[offset]!=0xc2:raise ValueError('Expected BYML string table')
+        result=[]
+        for i in range(count(offset)):
+            start=offset+u32(offset+4+i*4);end=data.index(0,start)
+            result.append(data[start:end].decode('utf-8'))
+        return result
+    keys=strings(u32(4));values=strings(u32(8))
+    def value(kind,offset,depth):
+        if depth>32:raise ValueError('BYML nesting too deep')
+        v=u32(offset)
+        if kind in (0xc0,0xc1):return node(v,depth+1)
+        if kind==0xa0:return values[v]
+        if kind==0xd0:return bool(v)
+        if kind==0xd1:return struct.unpack_from(endian+'i',data,offset)[0]
+        if kind==0xd2:return struct.unpack_from(endian+'f',data,offset)[0]
+        if kind==0xd3:return v
+        if kind==0xff:return None
+        raise ValueError(f'Unsupported BYML value type {kind:x}')
+    def node(offset,depth):
+        n=count(offset);kind=data[offset]
+        if kind==0xc1:
+            result={}
+            for i in range(n):
+                off=offset+4+i*8
+                key=int.from_bytes(data[off:off+3],'little' if endian=='<' else 'big')
+                result[keys[key]]=value(data[off+3],off+4,depth)
+            return result
+        if kind==0xc0:
+            start=(offset+4+n+3)&~3
+            return [value(data[offset+4+i],start+i*4,depth) for i in range(n)]
+        raise ValueError('Expected BYML container')
+    return node(u32(12),0)
+
+def archive(path):return dict(extract.sarc(extract.yaz0(path.read_bytes())))
+
+def self_check():
+    # One real dictionary node with a string and signed integer, in both byte orders.
+    for endian,magic in (('<',b'YB'),('>',b'BY')):
+        table=lambda names: b'\xc2'+len(names).to_bytes(3,'little' if endian=='<' else 'big')+struct.pack(endian+'I'*len(names),*(4+4*len(names)+sum(len(n)+1 for n in names[:i]) for i in range(len(names))))+b''.join(n+b'\0' for n in names)
+        keys=table([b'name',b'value']);values=table([b'explorer'])
+        root=16+len(keys)+len(values)
+        raw=magic+struct.pack(endian+'HIII',3,16,16+len(keys),root)+keys+values
+        raw+=b'\xc1'+(2).to_bytes(3,'little' if endian=='<' else 'big')
+        raw+=(0).to_bytes(3,'little' if endian=='<' else 'big')+b'\xa0'+struct.pack(endian+'I',0)
+        raw+=(1).to_bytes(3,'little' if endian=='<' else 'big')+b'\xd1'+struct.pack(endian+'i',-7)
+        assert byml(raw)=={'name':'explorer','value':-7}
+    try:byml(b'bad')
+    except ValueError:pass
+    else:raise AssertionError('Invalid metadata accepted')
+    print('Outfit metadata checks passed')
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--adapter',type=Path,default=extract.ROOT/'local/converter/convert.exe')
+    p.add_argument('--romfs',type=Path,default=extract.ROOT/'local/romfs')
+    p.add_argument('--outfit',action='append',help='Archive name, e.g. Mario or MarioAloha; repeat to select several')
+    p.add_argument('--list',action='store_true')
+    p.add_argument('--inspect',action='store_true')
+    p.add_argument('--force',action='store_true',help='Regenerate existing local GLBs')
+    p.add_argument('--self-check',action='store_true')
+    a=p.parse_args()
+    if a.self_check:self_check();return
+    candidates={}
+    paths=[a.romfs/'ObjectData'/f'{n}.szs' for n in a.outfit] if a.outfit else sorted((a.romfs/'ObjectData').glob('Mario*.szs'))
+    for file in paths:
+        files=archive(file)
+        if 'InitPartsFixInfoHandL.byml' in files and 'InitSubActor.byml' in files:candidates[file.stem]=files
+    if a.list:print('\n'.join(candidates));return
+    names=a.outfit or list(candidates)
+    if a.inspect:
+        for name in names:
+            print(name)
+            for key in ('InitCostumeInfoBody.byml','InitSubActor.byml'):
+                if key in candidates[name]:print(key,json.dumps(byml(candidates[name][key]),indent=2))
+        return
+    if not a.adapter.is_file():raise ValueError('Build the adapter with tools/build-converter.ps1 first')
+    objects=extract.ROOT/'local/objects';exports=extract.ROOT/'local/outfits'
+    exports.mkdir(parents=True,exist_ok=True)
+    def model(name):
+        file=objects/name/(name+'.bfres')
+        if not file.is_file():raise ValueError(f'Missing extracted model {name}; run extract.py first')
+        return file
+    for name in names:
+        if name not in candidates:raise ValueError(f'No body outfit named {name}; use --list')
+        files=candidates[name];parts=[]
+        head=name+'Head' if (objects/(name+'Head')).is_dir() else 'MarioHead'
+        parts.append(head)
+        for item in byml(files['InitSubActor.byml']).get('CreatorList',[]):
+            if item.get('ClassName')=='PartsModel' and item.get('ModelName'):
+                parts.append(item['ModelName'])
+        # Texture-only archives are not independent meshes.
+        for part in [name+'BodyTexture',head+'Texture']+[p.replace('HandL','HandTexture').replace('HandR','HandTexture') for p in parts if 'Hand' in p]:
+            if (objects/part).is_dir():parts.append(part)
+        parts=list(dict.fromkeys(parts))
+        output=exports/(name+'.glb')
+        base=exports/'Mario.glb'
+        if output.is_file() and not a.force:
+            if not extract.glb_json(output).get('animations') and base.is_file():packer.pack(output.with_suffix('.gltf'),base)
+            continue
+        animation=['--geometry-only'] if name!='Mario' and base.is_file() else [str(model('PlayerAnimation'))]
+        command=[str(a.adapter.resolve()),str(model(name)),str(output)]+animation+['--part='+str(model(part)) for part in parts]
+        log=output.with_suffix('.log')
+        with log.open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
+        if result.returncode:raise ValueError(f'{name} conversion failed; details in {log}')
+        packer.pack(output.with_suffix('.gltf'),base if animation==['--geometry-only'] else None)
+    caps=exports/'caps';caps.mkdir(exist_ok=True)
+    cap_output=extract.ROOT/'assets/local/caps';cap_output.mkdir(parents=True,exist_ok=True)
+    for name in names:
+        cap=name+'Cap' if (objects/(name+'Cap')).is_dir() else 'MarioCap'
+        output=caps/(cap+'.glb')
+        if not output.is_file() or a.force:
+            with output.with_suffix('.log').open('w',encoding='utf-8') as log:
+                texture=cap.removesuffix('Cap')+'HeadTexture'
+                if not (objects/texture).is_dir():texture='MarioHeadTexture'
+                result=subprocess.run([str(a.adapter.resolve()),str(model(cap)),str(output),'--geometry-only','--part='+str(model(texture))],stdout=log,stderr=subprocess.STDOUT)
+            if result.returncode:raise ValueError(f'{cap} conversion failed; see {output.with_suffix(".log")}')
+            packer.pack(output.with_suffix('.gltf'))
+        shutil.copyfile(output,cap_output/output.name)
+    eyes=caps/'CapManHeroEyes.glb'
+    if not eyes.is_file() or a.force:
+        with eyes.with_suffix('.log').open('w',encoding='utf-8') as log:
+            result=subprocess.run([str(a.adapter.resolve()),str(model('CapManHeroEyes')),str(eyes),'--geometry-only'],stdout=log,stderr=subprocess.STDOUT)
+        if result.returncode:raise ValueError('Cap eyes conversion failed; see '+str(eyes.with_suffix('.log')))
+        packer.pack(eyes.with_suffix('.gltf'))
+    shutil.copyfile(eyes,cap_output/eyes.name)
+    extract.install_exports(exports,extract.ROOT/'assets/local',0.012,3.141592653589793)
+
+if __name__=='__main__':
+    try:main()
+    except (ValueError,OSError,KeyError,IndexError,struct.error) as e:raise SystemExit(f'Outfit conversion stopped: {e}')
