@@ -1,6 +1,7 @@
 // Bevy system parameters declare ECS access directly; keep their query filters explicit.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod fx;
 mod input;
 mod local_assets;
 mod movement;
@@ -17,9 +18,10 @@ fn main() {
         input::self_check();
         ui::self_check();
         local_assets::self_check();
+        fx::self_check();
         #[cfg(feature = "local-assets")]
         sound::self_check();
-        println!("Movement, collision, input and local asset checks passed.");
+        println!("Movement, collision, input, effects and local asset checks passed.");
         return;
     }
     let mut app = App::new();
@@ -47,6 +49,7 @@ fn main() {
         world::plugin,
         ui::plugin,
         local_assets::plugin,
+        fx::plugin,
     ));
     #[cfg(feature = "local-assets")]
     app.add_plugins(sound::plugin);

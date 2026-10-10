@@ -1,5 +1,5 @@
 use crate::{
-    input::{ACTIONS, FrameInput, Orders, Settings},
+    input::{ACTIONS, FrameInput, Orders, Settings, act, label},
     movement::Player,
     world::Progress,
 };
@@ -29,6 +29,8 @@ pub struct Menu {
     capture: bool,
     cooldown: f32,
     pub notice: String,
+    /// Last input device, so hints show the right buttons.
+    pub pad: bool,
 }
 impl Default for Menu {
     fn default() -> Self {
@@ -45,6 +47,7 @@ impl Default for Menu {
             capture: false,
             cooldown: 0.,
             notice: String::new(),
+            pad: false,
         }
     }
 }
@@ -208,7 +211,7 @@ fn spawn(mut commands: Commands) {
             .with_children(|p| {
                 p.spawn(text("SUNBREAK TERRACE", 19., INK));
                 p.spawn(text(
-                    "[ L ] Select    [ B ] Back    [ A ] Confirm / Enter",
+                    "Stick / arrows / wheel: select     A / Enter: confirm     B / Esc: back",
                     19.,
                     Color::srgb(0.58, 0.50, 0.13),
                 ));
@@ -263,7 +266,7 @@ fn execute(
             }
             2 => {
                 m.page = Page::Wardrobe;
-                m.selected = s.outfit.min(2 + assets.outfits.len());
+                m.selected = assets.row(s.outfit);
                 m.offset = m.selected.saturating_sub(8);
             }
             3 => {
@@ -313,7 +316,10 @@ fn execute(
         }
         Page::Wardrobe => {
             if index < 3 + assets.outfits.len() {
-                s.outfit = index;
+                s.outfit = assets.slot(index);
+                if !assets.outfits.is_empty() {
+                    s.local_outfit = Some(s.outfit);
+                }
             } else {
                 m.page = Page::Main;
                 m.selected = 2;
@@ -353,8 +359,18 @@ fn handle(
         m.open = true;
         *orders = Orders::default();
     }
+    if frame.pad {
+        m.pad = true;
+    } else if frame.raw.as_ref().is_some_and(|r| r.0 == 0) {
+        m.pad = false;
+    }
     if m.capture {
-        if frame.back {
+        // Only the keyboard Escape cancels, so every pad button can be bound.
+        if frame
+            .raw
+            .as_ref()
+            .is_some_and(|r| r.0 == 0 && r.1 == "Escape")
+        {
             m.capture = false;
         } else if m.cooldown == 0.
             && let Some((device, ref name)) = frame.raw
@@ -372,7 +388,7 @@ fn handle(
         return;
     }
     if m.cooldown == 0.
-        && (frame.edge[15] || m.open && frame.back || keys.just_pressed(KeyCode::Escape))
+        && (frame.edge[act::PAUSE] || m.open && frame.back || keys.just_pressed(KeyCode::Escape))
     {
         if m.open && m.page != Page::Main {
             m.page = Page::Main;
@@ -499,15 +515,7 @@ fn render(
     for mut color in &mut menu_ink {
         color.0 = if m.page == Page::Wardrobe { INK } else { PAPER };
     }
-    let outfit = if s.outfit < 3 {
-        ["Terrace explorer", "Sunset explorer", "Midnight explorer"][s.outfit].to_owned()
-    } else {
-        assets
-            .outfits
-            .get(s.outfit - 3)
-            .map(|o| o.name.clone())
-            .unwrap_or_else(|| "Unavailable outfit".into())
-    };
+    let outfit = assets.name(s.outfit);
     let main = vec![
         if m.begun {
             "Resume exploring".into()
@@ -549,10 +557,10 @@ fn render(
             Page::Controls => {
                 if i < ACTIONS.len() {
                     format!(
-                        "{}   {} / {}",
+                        "{}   |   {}   |   {}",
                         ACTIONS[i].0,
-                        s.bindings[i][0].replace("Key", ""),
-                        s.bindings[i][1]
+                        label(&s.bindings[i][0], 0),
+                        label(&s.bindings[i][1], 1)
                     )
                 } else if i == ACTIONS.len() {
                     "Restore default bindings".into()
@@ -562,16 +570,16 @@ fn render(
             }
             Page::Guide => "Back to voyage".into(),
             Page::Wardrobe => {
-                let name = if i < 3 {
-                    ["Terrace explorer", "Sunset explorer", "Midnight explorer"][i].to_owned()
+                if i < 3 + assets.outfits.len() {
+                    let slot = assets.slot(i);
+                    format!(
+                        "{} {}",
+                        if slot == s.outfit { "[ON]" } else { "    " },
+                        assets.name(slot)
+                    )
                 } else {
-                    assets
-                        .outfits
-                        .get(i - 3)
-                        .map(|o| o.name.clone())
-                        .unwrap_or_else(|| "Back to voyage".into())
-                };
-                format!("{} {name}", if i == s.outfit { "[ON]" } else { "    " })
+                    "Back to voyage".into()
+                }
             }
         };
     }
@@ -582,24 +590,24 @@ fn render(
     };
     help.0 = if m.capture {
         format!(
-            "Press a key, mouse button or gamepad button for {}. Escape / B cancels. Duplicate bindings swap.",
+            "Press a key, mouse button or gamepad button for {}. Escape cancels. A binding already in use moves to the old one.",
             ACTIONS[m.selected].0
         )
     } else if m.page == Page::Guide {
-        "Jump then jump on landing for double / triple.\nCrouch + jump: long jump while moving, backflip at rest. Turn sharply + jump: sideflip.\nCrouch in air: pound. Jump on impact: pound jump.\nCrouch + throw: roll on ground, dive in air. E boosts a roll. Release crouch + throw cancels.\nHold a throw, then dive onto the cap to bounce. Run into a held cap to vault.\nQ / F / C: up / down / spin throws. E homes.\nV + jump: spin jump. Jump while wall sliding.\nApproach a ledge to hang. Jump climbs up; crouch drops. Poles: forward / back to climb.\nWater: jump rises, crouch dives, throw dashes.\nCollect 15 sparks and hit all 3 cap targets.".into()
+        guide(&s, m.pad)
     } else if !m.notice.is_empty() {
         m.notice.clone()
-    } else if m.page == Page::Controls || m.page == Page::Wardrobe {
+    } else if m.page == Page::Controls {
         format!(
-            "Scroll / arrows / D-pad: select | Enter / A: {}\n{}-{} of {}",
-            if m.page == Page::Wardrobe {
-                "wear"
-            } else {
-                "rebind"
-            },
+            "Action   |   keyboard & mouse   |   gamepad (Switch names by position: B = bottom, A = right)\nConfirm to rebind. {}-{} of {}",
             m.offset + 1,
             (m.offset + 9).min(count(m.page, assets.outfits.len())),
             count(m.page, assets.outfits.len())
+        )
+    } else if m.page == Page::Wardrobe {
+        format!(
+            "{}\nOriginal outfits come from your own game data; explorers are the ROMless originals.",
+            assets.status
         )
     } else {
         format!(
@@ -608,28 +616,77 @@ fn render(
         )
     };
     hud.0 = format!(
-        "SUN SPARKS  {:02} / 15     CAP TARGETS  {} / 3\n{}   |   {:.1} m/s   |   {:02}:{:04.1}",
+        "SUN SPARKS  {:02} / 15     CAP TARGETS  {} / 3     {:02}:{:04.1}\n{}",
         progress.gems.len(),
         progress.targets.len(),
-        p.mode.label(),
-        p.vel.with_y(0.).length(),
         (progress.time / 60.) as u32,
-        progress.time % 60.
+        progress.time % 60.,
+        p.mode.label().to_uppercase(),
     );
+    let k = |a: usize| {
+        if m.pad {
+            label(&s.bindings[a][1], 1)
+        } else {
+            label(&s.bindings[a][0], 0)
+        }
+    };
     bottom.0 = if progress.message_time > 0. {
         progress.message.clone()
     } else if p.pos.z > 19. {
-        "TIDAL POOL  |  Jump to rise | Crouch to dive | Throw to swim fast".into()
+        format!(
+            "TIDAL POOL  |  {}: swim up   {}: dive down   {}: swim dash",
+            k(act::JUMP),
+            k(act::CROUCH),
+            k(act::THROW)
+        )
     } else if p.pos.z < -19. {
-        "SKY STEPS  |  Chain long jump then held cap then dive then bounce then dive".into()
+        format!(
+            "SKY STEPS  |  Cap jump: jump, {}, then {} + {} into the cap",
+            k(act::THROW),
+            k(act::CROUCH),
+            k(act::THROW)
+        )
     } else if p.pos.x > 7. {
-        "WALL GARDEN  |  Slide, jump between walls, grab the ledge".into()
+        format!(
+            "WALL GARDEN  |  Slide down a wall, {} to kick off, grab ledges",
+            k(act::JUMP)
+        )
     } else if p.pos.x < -20. {
-        "FLOATING WALK  |  Moving platforms | Far island sets your checkpoint".into()
+        "FLOATING WALK  |  Moving platforms; the far island is a checkpoint".into()
     } else {
-        "SUNBREAK TERRACE  |  Space / A: jump | Ctrl / LT + throw: roll or dive | Esc / Start: menu"
-            .into()
+        format!(
+            "SUNBREAK TERRACE  |  Jump {}   Crouch {}   Cap {}   Menu {}",
+            k(act::JUMP),
+            k(act::CROUCH),
+            k(act::THROW),
+            k(act::PAUSE)
+        )
     };
+}
+fn guide(s: &Settings, pad: bool) -> String {
+    let k = |a: usize| {
+        if pad {
+            label(&s.bindings[a][1], 1)
+        } else {
+            label(&s.bindings[a][0], 0)
+        }
+    };
+    let (j, c, t) = (k(act::JUMP), k(act::CROUCH), k(act::THROW));
+    format!(
+        "Jump again right as you land for a double, then a triple jump.\n\
+         {c} + {j}: long jump while running, backflip standing still.\n\
+         Reverse at speed to skid, then {j}: side somersault. Circle the stick, then {j}: spin jump.\n\
+         {c} in the air: ground pound. {j} on impact: pound jump. {t} during a pound: dive.\n\
+         {c} + {t}: roll. Tap {t} on the roll's rhythm to boost; keep {c} held or it stops. {j}: roll jump.\n\
+         {t}, hold it, then dive into the cap ({c} + {t} in the air) for a cap jump.\n\
+         {}: up throw. {}: down throw. {}: spin throw. {}: home the cap.\n\
+         Slide down walls and {j} to kick off. Grab ledges; push toward the wall or {j} to climb.\n\
+         Collect 15 sun sparks and hit all 3 cap targets.",
+        k(act::UP_THROW),
+        k(act::DOWN_THROW),
+        k(act::SPIN_THROW),
+        k(act::HOMING)
+    )
 }
 fn cursor(m: Res<Menu>, mut window: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>) {
     let active = !m.open && window.0.focused && std::env::var_os("PJV_SHOT").is_none();
@@ -679,14 +736,14 @@ pub fn self_check() {
         "gamepad B throws downward during play"
     );
     assert!(world.resource::<Orders>().down_throw);
-    world.resource_mut::<FrameInput>().edge[15] = true;
+    world.resource_mut::<FrameInput>().edge[act::PAUSE] = true;
     world.run_system(system).unwrap();
     assert!(world.resource::<Menu>().open);
     assert!(!world.resource::<Orders>().down_throw);
     world
         .resource_mut::<Time<Real>>()
         .advance_by(std::time::Duration::from_millis(300));
-    world.resource_mut::<FrameInput>().edge[15] = false;
+    world.resource_mut::<FrameInput>().edge[act::PAUSE] = false;
     world.resource_mut::<FrameInput>().back = false;
     world
         .resource_mut::<bevy::ecs::message::Messages<Click>>()

@@ -1,4 +1,4 @@
-use crate::movement::{Course, Move, Player, Pole, SPAWN, Solid};
+use crate::movement::{Course, Fx, Move, Player, Pole, SPAWN, Solid};
 use bevy::prelude::*;
 
 #[derive(Resource)]
@@ -6,22 +6,41 @@ pub struct Orbit {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
+    /// Height the camera frames; it holds still through ordinary jumps.
+    anchor: f32,
+    focus: Vec3,
+    recenter: f32,
+    idle: f32,
+    zoom: f32,
+    fov: f32,
 }
 impl Default for Orbit {
     fn default() -> Self {
         Self {
             yaw: 0.,
-            pitch: 0.30,
+            pitch: 0.32,
             distance: 9.,
+            anchor: SPAWN.y,
+            focus: SPAWN + Vec3::Y * 1.2,
+            recenter: 0.,
+            idle: 0.,
+            zoom: 1.,
+            fov: 55_f32.to_radians(),
         }
     }
 }
+/// Camera shake amount; effects add to it and it decays.
+#[derive(Resource, Default)]
+pub struct Shake(pub f32);
 #[derive(Component)]
 struct MainCamera;
 #[derive(Component)]
 struct PreviewCamera;
 #[derive(Component)]
 struct PreviewLight;
+/// Visual root under the player: lean and squash for every outfit.
+#[derive(Component)]
+pub struct Pivot;
 #[derive(Component)]
 pub struct Body;
 #[derive(Component)]
@@ -65,6 +84,7 @@ pub struct Palette(pub Handle<StandardMaterial>);
 pub fn plugin(app: &mut App) {
     app.init_resource::<Orbit>()
         .init_resource::<Progress>()
+        .init_resource::<Shake>()
         .add_systems(Startup, setup)
         .add_systems(PreUpdate, moving_platforms.after(crate::input::read))
         .add_systems(Update, (animate, collect, camera, preview).chain());
@@ -75,7 +95,7 @@ pub fn plugin(app: &mut App) {
 fn material(m: &mut Assets<StandardMaterial>, rgb: [f32; 3]) -> Handle<StandardMaterial> {
     m.add(StandardMaterial {
         base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
-        perceptual_roughness: 0.72,
+        perceptual_roughness: 0.62,
         ..default()
     })
 }
@@ -94,38 +114,137 @@ fn block(
         ))
         .id()
 }
+/// Original gradient sky as a small cubemap: deep blue overhead, a pale
+/// horizon with a soft sun glow, and a muted ground bounce below.
+pub fn sky_cubemap(size: u32) -> Image {
+    use bevy::render::render_resource::{
+        Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+    };
+    let sun = Vec3::new(10., 18., 8.).normalize();
+    let mut data = Vec::with_capacity((size * size * 6 * 4) as usize);
+    for face in 0..6 {
+        for y in 0..size {
+            for x in 0..size {
+                let u = (x as f32 + 0.5) / size as f32 * 2. - 1.;
+                let v = (y as f32 + 0.5) / size as f32 * 2. - 1.;
+                let d = match face {
+                    0 => Vec3::new(1., -v, -u),
+                    1 => Vec3::new(-1., -v, u),
+                    2 => Vec3::new(u, 1., v),
+                    3 => Vec3::new(u, -1., -v),
+                    4 => Vec3::new(u, -v, 1.),
+                    _ => Vec3::new(-u, -v, -1.),
+                }
+                .normalize();
+                let zenith = Vec3::new(0.22, 0.52, 0.93);
+                let horizon = Vec3::new(0.80, 0.91, 0.98);
+                let ground = Vec3::new(0.55, 0.60, 0.52);
+                let mut c = if d.y >= 0. {
+                    horizon.lerp(zenith, d.y.powf(0.55))
+                } else {
+                    horizon.lerp(ground, (-d.y * 3.).min(1.))
+                };
+                c += Vec3::new(1., 0.92, 0.75) * d.dot(sun).max(0.).powf(48.) * 0.6;
+                for k in 0..3 {
+                    data.push((c[k].clamp(0., 1.) * 255.) as u8);
+                }
+                data.push(255);
+            }
+        }
+    }
+    let mut image = Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    image
+}
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut course: ResMut<Course>,
 ) {
-    let cream = material(&mut materials, [0.88, 0.83, 0.69]);
+    let cream = material(&mut materials, [0.93, 0.86, 0.68]);
     let white = material(&mut materials, [0.97, 0.96, 0.89]);
-    let red = material(&mut materials, [0.81, 0.31, 0.20]);
+    let red = material(&mut materials, [0.86, 0.30, 0.20]);
     let teal = material(&mut materials, [0.10, 0.52, 0.53]);
     let dark = material(&mut materials, [0.06, 0.18, 0.23]);
-    let gold = material(&mut materials, [1., 0.68, 0.15]);
+    let gold = materials.add(StandardMaterial {
+        base_color: Color::srgb(1., 0.72, 0.18),
+        emissive: LinearRgba::rgb(0.9, 0.5, 0.05),
+        metallic: 0.6,
+        perceptual_roughness: 0.3,
+        ..default()
+    });
     let skin = material(&mut materials, [0.67, 0.87, 0.85]);
+    let grass = material(&mut materials, [0.47, 0.76, 0.33]);
     commands.insert_resource(Palette(teal.clone()));
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.78, 0.88, 1.),
-        brightness: 600.,
+        brightness: 250.,
         ..default()
     });
     commands.spawn((
         DirectionalLight {
-            illuminance: 16000.,
+            illuminance: 14000.,
+            color: Color::srgb(1., 0.97, 0.9),
             shadow_maps_enabled: true,
             ..default()
         },
+        bevy::light::CascadeShadowConfigBuilder {
+            maximum_distance: 60.,
+            first_cascade_far_bound: 12.,
+            ..default()
+        }
+        .build(),
         bevy::camera::visibility::RenderLayers::from_layers(&[0, 1]),
         Transform::from_xyz(10., 18., 8.).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    let sky = images.add(sky_cubemap(128));
     commands.spawn((
         Camera3d::default(),
         MainCamera,
         IsDefaultUiCamera,
+        bevy::camera::Hdr,
+        Projection::Perspective(PerspectiveProjection {
+            fov: 55_f32.to_radians(),
+            ..default()
+        }),
+        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
+        bevy::post_process::bloom::Bloom {
+            intensity: 0.12,
+            ..bevy::post_process::bloom::Bloom::NATURAL
+        },
+        bevy::light::Skybox {
+            image: Some(sky.clone()),
+            brightness: 1800.,
+            ..default()
+        },
+        bevy::light::GeneratedEnvironmentMapLight {
+            environment_map: sky.clone(),
+            intensity: 1400.,
+            ..default()
+        },
+        bevy::pbr::DistanceFog {
+            color: Color::srgba(0.80, 0.90, 0.98, 0.9),
+            falloff: bevy::pbr::FogFalloff::Linear {
+                start: 45.,
+                end: 160.,
+            },
+            ..default()
+        },
         Transform::from_xyz(0., 5., 14.).looking_at(Vec3::Y, Vec3::Y),
     ));
     commands.spawn((
@@ -136,8 +255,18 @@ fn setup(
             clear_color: ClearColorConfig::None,
             ..default()
         },
+        // Same HDR target as the main camera; otherwise this uncleared
+        // overlay draws into its own texture and smears old frames. The main
+        // camera already tonemapped what lies underneath.
+        bevy::camera::Hdr,
+        bevy::core_pipeline::tonemapping::Tonemapping::None,
         bevy::camera::visibility::RenderLayers::layer(1),
         PreviewCamera,
+        bevy::light::GeneratedEnvironmentMapLight {
+            environment_map: sky,
+            intensity: 1400.,
+            ..default()
+        },
         Transform::default(),
     ));
     commands.spawn((
@@ -229,7 +358,7 @@ fn setup(
     add(
         Vec3::new(0., -1., 0.),
         Vec3::new(42., 2., 38.),
-        cream.clone(),
+        grass,
         0.,
         false,
         false,
@@ -469,10 +598,14 @@ fn setup(
             Visibility::default(),
         ))
         .id();
+    let pivot = commands
+        .spawn((Pivot, Transform::default(), Visibility::default()))
+        .id();
+    commands.entity(player).add_child(pivot);
     let root = commands
         .spawn((Body, Transform::default(), Visibility::default()))
         .id();
-    commands.entity(player).add_child(root);
+    commands.entity(pivot).add_child(root);
     let pieces = [
         (
             0,
@@ -564,37 +697,125 @@ fn moving_platforms(
         t.translation = next;
     }
 }
+fn wrap(a: f32) -> f32 {
+    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+/// Presentation state that the simulation does not need.
+#[derive(Default)]
+pub struct Visual {
+    yaw: Option<f32>,
+    bank: f32,
+    pitch: f32,
+    squash: f32,
+    squash_vel: f32,
+    speed: f32,
+}
 pub fn animate(
     time: Res<Time>,
+    mut fx: MessageReader<Fx>,
+    mut vis: Local<Visual>,
     p: Single<(&Player, &mut Transform)>,
-    mut body: Single<&mut Transform, (With<Body>, Without<Player>, Without<Part>, Without<Hat>)>,
-    mut parts: Query<(&Part, &mut Transform), (Without<Player>, Without<Body>, Without<Hat>)>,
+    mut pivot: Single<&mut Transform, (With<Pivot>, Without<Player>, Without<Body>)>,
+    mut body: Single<
+        &mut Transform,
+        (
+            With<Body>,
+            Without<Player>,
+            Without<Pivot>,
+            Without<Part>,
+            Without<Hat>,
+        ),
+    >,
+    mut parts: Query<
+        (&Part, &mut Transform),
+        (Without<Player>, Without<Body>, Without<Pivot>, Without<Hat>),
+    >,
     mut hat: Single<
         (&mut Transform, &mut Visibility),
-        (With<Hat>, Without<Player>, Without<Body>, Without<Part>),
+        (
+            With<Hat>,
+            Without<Player>,
+            Without<Body>,
+            Without<Pivot>,
+            Without<Part>,
+        ),
     >,
 ) {
+    let dt = time.delta_secs().clamp(1e-4, 0.05);
     let (p, mut t) = p.into_inner();
+    for f in fx.read() {
+        match f {
+            Fx::Jump(_) | Fx::CapBounce => vis.squash_vel += 3.2,
+            Fx::Land { hard } => vis.squash_vel -= if *hard { 5.5 } else { 3. },
+            Fx::PoundLand => vis.squash = -0.28,
+            Fx::RollBoost { .. } => vis.squash_vel -= 2.,
+            _ => {}
+        }
+    }
+    // Damped spring: a quick squash on landing, a stretch on take-off.
+    vis.squash_vel += (-180. * vis.squash - 14. * vis.squash_vel) * dt;
+    vis.squash = (vis.squash + vis.squash_vel * dt).clamp(-0.3, 0.3);
     t.translation = p.pos;
-    t.rotation = Quat::from_rotation_y((-p.facing.x).atan2(-p.facing.z));
-    let speed = p.vel.with_y(0.).length();
+    let target = (-p.facing.x).atan2(-p.facing.z);
+    let yaw = vis.yaw.unwrap_or(target);
+    let snap = matches!(
+        p.mode,
+        Move::WallJump | Move::Ledge | Move::Pole | Move::Sideflip
+    );
+    let step = wrap(target - yaw) * if snap { 1. } else { 1. - (-dt * 22.).exp() };
+    let next = yaw + step;
+    let turn_rate = step / dt;
+    vis.yaw = Some(next);
+    t.rotation = Quat::from_rotation_y(next);
+    let speed = p.flat_speed();
+    let accel = (speed - vis.speed) / dt;
+    vis.speed = speed;
+    let leaning = p.grounded && matches!(p.mode, Move::Walk | Move::Run | Move::Roll);
+    let bank = if leaning {
+        (turn_rate * speed * 0.006).clamp(-0.32, 0.32)
+    } else {
+        0.
+    };
+    let pitch = if leaning && p.mode != Move::Roll {
+        (-accel * 0.006).clamp(-0.12, 0.18)
+    } else {
+        0.
+    };
+    let blend = 1. - (-dt * 10.).exp();
+    vis.bank += (bank - vis.bank) * blend;
+    vis.pitch += (pitch - vis.pitch) * blend;
+    pivot.rotation = Quat::from_rotation_z(vis.bank) * Quat::from_rotation_x(-vis.pitch);
+    pivot.scale = Vec3::new(
+        1. - vis.squash * 0.5,
+        1. + vis.squash,
+        1. - vis.squash * 0.5,
+    );
     let phase = time.elapsed_secs() * speed * 1.3;
     body.rotation = match p.mode {
         Move::Roll => Quat::from_rotation_x(-p.distance * 2.5),
         Move::Dive | Move::Slide => Quat::from_rotation_x(-1.3),
-        Move::Backflip => Quat::from_rotation_x(p.timer * 7.),
-        Move::Sideflip => Quat::from_rotation_z(p.timer * 7.),
-        Move::TripleJump | Move::SpinJump => Quat::from_rotation_y(p.timer * 10.),
+        Move::Backflip => Quat::from_rotation_x((p.timer * 7.).min(std::f32::consts::TAU)),
+        Move::Sideflip => Quat::from_rotation_z((p.timer * 7.).min(std::f32::consts::TAU)),
+        Move::GroundPound if p.timer < 0.28 => {
+            Quat::from_rotation_x(-p.timer / 0.28 * std::f32::consts::TAU)
+        }
+        Move::TripleJump | Move::SpinJump => Quat::from_rotation_y(p.timer * 12.),
+        Move::LongJump | Move::RollJump => Quat::from_rotation_x(-0.6),
         _ => Quat::IDENTITY,
     };
     body.translation = Vec3::Y
-        * if matches!(p.mode, Move::Crouch | Move::Crawl | Move::Roll) {
+        * if matches!(
+            p.mode,
+            Move::Crouch | Move::Crawl | Move::Roll | Move::PoundLand
+        ) {
             -0.45
         } else {
             0.
         };
-    body.scale = if matches!(p.mode, Move::Crouch | Move::Crawl) {
+    body.scale = if matches!(p.mode, Move::Crouch | Move::Crawl | Move::PoundLand) {
         Vec3::new(1., 0.7, 1.)
+    } else if p.mode == Move::Roll {
+        Vec3::splat(0.75)
     } else {
         Vec3::ONE
     };
@@ -633,6 +854,7 @@ fn collect(
     mut targets: Query<(&Target, &mut MeshMaterial3d<StandardMaterial>)>,
     palette: Res<Palette>,
     mut settings: ResMut<crate::input::Settings>,
+    mut bursts: MessageWriter<crate::fx::Burst>,
 ) {
     if menu.open {
         return;
@@ -647,7 +869,7 @@ fn collect(
     }
     for (g, mut t, mut v) in &mut gems {
         t.translation.y = g.home.y + (time.elapsed_secs() * 2. + g.id as f32).sin() * 0.16;
-        t.rotation = Quat::from_rotation_y(time.elapsed_secs());
+        t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 2.);
         if progress.gems.contains(&g.id) {
             *v = Visibility::Hidden;
             continue;
@@ -657,6 +879,7 @@ fn collect(
             *v = Visibility::Hidden;
             progress.message = "Sun spark found!".into();
             progress.message_time = 2.;
+            bursts.write(crate::fx::Burst::Spark(t.translation));
         }
     }
     for (t, mut mat) in &mut targets {
@@ -668,10 +891,14 @@ fn collect(
             mat.0 = palette.0.clone();
             progress.message = "Cap target activated!".into();
             progress.message_time = 2.;
+            bursts.write(crate::fx::Burst::Target(t.home));
         }
     }
-    if p.pos.distance(Vec3::new(-41., 2.5, -8.)) < 3. {
+    if p.pos.distance(Vec3::new(-41., 2.5, -8.)) < 3. && p.checkpoint != Vec3::new(-41., 2.5, -8.) {
         p.checkpoint = Vec3::new(-41., 2.5, -8.);
+        progress.message = "Checkpoint!".into();
+        progress.message_time = 1.5;
+        bursts.write(crate::fx::Burst::Target(p.pos + Vec3::Y));
     }
     if progress.gems.len() == 15 && progress.targets.len() == 3 && !progress.finished {
         progress.finished = true;
@@ -692,17 +919,61 @@ fn camera(
     menu: Res<crate::ui::Menu>,
     orders: Res<crate::input::Orders>,
     mut orbit: ResMut<Orbit>,
-    mut cam: Single<&mut Transform, (With<MainCamera>, Without<Player>)>,
+    mut shake: ResMut<Shake>,
+    mut cam: Single<(&mut Transform, &mut Projection), (With<MainCamera>, Without<Player>)>,
     course: Res<Course>,
 ) {
+    let dt = time.delta_secs().clamp(1e-4, 0.05);
+    let behind = (-p.facing.x).atan2(-p.facing.z);
+    let speed = p.flat_speed();
     if !menu.open {
         orbit.yaw -= orders.look.x;
-        orbit.pitch = (orbit.pitch + orders.look.y).clamp(-0.3, 1.1);
+        orbit.pitch = (orbit.pitch + orders.look.y).clamp(-0.35, 1.15);
+        if orders.look.length_squared() > 1e-7 {
+            orbit.idle = 0.;
+            orbit.recenter = 0.;
+        } else {
+            orbit.idle += dt;
+        }
         if orders.recenter {
-            orbit.yaw = (-p.facing.x).atan2(-p.facing.z);
+            orbit.recenter = 0.35;
+        }
+        if orbit.recenter > 0. {
+            orbit.recenter -= dt;
+            let k = 1. - (-dt * 16.).exp();
+            orbit.yaw += wrap(behind - orbit.yaw) * k;
+            orbit.pitch += (0.32 - orbit.pitch) * k;
+        } else if orbit.idle > 1. && p.grounded && speed > 2. {
+            // Gentle follow while running sideways; never swing toward the camera.
+            let d = wrap(behind - orbit.yaw);
+            if d.abs() < 2.2 {
+                orbit.yaw += d * dt * 0.5 * (speed / crate::movement::RUN).min(1.);
+            }
         }
     }
-    let focus = p.pos + Vec3::Y * 1.1;
+    // Ground-anchored framing: ordinary jumps keep the horizon steady; long
+    // falls and big climbs are followed.
+    let settled = p.grounded
+        || matches!(
+            p.mode,
+            Move::Ledge | Move::Pole | Move::Swim | Move::SwimDash | Move::WallSlide
+        );
+    let target = if settled || p.pos.y < orbit.anchor - 0.3 {
+        p.pos.y
+    } else if p.pos.y > orbit.anchor + 3.2 {
+        p.pos.y - 3.2
+    } else {
+        orbit.anchor
+    };
+    let rate = if p.pos.y < orbit.anchor { 9. } else { 5. };
+    orbit.anchor += (target - orbit.anchor) * (1. - (-dt * rate).exp());
+    let ahead = (p.vel.with_y(0.) * 0.12).clamp_length_max(1.5);
+    let focus_target = Vec3::new(p.pos.x, orbit.anchor + 1.25, p.pos.z) + ahead;
+    orbit.focus = orbit.focus.lerp(focus_target, 1. - (-dt * 9.).exp());
+    if orbit.focus.distance(focus_target) > 12. {
+        orbit.focus = focus_target;
+    }
+    let focus = orbit.focus;
     let offset = Vec3::new(
         orbit.yaw.sin() * orbit.pitch.cos(),
         orbit.pitch.sin(),
@@ -731,11 +1002,23 @@ fn camera(
             distance = distance.min((near - 0.04).max(0.08));
         }
     }
-    let target = focus + offset * distance;
-    cam.translation = cam
-        .translation
-        .lerp(target, 1. - (-time.delta_secs() * 12.).exp());
-    cam.look_at(focus, Vec3::Y);
+    // Pull in instantly when blocked, ease back out when clear.
+    orbit.zoom = if distance < orbit.zoom {
+        distance
+    } else {
+        orbit.zoom + (distance - orbit.zoom) * (1. - (-dt * 4.).exp())
+    };
+    let fast = ((speed - crate::movement::RUN) / 10.).clamp(0., 1.);
+    let fov = (55. + 9. * fast).to_radians();
+    orbit.fov += (fov - orbit.fov) * (1. - (-dt * 4.).exp());
+    if let Projection::Perspective(proj) = cam.1.as_mut() {
+        proj.fov = orbit.fov;
+    }
+    shake.0 = (shake.0 - dt * 2.2).max(0.);
+    let t = time.elapsed_secs() * 47.;
+    let jitter = Vec3::new(t.sin(), (t * 1.31).cos(), (t * 0.77).sin()) * shake.0 * shake.0 * 0.35;
+    cam.0.translation = focus + offset * orbit.zoom + jitter;
+    cam.0.look_at(focus + jitter * 0.5, Vec3::Y);
 }
 fn preview(
     mut commands: Commands,
@@ -786,21 +1069,34 @@ fn preview(
     camera.1.translation = p.1.pos + p.1.facing * 3.2 + Vec3::Y * 1.5;
     camera.1.look_at(p.1.pos + Vec3::Y * 0.95, Vec3::Y);
 }
+/// Development aid: `PJV_SHOT=out.png PJV_SHOT_AT=1.2,2.5` saves numbered
+/// screenshots at those seconds, then exits.
 fn screenshot(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    mut phase: Local<u8>,
+    mut taken: Local<usize>,
     mut exit: MessageWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-    if *phase == 0 && time.elapsed_secs() > 5. {
-        commands
-            .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(std::env::var("PJV_SHOT").unwrap()));
-        *phase = 1;
-    }
-    if *phase == 1 && time.elapsed_secs() > 7. {
+    let times: Vec<f32> = std::env::var("PJV_SHOT_AT")
+        .unwrap_or_else(|_| "5".into())
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let path = std::env::var("PJV_SHOT").unwrap_or_default();
+    if let Some(at) = times.get(*taken) {
+        if time.elapsed_secs() > *at {
+            let file = if times.len() > 1 {
+                path.replace(".png", &format!("-{}.png", *taken))
+            } else {
+                path
+            };
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(file));
+            *taken += 1;
+        }
+    } else if time.elapsed_secs() > times.last().copied().unwrap_or(0.) + 2. {
         exit.write(AppExit::Success);
-        *phase = 2;
     }
 }

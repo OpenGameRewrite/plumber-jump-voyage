@@ -221,12 +221,17 @@ def install_exports(exports, output, scale, yaw):
         raise ValueError('No exported GLB outfits found')
     parsed = [(p, glb_json(p)) for p in files]
     output.mkdir(parents=True, exist_ok=True)
-    aliases = {'idle':('Wait','Idle'), 'walk':('Walk',),'run':('Run','Dash','Walk'), 'jump':('Jump','Fall'),
+    aliases = {'idle':('Wait','Idle'),'walk':('Walk',),'run':('Run','Dash','Walk'),'run_start':('RunStart',),'brake':('Brake',),
+        'land':('Land',),'land_hard':('LandStiffen','Land'),'jump':('Jump','Fall'),'fall':('Fall',),
         'double_jump':('Jump2',),'triple_jump':('Jump3',),'long_jump':('JumpBroad',),'backflip':('JumpBack',),'sideflip':('JumpReverse',),
-        'spin_jump':('SpinJumpLoop','SpinJump'),'pound_jump':('JumpHipDrop',),'roll_jump':('RollingJump',),
-        'wall_slide':('WallKeep',),'wall_jump':('WallJump',),'ledge':('WallCatch',),'pole':('PoleClimb','ClimbTree'),
-        'cap_vault':('JumpCapLeapFrog',),'cap_bounce':('JumpNpcTrample','JumpCapLeapFrog'),'catch_jump':('JumpCapCatchCommon',),
-        'throw':('ThrowCap',),'roll':('Rolling','Roll'), 'dive':('Dive','HipDrop'), 'swim':('SwimWait','Swim'), 'pound':('HipDrop','GroundPound'), 'crouch':('SquatWait','Squat','Crouch')}
+        'spin_jump':('SpinJump',),'pound_start':('HipDropStart',),'pound':('HipDrop','GroundPound'),'pound_land':('HipDropLand',),'pound_jump':('JumpHipDrop',),
+        'roll_start':('RollingStart',),'roll':('Rolling','Roll'),'roll_end':('RollingEnd',),'roll_jump':('RollingJump',),
+        'dive':('Dive','HipDrop'),'slide':('HeadSliding','Slide'),'wall_slide':('WallSlideL','WallKeep'),'wall_jump':('WallJump',),
+        'ledge':('WallCatch',),'ledge_start':('WallCatchStart',),'pole':('PoleWait','PoleClimb'),'pole_climb':('PoleClimb','ClimbTree'),
+        'cap_vault':('JumpCapLeapFrog',),'cap_bounce':('JumpNpcTrample','JumpCapLeapFrog'),
+        'throw':('ThrowCap',),'throw_air':('ThrowCapJump','ThrowCap'),'spin_throw':('SpinCapStart','SpinCap'),
+        'swim':('SwimWait','Swim'),'swim_move':('SwimWalk','SwimWait'),'swim_dash':('SwimDive','SwimWait'),
+        'crouch':('SquatWait','Squat','Crouch'),'crouch_start':('SquatStart',),'crawl':('SquatWalk','SquatWait')}
     outfits = []
     for file, model in parsed:
         names = [a.get('name', '') for a in model.get('animations', [])]

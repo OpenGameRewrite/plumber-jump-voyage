@@ -1,7 +1,7 @@
 //! Local effects are loaded only by the optional asset build.
 use crate::{
     input::Settings,
-    movement::{Move, Player},
+    movement::{Fx, Move},
     ui::Menu,
 };
 use bevy::audio::Volume;
@@ -37,81 +37,59 @@ fn load(mut sounds: ResMut<Sounds>, server: Res<AssetServer>) {
         }
     }
 }
-#[derive(Default)]
-struct Last {
-    mode: Move,
-    grounded: bool,
-    cap: bool,
-    distance: f32,
-    serial: usize,
+fn key(fx: Fx) -> Option<&'static str> {
+    Some(match fx {
+        Fx::Jump(kind) => match kind {
+            Move::DoubleJump => "double_jump",
+            Move::TripleJump => "triple_jump",
+            Move::LongJump => "long_jump",
+            Move::Backflip => "backflip",
+            Move::Sideflip => "sideflip",
+            Move::SpinJump => "spin_jump",
+            Move::RollJump => "roll_jump",
+            Move::PoundJump => "pound_jump",
+            Move::WallJump => "wall_jump",
+            Move::CapBounce | Move::CapVault => return None,
+            _ => "jump",
+        },
+        Fx::Land { .. } | Fx::PoundLand => "land",
+        Fx::Step => "step",
+        Fx::PoundStart => "pound",
+        Fx::RollStart | Fx::RollBoost { .. } => "roll",
+        Fx::Dive => "dive",
+        Fx::Throw(_) => "throw",
+        Fx::Catch => "catch",
+        Fx::CapBounce => "cap_bounce",
+        Fx::Ledge => "ledge",
+        Fx::Pole => "pole",
+        Fx::Splash => "swim",
+        Fx::SwimStroke => "swim_dash",
+        Fx::Skid | Fx::WallSlide => return None,
+    })
 }
 fn play(
     mut commands: Commands,
-    p: Single<&Player>,
+    mut events: MessageReader<Fx>,
     sounds: Res<Sounds>,
     settings: Res<Settings>,
     menu: Res<Menu>,
-    mut last: Local<Last>,
+    mut serial: Local<usize>,
 ) {
-    let mut events = Vec::new();
-    if !menu.open && settings.outfit >= 3 {
-        if last.mode != p.mode
-            && let Some(key) = match p.mode {
-                Move::Jump => Some("jump"),
-                Move::DoubleJump => Some("double_jump"),
-                Move::TripleJump => Some("triple_jump"),
-                Move::LongJump => Some("long_jump"),
-                Move::Backflip => Some("backflip"),
-                Move::Sideflip => Some("sideflip"),
-                Move::SpinJump => Some("spin_jump"),
-                Move::Roll => Some("roll"),
-                Move::RollJump => Some("roll_jump"),
-                Move::Dive => Some("dive"),
-                Move::GroundPound => Some("pound"),
-                Move::PoundJump => Some("pound_jump"),
-                Move::WallJump => Some("wall_jump"),
-                Move::Ledge => Some("ledge"),
-                Move::Pole => Some("pole"),
-                Move::Swim => Some("swim"),
-                Move::SwimDash => Some("swim_dash"),
-                Move::CapBounce | Move::CapVault | Move::CatchJump => Some("cap_bounce"),
-                _ => None,
-            }
+    for fx in events.read() {
+        if menu.open || settings.outfit < 3 {
+            continue;
+        }
+        if let Some(choices) = key(*fx)
+            .and_then(|k| sounds.0.get(k))
+            .filter(|v| !v.is_empty())
         {
-            events.push(key);
-        }
-        if p.grounded && !last.grounded {
-            events.push("land");
-        }
-        if p.cap.is_some() && !last.cap {
-            events.push("throw");
-        }
-        if p.cap.is_none() && last.cap && !matches!(p.mode, Move::CapBounce | Move::CapVault) {
-            events.push("catch");
-        }
-        if matches!(p.mode, Move::Run | Move::Walk | Move::Crawl)
-            && p.grounded
-            && p.distance - last.distance > 0.9
-        {
-            events.push("step");
-            last.distance = p.distance;
-        }
-        for key in events {
-            if let Some(choices) = sounds.0.get(key).filter(|v| !v.is_empty()) {
-                commands.spawn((
-                    AudioPlayer::new(choices[last.serial % choices.len()].clone()),
-                    PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.65 * settings.volume)),
-                ));
-                last.serial = last.serial.wrapping_add(1);
-            }
+            commands.spawn((
+                AudioPlayer::new(choices[*serial % choices.len()].clone()),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.65 * settings.volume)),
+            ));
+            *serial = serial.wrapping_add(1);
         }
     }
-    if p.distance < last.distance {
-        last.distance = p.distance;
-    }
-    last.mode = p.mode;
-    last.grounded = p.grounded;
-    last.cap = p.cap.is_some();
 }
 pub fn self_check() {
     let mut world = World::new();
@@ -123,26 +101,19 @@ pub fn self_check() {
     menu.open = false;
     world.insert_resource(menu);
     world.insert_resource(Sounds([("jump".into(), vec![Handle::default()])].into()));
-    let player = world
-        .spawn(Player {
-            mode: Move::Jump,
-            grounded: false,
-            ..default()
-        })
-        .id();
+    world.insert_resource(bevy::ecs::message::Messages::<Fx>::default());
     let system = world.register_system(play);
+    world.write_message(Fx::Jump(Move::Jump));
     world.run_system(system).unwrap();
     assert_eq!(world.query::<&AudioPlayer>().iter(&world).count(), 1);
     world.run_system(system).unwrap();
     assert_eq!(
         world.query::<&AudioPlayer>().iter(&world).count(),
         1,
-        "held states must not replay every frame"
+        "each event plays once"
     );
     world.resource_mut::<Menu>().open = true;
-    world.get_mut::<Player>(player).unwrap().mode = Move::Idle;
-    world.run_system(system).unwrap();
-    world.get_mut::<Player>(player).unwrap().mode = Move::Jump;
+    world.write_message(Fx::Jump(Move::Jump));
     world.run_system(system).unwrap();
     assert_eq!(
         world.query::<&AudioPlayer>().iter(&world).count(),

@@ -18,10 +18,39 @@ pub struct Outfit {
 fn one() -> f32 {
     1.
 }
+pub const EXPLORERS: [&str; 3] = ["Terrace explorer", "Sunset explorer", "Midnight explorer"];
 #[derive(Resource)]
 pub struct Wardrobe {
     pub outfits: Vec<Outfit>,
     pub status: String,
+}
+impl Wardrobe {
+    /// Display order: local outfits first when present, then the explorers.
+    pub fn slot(&self, row: usize) -> usize {
+        let n = self.outfits.len();
+        if n == 0 {
+            row
+        } else if row < n {
+            row + 3
+        } else {
+            row - n
+        }
+    }
+    pub fn row(&self, slot: usize) -> usize {
+        (0..self.outfits.len() + 3)
+            .find(|r| self.slot(*r) == slot)
+            .unwrap_or(0)
+    }
+    pub fn name(&self, slot: usize) -> String {
+        if slot < 3 {
+            format!("{}  (ROMless)", EXPLORERS[slot])
+        } else {
+            self.outfits
+                .get(slot - 3)
+                .map(|o| o.name.clone())
+                .unwrap_or_else(|| "Unavailable outfit".into())
+        }
+    }
 }
 #[cfg(feature = "local-assets")]
 #[derive(Deserialize)]
@@ -49,12 +78,6 @@ pub fn validate(outfit: &Outfit) -> bool {
                 && !p.contains(':')
         })
 }
-#[cfg(feature = "local-assets")]
-#[derive(Component)]
-struct Imported;
-#[cfg(feature = "local-assets")]
-#[derive(Component)]
-struct ImportedCap;
 pub fn asset_dir() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default().join("assets");
     if cwd.is_dir() {
@@ -67,48 +90,42 @@ pub fn asset_dir() -> std::path::PathBuf {
             .join("assets")
     }
 }
-#[cfg(feature = "local-assets")]
-#[derive(Resource, Default)]
-struct Loaded {
-    selection: Option<usize>,
-    gltf: Handle<bevy::gltf::Gltf>,
-    graph: Handle<AnimationGraph>,
-    nodes: std::collections::BTreeMap<String, AnimationNodeIndex>,
-    last: String,
-    ready: bool,
-    model_visible: bool,
-    cap_loaded: bool,
-}
 pub fn plugin(app: &mut App) {
     #[allow(unused_mut)]
     let mut wardrobe = Wardrobe {
         outfits: vec![],
-        status: "ROMless | original explorer and scenery".into(),
+        status: "ROMless build: original explorer and scenery".into(),
     };
     #[cfg(feature = "local-assets")]
     match std::fs::read(asset_dir().join("local/manifest.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<Manifest>(&b).ok())
     {
-        Some(m) if m.outfits.iter().all(validate) => {
+        Some(m) if !m.outfits.is_empty() && m.outfits.iter().all(validate) => {
             wardrobe.outfits = m.outfits;
-            wardrobe.status = format!("{} local outfits available", wardrobe.outfits.len());
+            wardrobe.status = format!(
+                "Game-data build: {} original outfits installed",
+                wardrobe.outfits.len()
+            );
         }
-        _ => wardrobe.status = "No valid local asset pack. Original explorer available.".into(),
+        _ => {
+            wardrobe.status =
+                "Game-data build, but no outfits are installed. See the README.".into()
+        }
     }
-    if let Some(mut settings) = app.world_mut().get_resource_mut::<crate::input::Settings>()
-        && settings.outfit >= 3 + wardrobe.outfits.len()
-    {
-        settings.outfit = 0;
+    if let Some(mut settings) = app.world_mut().get_resource_mut::<crate::input::Settings>() {
+        // The game-data build starts in an original outfit unless the player
+        // picked something else in this build before.
+        if !wardrobe.outfits.is_empty() {
+            settings.outfit = settings
+                .local_outfit
+                .filter(|o| *o < 3 + wardrobe.outfits.len())
+                .unwrap_or(3);
+        }
     }
     app.insert_resource(wardrobe).add_systems(Update, colors);
     #[cfg(feature = "local-assets")]
-    app.init_resource::<Loaded>().add_systems(
-        Update,
-        (select, animation, parts)
-            .chain()
-            .after(crate::world::animate),
-    );
+    imported::plugin(app);
 }
 fn colors(
     settings: Res<crate::input::Settings>,
@@ -125,276 +142,399 @@ fn colors(
         };
     }
 }
+/// Animation state for the current movement, as a manifest key.
+/// Returns (key, loops, playback speed, blend seconds).
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub fn pose(p: &crate::movement::Player) -> (&'static str, bool, f32, f32) {
+    use crate::movement::{Move, Throw};
+    let speed = p.flat_speed();
+    let throwing = p.cap.as_ref().filter(|c| c.age < 0.35 && !c.returning);
+    if let Some(cap) = throwing {
+        if cap.kind == Throw::Spin {
+            return ("spin_throw", false, 1., 0.06);
+        }
+        if p.grounded && matches!(p.mode, Move::Idle | Move::Walk) {
+            return ("throw", false, 1., 0.06);
+        }
+        if !p.grounded && matches!(p.mode, Move::Jump | Move::Fall | Move::DoubleJump) {
+            return ("throw_air", false, 1., 0.06);
+        }
+    }
+    match p.mode {
+        Move::Idle if p.since_land < 0.3 && p.hard_land => ("land_hard", false, 1., 0.05),
+        Move::Idle if p.since_land < 0.2 => ("land", false, 1., 0.05),
+        Move::Idle => ("idle", true, 1., 0.22),
+        Move::Walk => ("walk", true, (speed / 2.6).clamp(0.5, 1.6), 0.15),
+        Move::Run => ("run", true, (speed / 8.).clamp(0.75, 1.5), 0.12),
+        Move::Skid => ("brake", false, 1., 0.06),
+        Move::Crouch => ("crouch", true, 1., 0.1),
+        Move::Crawl => ("crawl", true, (speed / 1.6).clamp(0.5, 1.5), 0.1),
+        Move::Fall => ("fall", true, 1., 0.2),
+        Move::Jump | Move::CapBounce if p.vel.y < -2. && p.timer > 0.5 => ("fall", true, 1., 0.25),
+        Move::Jump => ("jump", false, 1., 0.05),
+        Move::DoubleJump => ("double_jump", false, 1., 0.05),
+        Move::TripleJump => ("triple_jump", false, 1., 0.05),
+        Move::LongJump => ("long_jump", false, 1., 0.05),
+        Move::Backflip => ("backflip", false, 1., 0.05),
+        Move::Sideflip => ("sideflip", false, 1., 0.05),
+        Move::SpinJump => ("spin_jump", true, 1., 0.05),
+        Move::GroundPound if p.timer < 0.28 => ("pound_start", false, 1., 0.04),
+        Move::GroundPound => ("pound", true, 1., 0.05),
+        Move::PoundLand => ("pound_land", false, 1., 0.03),
+        Move::PoundJump => ("pound_jump", false, 1., 0.05),
+        Move::Roll => ("roll", true, (speed / 13.).clamp(0.7, 1.8), 0.06),
+        Move::RollEnd => ("roll_end", false, 1., 0.08),
+        Move::RollJump => ("roll_jump", false, 1., 0.05),
+        Move::Dive => ("dive", false, 1., 0.05),
+        Move::Slide => ("slide", true, 1., 0.1),
+        Move::WallSlide => ("wall_slide", true, 1., 0.08),
+        Move::WallJump => ("wall_jump", false, 1., 0.04),
+        Move::Ledge if p.timer < 0.25 => ("ledge_start", false, 1., 0.05),
+        Move::Ledge => ("ledge", true, 1., 0.1),
+        Move::Pole => ("pole", true, 1., 0.1),
+        Move::Swim if speed > 1. => ("swim_move", true, 1., 0.2),
+        Move::Swim => ("swim", true, 1., 0.2),
+        Move::SwimDash => ("swim_dash", false, 1., 0.08),
+        Move::CapBounce => ("cap_bounce", false, 1., 0.04),
+        Move::CapVault => ("cap_vault", false, 1., 0.04),
+    }
+}
+/// Key to fall back on when an outfit's manifest lacks a clip.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+fn fallback(key: &str) -> &'static str {
+    match key {
+        "land" | "land_hard" | "brake" | "crouch" => "idle",
+        "fall" | "throw_air" | "pound_jump" | "roll_jump" | "spin_jump" | "cap_bounce" => "jump",
+        "pound_start" | "pound_land" => "pound",
+        "roll_end" => "crouch",
+        "ledge_start" => "ledge",
+        "swim_move" | "swim_dash" => "swim",
+        "crawl" => "crouch",
+        "spin_throw" => "throw",
+        _ => "idle",
+    }
+}
 #[cfg(feature = "local-assets")]
-fn select(
-    mut commands: Commands,
-    settings: Res<crate::input::Settings>,
-    mut wardrobe: ResMut<Wardrobe>,
-    server: Res<AssetServer>,
-    models: Res<Assets<bevy::gltf::Gltf>>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
-    mut loaded: ResMut<Loaded>,
-    player: Single<Entity, With<crate::movement::Player>>,
-    roots: Query<Entity, With<Imported>>,
-    mut original: Query<&mut Visibility, With<crate::world::Body>>,
-) {
-    if loaded.selection != Some(settings.outfit) {
-        for e in &roots {
-            commands.entity(e).despawn();
+mod imported {
+    use super::*;
+    #[derive(Component)]
+    struct Imported;
+    #[derive(Component)]
+    struct ImportedCap;
+    #[derive(Resource, Default)]
+    struct Loaded {
+        selection: Option<usize>,
+        gltf: Handle<bevy::gltf::Gltf>,
+        graph: Handle<AnimationGraph>,
+        nodes: std::collections::BTreeMap<String, AnimationNodeIndex>,
+        last: String,
+        ready: bool,
+        model_visible: bool,
+        cap_loaded: bool,
+        finished: bool,
+        jumps: usize,
+    }
+    pub fn plugin(app: &mut App) {
+        app.init_resource::<Loaded>().add_systems(
+            Update,
+            (select, animation, parts, finish)
+                .chain()
+                .after(crate::world::animate),
+        );
+    }
+    fn select(
+        mut commands: Commands,
+        settings: Res<crate::input::Settings>,
+        mut wardrobe: ResMut<Wardrobe>,
+        server: Res<AssetServer>,
+        models: Res<Assets<bevy::gltf::Gltf>>,
+        mut graphs: ResMut<Assets<AnimationGraph>>,
+        mut loaded: ResMut<Loaded>,
+        pivot: Single<Entity, With<crate::world::Pivot>>,
+        roots: Query<Entity, With<Imported>>,
+        mut original: Query<&mut Visibility, With<crate::world::Body>>,
+    ) {
+        if loaded.selection != Some(settings.outfit) {
+            for e in &roots {
+                commands.entity(e).despawn();
+            }
+            *loaded = Loaded {
+                selection: Some(settings.outfit),
+                ..default()
+            };
+            for mut v in &mut original {
+                *v = Visibility::Visible;
+            }
+            if let Some(outfit) = settings
+                .outfit
+                .checked_sub(3)
+                .and_then(|i| wardrobe.outfits.get(i))
+            {
+                loaded.gltf = server.load(outfit.file.clone());
+                wardrobe.status = format!("Loading {}...", outfit.name);
+            }
         }
-        loaded.selection = Some(settings.outfit);
-        loaded.nodes.clear();
-        loaded.ready = false;
-        loaded.model_visible = false;
-        loaded.cap_loaded = false;
-        loaded.last.clear();
-        for mut v in &mut original {
-            *v = Visibility::Visible;
+        if loaded.ready || settings.outfit < 3 {
+            return;
         }
-        if let Some(outfit) = settings
+        if server.is_loaded_with_dependencies(&loaded.gltf) {
+            let Some(gltf) = models.get(&loaded.gltf) else {
+                return;
+            };
+            let Some(scene) = gltf
+                .default_scene
+                .clone()
+                .or_else(|| gltf.scenes.first().cloned())
+            else {
+                wardrobe.status = "This outfit has no model. Using the explorer.".into();
+                loaded.ready = true;
+                return;
+            };
+            let outfit = &wardrobe.outfits[settings.outfit - 3];
+            let mut graph = AnimationGraph::new();
+            for (name, clip) in &gltf.named_animations {
+                let node = graph.add_clip(clip.clone(), 1., graph.root);
+                loaded.nodes.insert(name.to_string(), node);
+            }
+            loaded.graph = graphs.add(graph);
+            let root = commands
+                .spawn((
+                    WorldAssetRoot(scene),
+                    Imported,
+                    Transform::from_rotation(Quat::from_rotation_y(outfit.yaw))
+                        .with_scale(Vec3::splat(outfit.scale)),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.entity(*pivot).add_child(root);
+            if let Some(file) = &outfit.cap_file {
+                let cap_root = commands
+                    .spawn((
+                        Imported,
+                        ImportedCap,
+                        WorldAssetRoot(server.load(format!("{file}#Scene0"))),
+                        Transform::from_scale(Vec3::splat(outfit.scale)),
+                        Visibility::Hidden,
+                    ))
+                    .id();
+                if asset_dir().join("local/caps/CapManHeroEyes.glb").is_file() {
+                    let eyes = commands
+                        .spawn((
+                            WorldAssetRoot(server.load("local/caps/CapManHeroEyes.glb#Scene0")),
+                            Transform::from_xyz(0., 15., 42.).with_scale(Vec3::splat(1.5)),
+                        ))
+                        .id();
+                    commands.entity(cap_root).add_child(eyes);
+                }
+                loaded.cap_loaded = true;
+            }
+            loaded.model_visible = true;
+            for mut v in &mut original {
+                *v = Visibility::Hidden;
+            }
+            loaded.ready = true;
+            wardrobe.status = if loaded.nodes.is_empty() {
+                format!(
+                    "Wearing {}. Its movement animations are missing.",
+                    outfit.name
+                )
+            } else {
+                format!("Wearing {} (original game data)", outfit.name)
+            };
+        } else if matches!(
+            server.load_state(&loaded.gltf),
+            bevy::asset::LoadState::Failed(_)
+        ) {
+            wardrobe.status = "This outfit failed to load. Using the explorer.".into();
+            loaded.ready = true;
+        }
+    }
+    fn animation(
+        mut commands: Commands,
+        p: Single<&crate::movement::Player>,
+        settings: Res<crate::input::Settings>,
+        wardrobe: Res<Wardrobe>,
+        mut loaded: ResMut<Loaded>,
+        mut fx: MessageReader<crate::movement::Fx>,
+        mut players: Query<(
+            Entity,
+            &mut AnimationPlayer,
+            Option<&AnimationGraphHandle>,
+            Option<&mut AnimationTransitions>,
+        )>,
+    ) {
+        // A repeated move (two cap jumps, a second roll boost) restarts its clip.
+        let restarts = fx
+            .read()
+            .filter(|f| {
+                matches!(
+                    f,
+                    crate::movement::Fx::Jump(_) | crate::movement::Fx::RollBoost { .. }
+                )
+            })
+            .count();
+        if !loaded.ready || loaded.nodes.is_empty() {
+            return;
+        }
+        let Some(outfit) = settings
             .outfit
             .checked_sub(3)
             .and_then(|i| wardrobe.outfits.get(i))
-        {
-            loaded.gltf = server.load(outfit.file.clone());
-            wardrobe.status = "Loading local model...".into();
-        } else {
-            loaded.gltf = Handle::default();
-        }
-    }
-    if loaded.ready || settings.outfit < 3 {
-        return;
-    }
-    if server.is_loaded_with_dependencies(&loaded.gltf) {
-        let Some(gltf) = models.get(&loaded.gltf) else {
-            return;
-        };
-        let Some(scene) = gltf
-            .default_scene
-            .clone()
-            .or_else(|| gltf.scenes.first().cloned())
         else {
-            wardrobe.status = "Local model has no scene. Using explorer.".into();
-            loaded.ready = true;
             return;
         };
-        let outfit = &wardrobe.outfits[settings.outfit - 3];
-        let mut graph = AnimationGraph::new();
-        for (name, clip) in &gltf.named_animations {
-            let node = graph.add_clip(clip.clone(), 1., graph.root);
-            loaded.nodes.insert(name.to_string(), node);
-        }
-        loaded.graph = graphs.add(graph);
-        let root = commands
-            .spawn((
-                WorldAssetRoot(scene),
-                Imported,
-                Transform::from_rotation(Quat::from_rotation_y(outfit.yaw))
-                    .with_scale(Vec3::splat(outfit.scale)),
-                Visibility::default(),
-            ))
-            .id();
-        commands.entity(*player).add_child(root);
-        if let Some(file) = &outfit.cap_file {
-            let cap_root = commands
-                .spawn((
-                    Imported,
-                    ImportedCap,
-                    WorldAssetRoot(server.load(format!("{file}#Scene0"))),
-                    Transform::from_scale(Vec3::splat(outfit.scale)),
-                    Visibility::Hidden,
-                ))
-                .id();
-            if asset_dir().join("local/caps/CapManHeroEyes.glb").is_file() {
-                let eyes = commands
-                    .spawn((
-                        WorldAssetRoot(server.load("local/caps/CapManHeroEyes.glb#Scene0")),
-                        Transform::from_xyz(0., 15., 42.).with_scale(Vec3::splat(1.5)),
-                    ))
-                    .id();
-                commands.entity(cap_root).add_child(eyes);
+        let (mut key, repeat, speed, blend) = pose(&p);
+        let mut name = outfit.animations.get(key);
+        for _ in 0..3 {
+            if name.is_some_and(|n| loaded.nodes.contains_key(n)) {
+                break;
             }
-            loaded.cap_loaded = true;
+            key = fallback(key);
+            name = outfit.animations.get(key);
         }
-        loaded.model_visible = true;
-        for mut v in &mut original {
-            *v = Visibility::Hidden;
-        }
-        loaded.ready = true;
-        wardrobe.status = if loaded.nodes.is_empty() {
-            "Local outfit ready. Movement animation pack absent.".into()
-        } else {
-            "Local wardrobe ready.".into()
+        let Some(name) = name.cloned() else {
+            return;
         };
-    } else if matches!(
-        server.load_state(&loaded.gltf),
-        bevy::asset::LoadState::Failed(_)
+        let Some(node) = loaded.nodes.get(&name).copied() else {
+            return;
+        };
+        let restart = restarts > 0 && key != "roll";
+        loaded.jumps += restarts;
+        let changed = loaded.last != name || restart;
+        for (e, mut player, graph, transitions) in &mut players {
+            let mut fresh = AnimationTransitions::new();
+            if changed || graph.is_none() {
+                let fade = std::time::Duration::from_secs_f32(blend);
+                let animation = if let Some(mut transitions) = transitions {
+                    transitions.play(&mut player, node, fade)
+                } else {
+                    fresh.play(&mut player, node, std::time::Duration::ZERO)
+                };
+                if repeat {
+                    animation.repeat();
+                }
+                animation.replay();
+            }
+            if let Some(active) = player.animation_mut(node) {
+                active.set_speed(speed);
+            }
+            if graph.is_none() {
+                commands
+                    .entity(e)
+                    .insert((AnimationGraphHandle(loaded.graph.clone()), fresh));
+            }
+        }
+        loaded.last = name;
+    }
+    fn parts(
+        time: Res<Time>,
+        p: Single<&crate::movement::Player>,
+        settings: Res<crate::input::Settings>,
+        loaded: Res<Loaded>,
+        mut hats: Query<&mut Visibility, With<crate::world::Hat>>,
+        mut meshes: Query<(&Name, &mut Visibility), (With<Mesh3d>, Without<crate::world::Hat>)>,
+        mut caps: Query<
+            (&mut Transform, &mut Visibility),
+            (
+                With<ImportedCap>,
+                Without<Mesh3d>,
+                Without<crate::world::Hat>,
+            ),
+        >,
     ) {
-        wardrobe.status = "Local model failed to load. Using original explorer.".into();
-        loaded.ready = true;
-    }
-}
-#[cfg(feature = "local-assets")]
-fn animation(
-    mut commands: Commands,
-    p: Single<&crate::movement::Player>,
-    settings: Res<crate::input::Settings>,
-    wardrobe: Res<Wardrobe>,
-    mut loaded: ResMut<Loaded>,
-    mut players: Query<(
-        Entity,
-        &mut AnimationPlayer,
-        Option<&AnimationGraphHandle>,
-        Option<&mut AnimationTransitions>,
-    )>,
-) {
-    if !loaded.ready || loaded.nodes.is_empty() {
-        return;
-    }
-    let Some(outfit) = settings
-        .outfit
-        .checked_sub(3)
-        .and_then(|i| wardrobe.outfits.get(i))
-    else {
-        return;
-    };
-    let state = match p.mode {
-        crate::movement::Move::Idle => "idle",
-        crate::movement::Move::Walk => "walk",
-        crate::movement::Move::Run => "run",
-        crate::movement::Move::DoubleJump => "double_jump",
-        crate::movement::Move::TripleJump => "triple_jump",
-        crate::movement::Move::LongJump => "long_jump",
-        crate::movement::Move::Backflip => "backflip",
-        crate::movement::Move::Sideflip => "sideflip",
-        crate::movement::Move::SpinJump => "spin_jump",
-        crate::movement::Move::PoundJump => "pound_jump",
-        crate::movement::Move::RollJump => "roll_jump",
-        crate::movement::Move::WallSlide => "wall_slide",
-        crate::movement::Move::WallJump => "wall_jump",
-        crate::movement::Move::Ledge => "ledge",
-        crate::movement::Move::Pole => "pole",
-        crate::movement::Move::CapVault => "cap_vault",
-        crate::movement::Move::CapBounce => "cap_bounce",
-        crate::movement::Move::CatchJump => "catch_jump",
-        crate::movement::Move::Roll => "roll",
-        crate::movement::Move::Dive | crate::movement::Move::Slide => "dive",
-        crate::movement::Move::Swim | crate::movement::Move::SwimDash => "swim",
-        crate::movement::Move::GroundPound => "pound",
-        crate::movement::Move::Crouch | crate::movement::Move::Crawl => "crouch",
-        _ => "jump",
-    };
-    let state = if p.cap.as_ref().is_some_and(|c| c.age < 0.3)
-        && p.grounded
-        && matches!(
-            p.mode,
-            crate::movement::Move::Idle | crate::movement::Move::Run | crate::movement::Move::Walk
-        ) {
-        "throw"
-    } else {
-        state
-    };
-    let name = outfit
-        .animations
-        .get(state)
-        .or_else(|| {
-            outfit
-                .animations
-                .get(if p.grounded { "idle" } else { "jump" })
-        })
-        .cloned()
-        .unwrap_or_else(|| state.into());
-    let Some(node) = loaded.nodes.get(&name).copied() else {
-        return;
-    };
-    let changed = loaded.last != name;
-    for (e, mut player, graph, transitions) in &mut players {
-        let mut fresh = AnimationTransitions::new();
-        if changed || graph.is_none() {
-            let animation = if let Some(mut transitions) = transitions {
-                transitions.play(&mut player, node, std::time::Duration::from_millis(90))
+        let imported = settings.outfit >= 3 && loaded.model_visible;
+        for mut hat in &mut hats {
+            *hat = if imported && (p.cap.is_none() || loaded.cap_loaded) {
+                Visibility::Hidden
             } else {
-                fresh.play(&mut player, node, std::time::Duration::ZERO)
+                Visibility::Visible
             };
-            if matches!(
-                state,
-                "idle"
-                    | "run"
-                    | "walk"
-                    | "swim"
-                    | "roll"
-                    | "pole"
-                    | "ledge"
-                    | "crouch"
-                    | "wall_slide"
-            ) {
-                animation.repeat();
+        }
+        for (mut transform, mut visibility) in &mut caps {
+            *visibility = if p.cap.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+            if let Some(cap) = &p.cap {
+                transform.translation = cap.pos;
+                transform.rotation = Quat::from_rotation_y(cap.age * 18.);
             }
         }
-        if graph.is_none() {
-            commands
-                .entity(e)
-                .insert((AnimationGraphHandle(loaded.graph.clone()), fresh));
-        }
-    }
-    loaded.last = name;
-}
-#[cfg(feature = "local-assets")]
-fn parts(
-    p: Single<&crate::movement::Player>,
-    settings: Res<crate::input::Settings>,
-    loaded: Res<Loaded>,
-    mut hats: Query<&mut Visibility, With<crate::world::Hat>>,
-    mut meshes: Query<(&Name, &mut Visibility), (With<Mesh3d>, Without<crate::world::Hat>)>,
-    mut caps: Query<
-        (&mut Transform, &mut Visibility),
-        (
-            With<ImportedCap>,
-            Without<Mesh3d>,
-            Without<crate::world::Hat>,
-        ),
-    >,
-) {
-    let imported = settings.outfit >= 3 && loaded.model_visible;
-    for mut hat in &mut hats {
-        *hat = if imported && (p.cap.is_none() || loaded.cap_loaded) {
-            Visibility::Hidden
-        } else {
-            Visibility::Visible
-        };
-    }
-    for (mut transform, mut visibility) in &mut caps {
-        *visibility = if p.cap.is_some() {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-        if let Some(cap) = &p.cap {
-            transform.translation = cap.pos;
-            transform.rotation = Quat::from_rotation_y(cap.age * 18.);
-        }
-    }
-    for (name, mut visibility) in &mut meshes {
-        let n = name.as_str();
-        if n.starts_with("Eyelid")
-            || n.starts_with("EyeClose")
-            || n.starts_with("EyeHalf")
-            || n.starts_with("Eyeball__EyeMT")
-        {
-            *visibility = Visibility::Hidden;
-        } else if n.starts_with("Cap__") || n.starts_with("CapHair__") {
-            *visibility = if p.cap.is_some() {
-                Visibility::Hidden
+        // Blink for a few frames every few seconds; eyes stay shut in a pound.
+        let t = time.elapsed_secs();
+        let blink =
+            (t % 3.7) < 0.11 || (t % 11.3) < 0.09 || p.mode == crate::movement::Move::PoundLand;
+        for (name, mut visibility) in &mut meshes {
+            let n = name.as_str();
+            let show = if n.starts_with("EyelidClose") {
+                Some(blink)
+            } else if n.starts_with("Eyeball__EyePupil") {
+                Some(!blink)
+            } else if n.starts_with("Eyelid")
+                || n.starts_with("EyeHalf")
+                || n.starts_with("Eyeball__EyeMT")
+            {
+                Some(false)
+            } else if n.starts_with("Cap__") || n.starts_with("CapHair__") {
+                Some(p.cap.is_none())
+            } else if n.starts_with("Hair__") {
+                Some(p.cap.is_some())
             } else {
-                Visibility::Visible
+                None
             };
-        } else if n.starts_with("Hair__") {
-            *visibility = if p.cap.is_some() {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
+            if let Some(show) = show {
+                visibility.set_if_neq(if show {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+            }
         }
+    }
+    /// Materials the export cannot express: the metal suit is shaded entirely
+    /// by reflections in the original, and untextured glass is see-through.
+    fn finish(
+        settings: Res<crate::input::Settings>,
+        wardrobe: Res<Wardrobe>,
+        mut loaded: ResMut<Loaded>,
+        meshes: Query<(&Name, &MeshMaterial3d<StandardMaterial>)>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+    ) {
+        if !loaded.model_visible || loaded.finished {
+            return;
+        }
+        let Some(outfit) = settings
+            .outfit
+            .checked_sub(3)
+            .and_then(|i| wardrobe.outfits.get(i))
+        else {
+            return;
+        };
+        let metal = outfit.file.contains("Metal");
+        let mut seen = false;
+        for (name, handle) in &meshes {
+            if !name.as_str().contains("__") {
+                continue;
+            }
+            seen = true;
+            let Some(mut m) = materials.get_mut(&handle.0) else {
+                continue;
+            };
+            if m.base_color_texture.is_some() {
+                continue;
+            }
+            if name.as_str().contains("Glass") {
+                m.base_color = Color::srgba(0.75, 0.9, 1., 0.3);
+                m.alpha_mode = AlphaMode::Blend;
+                m.perceptual_roughness = 0.05;
+            } else if metal {
+                m.base_color = Color::srgb(0.86, 0.88, 0.92);
+                m.metallic = 1.;
+                m.perceptual_roughness = 0.12;
+            }
+        }
+        loaded.finished = seen;
     }
 }
 pub fn self_check() {
@@ -416,4 +556,23 @@ pub fn self_check() {
         o.file = path.into();
         assert!(!validate(&o));
     }
+    o.file = "local/outfit.glb".into();
+    let w = Wardrobe {
+        outfits: vec![o.clone(), o],
+        status: String::new(),
+    };
+    assert_eq!(w.slot(0), 3, "original outfits are listed first");
+    assert_eq!(w.slot(2), 0);
+    assert_eq!(w.row(0), 2);
+    let empty = Wardrobe {
+        outfits: vec![],
+        status: String::new(),
+    };
+    assert_eq!(empty.slot(1), 1);
+    // Every movement state maps to a clip key with a fallback chain ending in idle.
+    let mut p = crate::movement::Player::default();
+    let (key, ..) = pose(&p);
+    assert_eq!(key, "idle");
+    p.mode = crate::movement::Move::RollEnd;
+    assert_eq!(fallback(fallback(pose(&p).0)), "idle");
 }

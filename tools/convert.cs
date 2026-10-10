@@ -62,7 +62,8 @@ class ConvertOutfit {
                                 int source=v.boneIds[i]<0?shape.BoneIndex:sub.Skeleton.Node_Array[v.boneIds[i]];
                                 source=Math.Max(0,source);string name=sub.Skeleton.bones[source].Text;
                                 int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==name);
-                                if(destBone<0||name=="nw4f_root"||name=="AllRoot")destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
+                                // Part roots share names with body roots; rigid face pieces belong to the anchor.
+                                if(destBone<0||name=="nw4f_root"||name=="AllRoot"||name=="JointRoot")destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
                                 if(destBone<0)throw new InvalidDataException("No attachment bone for "+file);
                                 int dest=Array.IndexOf(model.Skeleton.Node_Array,destBone);
                                 if(dest<0){dest=model.Skeleton.Node_Array.Length;model.Skeleton.Node_Array=model.Skeleton.Node_Array.Concat(new[]{destBone}).ToArray();}
@@ -102,8 +103,9 @@ class ConvertOutfit {
                 var all=new List<FSKA>();all.AddRange(Animations(resource));
                 foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations(r));}
                 if(args.Contains("--geometry-only"))all.Clear();
+                Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
                 File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
-                var prefixes=new[]{"Wait","Run","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide"};
+                var prefixes=new[]{"Wait","Run","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
                 foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
                     var anim=new Assimp.Animation {Name=clip.Text,DurationInTicks=clip.FrameCount,TicksPerSecond=60.0};
                     var channels=new Dictionary<string,NodeAnimationChannel>();
@@ -114,6 +116,14 @@ class ConvertOutfit {
                         foreach(var bone in model.Skeleton.bones) {
                             NodeAnimationChannel ch;if(!channels.TryGetValue(bone.Text,out ch))continue;
                             var p=bone.GetPosition();var s=bone.GetScale();var q=bone.rot;
+                            // Odyssey rigs use segment scale compensation: a stretched arm
+                            // must not inflate its hand. glTF always inherits parent scale,
+                            // so divide it back out (exact for uniform parent scale).
+                            var parent=bone.parentIndex>=0?model.Skeleton.bones[bone.parentIndex]:null;
+                            if(bone.UseSegmentScaleCompensate&&parent!=null) {
+                                var ps=parent.GetScale();
+                                if(ps.X!=0&&ps.Y!=0&&ps.Z!=0)s=new OpenTK.Vector3(s.X/ps.X,s.Y/ps.Y,s.Z/ps.Z);
+                            }
                             ch.PositionKeys.Add(new VectorKey(frame,new Vector3D(p.X,p.Y,p.Z)));
                             ch.ScalingKeys.Add(new VectorKey(frame,new Vector3D(s.X,s.Y,s.Z)));
                             ch.RotationKeys.Add(new QuaternionKey(frame,new Assimp.Quaternion(q.W,q.X,q.Y,q.Z)));
