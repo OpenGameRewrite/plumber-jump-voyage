@@ -117,8 +117,8 @@ Every action can be rebound in **Rebind controls**.
 ## Limitations
 
 The movement is an approximation tuned by feel, not a measured reconstruction
-of the original controller, so speeds and timings differ. A few specialty
-outfits have small rigid pieces that do not animate. Captures, enemies and kingdoms are out of scope.
+of the original controller, so speeds and timings differ. The 8-bit outfit is
+a rigid voxel figure in the original data, so it moves as one piece. Captures, enemies and kingdoms are out of scope.
 
 ## About
 

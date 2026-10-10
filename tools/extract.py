@@ -229,7 +229,7 @@ def install_exports(exports, output, scale, yaw):
         'dive':('Dive','HipDrop'),'slide':('HeadSliding','Slide'),'wall_slide':('WallSlideL','WallKeep'),'wall_jump':('WallJump',),
         'ledge':('WallCatch',),'ledge_start':('WallCatchStart',),'pole':('PoleWait','PoleClimb'),'pole_climb':('PoleClimb','ClimbTree'),
         'cap_vault':('JumpCapLeapFrog',),'cap_bounce':('JumpNpcTrample','JumpCapLeapFrog'),
-        'throw':('ThrowCap',),'throw_air':('ThrowCapJump','ThrowCap'),'spin_throw':('SpinCapStart','SpinCap'),
+        'throw':('ThrowCap',),'throw_upper':('ThrowCapParts',),'throw_upper_air':('ThrowCapJumpParts',),'throw_air':('ThrowCapJump','ThrowCap'),'spin_throw':('SpinCapStart','SpinCap'),
         'swim':('SwimWait','Swim'),'swim_move':('SwimWalk','SwimWait'),'swim_dash':('SwimDive','SwimWait'),
         'crouch':('SquatWait','Squat','Crouch'),'crouch_start':('SquatStart',),'crawl':('SquatWalk','SquatWait')}
     outfits = []
@@ -242,6 +242,7 @@ def install_exports(exports, output, scale, yaw):
             shutil.copyfile(file, target)
         name=file.stem.removeprefix('Mario') if file.stem.startswith('Mario') else file.stem
         name=re.sub(r'([a-z0-9])([A-Z])',r'\1 \2',name).replace('_',' ') or 'Classic plumber'
+        name={'Dot3d':'8-bit'}.get(name,name)
         outfits.append({'name':name, 'file':'local/' + file.name, 'scale':scale,'yaw':yaw,'animations':mapping})
         cap=file.stem+'Cap.glb'
         if not (output/'caps'/cap).is_file():cap='MarioCap.glb'

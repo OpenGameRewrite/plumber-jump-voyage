@@ -16,6 +16,18 @@ class ConvertOutfit {
         double x=red/127.5-1,y=green/127.5-1;
         return (byte)Math.Round(127.5*(1+Math.Sqrt(Math.Max(0,1-x*x-y*y))));
     }
+    static bool IsRoot(string name) {return name=="JointRoot"||name=="AllRoot"||name=="nw4f_root";}
+    // A few outfits (the voxel figure) bind the whole body rigidly to the
+    // root in the original data. Keep such a figure in one piece: its head and
+    // hands follow the root too, instead of floating off on their own bones.
+    static bool RigidFigure(FMDL model) {
+        var bones=model.Skeleton.bones;
+        return model.Objects.Any()&&model.Objects.All(shape=>shape.vertices.All(v=>{
+            if(v.boneIds.Count>1)return false;
+            int i=v.boneIds.Count==0||v.boneIds[0]<0?shape.BoneIndex:model.Skeleton.Node_Array[v.boneIds[0]];
+            return i>=0&&IsRoot(bones[i].Text);
+        }));
+    }
     static IEnumerable<FSKA> Animations(TreeNode node) {
         var animation = node as FSKA;
         if (animation != null) yield return animation;
@@ -43,6 +55,8 @@ class ConvertOutfit {
             if(models.Length==0) throw new InvalidDataException("BFRES has no exportable model");
             // Export the model through the installed tool's standard interchange exporter.
             var model=models[0];var dae=Path.ChangeExtension(dst,"dae");
+            bool rigidFigure=RigidFigure(model);
+            if(rigidFigure)Console.WriteLine("Rigid figure: parts follow the root");
             var meshList=model.Objects.ToList();var materials=model.Materials.ToList();var textures=resource.GetTextures();
             foreach(var part in args.Skip(2).Where(a=>a.StartsWith("--part="))) {
                 var path=part.Substring(7);var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};
@@ -64,6 +78,7 @@ class ConvertOutfit {
                                 int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==name);
                                 // Part roots share names with body roots; rigid face pieces belong to the anchor.
                                 if(destBone<0||name=="nw4f_root"||name=="AllRoot"||name=="JointRoot")destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
+                                if(rigidFigure)destBone=model.Skeleton.bones.FindIndex(b=>b.Text=="JointRoot");
                                 if(destBone<0)throw new InvalidDataException("No attachment bone for "+file);
                                 int dest=Array.IndexOf(model.Skeleton.Node_Array,destBone);
                                 if(dest<0){dest=model.Skeleton.Node_Array.Length;model.Skeleton.Node_Array=model.Skeleton.Node_Array.Concat(new[]{destBone}).ToArray();}

@@ -153,7 +153,7 @@ pub fn pose(p: &crate::movement::Player) -> (&'static str, bool, f32, f32) {
         if cap.kind == Throw::Spin {
             return ("spin_throw", false, 1., 0.06);
         }
-        if p.grounded && matches!(p.mode, Move::Idle | Move::Walk) {
+        if p.grounded && p.mode == Move::Idle {
             return ("throw", false, 1., 0.06);
         }
         if !p.grounded && matches!(p.mode, Move::Jump | Move::Fall | Move::DoubleJump) {
@@ -232,12 +232,30 @@ mod imported {
         model_visible: bool,
         cap_loaded: bool,
         finished: bool,
-        jumps: usize,
+        /// Upper-body throw clips (ground, air), masked off the legs.
+        overlay: Option<(AnimationNodeIndex, AnimationNodeIndex)>,
+        overlay_weight: f32,
+        masked: bool,
+    }
+    /// Mask group for hips and legs; the throw overlay leaves them alone.
+    const LEGS: u32 = 0;
+    fn legs(name: &str) -> bool {
+        [
+            "Hip",
+            "Leg",
+            "Foot",
+            "Toe",
+            "JointRoot",
+            "AllRoot",
+            "nw4f_root",
+        ]
+        .iter()
+        .any(|n| name.contains(n))
     }
     pub fn plugin(app: &mut App) {
         app.init_resource::<Loaded>().add_systems(
             Update,
-            (select, animation, parts, finish)
+            (select, mask, animation, parts, finish)
                 .chain()
                 .after(crate::world::animate),
         );
@@ -296,6 +314,22 @@ mod imported {
                 let node = graph.add_clip(clip.clone(), 1., graph.root);
                 loaded.nodes.insert(name.to_string(), node);
             }
+            // Blending is a normalized weighted average, so a heavy overlay
+            // node dominates the arms and torso while its mask keeps the
+            // running legs from the locomotion clip underneath.
+            let upper = |key: &str, default: &str| {
+                let name = outfit.animations.get(key).map_or(default, String::as_str);
+                gltf.named_animations.get(name).cloned()
+            };
+            if let (Some(ground), Some(air)) = (
+                upper("throw_upper", "ThrowCapParts"),
+                upper("throw_upper_air", "ThrowCapJumpParts"),
+            ) {
+                loaded.overlay = Some((
+                    graph.add_clip_with_mask(ground, 1 << LEGS, 12., graph.root),
+                    graph.add_clip_with_mask(air, 1 << LEGS, 12., graph.root),
+                ));
+            }
             loaded.graph = graphs.add(graph);
             let root = commands
                 .spawn((
@@ -349,8 +383,30 @@ mod imported {
             loaded.ready = true;
         }
     }
+    /// Bone entities exist only after the scene spawns; tag the legs then.
+    fn mask(
+        mut loaded: ResMut<Loaded>,
+        mut graphs: ResMut<Assets<AnimationGraph>>,
+        targets: Query<(&bevy::animation::AnimationTargetId, &Name)>,
+    ) {
+        if !loaded.ready || loaded.masked || loaded.overlay.is_none() {
+            return;
+        }
+        let Some(mut graph) = graphs.get_mut(&loaded.graph) else {
+            return;
+        };
+        let mut found = false;
+        for (id, name) in &targets {
+            if legs(name.as_str()) {
+                graph.add_target_to_mask_group(*id, LEGS);
+                found |= name.as_str().ends_with("Hip");
+            }
+        }
+        loaded.masked = found;
+    }
     fn animation(
         mut commands: Commands,
+        time: Res<Time>,
         p: Single<&crate::movement::Player>,
         settings: Res<crate::input::Settings>,
         wardrobe: Res<Wardrobe>,
@@ -363,16 +419,17 @@ mod imported {
             Option<&mut AnimationTransitions>,
         )>,
     ) {
+        use crate::movement::{Fx, Move, Throw};
         // A repeated move (two cap jumps, a second roll boost) restarts its clip.
-        let restarts = fx
-            .read()
-            .filter(|f| {
-                matches!(
-                    f,
-                    crate::movement::Fx::Jump(_) | crate::movement::Fx::RollBoost { .. }
-                )
-            })
-            .count();
+        let mut restarts = 0;
+        let mut thrown = false;
+        for f in fx.read() {
+            match f {
+                Fx::Jump(_) | Fx::RollBoost { .. } => restarts += 1,
+                Fx::Throw(kind) => thrown |= *kind != Throw::Spin,
+                _ => {}
+            }
+        }
         if !loaded.ready || loaded.nodes.is_empty() {
             return;
         }
@@ -399,8 +456,35 @@ mod imported {
             return;
         };
         let restart = restarts > 0 && key != "roll";
-        loaded.jumps += restarts;
         let changed = loaded.last != name || restart;
+        // Throwing while moving: the upper-body clip over whatever the legs do.
+        let full_body = matches!(key, "throw" | "throw_air" | "spin_throw");
+        let throwing = !full_body
+            && p.cap
+                .as_ref()
+                .is_some_and(|c| c.age < 0.4 && !c.returning && c.kind != Throw::Spin)
+            && !matches!(
+                p.mode,
+                Move::Roll
+                    | Move::Dive
+                    | Move::Slide
+                    | Move::GroundPound
+                    | Move::Swim
+                    | Move::SwimDash
+            );
+        let fade = time.delta_secs() / if throwing { 0.06 } else { 0.15 };
+        loaded.overlay_weight = if throwing {
+            (loaded.overlay_weight + fade).min(1.)
+        } else {
+            (loaded.overlay_weight - fade).max(0.)
+        };
+        let overlay = loaded.overlay.map(|(ground, air)| {
+            if p.grounded {
+                (ground, air)
+            } else {
+                (air, ground)
+            }
+        });
         for (e, mut player, graph, transitions) in &mut players {
             let mut fresh = AnimationTransitions::new();
             if changed || graph.is_none() {
@@ -417,6 +501,18 @@ mod imported {
             }
             if let Some(active) = player.animation_mut(node) {
                 active.set_speed(speed);
+            }
+            if let Some((on, off)) = overlay {
+                if thrown && throwing {
+                    player.stop(off);
+                    player.start(on);
+                }
+                if loaded.overlay_weight == 0. {
+                    player.stop(on);
+                    player.stop(off);
+                } else if let Some(active) = player.animation_mut(on) {
+                    active.set_weight(loaded.overlay_weight);
+                }
             }
             if graph.is_none() {
                 commands

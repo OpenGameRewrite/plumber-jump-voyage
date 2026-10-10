@@ -414,10 +414,12 @@ pub fn read(
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
         *orders = Orders {
-            direction: if started && phase < 5 {
-                Vec2::NEG_Y
-            } else {
-                Vec2::ZERO
+            // Across open ground: run, jump, throw mid-run, then roll back.
+            direction: match phase {
+                _ if !started => Vec2::ZERO,
+                0..=2 => Vec2::X,
+                3 | 4 => Vec2::NEG_X,
+                _ => Vec2::ZERO,
             },
             jump: phase == 1 && edge,
             jump_held: phase == 1,
