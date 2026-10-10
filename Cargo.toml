@@ -1,0 +1,26 @@
+[package]
+name = "plumber-jump-voyage"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[features]
+default = []
+local-assets = []
+
+[dependencies]
+bevy = { version = "=0.20.0", default-features = false, features = ["3d", "ui", "bevy_gilrs", "bevy_gltf", "png", "x11", "wayland", "default_font", "tonemapping_luts"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+opt-level = 1
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = 0
+
+[profile.test]
+debug = 0
