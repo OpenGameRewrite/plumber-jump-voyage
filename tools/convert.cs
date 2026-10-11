@@ -58,13 +58,29 @@ class ConvertOutfit {
             bool rigidFigure=RigidFigure(model);
             if(rigidFigure)Console.WriteLine("Rigid figure: parts follow the root");
             var meshList=model.Objects.ToList();var materials=model.Materials.ToList();var textures=resource.GetTextures();
+            // Materials per part file, so a part's texture archive binds only to that part.
+            var partMaterials=new Dictionary<string,List<FMAT>>();
             foreach(var part in args.Skip(2).Where(a=>a.StartsWith("--part="))) {
                 // --part=model.bfres[|Joint|rotX|rotY|rotZ|transX|transY|transZ], from the
                 // costume's own placement table (joint plus local rotation in degrees).
                 var spec=part.Substring(7).Split('|');var path=spec[0];
                 var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};
-                using(var f=File.OpenRead(path))r.Load(f);textures.AddRange(r.GetTextures());
+                using(var f=File.OpenRead(path))r.Load(f);
                 var file=Path.GetFileNameWithoutExtension(path);
+                var own=r.GetTextures();
+                if(!r.ExportableModels.OfType<FMDL>().Any()&&file.EndsWith("Texture")) {
+                    // A texture archive (e.g. the 64 gloves) may reuse a body texture's name; the
+                    // original binds it to its own part, so keep it apart under a new name.
+                    var owner=file.Substring(0,file.Length-"Texture".Length);
+                    foreach(var t in own.Where(t=>textures.Any(x=>x.Text==t.Text))) {
+                        var renamed=t.Text+"_"+owner;
+                        foreach(var m in partMaterials.Where(k=>k.Key.StartsWith(owner)).SelectMany(k=>k.Value))
+                            foreach(var map in m.TextureMaps.Where(x=>x.Name==t.Text))map.Name=renamed;
+                        Console.WriteLine("Texture "+t.Text+" of "+file+" renamed to "+renamed);
+                        t.Text=renamed;
+                    }
+                }
+                textures.AddRange(own);
                 // Fallback for parts without a table: the installed tool's placement and a name guess.
                 string anchor=file.Contains("HandL")?"HandL":file.Contains("HandR")?"HandR":file.Contains("Under")||file.Contains("Skirt")?"Hip":file.Contains("Shell")||file.Contains("Ruck")?"Spine2":"Head";
                 var place=r.BFRESRender.ModelTransform;
@@ -114,6 +130,8 @@ class ConvertOutfit {
                         if(shape.BoneIndex>=0){var name=sub.Skeleton.bones[shape.BoneIndex].Text;shape.BoneIndex=model.Skeleton.bones.FindIndex(b=>b.Text==name);}
                     }
                     meshList.AddRange(sub.Objects);materials.AddRange(sub.Materials);
+                    if(!partMaterials.ContainsKey(file))partMaterials[file]=new List<FMAT>();
+                    partMaterials[file].AddRange(sub.Materials.OfType<FMAT>());
                 }
             }
             textures=textures.GroupBy(t=>t.Text).Select(g=>g.First()).ToList();
@@ -140,7 +158,7 @@ class ConvertOutfit {
                 if(args.Contains("--geometry-only"))all.Clear();
                 Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
                 File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
-                var prefixes=new[]{"Wait","Run","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
+                var prefixes=new[]{"Wait","Run","Dash","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
                 foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
                     var anim=new Assimp.Animation {Name=clip.Text,DurationInTicks=clip.FrameCount,TicksPerSecond=60.0};
                     var channels=new Dictionary<string,NodeAnimationChannel>();

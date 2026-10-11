@@ -1,93 +1,383 @@
 //! Local effects are loaded only by the optional asset build.
+//!
+//! What plays and when comes from the original's own sound tables (written
+//! by `tools/extract-sounds.py`): sounds attached to animation frames, to
+//! events such as landing, and to the thrown cap, each with its volume,
+//! pitch and speed curves.
 use crate::{
     input::Settings,
-    movement::{Fx, Move},
+    movement::{Fx, Move, Player},
     ui::Menu,
 };
-use bevy::audio::Volume;
+use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Trigger {
+    play: String,
+    frame: f32,
+    once: bool,
+}
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Layer {
+    resource: String,
+    volume: Option<f32>,
+    pitch: f32,
+    random_pitch: f32,
+    random_volume: f32,
+    delay: u32,
+    volume_curve: Option<[f32; 4]>,
+    pitch_curve: Option<[f32; 4]>,
+}
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Play {
+    random: bool,
+    #[serde(rename = "loop")]
+    looping: bool,
+    layers: Vec<Layer>,
+}
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Group {
+    actions: BTreeMap<String, Vec<Trigger>>,
+    reactions: BTreeMap<String, Vec<String>>,
+    plays: BTreeMap<String, Play>,
+}
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Resource {
+    files: Vec<String>,
+    volume: f32,
+    random_semitones: Option<[f32; 2]>,
+}
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Table {
+    mario: Group,
+    cap: Group,
+    footwear: BTreeMap<String, String>,
+    resources: BTreeMap<String, Resource>,
+}
 #[derive(Resource, Default)]
-struct Sounds(std::collections::BTreeMap<String, Vec<Handle<AudioSource>>>);
+struct Sounds {
+    table: Table,
+    handles: BTreeMap<String, Vec<Handle<AudioSource>>>,
+}
+/// A looping sound, tied to the animation or cap state that started it.
+#[derive(Component)]
+struct Looping(&'static str);
+#[derive(Default)]
+struct Tracker {
+    anim: (&'static str, u32),
+    frame: f32,
+    cap_out: bool,
+    cap_returning: bool,
+    boosts: u32,
+    rng: u32,
+    pending: Vec<(f32, String, bool, f32)>,
+}
 pub fn plugin(app: &mut App) {
     app.init_resource::<Sounds>()
         .add_systems(Startup, load)
         .add_systems(Update, play);
 }
+fn safe(path: &str) -> bool {
+    path.starts_with("local/sounds/")
+        && path.ends_with(".wav")
+        && !path.contains("..")
+        && !path.contains('\\')
+        && !path.contains(':')
+}
 fn load(mut sounds: ResMut<Sounds>, server: Res<AssetServer>) {
-    if let Some(files) =
-        std::fs::read(crate::local_assets::asset_dir().join("local/sounds/manifest.json"))
+    let Some(table) =
+        std::fs::read(crate::local_assets::asset_dir().join("local/sounds/player.json"))
             .ok()
-            .and_then(|b| {
-                serde_json::from_slice::<std::collections::BTreeMap<String, Vec<String>>>(&b).ok()
-            })
-    {
-        for (key, paths) in files {
-            let paths = paths
-                .into_iter()
-                .filter(|p| {
-                    p.starts_with("local/sounds/")
-                        && p.ends_with(".wav")
-                        && !p.contains("..")
-                        && !p.contains('\\')
-                        && !p.contains(':')
-                })
-                .map(|p| server.load(p))
-                .collect();
-            sounds.0.insert(key, paths);
+            .and_then(|b| serde_json::from_slice::<Table>(&b).ok())
+    else {
+        return;
+    };
+    for (name, resource) in &table.resources {
+        let handles = resource
+            .files
+            .iter()
+            .filter(|p| safe(p))
+            .map(|p| server.load(p.clone()))
+            .collect();
+        sounds.handles.insert(name.clone(), handles);
+    }
+    sounds.table = table;
+}
+fn curve(c: Option<[f32; 4]>, input: f32) -> f32 {
+    c.map_or(1., |[in_min, in_max, out_min, out_max]| {
+        let k = ((input - in_min) / (in_max - in_min).max(1e-6)).clamp(0., 1.);
+        out_min + (out_max - out_min) * k
+    })
+}
+impl Tracker {
+    fn rand(&mut self) -> f32 {
+        self.rng = self.rng.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        (self.rng >> 8) as f32 / (1u32 << 24) as f32
+    }
+}
+/// Everything needed to start sounds in one frame.
+struct Ctx<'a, 'w, 's> {
+    commands: &'a mut Commands<'w, 's>,
+    sounds: &'a Sounds,
+    volume: f32,
+    speed: f32,
+    footwear: Option<&'a str>,
+}
+impl Ctx<'_, '_, '_> {
+    /// Start one named sound of a group. Loops are tagged so they can stop.
+    fn start(&mut self, cap: bool, name: &str, tag: Option<&'static str>, t: &mut Tracker) {
+        let group = if cap {
+            &self.sounds.table.cap
+        } else {
+            &self.sounds.table.mario
+        };
+        // Outfits with their own footwear use its foot sounds when present.
+        let worn = self.footwear.and_then(|f| {
+            let name = if f == "Metal" {
+                name.replacen("Run", "RunMetal", 1)
+            } else {
+                format!("{f}{name}")
+            };
+            group.plays.get(&name)
+        });
+        let Some(play) = worn.or_else(|| group.plays.get(name)) else {
+            return;
+        };
+        let layers: Vec<&Layer> = if play.random && !play.layers.is_empty() {
+            let i = (t.rand() * play.layers.len() as f32) as usize % play.layers.len();
+            vec![&play.layers[i]]
+        } else {
+            play.layers.iter().collect()
+        };
+        for layer in layers {
+            let (Some(resource), Some(handles)) = (
+                self.sounds.table.resources.get(&layer.resource),
+                self.sounds.handles.get(&layer.resource),
+            ) else {
+                continue;
+            };
+            if handles.is_empty() {
+                continue;
+            }
+            let handle =
+                handles[(t.rand() * handles.len() as f32) as usize % handles.len()].clone();
+            let mut semitones = layer.pitch + (t.rand() * 2. - 1.) * layer.random_pitch;
+            if let Some([low, high]) = resource.random_semitones {
+                semitones += low + (high - low) * t.rand();
+            }
+            let pitch = 2f32.powf(semitones / 12.) * curve(layer.pitch_curve, self.speed);
+            let gain = self.volume
+                * resource.volume
+                * layer.volume.unwrap_or(1.)
+                * curve(layer.volume_curve, self.speed)
+                * (1. - layer.random_volume * t.rand());
+            if layer.delay > 0 && tag.is_none() {
+                t.pending
+                    .push((layer.delay as f32 / 60., layer.resource.clone(), cap, gain));
+                continue;
+            }
+            let mode = if play.looping && tag.is_some() {
+                PlaybackMode::Loop
+            } else {
+                PlaybackMode::Despawn
+            };
+            let mut e = self.commands.spawn((
+                AudioPlayer::new(handle),
+                PlaybackSettings {
+                    mode,
+                    volume: Volume::Linear(gain),
+                    speed: pitch,
+                    ..default()
+                },
+            ));
+            if let (true, Some(tag)) = (play.looping, tag) {
+                e.insert(Looping(tag));
+            }
+        }
+    }
+    fn reaction(&mut self, cap: bool, name: &str, t: &mut Tracker) {
+        let group = if cap {
+            &self.sounds.table.cap
+        } else {
+            &self.sounds.table.mario
+        };
+        for play in group.reactions.get(name).cloned().unwrap_or_default() {
+            self.start(cap, &play, None, t);
+        }
+    }
+    /// Sounds an action schedules between two frames of its clip.
+    fn action(
+        &mut self,
+        cap: bool,
+        name: &str,
+        from: f32,
+        to: f32,
+        tag: &'static str,
+        t: &mut Tracker,
+    ) {
+        let group = if cap {
+            &self.sounds.table.cap
+        } else {
+            &self.sounds.table.mario
+        };
+        for trigger in group.actions.get(name).cloned().unwrap_or_default() {
+            // Unset or negative start frames play as the clip begins.
+            let at = trigger.frame.max(0.);
+            let crossed = if from < 0. {
+                at <= to
+            } else {
+                from < at && at <= to
+            };
+            if crossed {
+                self.start(cap, &trigger.play, Some(tag), t);
+            }
         }
     }
 }
-fn key(fx: Fx) -> Option<&'static str> {
-    Some(match fx {
-        Fx::Jump(kind) => match kind {
-            Move::DoubleJump => "double_jump",
-            Move::TripleJump => "triple_jump",
-            Move::LongJump => "long_jump",
-            Move::Backflip => "backflip",
-            Move::Sideflip => "sideflip",
-            Move::SpinJump => "spin_jump",
-            Move::RollJump => "roll_jump",
-            Move::PoundJump => "pound_jump",
-            Move::WallJump => "wall_jump",
-            Move::CapBounce | Move::CapVault => return None,
-            _ => "jump",
-        },
-        Fx::Land { .. } | Fx::PoundLand => "land",
-        Fx::Step => "step",
-        Fx::PoundStart => "pound",
-        Fx::RollStart | Fx::RollBoost { .. } => "roll",
-        Fx::Dive => "dive",
-        Fx::Throw(_) => "throw",
-        Fx::Catch => "catch",
-        Fx::CapBounce => "cap_bounce",
-        Fx::Ledge => "ledge",
-        Fx::Pole => "pole",
-        Fx::Splash => "swim",
-        Fx::SwimStroke => "swim_dash",
-        Fx::Skid | Fx::WallSlide => return None,
-    })
-}
+#[allow(clippy::too_many_arguments)]
 fn play(
     mut commands: Commands,
     mut events: MessageReader<Fx>,
     sounds: Res<Sounds>,
     settings: Res<Settings>,
+    wardrobe: Option<Res<crate::local_assets::Wardrobe>>,
     menu: Res<Menu>,
-    mut serial: Local<usize>,
+    time: Res<Time>,
+    player: Option<Single<&Player>>,
+    loops: Query<(Entity, &Looping)>,
+    mut t: Local<Tracker>,
 ) {
-    for fx in events.read() {
-        if menu.open || settings.outfit < 3 {
-            continue;
+    let fx: Vec<Fx> = events.read().copied().collect();
+    let (Some(p), false) = (player, menu.open || settings.outfit < 3) else {
+        for (e, _) in &loops {
+            commands.entity(e).despawn();
         }
-        if let Some(choices) = key(*fx)
-            .and_then(|k| sounds.0.get(k))
-            .filter(|v| !v.is_empty())
-        {
-            commands.spawn((
-                AudioPlayer::new(choices[*serial % choices.len()].clone()),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.65 * settings.volume)),
+        return;
+    };
+    let outfit = wardrobe
+        .as_ref()
+        .and_then(|w| w.outfits.get(settings.outfit - 3))
+        .and_then(|o| o.file.strip_prefix("local/"))
+        .and_then(|f| f.strip_suffix(".glb"))
+        .unwrap_or("");
+    let mut ctx = Ctx {
+        commands: &mut commands,
+        sounds: &sounds,
+        volume: settings.volume,
+        speed: p.move_speed,
+        footwear: sounds.table.footwear.get(outfit).map(String::as_str),
+    };
+    // Animation-driven sounds, with loops ending when their clip does.
+    let anim = (p.anim.name, p.anim.serial);
+    let looped = crate::local_assets::looping(p.anim.name);
+    if anim != t.anim {
+        for (e, tag) in &loops {
+            if tag.0 == "anim" {
+                ctx.commands.entity(e).despawn();
+            }
+        }
+        t.anim = anim;
+        t.frame = -1.;
+    }
+    let frame = p.anim.frame;
+    if frame >= t.frame {
+        let from = t.frame;
+        ctx.action(false, p.anim.name, from, frame, "anim", &mut t);
+        ctx.action(true, p.anim.name, from, frame, "anim", &mut t);
+    } else if looped {
+        // A looping clip wrapped: replay its repeating sounds.
+        ctx.action(false, p.anim.name, -1., frame, "anim", &mut t);
+    }
+    t.frame = frame;
+    // Event sounds.
+    for f in fx {
+        match f {
+            Fx::Step { left } => {
+                let name = match (p.mode, left) {
+                    (Move::Crawl, _) => continue,
+                    (Move::Swim | Move::SwimDash, true) => "SwimRunL",
+                    (Move::Swim | Move::SwimDash, false) => "SwimRunR",
+                    (_, true) => "RunL",
+                    (_, false) => "RunR",
+                };
+                ctx.start(false, name, None, &mut t);
+            }
+            Fx::Land { .. } => {
+                let name = if p.mode == Move::Roll {
+                    "RollLand"
+                } else if p.move_speed > 3. {
+                    "LandRun"
+                } else {
+                    "Land"
+                };
+                ctx.reaction(false, name, &mut t);
+            }
+            Fx::RollStart => t.boosts = 0,
+            Fx::RollBoost { .. } => {
+                t.boosts += 1;
+                let name = if t.boosts == 1 {
+                    "RollBoost"
+                } else {
+                    "RollBoostAgain"
+                };
+                ctx.reaction(false, name, &mut t);
+            }
+            Fx::Throw(kind) => {
+                ctx.reaction(true, "Throw", &mut t);
+                let flight = match kind {
+                    crate::movement::Throw::Spin => "FlyingWaitSpiral",
+                    crate::movement::Throw::Down if p.grounded => "FlyingWaitRolling",
+                    _ => "FlyingWait",
+                };
+                ctx.action(true, flight, -1., 0., "cap", &mut t);
+            }
+            Fx::CapBounce => ctx.action(true, "Trample", -1., 60., "none", &mut t),
+            _ => {}
+        }
+    }
+    // The cap: return swing, catch, and its flight loop stopping.
+    let out = p.cap.is_some();
+    let returning = p.cap.as_ref().is_some_and(|c| c.returning);
+    if returning && !t.cap_returning {
+        ctx.reaction(true, "Return", &mut t);
+    }
+    if t.cap_out && !out {
+        for (e, tag) in &loops {
+            if tag.0 == "cap" {
+                ctx.commands.entity(e).despawn();
+            }
+        }
+        if p.events.is_empty() {
+            ctx.reaction(true, "Catch", &mut t);
+        }
+    }
+    t.cap_out = out;
+    t.cap_returning = returning;
+    // Delayed layers.
+    let dt = time.delta_secs();
+    let mut due = Vec::new();
+    t.pending.retain_mut(|(wait, name, cap, gain)| {
+        *wait -= dt;
+        if *wait <= 0. {
+            due.push((name.clone(), *cap, *gain));
+        }
+        *wait > 0.
+    });
+    for (name, _, gain) in due {
+        if let Some(handle) = sounds.handles.get(&name).and_then(|h| h.first()) {
+            ctx.commands.spawn((
+                AudioPlayer::new(handle.clone()),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(gain)),
             ));
-            *serial = serial.wrapping_add(1);
         }
     }
 }
@@ -100,24 +390,74 @@ pub fn self_check() {
     let mut menu = Menu::default();
     menu.open = false;
     world.insert_resource(menu);
-    world.insert_resource(Sounds([("jump".into(), vec![Handle::default()])].into()));
+    world.insert_resource(Time::<()>::default());
+    let layer = |r: &str| Layer {
+        resource: r.into(),
+        ..default()
+    };
+    let single = |r: &str| Play {
+        layers: vec![layer(r)],
+        ..default()
+    };
+    let mut table = Table::default();
+    table.mario.actions.insert(
+        "Jump".into(),
+        vec![
+            Trigger {
+                play: "Jump".into(),
+                frame: -1.,
+                once: false,
+            },
+            Trigger {
+                play: "vJump".into(),
+                frame: 1.,
+                once: false,
+            },
+        ],
+    );
+    table
+        .mario
+        .plays
+        .insert("Jump".into(), single("SePfJumpSoil"));
+    table
+        .mario
+        .plays
+        .insert("vJump".into(), single("WsPvJump00"));
+    for r in ["SePfJumpSoil", "WsPvJump00"] {
+        table.resources.insert(
+            r.into(),
+            Resource {
+                files: vec![format!("local/sounds/{r}.wav")],
+                volume: 0.5,
+                random_semitones: None,
+            },
+        );
+    }
+    let handles = table
+        .resources
+        .keys()
+        .map(|k| (k.clone(), vec![Handle::default()]))
+        .collect();
+    world.insert_resource(Sounds { table, handles });
     world.insert_resource(bevy::ecs::message::Messages::<Fx>::default());
+    let mut p = Player::default();
+    p.anim.name = "Jump";
+    p.anim.serial = 1;
+    p.anim.frame = 0.;
+    let e = world.spawn(p).id();
     let system = world.register_system(play);
-    world.write_message(Fx::Jump(Move::Jump));
+    let count = |w: &mut World| w.query::<&AudioPlayer>().iter(w).count();
     world.run_system(system).unwrap();
-    assert_eq!(world.query::<&AudioPlayer>().iter(&world).count(), 1);
+    assert_eq!(count(&mut world), 1, "the foot sound starts with the clip");
     world.run_system(system).unwrap();
-    assert_eq!(
-        world.query::<&AudioPlayer>().iter(&world).count(),
-        1,
-        "each event plays once"
-    );
+    assert_eq!(count(&mut world), 1, "each trigger plays once");
+    world.get_mut::<Player>(e).unwrap().anim.frame = 2.;
+    world.run_system(system).unwrap();
+    assert_eq!(count(&mut world), 2, "the voice waits for its frame");
     world.resource_mut::<Menu>().open = true;
-    world.write_message(Fx::Jump(Move::Jump));
+    world.get_mut::<Player>(e).unwrap().anim.serial = 2;
     world.run_system(system).unwrap();
-    assert_eq!(
-        world.query::<&AudioPlayer>().iter(&world).count(),
-        1,
-        "menus suppress movement audio"
-    );
+    assert_eq!(count(&mut world), 2, "menus suppress movement audio");
+    assert!((curve(Some([0.1, 6., 0.4, 1.]), 14.) - 1.).abs() < 1e-6);
+    assert!((curve(Some([0.1, 6., 0.4, 1.]), 0.1) - 0.4).abs() < 1e-6);
 }

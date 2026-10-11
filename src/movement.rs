@@ -1,20 +1,206 @@
-//! Original movement approximation. Metres, seconds, Y up; no copied game code.
-//! Tuning is by feel against the original's behaviour, not measured values.
+//! Player controller modelled on the original game's player states.
+//!
+//! It runs at the original's 60 frames per second in its distance unit (one
+//! unit is a centimetre; Mario is 160 tall) and its tuning values. Positions
+//! are stored in metres for the rest of the game. States that the public
+//! decompilation documents follow it; the rest are inferred from their tuning
+//! names and observed behaviour. No original code is reproduced here.
 use crate::input::Orders;
 use bevy::prelude::*;
 
-pub const RADIUS: f32 = 0.35;
-pub const HEIGHT: f32 = 1.65;
+/// Metres per original distance unit.
+pub const UNIT: f32 = 0.01;
+/// Simulation rate, matching the original.
+pub const FPS: f32 = 60.;
+pub const RADIUS: f32 = 0.45;
+pub const HEIGHT: f32 = 1.6;
+const SQUAT_HEIGHT: f32 = 0.9;
 pub const SPAWN: Vec3 = Vec3::new(0.0, 0.0, 5.0);
+/// Full-tilt running speed in metres per second.
+pub const RUN: f32 = t::NORMAL_MAX * UNIT * FPS;
 
-/// Full-tilt running speed.
-pub const RUN: f32 = 9.;
-const RISE_GRAVITY: f32 = 27.;
-const FIXED_GRAVITY: f32 = 31.;
-const CUT_GRAVITY: f32 = 72.;
-const FALL_GRAVITY: f32 = 40.;
-const TERMINAL: f32 = 30.;
-const ROLL_MAX: f32 = 23.;
+/// Tuning in original units per frame, following the original player constants.
+mod t {
+    pub const GRAVITY: f32 = 3.;
+    pub const NORMAL_MAX: f32 = 14.;
+    pub const NORMAL_MIN: f32 = 3.;
+    pub const ACCEL_FRAMES: f32 = 40.;
+    pub const BRAKE_FRAMES: f32 = 10.;
+    pub const DASH_JUDGE: f32 = 14.5;
+    pub const AFTER_TURN_MAX: f32 = 17.;
+    pub const AFTER_TURN_FRAMES: u32 = 30;
+    pub const BRAKE_TURN_START: u32 = 5;
+    pub const BRAKE_ON_SPEED_RATE: f32 = 0.5;
+    pub const BRAKE_ON_COUNTER: u32 = 10;
+    pub const QUICK_TURN_JUMP_FRAMES: u32 = 20;
+    pub const ROUND_LIMIT_DEG: f32 = 8.5;
+    pub const ROUND_LIMIT_DEG_MIN: f32 = 6.5;
+    pub const RUN_SPEED_CONTINUOUS_THROW: f32 = 16.;
+    pub const RUN_TIME_CONTINUOUS_THROW: u32 = 20;
+    pub const RUN_ACCEL_FRAMES_CONTINUOUS_THROW: f32 = 60.;
+
+    pub const EXTEND_FRAMES: u32 = 10;
+    pub const JUMP_POWER_MIN: f32 = 17.;
+    pub const JUMP_POWER_MAX: f32 = 19.5;
+    pub const JUMP_GRAVITY: f32 = 1.5;
+    pub const JUMP_MOVE_MIN: f32 = 11.;
+    pub const JUMP_MOVE_MAX: f32 = 30.;
+    pub const JUMP_ACCEL_FRONT: f32 = 0.5;
+    pub const JUMP_ACCEL_BACK: f32 = 1.;
+    pub const JUMP_TURN_LIMIT_DEG: f32 = 6.;
+    pub const JUMP_TURN_FAST_DEG: f32 = 135.;
+    pub const JUMP_TURN_FAST_LIMIT_DEG: f32 = 25.;
+    pub const PRE_INPUT_JUMP: u32 = 5;
+    pub const CONTINUOUS_JUMP_TIMER: u32 = 10;
+    pub const CONTINUOUS_JUMP_POWER_MIN: f32 = 19.5;
+    pub const JUMP_POWER_MAX_2ND: f32 = 21.;
+    pub const JUMP_GRAVITY_2ND: f32 = 1.5;
+    pub const JUMP_POWER_3RD: f32 = 25.;
+    pub const JUMP_GRAVITY_3RD: f32 = 1.;
+    pub const GRAVITY_AIR: f32 = 1.5;
+    pub const FRICTION_AIR: f32 = 0.99;
+    pub const FALL_MAX: f32 = 35.;
+    pub const LONG_FALL: f32 = 3000.;
+
+    pub const SQUAT_JUMP_POWER: f32 = 32.;
+    pub const SQUAT_JUMP_GRAVITY: f32 = 1.;
+    pub const SQUAT_JUMP_BACK: f32 = 5.;
+    pub const SQUAT_JUMP_MOVE_MAX: f32 = 9.;
+    pub const TURN_JUMP_POWER: f32 = 32.;
+    pub const TURN_JUMP_GRAVITY: f32 = 1.;
+    pub const TURN_JUMP_VEL_H: f32 = 9.;
+
+    pub const LONG_JUMP_ACCEL: f32 = 0.25;
+    pub const LONG_JUMP_BRAKE: f32 = 0.5;
+    pub const LONG_JUMP_SIDE_ACCEL: f32 = 0.25;
+    pub const LONG_JUMP_GRAVITY: f32 = 0.48;
+    pub const LONG_JUMP_POWER: f32 = 12.;
+    pub const LONG_JUMP_MOVE_POW: f32 = 4.;
+    pub const LONG_JUMP_INIT_SPEED: f32 = 14.;
+    pub const LONG_JUMP_SPEED: f32 = 23.;
+    pub const LONG_JUMP_SPEED_MIN: f32 = 2.5;
+    pub const CONTINUOUS_LONG_JUMP_TIMER: u32 = 15;
+
+    pub const SPIN_JUMP_POWER: f32 = 20.;
+    pub const SPIN_JUMP_GRAVITY: f32 = 0.4;
+    pub const SPIN_JUMP_MOVE_MAX: f32 = 8.;
+    pub const SPIN_DOWN_FALL_INIT: f32 = 35.;
+    pub const SPIN_DOWN_FALL_POWER: f32 = 1.5;
+    pub const SPIN_DOWN_FALL_MAX: f32 = 45.;
+    pub const GROUND_SPIN_FRAMES: u32 = 90;
+    pub const GROUND_SPIN_MOVE_MAX: f32 = 8.;
+
+    pub const HIP_DROP_SPEED: f32 = 45.;
+    pub const HIP_DROP_LAND_CANCEL: u32 = 24;
+    pub const HIP_DROP_JUMP_BEGIN: u32 = 5;
+    pub const HIP_DROP_JUMP_END: u32 = 30;
+    pub const HIP_DROP_JUMP_POWER: f32 = 40.;
+
+    pub const HEAD_SLIDING_SPEED: f32 = 20.;
+    pub const HEAD_SLIDING_SPEED_MIN: f32 = 2.5;
+    pub const HEAD_SLIDING_BRAKE: f32 = 0.5;
+    pub const HEAD_SLIDING_SIDE_ACCEL: f32 = 0.125;
+    pub const HEAD_SLIDING_JUMP: f32 = 28.;
+    pub const HEAD_SLIDING_GRAVITY: f32 = 2.;
+
+    pub const ROLL_START: f32 = 20.;
+    pub const ROLL_BOOST: f32 = 30.;
+    pub const ROLL_MAX: f32 = 35.;
+    pub const ROLL_FRAMES_MIN: u32 = 45;
+    pub const ROLL_FRAMES_MIN_BOOST: u32 = 30;
+    pub const ROLL_START_JUMP: f32 = 12.;
+    pub const ROLL_SLOPE_ACCEL: f32 = 0.6;
+    pub const ROLL_BRAKE: f32 = 0.998;
+    pub const ROLL_END_SPEED: f32 = 17.;
+    pub const ROLL_SIDE_ACCEL: f32 = 0.4;
+    pub const ROLL_UNROLL_FRAMES: u32 = 5;
+    pub const ROLL_END_BRAKE: f32 = 0.95;
+    pub const ROLL_END_BRAKE_END: f32 = 10.;
+    pub const ROLL_RESTART_ACCEL: f32 = 6.;
+    pub const ROLL_RESTART_INTERVAL: u32 = 15;
+
+    pub const SQUAT_BRAKE_END: f32 = 3.5;
+    pub const SQUAT_ACCEL_RATE: f32 = 1.2;
+    pub const SQUAT_BRAKE_RATE: f32 = 0.95;
+    pub const SQUAT_WALK: f32 = 3.5;
+
+    pub const WALL_SLIDE_GRAVITY: f32 = 0.5;
+    pub const WALL_SLIDE_MAX: f32 = 10.;
+    pub const WALL_KEEP_FRAMES: u32 = 3;
+    pub const WALL_JUMP_POWER: f32 = 23.;
+    pub const WALL_JUMP_GRAVITY: f32 = 0.95;
+    pub const WALL_JUMP_H: f32 = 8.6;
+    pub const WALL_JUMP_NO_INPUT: u32 = 25;
+    pub const WALL_CATCH_EDGE_TOP: f32 = 120.;
+    pub const WALL_CATCH_BOTTOM: f32 = 150.;
+    pub const WALL_CLIMB_JUMP_V: f32 = 20.;
+    pub const WALL_CLIMB_JUMP_H: f32 = 3.;
+    pub const WALL_CLIMB_JUMP_GRAVITY: f32 = 1.5;
+
+    pub const CAP_LEAPFROG_POWER: f32 = 32.;
+    pub const CAP_LEAPFROG_POWER_AIR: f32 = 26.;
+    pub const CAP_LEAPFROG_GRAVITY: f32 = 1.;
+    pub const CAP_CATCH_POP_POWER: f32 = 10.;
+    pub const CAP_CATCH_POP_GRAVITY: f32 = 0.8;
+    pub const CAP_CATCH_JUMP_POWER: f32 = 22.;
+    pub const CAP_CATCH_JUMP_GRAVITY: f32 = 1.3;
+    pub const CAP_CATCH_WINDOW: u32 = 10;
+    pub const PRE_INPUT_THROW: u32 = 10;
+
+    pub const SPIN_CAP_THROW_FRAME: u32 = 12;
+    pub const SPIN_CAP_THROW_FRAME_AIR: u32 = 8;
+    pub const SPIN_AIR_JUMP: f32 = 6.;
+    pub const SPIN_AIR_SPEED_MAX: f32 = 7.;
+    pub const SPIN_AIR_GRAVITY: f32 = 0.3;
+    pub const SPIN_BRAKE_FRAMES: u32 = 15;
+    pub const SPIN_BRAKE_RATE: f32 = 0.95;
+
+    // Cap flight (the cap's own parameters).
+    pub const CAP_HEIGHT: f32 = 70.;
+    pub const CAP_SPEED: f32 = 32.;
+    pub const CAP_REACH: f32 = 500.;
+    pub const CAP_BRAKE_FRAMES: f32 = 10.;
+    pub const CAP_STAY: u32 = 20;
+    pub const CAP_STAY_MAX: u32 = 120;
+    pub const CAP_RETURN_ACCEL: f32 = 18.;
+    pub const CAP_RETURN_MAX: f32 = 80.;
+    pub const CAP_SPIN_RADIUS: f32 = 250.;
+    pub const CAP_SPIN_FRAMES: u32 = 45;
+    pub const CAP_ROLL_SPEED: f32 = 30.;
+    pub const CAP_ROLL_REACH: f32 = 400.;
+
+    pub const SWIM_GRAVITY: f32 = 0.25;
+    pub const SWIM_FALL_MAX: f32 = 6.5;
+    pub const SWIM_RISE_POWER: f32 = 0.6;
+    pub const SWIM_RISE_MAX: f32 = 7.5;
+    pub const SWIM_RISE_FRAMES: u32 = 10;
+    pub const SWIM_ACCEL_H: f32 = 0.25;
+    pub const SWIM_SPEED_MAX_H: f32 = 7.5;
+    pub const SWIM_BRAKE_H: f32 = 0.975;
+    pub const SWIM_DIVE_SPEED: f32 = 26.5;
+    pub const SWIM_DIVE_BRAKE: f32 = 0.875;
+
+    pub const POLE_UP_DIST: f32 = 100.;
+    pub const POLE_UP_FRAMES: u32 = 25;
+    pub const POLE_DOWN_SPEED: f32 = 15.;
+}
+
+/// Frame counts of clips whose end the controller waits for.
+pub mod clip {
+    pub const HIP_DROP_START: u32 = 24;
+    pub const HIP_DROP_LAND: u32 = 44;
+    pub const ROLLING_START: u32 = 6;
+    pub const ROLLING_END: u32 = 12;
+    pub const HEAD_SLIDING_START: u32 = 48;
+    pub const LAND: u32 = 26;
+    pub const SPIN_CAP_START: u32 = 22;
+    pub const TURN: u32 = 12;
+    pub const WALL_CATCH_START: u32 = 55;
+    pub const WALL_CATCH_END: u32 = 46;
+    pub const POLE_CATCH: u32 = 8;
+    pub const RUN_START: u32 = 30;
+    pub const JUMP_CAP_LEAP_FROG: u32 = 36;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Move {
@@ -23,6 +209,7 @@ pub enum Move {
     Walk,
     Run,
     Skid,
+    Turn,
     Crouch,
     Crawl,
     Fall,
@@ -33,6 +220,8 @@ pub enum Move {
     Backflip,
     Sideflip,
     SpinJump,
+    SpinDrop,
+    GroundSpin,
     GroundPound,
     PoundLand,
     PoundJump,
@@ -49,6 +238,8 @@ pub enum Move {
     SwimDash,
     CapBounce,
     CapVault,
+    CatchJump,
+    Throw,
 }
 impl Move {
     pub fn label(self) -> &'static str {
@@ -57,6 +248,7 @@ impl Move {
             Self::Walk => "Walk",
             Self::Run => "Run",
             Self::Skid => "Skid",
+            Self::Turn => "Turn",
             Self::Crouch => "Crouch",
             Self::Crawl => "Crawl",
             Self::Fall => "Fall",
@@ -67,11 +259,11 @@ impl Move {
             Self::Backflip => "Backflip",
             Self::Sideflip => "Side somersault",
             Self::SpinJump => "Spin jump",
-            Self::GroundPound => "Ground pound",
-            Self::PoundLand => "Ground pound",
+            Self::SpinDrop => "Spin drop",
+            Self::GroundSpin => "Spin",
+            Self::GroundPound | Self::PoundLand => "Ground pound",
             Self::PoundJump => "Ground pound jump",
-            Self::Roll => "Roll",
-            Self::RollEnd => "Roll",
+            Self::Roll | Self::RollEnd => "Roll",
             Self::RollJump => "Roll jump",
             Self::Dive => "Dive",
             Self::Slide => "Belly slide",
@@ -83,12 +275,26 @@ impl Move {
             Self::SwimDash => "Swim dash",
             Self::CapBounce => "Cap jump",
             Self::CapVault => "Cap vault",
+            Self::CatchJump => "Catch jump",
+            Self::Throw => "Cap throw",
         }
     }
-    pub fn airborne_momentum(self) -> bool {
+    fn airborne_jump(self) -> bool {
         matches!(
             self,
-            Self::LongJump | Self::RollJump | Self::Dive | Self::CapVault
+            Self::Jump
+                | Self::DoubleJump
+                | Self::TripleJump
+                | Self::Backflip
+                | Self::Sideflip
+                | Self::SpinJump
+                | Self::PoundJump
+                | Self::RollJump
+                | Self::WallJump
+                | Self::CapBounce
+                | Self::CapVault
+                | Self::CatchJump
+                | Self::Fall
         )
     }
 }
@@ -104,8 +310,9 @@ pub enum Throw {
 pub enum Fx {
     Jump(Move),
     Land { hard: bool },
-    Step,
+    Step { left: bool },
     Skid,
+    TurnDust,
     PoundStart,
     PoundLand,
     RollStart,
@@ -120,48 +327,105 @@ pub enum Fx {
     Splash,
     SwimStroke,
 }
+/// Clip the presentation should play: an original animation name, or "Move"
+/// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anim {
+    pub name: &'static str,
+    pub serial: u32,
+    /// Original frames elapsed in the clip (for "Move", the 60-frame cycle phase).
+    pub frame: f32,
+    /// Playback rate in original frames per frame.
+    pub rate: f32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapPhase {
+    Out,
+    Stay,
+    Return,
+}
 #[derive(Clone, Debug)]
 pub struct Cap {
+    /// Metres.
     pub pos: Vec3,
-    pub origin: Vec3,
-    pub dir: Vec3,
-    pub reach: f32,
+    /// Seconds since the throw, for presentation.
     pub age: f32,
     pub returning: bool,
     pub kind: Throw,
+    pub phase: CapPhase,
+    /// Units per frame.
+    vel: Vec3,
+    dir: Vec3,
+    travelled: f32,
+    frames: u32,
+    stay: u32,
 }
 #[derive(Component, Debug)]
 pub struct Player {
+    /// Metres.
     pub pos: Vec3,
+    /// Metres per second, derived each frame from `v`.
     pub vel: Vec3,
     pub facing: Vec3,
     pub mode: Move,
     pub grounded: bool,
     pub cap: Option<Cap>,
-    pub chain: u8,
-    pub since_land: f32,
-    pub coyote: f32,
-    pub jump_buffer: f32,
-    pub wall: Vec3,
-    pub ledge: Vec3,
+    /// Seconds in the current mode.
     pub timer: f32,
-    pub spin: f32,
-    pub spin_turn: f32,
-    pub last_stick: Vec2,
+    pub since_land: f32,
     pub distance: f32,
     pub checkpoint: Vec3,
-    pub cap_bounced: bool,
-    pub dive_used: bool,
-    pub air_throw: bool,
-    pub last_boost: f32,
-    pub control_lock: f32,
     pub hard_land: bool,
-    pub peak: f32,
-    pub slope: f32,
-    pub slick: bool,
-    pub stride: f32,
+    pub wall: Vec3,
     pub hitstop: f32,
     pub events: Vec<Fx>,
+    pub anim: Anim,
+    /// Upper-body overlay clip while throwing on the run.
+    pub sub_anim: Option<Anim>,
+    /// Horizontal speed in original units per frame, for animation blending.
+    pub move_speed: f32,
+    /// Units per frame.
+    v: Vec3,
+    frame: u32,
+    land_frames: u32,
+    pre_jump: u32,
+    pre_throw: u32,
+    coyote: u32,
+    jump_count: u32,
+    jump_timer: u32,
+    jump_held_frames: u32,
+    long_jump_count: u32,
+    long_jump_timer: u32,
+    run_frames: u32,
+    after_turn: u32,
+    quick_turn: u32,
+    throw_run: u32,
+    throw_count: u32,
+    throw_side: bool,
+    throw_timer: u32,
+    pending_throw: Option<Throw>,
+    catch_window: u32,
+    cap_jump_possible: bool,
+    air_throw_used: bool,
+    dive_possible: bool,
+    roll_boost_frames: u32,
+    roll_last_boost: u32,
+    unroll: u32,
+    gravity: f32,
+    jump_extend: bool,
+    max_air_speed: f32,
+    peak: f32,
+    spin: u32,
+    spin_turn: f32,
+    last_stick: Vec2,
+    stick: Vec3,
+    tilt: f32,
+    slope: f32,
+    slick: bool,
+    ledge: Vec3,
+    pole: Vec3,
+    swim_rise: u32,
+    step_phase: f32,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -172,30 +436,63 @@ impl Default for Player {
             mode: Move::Idle,
             grounded: true,
             cap: None,
-            chain: 0,
-            since_land: 5.,
-            coyote: 0.1,
-            jump_buffer: 0.,
-            wall: Vec3::ZERO,
-            ledge: Vec3::ZERO,
             timer: 0.,
-            spin: 0.,
-            spin_turn: 0.,
-            last_stick: Vec2::ZERO,
+            since_land: 5.,
             distance: 0.,
             checkpoint: SPAWN,
-            cap_bounced: false,
-            dive_used: false,
-            air_throw: false,
-            last_boost: 9.,
-            control_lock: 0.,
             hard_land: false,
-            peak: SPAWN.y,
-            slope: 0.,
-            slick: false,
-            stride: 0.,
+            wall: Vec3::ZERO,
             hitstop: 0.,
             events: Vec::new(),
+            anim: Anim {
+                name: "Wait",
+                serial: 0,
+                frame: 0.,
+                rate: 1.,
+            },
+            sub_anim: None,
+            move_speed: 0.,
+            v: Vec3::ZERO,
+            frame: 0,
+            land_frames: 300,
+            pre_jump: 0,
+            pre_throw: 0,
+            coyote: 0,
+            jump_count: 0,
+            jump_timer: t::CONTINUOUS_JUMP_TIMER,
+            jump_held_frames: 0,
+            long_jump_count: 0,
+            long_jump_timer: 0,
+            run_frames: 0,
+            after_turn: 0,
+            quick_turn: 0,
+            throw_run: 0,
+            throw_count: 0,
+            throw_side: false,
+            throw_timer: 0,
+            pending_throw: None,
+            catch_window: 0,
+            cap_jump_possible: true,
+            air_throw_used: false,
+            dive_possible: true,
+            roll_boost_frames: 0,
+            roll_last_boost: 0,
+            unroll: 0,
+            gravity: t::GRAVITY_AIR,
+            jump_extend: false,
+            max_air_speed: t::JUMP_MOVE_MIN,
+            peak: SPAWN.y,
+            spin: 0,
+            spin_turn: 0.,
+            last_stick: Vec2::ZERO,
+            stick: Vec3::ZERO,
+            tilt: 0.,
+            slope: 0.,
+            slick: false,
+            ledge: Vec3::ZERO,
+            pole: Vec3::ZERO,
+            swim_rise: 0,
+            step_phase: 0.,
         }
     }
 }
@@ -246,13 +543,13 @@ impl Course {
 pub fn plugin(app: &mut App) {
     app.init_resource::<Course>()
         .add_message::<Fx>()
+        .insert_resource(Time::<Fixed>::from_hz(FPS as f64))
         .add_systems(FixedUpdate, simulate);
 }
 fn simulate(
     mut players: Query<&mut Player>,
     mut orders: ResMut<Orders>,
     course: Res<Course>,
-    time: Res<Time<Fixed>>,
     menu: Res<crate::ui::Menu>,
     mut fx: MessageWriter<Fx>,
 ) {
@@ -261,18 +558,44 @@ fn simulate(
         return;
     }
     for mut p in &mut players {
-        p.step(&orders, &course, time.delta_secs());
+        p.step(&orders, &course);
         fx.write_batch(p.events.drain(..));
     }
     orders.clear_edges();
 }
+fn yaw(v: Vec3) -> f32 {
+    v.x.atan2(v.z)
+}
+fn wrap(a: f32) -> f32 {
+    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
 /// Rotate a flat direction toward another by at most `max` radians.
 fn turn(from: Vec3, to: Vec3, max: f32) -> Vec3 {
-    let a = from.x.atan2(from.z);
-    let b = to.x.atan2(to.z);
-    let d = (b - a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-    let y = a + d.clamp(-max, max);
-    Vec3::new(y.sin(), 0., y.cos())
+    let a = yaw(from);
+    let d = wrap(yaw(to) - a).clamp(-max, max);
+    Vec3::new((a + d).sin(), 0., (a + d).cos())
+}
+/// Weights of Walk, Run, Dash and DashFast in the run cycle at a speed in
+/// units per frame, from the original's border speeds and blend ranges.
+pub fn move_weights(speed: f32) -> [f32; 4] {
+    let ramp = |border: f32, range: f32| ((speed - border + range) / (2. * range)).clamp(0., 1.);
+    let (run, dash, fast) = (ramp(8., 2.), ramp(15., 1.), ramp(20., 1.));
+    [1. - run, run * (1. - dash), dash * (1. - fast), fast]
+}
+/// Run cycle playback rate, in frames of its 60-frame phase per game frame.
+pub fn move_rate(speed: f32) -> f32 {
+    let speed = speed.min(25.);
+    let k = ((speed - 6.) / (26. - 6.)).clamp(0., 1.);
+    let w = move_weights(speed);
+    let rate = (w[0] + w[1]) * lerp_clamped(1., 3.5, k)
+        + w[2] * lerp_clamped(1., 4., k)
+        + w[3] * lerp_clamped(1., 5., k);
+    // Below the minimum speed the cycle slows with the feet.
+    if speed < 6. {
+        rate * (speed / 6.).max(0.25)
+    } else {
+        rate
+    }
 }
 fn approach(value: f32, target: f32, step: f32) -> f32 {
     if value < target {
@@ -281,25 +604,15 @@ fn approach(value: f32, target: f32, step: f32) -> f32 {
         (value - step).max(target)
     }
 }
+fn lerp_clamped(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t.clamp(0., 1.)
+}
 impl Player {
-    fn launch(&mut self, kind: Move, height: f32, speed: Option<f32>) {
-        self.mode = kind;
-        self.vel.y = height;
-        if let Some(s) = speed {
-            self.vel.x = self.facing.x * s;
-            self.vel.z = self.facing.z * s;
-        }
-        self.grounded = false;
-        self.coyote = 0.;
-        self.timer = 0.;
-        self.jump_buffer = 0.;
-        self.events.push(Fx::Jump(kind));
+    pub fn flat_speed(&self) -> f32 {
+        self.vel.with_y(0.).length()
     }
-    fn set(&mut self, mode: Move) {
-        if self.mode != mode {
-            self.mode = mode;
-            self.timer = 0.;
-        }
+    fn speed_h(&self) -> f32 {
+        self.v.with_y(0.).length()
     }
     pub fn reset(&mut self) {
         let checkpoint = self.checkpoint;
@@ -308,48 +621,140 @@ impl Player {
         self.peak = checkpoint.y;
         self.checkpoint = checkpoint;
     }
-    pub fn flat_speed(&self) -> f32 {
-        self.vel.with_y(0.).length()
+    fn set(&mut self, mode: Move) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.frame = 0;
+        }
     }
-    pub fn step(&mut self, o: &Orders, scene: &Course, dt: f32) {
-        if !dt.is_finite() || dt <= 0. || dt > 0.05 {
-            return;
-        }
-        if self.hitstop > 0. {
-            self.hitstop -= dt;
-            return;
-        }
-        let mut guarded = o.clone();
-        let low_ceiling = scene.solids.iter().any(|b| {
-            let bottom = b.center.y - b.half.y;
-            bottom > self.pos.y + 0.2
-                && bottom < self.pos.y + HEIGHT
-                && (self.pos.x - b.center.x).abs() < b.half.x + RADIUS
-                && (self.pos.z - b.center.z).abs() < b.half.z + RADIUS
-        });
-        if self.grounded && low_ceiling && self.mode != Move::Roll {
-            guarded.crouch = true;
-            guarded.jump = false;
-            self.jump_buffer = 0.;
-        }
-        let o = &guarded;
-        self.timer += dt;
-        self.since_land += dt;
-        self.last_boost += dt;
-        self.spin = (self.spin - dt).max(0.);
-        self.control_lock = (self.control_lock - dt).max(0.);
-        self.jump_buffer = (self.jump_buffer - dt).max(0.);
-        if o.jump {
-            self.jump_buffer = 0.12;
-        }
-        self.coyote = if self.grounded {
-            0.1
-        } else {
-            (self.coyote - dt).max(0.)
+    fn play(&mut self, name: &'static str) {
+        self.anim = Anim {
+            name,
+            serial: self.anim.serial.wrapping_add(1),
+            frame: 0.,
+            rate: 1.,
         };
-        let wish = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
+    }
+    /// Start a clip unless it is already the current one.
+    fn keep(&mut self, name: &'static str) {
+        if self.anim.name != name {
+            self.play(name);
+        }
+    }
+    fn anim_done(&self, frames: u32) -> bool {
+        self.anim.frame >= frames as f32 - 1.
+    }
+    fn set_h(&mut self, h: Vec3) {
+        self.v.x = h.x;
+        self.v.z = h.z;
+    }
+
+    /// Advance one original frame.
+    pub fn step(&mut self, o: &Orders, scene: &Course) {
+        if self.hitstop > 0. {
+            self.hitstop -= 1. / FPS;
+            return;
+        }
+        if o.reset {
+            self.reset();
+            return;
+        }
+        let low_ceiling = self.grounded
+            && scene.solids.iter().any(|b| {
+                let bottom = b.center.y - b.half.y;
+                bottom > self.pos.y + 0.2
+                    && bottom < self.pos.y + HEIGHT
+                    && (self.pos.x - b.center.x).abs() < b.half.x + RADIUS
+                    && (self.pos.z - b.center.z).abs() < b.half.z + RADIUS
+            });
+        let mut o = o.clone();
+        if low_ceiling && !matches!(self.mode, Move::Roll | Move::Slide) {
+            o.crouch = true;
+            o.jump = false;
+        }
+        self.read_input(&o);
+        let was_grounded = self.grounded;
+        let wet = scene.wet(self.pos + Vec3::Y * 0.8);
+        if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
+            self.events.push(Fx::Splash);
+            self.v *= 0.3;
+            self.enter(Move::Swim, "SwimFallIn");
+        } else if !wet && matches!(self.mode, Move::Swim | Move::SwimDash) {
+            self.enter(Move::Fall, "Fall");
+        }
+        match self.mode {
+            Move::Idle | Move::Walk | Move::Run => self.run(&o),
+            Move::Skid | Move::Turn => self.brake(&o),
+            Move::Crouch | Move::Crawl => self.squat(&o),
+            Move::GroundSpin => self.ground_spin(&o),
+            Move::Throw => self.throw_state(&o),
+            Move::GroundPound => self.hip_drop(&o),
+            Move::PoundLand => self.hip_drop_land(&o),
+            Move::Roll => self.roll(&o),
+            Move::RollEnd => self.roll_end(&o),
+            Move::Dive => self.head_sliding(&o),
+            Move::Slide => self.belly_slide(&o),
+            Move::LongJump => self.long_jump_air(&o),
+            Move::WallSlide => self.wall_slide(&o),
+            Move::Ledge => self.wall_catch(&o),
+            Move::Pole => self.pole_climb(&o),
+            Move::Swim | Move::SwimDash => self.swim(&o),
+            Move::SpinDrop => self.spin_drop(&o),
+            _ => self.air(&o),
+        }
+        self.update_cap(&o, scene);
+        if matches!(self.mode, Move::Ledge | Move::Pole) {
+            self.finish_frame(was_grounded);
+            return;
+        }
+        self.grab_pole(scene);
+        self.cap_contact();
+        self.collide(&o, scene);
+        if self.grounded && !was_grounded {
+            self.land(&o);
+        } else if !self.grounded
+            && was_grounded
+            && self.v.y <= 0.
+            && matches!(
+                self.mode,
+                Move::Idle
+                    | Move::Walk
+                    | Move::Run
+                    | Move::Skid
+                    | Move::Turn
+                    | Move::Crouch
+                    | Move::Crawl
+                    | Move::GroundSpin
+                    | Move::Throw
+                    | Move::Slide
+            )
+        {
+            self.coyote = 3;
+            self.enter(Move::Fall, "Fall");
+        }
+        self.finish_frame(was_grounded);
+    }
+    fn read_input(&mut self, o: &Orders) {
+        let stick = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
+        self.tilt = stick.length();
+        self.stick = stick.normalize_or_zero();
+        self.pre_jump = if o.jump {
+            t::PRE_INPUT_JUMP
+        } else {
+            self.pre_jump.saturating_sub(1)
+        };
+        self.pre_throw = if o.throw_pressed {
+            t::PRE_INPUT_THROW
+        } else {
+            self.pre_throw.saturating_sub(1)
+        };
+        self.jump_held_frames = if o.jump_held {
+            self.jump_held_frames + 1
+        } else {
+            0
+        };
         // Circling the stick arms a spin, as in the original's spin jump/throw.
-        if wish.length_squared() > 0.25 && self.last_stick.length_squared() > 0.25 {
+        if o.direction.length_squared() > 0.25 && self.last_stick.length_squared() > 0.25 {
             let angle = self.last_stick.angle_to(o.direction);
             if angle.abs() < 1.2
                 && (self.spin_turn == 0. || angle.signum() == self.spin_turn.signum())
@@ -359,721 +764,1155 @@ impl Player {
                 self.spin_turn = 0.;
             }
             if self.spin_turn.abs() > 5.5 {
-                self.spin = 0.5;
+                self.spin = 30;
                 self.spin_turn = 0.;
             }
         } else {
             self.spin_turn = 0.;
         }
+        if o.spin_throw {
+            self.spin = 30;
+        }
+        self.spin = self.spin.saturating_sub(1);
         self.last_stick = o.direction;
-        if o.reset {
-            self.reset();
-            return;
+        self.catch_window = self.catch_window.saturating_sub(1);
+        self.after_turn = self.after_turn.saturating_sub(1);
+        self.quick_turn = self.quick_turn.saturating_sub(1);
+        self.throw_run = self.throw_run.saturating_sub(1);
+        self.throw_timer = self.throw_timer.saturating_sub(1);
+        self.coyote = self.coyote.saturating_sub(1);
+        self.long_jump_timer = self.long_jump_timer.saturating_add(1);
+        if self.grounded {
+            self.jump_timer = self.jump_timer.saturating_add(1);
+            self.land_frames = self.land_frames.saturating_add(1);
         }
-        let was_grounded = self.grounded;
-
-        if self.mode == Move::Ledge {
-            self.vel = Vec3::ZERO;
-            let toward = wish.dot(-self.wall);
-            if o.crouch_pressed || toward < -0.4 {
-                self.set(Move::Fall);
-                self.pos += self.wall * 0.25;
-                self.vel.y = -2.;
-            } else if self.timer > 0.15 && (o.jump || toward > 0.5) {
-                // Climb: hop onto the ledge top.
-                self.pos = self.ledge - self.wall * 0.7;
-                self.launch(Move::Jump, 6.5, Some(2.));
-            }
-            self.update_cap(o, scene, dt);
-            return;
-        }
-        if self.mode == Move::Pole {
-            if o.jump {
-                self.facing = wish.try_normalize().unwrap_or(-self.facing);
-                self.pos += self.facing * 0.5;
-                self.launch(Move::Backflip, 13., Some(6.));
-            } else if o.crouch_pressed {
-                self.set(Move::Fall);
-                self.vel.y = -3.;
-                self.pos += self.facing * 0.7;
-            } else {
-                self.pos.y = (self.pos.y + o.direction.y * -4. * dt)
-                    .clamp(self.ledge.y, self.ledge.y + self.ledge.z);
-                self.vel = Vec3::ZERO;
-                self.update_cap(o, scene, dt);
-                return;
-            }
-        }
-        for pole in &scene.poles {
-            if !matches!(self.mode, Move::Pole | Move::Backflip | Move::GroundPound)
-                && !self.grounded
-                && (self.pos - pole.center).with_y(0.).length() < 0.65
-                && (pole.center.y..pole.center.y + pole.height).contains(&self.pos.y)
-            {
-                self.set(Move::Pole);
-                self.ledge = Vec3::new(pole.center.x, pole.center.y, pole.height);
-                self.facing = (self.pos - pole.center)
-                    .with_y(0.)
-                    .try_normalize()
-                    .map_or(self.facing, |d| -d);
-                self.pos.x = pole.center.x;
-                self.pos.z = pole.center.z;
-                self.vel = Vec3::ZERO;
-                self.events.push(Fx::Pole);
-                self.update_cap(o, scene, dt);
-                return;
-            }
-        }
-        let wet = scene.wet(self.pos + Vec3::Y * 0.6);
-        if wet {
-            self.swim(o, wish, dt);
+    }
+    fn finish_frame(&mut self, _was_grounded: bool) {
+        self.frame += 1;
+        if self.anim.name == "Move" {
+            self.anim.frame = self.step_phase;
         } else {
-            if matches!(self.mode, Move::Swim | Move::SwimDash) {
-                self.set(Move::Fall);
-            }
-            self.actions(o, wish);
-            if self.grounded {
-                self.ground_move(o, wish, dt);
-            } else {
-                self.air_move(o, wish, dt);
+            self.anim.frame += self.anim.rate;
+        }
+        if let Some(sub) = &mut self.sub_anim {
+            sub.frame += 1.;
+            if sub.frame >= 16. {
+                self.sub_anim = None;
             }
         }
-        self.update_cap(o, scene, dt);
-        self.cap_contact();
-        self.collide(o, scene, dt);
-        // Stay glued to ramps and steps down instead of hopping off each frame.
-        if !self.grounded
-            && was_grounded
-            && self.vel.y <= 0.
-            && let Some(ground) = scene.ground(self.pos)
-            && self.pos.y - ground < 0.45
-        {
-            self.pos.y = ground;
-            self.grounded = true;
-        }
-        if self.grounded && !was_grounded {
-            self.land(o);
-        } else if !self.grounded && was_grounded && self.vel.y <= 0. {
-            // Walked off an edge: coyote time still allows a jump.
-            if matches!(
-                self.mode,
-                Move::Idle | Move::Walk | Move::Run | Move::Skid | Move::Crouch | Move::Crawl
-            ) {
-                self.set(Move::Fall);
-            }
-        }
+        self.vel = self.v * UNIT * FPS;
+        self.move_speed = self.speed_h();
+        self.timer = self.frame as f32 / FPS;
+        self.since_land = self.land_frames as f32 / FPS;
         if self.grounded {
             self.peak = self.pos.y;
-            self.stride += self.flat_speed() * dt;
-            let stride = if self.flat_speed() > 5. { 1.15 } else { 0.75 };
-            if matches!(self.mode, Move::Walk | Move::Run | Move::Crawl) && self.stride > stride {
-                self.stride = 0.;
-                self.events.push(Fx::Step);
-            }
         } else {
             self.peak = self.peak.max(self.pos.y);
         }
-        if self.pos.y < -18. || !self.pos.is_finite() {
+        if self.pos.y < -18. || !self.pos.is_finite() || !self.v.is_finite() {
             self.reset();
         }
     }
-    /// Discrete moves started by button presses, before continuous movement.
-    fn actions(&mut self, o: &Orders, wish: Vec3) {
-        let speed = self.flat_speed();
-        // Dive: crouch + throw in the air, or throw during a ground pound.
-        if !self.grounded
-            && o.throw_pressed
-            && !self.dive_used
-            && (o.crouch || self.mode == Move::GroundPound)
-            && !matches!(self.mode, Move::Dive | Move::WallSlide | Move::Roll)
-        {
-            if let Some(w) = wish.try_normalize() {
-                self.facing = w;
+    fn enter(&mut self, mode: Move, anim: &'static str) {
+        self.set(mode);
+        self.frame = 0;
+        self.play(anim);
+    }
+
+    // ---- Ground movement ------------------------------------------------
+    /// Shared ground transitions. Returns true when a new state took over.
+    fn ground_actions(&mut self, o: &Orders) -> bool {
+        let speed = self.speed_h();
+        if self.pre_jump > 0 {
+            self.ground_jump(o);
+            return true;
+        }
+        if o.crouch && speed >= t::DASH_JUDGE {
+            // Crouching at dash speed goes straight into a roll.
+            self.start_roll(speed.max(t::ROLL_START), false);
+            return true;
+        }
+        if o.crouch && !matches!(self.mode, Move::Crouch | Move::Crawl) {
+            self.start_squat();
+            return true;
+        }
+        if self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw {
+            self.pre_throw = 0;
+            let kind = self.throw_kind(o);
+            if self.cap.is_none() {
+                if matches!(self.mode, Move::Run | Move::Walk)
+                    && kind == Throw::Forward
+                    && speed > t::NORMAL_MIN
+                {
+                    // Throwing on the run keeps the legs running; continuous
+                    // throws push the run up to dash speed.
+                    self.throw_run = t::RUN_TIME_CONTINUOUS_THROW;
+                    self.sub_anim = Some(Anim {
+                        name: "ThrowCapParts",
+                        serial: self.anim.serial.wrapping_add(7),
+                        frame: 0.,
+                        rate: 1.,
+                    });
+                    self.launch_cap(kind);
+                } else {
+                    self.start_throw(kind);
+                }
+                return true;
             }
-            let s = (speed.max(9.) + 3.).min(16.);
-            self.mode = Move::Dive;
-            self.timer = 0.;
-            self.vel = self.facing * s + Vec3::Y * 5.5;
-            self.dive_used = true;
-            self.events.push(Fx::Dive);
+        }
+        if self.spin > 0 && self.tilt > 0.5 && self.mode != Move::GroundSpin {
+            self.spin = 0;
+            self.enter(
+                Move::GroundSpin,
+                if self.spin_turn >= 0. {
+                    "SpinGroundL"
+                } else {
+                    "SpinGroundR"
+                },
+            );
+            return true;
+        }
+        false
+    }
+    fn run(&mut self, o: &Orders) {
+        if self.ground_actions(o) {
             return;
         }
-        if !self.grounded
-            && o.crouch_pressed
-            && !matches!(
-                self.mode,
-                Move::Dive
-                    | Move::GroundPound
-                    | Move::WallSlide
-                    | Move::Ledge
-                    | Move::Pole
-                    | Move::Roll
-            )
-        {
-            self.set(Move::GroundPound);
-            self.vel = Vec3::ZERO;
-            self.events.push(Fx::PoundStart);
-            return;
-        }
-        if self.grounded && o.throw_pressed {
-            if self.mode == Move::PoundLand && o.crouch {
-                self.start_roll(17.);
+        let speed = self.speed_h();
+        if self.tilt > 0.05 {
+            let wish = self.stick;
+            // Reversing at speed: brake, then turn around.
+            if speed > t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE
+                && self.run_frames >= t::BRAKE_ON_COUNTER
+                && wish.dot(self.facing) < -0.7
+            {
+                self.enter(Move::Skid, "Brake");
+                self.quick_turn = t::QUICK_TURN_JUMP_FRAMES;
+                self.events.push(Fx::Skid);
                 return;
             }
-            if self.mode == Move::Roll && !o.jump {
-                self.roll_boost();
-                return;
-            }
-            if o.crouch && !matches!(self.mode, Move::Roll | Move::Slide | Move::Skid) {
-                self.start_roll(speed.max(13.));
-                return;
-            }
-        }
-        if self.jump_buffer <= 0. {
-            return;
-        }
-        if self.mode == Move::WallSlide && self.wall.length_squared() > 0.5 {
-            self.facing = self.wall;
-            self.launch(Move::WallJump, 13., Some(7.5));
-            self.control_lock = 0.22;
-            self.dive_used = false;
-            return;
-        }
-        if !(self.grounded || self.coyote > 0.) {
-            return;
-        }
-        match self.mode {
-            Move::Roll if o.throw_pressed => {
-                // Roll cancel: stand up at speed, ready to jump onward.
+            let limit = lerp_clamped(
+                t::ROUND_LIMIT_DEG,
+                t::ROUND_LIMIT_DEG_MIN,
+                speed / t::NORMAL_MAX,
+            );
+            let limit = if speed < t::NORMAL_MIN { 30. } else { limit };
+            self.facing = turn(self.facing, wish, limit.to_radians());
+            let max = if self.after_turn > 0 {
+                t::AFTER_TURN_MAX
+            } else if self.throw_run > 0 {
+                t::RUN_SPEED_CONTINUOUS_THROW
+            } else {
+                t::NORMAL_MAX
+            } * self.tilt.max(0.2);
+            let accel = if self.throw_run > 0 {
+                t::RUN_SPEED_CONTINUOUS_THROW / t::RUN_ACCEL_FRAMES_CONTINUOUS_THROW
+            } else {
+                t::NORMAL_MAX / t::ACCEL_FRAMES
+            };
+            let s = if speed < max {
+                (speed.max(t::NORMAL_MIN) + accel).min(max)
+            } else {
+                // Above the stick's speed (after boosts) ease back down.
+                approach(speed, max, accel)
+            };
+            self.set_h(self.facing * s);
+            self.run_frames += 1;
+            if !matches!(self.mode, Move::Run | Move::Walk) {
                 self.set(Move::Run);
-                self.jump_buffer = 0.;
-                let s = speed.min(14.);
-                self.vel = self.facing * s;
             }
-            Move::Roll | Move::RollEnd => {
-                self.launch(Move::RollJump, 9.5, Some(speed.max(12.)));
-            }
-            Move::PoundLand if self.timer < 0.3 => self.launch(Move::PoundJump, 17., Some(0.)),
-            _ if self.spin > 0. => {
-                self.spin = 0.;
-                self.launch(Move::SpinJump, 13., None);
-            }
-            Move::Skid => {
-                if let Some(w) = wish.try_normalize() {
-                    self.facing = w;
-                }
-                self.launch(Move::Sideflip, 15., Some(3.));
-            }
-            Move::Slide => self.launch(Move::Jump, 8.5, Some(speed * 0.5)),
-            _ if o.crouch => {
-                if speed > 3. {
-                    self.launch(Move::LongJump, 9., Some(speed.max(14.)));
+            if self.anim.name != "Move" && self.anim.name != "RunStart" {
+                // Starting from a standstill plays the run start.
+                if speed < 0.5 && self.anim.name == "Wait" {
+                    self.play("RunStart");
                 } else {
-                    self.launch(Move::Backflip, 15.5, Some(-3.5));
+                    self.play("Move");
+                }
+            } else if self.anim.name == "RunStart"
+                && (self.anim_done(clip::RUN_START) || self.anim.frame > 10.)
+            {
+                self.play("Move");
+            }
+            self.mode = if s < 8. { Move::Walk } else { Move::Run };
+        } else {
+            self.run_frames = 0;
+            let s = (speed - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
+            self.set_h(self.facing * s);
+            if s <= 0. {
+                self.set(Move::Idle);
+                let landing = self.land_frames < clip::LAND
+                    && matches!(
+                        self.anim.name,
+                        "Land" | "LandJump3" | "LandStiffen" | "LandDownFall" | "LandTurn"
+                    );
+                if !landing && self.anim.name != "Wait" {
+                    self.play("Wait");
                 }
             }
-            _ => {
-                self.chain = if self.since_land < 0.2 && speed > 3. && self.chain < 3 {
-                    if self.chain == 2 && speed < 6. {
-                        2
-                    } else {
-                        self.chain + 1
-                    }
+        }
+        self.v.y = -t::GRAVITY;
+        self.update_move_anim();
+    }
+    /// The original's run cycle: a 60-frame phase that speeds up with speed.
+    fn update_move_anim(&mut self) {
+        let speed = self.speed_h();
+        if self.anim.name == "Move" {
+            let rate = move_rate(speed);
+            self.anim.rate = rate;
+            let before = self.step_phase;
+            self.step_phase = (self.step_phase + rate) % 60.;
+            // Footfalls at the original's foot-print frames of the cycle.
+            for (at, left) in [(4., true), (35., false)] {
+                let crossed = if before <= self.step_phase {
+                    before < at && self.step_phase >= at
                 } else {
-                    1
+                    before < at || self.step_phase >= at
                 };
-                let (kind, v) = match self.chain {
-                    2 => (Move::DoubleJump, 12.5),
-                    3 => (Move::TripleJump, 15.),
-                    _ => (Move::Jump, 11.),
-                };
-                self.launch(kind, v, None);
+                if crossed && speed > 0.5 {
+                    self.events.push(Fx::Step { left });
+                }
             }
+        } else if self.anim.name == "RunStart" {
+            self.anim.rate = 2.;
         }
     }
-    fn start_roll(&mut self, speed: f32) {
-        self.set(Move::Roll);
-        self.last_boost = 0.;
-        if let Some(w) = Vec3::new(self.last_stick.x, 0., self.last_stick.y).try_normalize() {
+    fn brake(&mut self, o: &Orders) {
+        if self.pre_jump > 0 && self.quick_turn > 0 {
+            self.side_somersault();
+            return;
+        }
+        let speed = self.speed_h();
+        if self.mode == Move::Skid {
+            let s = (speed - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
+            self.set_h(self.facing * s);
+            if self.frame >= t::BRAKE_TURN_START && s < t::NORMAL_MIN || self.tilt < 0.05 && s <= 0.
+            {
+                if self.tilt > 0.05 {
+                    self.facing = self.stick;
+                    self.enter(Move::Turn, "TurnPoint");
+                    self.events.push(Fx::TurnDust);
+                } else {
+                    self.enter(Move::Idle, "Wait");
+                }
+            }
+        } else {
+            // Turned around: burst away with the after-turn speed allowance.
+            self.after_turn = t::AFTER_TURN_FRAMES;
+            if self.tilt > 0.05 {
+                self.facing = turn(self.facing, self.stick, 20_f32.to_radians());
+            }
+            self.set_h(
+                self.facing
+                    * (speed + t::NORMAL_MAX / t::ACCEL_FRAMES * 2.).min(t::AFTER_TURN_MAX * 0.5),
+            );
+            if self.frame >= clip::TURN || self.tilt < 0.05 {
+                self.run_frames = t::BRAKE_ON_COUNTER;
+                self.set(Move::Run);
+                self.play("Move");
+            }
+        }
+        if self.pre_jump > 0 {
+            self.ground_jump(o);
+        }
+        self.v.y = -t::GRAVITY;
+    }
+    fn ground_spin(&mut self, o: &Orders) {
+        if self.pre_jump > 0 {
+            self.spin = 30;
+            self.ground_jump(o);
+            return;
+        }
+        if self.pre_throw > 0 && self.cap.is_none() {
+            self.pre_throw = 0;
+            self.start_throw(Throw::Spin);
+            return;
+        }
+        let speed = self.speed_h();
+        let s = if self.tilt > 0.05 {
+            self.facing = turn(self.facing, self.stick, 0.2);
+            (speed + 0.5).min(t::GROUND_SPIN_MOVE_MAX)
+        } else {
+            speed * 0.95
+        };
+        self.set_h(self.facing * s);
+        self.v.y = -t::GRAVITY;
+        if self.frame >= 20 && self.tilt < 0.05 || self.frame >= t::GROUND_SPIN_FRAMES {
+            self.enter(Move::Idle, "Wait");
+        }
+    }
+
+    // ---- Squat, roll, slides --------------------------------------------
+    fn start_squat(&mut self) {
+        let from_roll = self.anim.name == "RollingEnd";
+        self.set(Move::Crouch);
+        self.play(if from_roll { "SquatWait" } else { "SquatStart" });
+        let speed = self.speed_h();
+        let forward = self.v.with_y(0.).dot(self.facing);
+        // Crouching keeps forward momentum as a short crouch slide.
+        let s = if speed <= t::NORMAL_MAX && forward > 0. {
+            let s = speed * t::SQUAT_ACCEL_RATE;
+            if s <= t::SQUAT_BRAKE_END { 0. } else { s }
+        } else {
+            forward.max(0.)
+        };
+        self.set_h(self.facing * s);
+    }
+    fn squat(&mut self, o: &Orders) {
+        let speed = self.speed_h();
+        let sliding = speed > t::SQUAT_BRAKE_END;
+        if self.pre_jump > 0 {
+            self.pre_jump = 0;
+            if sliding && self.v.dot(self.facing) > 0. {
+                self.long_jump();
+            } else {
+                self.backflip();
+            }
+            return;
+        }
+        if self.pre_throw > 0 || o.throw_pressed {
+            self.pre_throw = 0;
+            self.start_roll(speed.max(t::ROLL_START), false);
+            return;
+        }
+        if !o.crouch {
+            self.enter(Move::Idle, "SquatEnd");
+            return;
+        }
+        if sliding {
+            let s = speed * t::SQUAT_BRAKE_RATE;
+            self.set_h(self.v.with_y(0.).normalize_or(self.facing) * s);
+        } else if self.tilt > 0.05 {
+            self.facing = turn(self.facing, self.stick, 30_f32.to_radians() / 10.);
+            self.set_h(self.facing * t::SQUAT_WALK);
+            self.set(Move::Crawl);
+            self.keep("SquatWalk");
+            for (at, left) in [(2., true), (20., false)] {
+                if (self.anim.frame % 36.) < at && ((self.anim.frame + 1.) % 36.) >= at {
+                    self.events.push(Fx::Step { left });
+                }
+            }
+        } else {
+            self.set_h(Vec3::ZERO);
+            self.set(Move::Crouch);
+            if self.anim.name != "SquatStart" || self.anim.frame > 2. {
+                self.keep("SquatWait");
+            }
+        }
+        self.v.y = -t::GRAVITY;
+    }
+    fn start_roll(&mut self, speed: f32, boosted: bool) {
+        if let Some(w) = (self.tilt > 0.1).then_some(self.stick) {
             self.facing = w;
         }
-        self.vel = self.facing * speed.min(ROLL_MAX);
+        self.enter(Move::Roll, "RollingStart");
+        self.set_h(self.facing * speed.min(t::ROLL_MAX));
+        self.v.y = t::ROLL_START_JUMP * 0.25;
+        self.roll_boost_frames = if boosted { t::ROLL_FRAMES_MIN_BOOST } else { 0 };
+        self.roll_last_boost = 0;
+        self.unroll = 0;
         self.events.push(Fx::RollStart);
     }
-    fn roll_boost(&mut self) {
-        if self.last_boost < 0.22 {
+    fn roll(&mut self, o: &Orders) {
+        if self.pre_jump > 0 && self.grounded {
+            self.pre_jump = 0;
+            if o.throw_pressed {
+                // Roll cancel: stand up at speed with a cap throw.
+                let s = self.speed_h().min(t::RUN_SPEED_CONTINUOUS_THROW);
+                self.enter(Move::Run, "Move");
+                self.set_h(self.facing * s);
+                self.throw_run = t::RUN_TIME_CONTINUOUS_THROW;
+                if self.cap.is_none() {
+                    self.launch_cap(Throw::Forward);
+                }
+                return;
+            }
+            let s = self.speed_h();
+            self.jump_with(
+                Move::RollJump,
+                "RollingJump",
+                t::JUMP_POWER_MAX,
+                t::JUMP_GRAVITY,
+            );
+            self.max_air_speed = s.min(t::JUMP_MOVE_MAX);
             return;
         }
-        // Pressing on the roll's rhythm earns a stronger push.
-        let perfect = (0.32..0.62).contains(&self.last_boost);
-        let s = (self.flat_speed() + if perfect { 5.5 } else { 3. }).min(ROLL_MAX);
-        self.vel = self.facing * s + Vec3::Y * 3.2;
-        self.grounded = false;
-        self.last_boost = 0.;
-        self.timer = 0.;
-        self.events.push(Fx::RollBoost { perfect });
-    }
-    fn ground_move(&mut self, o: &Orders, wish: Vec3, dt: f32) {
-        let speed = self.flat_speed();
-        let tilt = wish.length();
-        match self.mode {
-            Move::Skid => {
-                let s = (speed - 38. * dt).max(0.);
-                self.vel = self.vel.with_y(0.).normalize_or_zero() * s;
-                if s < 0.5 || self.timer > 0.32 {
-                    if let Some(w) = wish.try_normalize() {
-                        self.facing = w;
-                    }
-                    self.vel = self.facing * s.min(2.);
-                    self.set(Move::Run);
-                }
-            }
-            Move::PoundLand => {
-                self.vel = Vec3::ZERO;
-                if self.timer > 0.3 {
-                    self.set(if o.crouch { Move::Crouch } else { Move::Idle });
-                }
-            }
-            Move::Slide => {
-                let s = (speed - 9. * dt).max(0.);
-                if let Some(w) = wish.try_normalize() {
-                    self.facing = turn(self.facing, w, 1.5 * dt);
-                }
-                self.vel = self.facing * s;
-                if s < 1. {
-                    self.set(Move::Idle);
-                }
-            }
-            Move::Roll => {
-                if let Some(w) = wish.try_normalize() {
-                    self.facing = turn(self.facing, w, 2.4 * dt);
-                }
-                // Downhill speeds the roll up, uphill slows and can reverse it.
-                let downhill = -self.slope * self.facing.x;
-                let mut s = speed + downhill * 26. * dt;
-                if o.crouch {
-                    s -= if self.slick { 1. } else { 6.5 } * dt;
-                } else {
-                    s -= 30. * dt;
-                }
-                if s < 0. {
-                    self.facing = -self.facing;
-                    s = -s;
-                }
-                s = s.min(ROLL_MAX);
-                self.vel = self.facing * s;
-                if !o.crouch && s <= RUN {
-                    self.set(if tilt > 0.1 { Move::Run } else { Move::RollEnd });
-                } else if o.crouch && s < 5. && downhill <= 0.05 {
-                    self.set(Move::RollEnd);
-                }
-            }
-            Move::RollEnd => {
-                let s = (speed - 25. * dt).max(0.);
-                self.vel = self.facing * s;
-                if self.timer > 0.3 {
-                    self.set(if o.crouch { Move::Crouch } else { Move::Idle });
-                }
-            }
-            _ => {
-                let crouching = o.crouch;
-                if !crouching
-                    && speed > 6.
-                    && tilt > 0.5
-                    && wish.normalize().dot(self.facing) < -0.55
-                {
-                    self.set(Move::Skid);
-                    self.events.push(Fx::Skid);
-                    return;
-                }
-                if let Some(w) = wish.try_normalize() {
-                    let rate = if crouching {
-                        6.
-                    } else if speed < 3. {
-                        22.
-                    } else {
-                        14. - 6. * (speed / RUN).min(1.)
-                    };
-                    self.facing = turn(self.facing, w, rate * dt);
-                }
-                let max = if crouching { 2.2 } else { RUN } * tilt;
-                let accel = if max > speed {
-                    if speed < 3. { 40. } else { 22. }
-                } else if tilt < 0.05 {
-                    if crouching { 14. } else { 45. }
-                } else {
-                    18.
-                };
-                let s = approach(speed, max, accel * dt);
-                self.vel = self.facing * s;
-                if !matches!(self.mode, Move::PoundLand) {
-                    let next = if crouching {
-                        if s > 0.3 { Move::Crawl } else { Move::Crouch }
-                    } else if s < 0.2 && tilt < 0.05 {
-                        Move::Idle
-                    } else if s < 4.5 {
-                        Move::Walk
-                    } else {
-                        Move::Run
-                    };
-                    self.set(next);
-                }
-            }
+        if self.anim.name == "RollingStart" && self.anim_done(clip::ROLLING_START) {
+            self.play("Rolling");
         }
-    }
-    fn air_move(&mut self, o: &Orders, wish: Vec3, dt: f32) {
-        let mut flat = self.vel.with_y(0.);
-        let tilt = wish.length();
-        match self.mode {
-            Move::GroundPound => {
-                // A brief somersault hang, then a straight drop.
-                self.vel = if self.timer < 0.28 {
-                    Vec3::Y * 0.6
-                } else {
-                    Vec3::NEG_Y * 32.
-                };
-                return;
-            }
-            Move::WallSlide => {
-                if o.crouch_pressed {
-                    self.set(Move::Fall);
-                    self.pos += self.wall * 0.15;
-                }
-                // Keep pressing into the wall so contact is detected each step.
-                self.vel = -self.wall * 1.5 + Vec3::Y * (self.vel.y - 18. * dt).max(-3.5);
-                return;
-            }
-            Move::Roll => {}
-            m if m.airborne_momentum() => {
-                if let Some(w) = wish.try_normalize() {
-                    let d = flat.normalize_or(self.facing);
-                    if w.dot(d) < -0.3 {
-                        flat *= 1. - 1.6 * dt;
-                    } else {
-                        flat = turn(d, w, 1.7 * dt) * flat.length();
-                    }
-                }
-                self.facing = flat.normalize_or(self.facing);
-            }
-            _ if self.control_lock > 0. => {}
-            _ => {
-                let speed = flat.length();
-                if tilt > 0.05 {
-                    let target = wish * speed.max(RUN * tilt);
-                    flat = flat.move_towards(target, 17. * dt);
-                    if !matches!(self.mode, Move::Backflip | Move::Sideflip | Move::WallJump) {
-                        self.facing = turn(self.facing, wish.normalize(), 7. * dt);
-                    }
-                } else {
-                    flat = flat.move_towards(Vec3::ZERO, 5. * dt);
-                }
-            }
-        }
-        self.vel.x = flat.x;
-        self.vel.z = flat.z;
-        let variable = matches!(
-            self.mode,
-            Move::Jump | Move::DoubleJump | Move::TripleJump | Move::WallJump
-        );
-        let gravity = if self.vel.y > 0. {
-            if !variable {
-                FIXED_GRAVITY
-            } else if o.jump_held {
-                RISE_GRAVITY
-            } else {
-                CUT_GRAVITY
-            }
-        } else {
-            FALL_GRAVITY
-        };
-        let terminal = if self.mode == Move::SpinJump && self.timer > 0.3 {
-            // The spin jump drifts down slowly while turning.
-            -5.
-        } else {
-            -TERMINAL
-        };
-        self.vel.y = (self.vel.y - gravity * dt).max(terminal.min(self.vel.y));
-    }
-    fn swim(&mut self, o: &Orders, wish: Vec3, dt: f32) {
-        if !matches!(self.mode, Move::Swim | Move::SwimDash) {
-            self.events.push(Fx::Splash);
-            self.vel.y *= 0.3;
-            self.set(Move::Swim);
-        }
-        if o.throw_pressed {
-            self.set(Move::SwimDash);
-            self.vel = self.facing * 9. + Vec3::Y * self.vel.y;
-            self.events.push(Fx::SwimStroke);
-        } else if self.mode == Move::SwimDash && self.timer > 0.5 {
-            self.set(Move::Swim);
-        }
-        if let Some(w) = wish.try_normalize() {
-            self.facing = turn(self.facing, w, 5. * dt);
-        }
-        let flat = self.vel.with_y(0.).move_towards(
-            wish * if self.mode == Move::SwimDash { 9. } else { 4.5 },
-            (if self.mode == Move::SwimDash { 4. } else { 10. }) * dt,
-        );
-        self.vel.x = flat.x;
-        self.vel.z = flat.z;
-        let target = if o.jump_held {
-            3.5
-        } else if o.crouch {
-            -4.
-        } else {
-            -0.6
-        };
-        self.vel.y += (target - self.vel.y) * (2.5 * dt).min(1.);
-        if o.jump {
-            self.vel.y = 7.;
-            self.events.push(Fx::SwimStroke);
-        }
-    }
-    fn land(&mut self, o: &Orders) {
-        let fall = self.peak - self.pos.y;
-        let speed = self.flat_speed();
-        self.since_land = 0.;
-        self.cap_bounced = false;
-        self.dive_used = false;
-        self.air_throw = false;
-        self.control_lock = 0.;
-        self.hard_land = fall > 7. && !matches!(self.mode, Move::GroundPound | Move::Dive);
-        match self.mode {
-            Move::GroundPound => {
-                self.set(Move::PoundLand);
-                self.hitstop = 0.05;
-                self.events.push(Fx::PoundLand);
-                return;
-            }
-            Move::Dive | Move::LongJump | Move::RollJump if o.crouch && speed > 6. => {
-                self.set(Move::Roll);
-                self.last_boost = 0.;
-                self.events.push(Fx::RollStart);
-            }
-            Move::Dive => self.set(Move::Slide),
-            Move::Roll => {}
-            _ => {
-                if self.hard_land {
-                    self.vel *= 0.25;
-                }
-                self.set(if o.crouch {
-                    Move::Crouch
-                } else if self.flat_speed() > 4.5 {
-                    Move::Run
-                } else if self.flat_speed() > 0.2 {
-                    Move::Walk
-                } else {
-                    Move::Idle
-                });
-            }
-        }
-        self.events.push(Fx::Land {
-            hard: self.hard_land,
-        });
-    }
-    fn cap_contact(&mut self) {
-        let Some(cap) = &self.cap else {
-            return;
-        };
-        if self.cap_bounced
-            || cap.age < 0.12
-            || cap.returning
-            || cap.kind == Throw::Up
-            || matches!(
-                self.mode,
-                Move::GroundPound | Move::Ledge | Move::Pole | Move::Swim | Move::SwimDash
-            )
-            || (self.pos + Vec3::Y * 0.7).distance(cap.pos) > 1.0
+        self.roll_last_boost += 1;
+        if (self.pre_throw > 0 || o.throw_pressed)
+            && self.grounded
+            && self.roll_last_boost >= t::ROLL_RESTART_INTERVAL
         {
-            return;
+            self.pre_throw = 0;
+            // Boost: a hop and a push; pressing on the roll's rhythm keeps it going.
+            let perfect = self.roll_last_boost <= t::ROLL_RESTART_INTERVAL * 3;
+            let s = (self.speed_h() + t::ROLL_RESTART_ACCEL).clamp(t::ROLL_BOOST, t::ROLL_MAX);
+            self.set_h(self.facing * s);
+            self.v.y = t::ROLL_START_JUMP;
+            self.grounded = false;
+            self.roll_last_boost = 0;
+            self.roll_boost_frames = 0;
+            self.frame = 0;
+            self.events.push(Fx::RollBoost { perfect });
         }
-        let vault = self.grounded || self.mode == Move::Roll;
-        if !vault && self.vel.y > 3. {
-            return;
+        let mut s = self.speed_h();
+        if self.tilt > 0.1 {
+            // Steering: the side push turns the roll gradually.
+            let max = (t::ROLL_SIDE_ACCEL / s.max(1.)).atan();
+            self.facing = turn(self.facing, self.stick, max);
         }
-        let keep = self.flat_speed();
-        self.launch(
-            if vault {
-                Move::CapVault
-            } else {
-                Move::CapBounce
-            },
-            12.5,
-            Some(if vault { keep.max(11.) } else { keep.min(10.) }),
-        );
-        self.cap_bounced = true;
-        self.dive_used = false;
-        self.air_throw = false;
-        self.hitstop = 0.035;
-        self.cap = None;
-        self.events.push(Fx::CapBounce);
-    }
-    fn collide(&mut self, o: &Orders, scene: &Course, dt: f32) {
-        let height = if self.grounded && o.crouch
-            || matches!(self.mode, Move::Roll | Move::Slide | Move::Dive)
-        {
-            0.9
+        if self.grounded {
+            let downhill = -self.slope * self.facing.x;
+            s = s * if self.slick { 0.9995 } else { t::ROLL_BRAKE }
+                + downhill * t::ROLL_SLOPE_ACCEL * 4.;
+            if s < 0. {
+                self.facing = -self.facing;
+                s = -s;
+            }
+            self.v.y = -t::GRAVITY;
         } else {
-            HEIGHT
+            self.v.y = (self.v.y - t::GRAVITY_AIR).max(-t::FALL_MAX);
+        }
+        s = s.min(t::ROLL_MAX);
+        self.set_h(self.facing * s);
+        self.unroll = if o.crouch { 0 } else { self.unroll + 1 };
+        let min_frames = if self.roll_boost_frames > 0 {
+            t::ROLL_FRAMES_MIN_BOOST
+        } else {
+            t::ROLL_FRAMES_MIN
         };
-        let old = self.pos;
-        self.grounded = false;
-        self.wall = Vec3::ZERO;
-        // Small fixed steps bound travel to less than the collider radius.
-        for axis in [0, 2, 1] {
-            self.pos[axis] += self.vel[axis] * dt;
-            for b in &scene.solids {
-                let lo = b.center - b.half;
-                let hi = b.center + b.half;
-                let horizontal = self.pos.x + RADIUS > lo.x
-                    && self.pos.x - RADIUS < hi.x
-                    && self.pos.z + RADIUS > lo.z
-                    && self.pos.z - RADIUS < hi.z;
-                if !horizontal {
-                    continue;
-                }
-                let top = b.top(self.pos.x.clamp(lo.x, hi.x));
-                if axis == 1 {
-                    if self.vel.y <= 0.
-                        && old.y >= b.top(old.x.clamp(lo.x, hi.x)) - 0.15
-                        && self.pos.y <= top
-                        && self.pos.y + height > lo.y
-                    {
-                        self.pos.y = top;
-                        self.vel.y = 0.;
-                        self.grounded = true;
-                        self.slope = if (self.pos.x - b.center.x).abs() < b.half.x {
-                            b.slope
-                        } else {
-                            0.
-                        };
-                        self.slick = b.slippery;
-                    } else if self.vel.y > 0.
-                        && old.y + height <= lo.y + 0.1
-                        && self.pos.y + height >= lo.y
-                    {
-                        self.pos.y = lo.y - height;
-                        self.vel.y = 0.;
-                    }
-                } else if self.pos.y + 0.12 < top && self.pos.y + height > lo.y + 0.05 {
-                    // Short steps and ramps are traversable while grounded.
-                    if old.y >= top - 0.32
-                        && self.vel.y <= 0.
-                        && !matches!(self.mode, Move::GroundPound | Move::Dive)
-                    {
-                        self.pos.y = top;
-                        self.vel.y = 0.;
-                        self.grounded = true;
-                        continue;
-                    }
-                    let sign = if old[axis] < b.center[axis] { -1. } else { 1. };
-                    self.pos[axis] = b.center[axis] + sign * (b.half[axis] + RADIUS);
-                    self.wall = Vec3::ZERO;
-                    self.wall[axis] = sign;
-                    let into = -self.vel[axis] * sign;
-                    self.vel[axis] = 0.;
-                    if self.mode == Move::Roll && into > 8. {
-                        // Rolling into a wall knocks the roll back out.
-                        self.facing = (self.facing - self.wall * 2. * self.facing.dot(self.wall))
-                            .normalize_or(self.wall);
-                        self.vel = self.facing * 4.;
-                        self.set(Move::RollEnd);
-                    }
-                    if self.vel.y < 0.
-                        && !self.grounded
-                        && !matches!(
-                            self.mode,
-                            Move::Dive
-                                | Move::GroundPound
-                                | Move::LongJump
-                                | Move::RollJump
-                                | Move::Roll
-                        )
-                    {
-                        if self.pos.y + HEIGHT > top
-                            && self.pos.y + HEIGHT < top + 0.45
-                            && o.direction.length() > 0.1
-                        {
-                            self.set(Move::Ledge);
-                            self.ledge = Vec3::new(self.pos.x, top, self.pos.z);
-                            self.facing = -self.wall;
-                            self.vel = Vec3::ZERO;
-                            self.events.push(Fx::Ledge);
-                        } else if self.mode != Move::WallSlide && into > 0.5 {
-                            self.set(Move::WallSlide);
-                            self.facing = self.wall;
-                            self.vel.y = self.vel.y.max(-3.5);
-                            self.events.push(Fx::WallSlide);
-                        }
-                    }
-                }
+        if self.grounded
+            && (self.unroll >= t::ROLL_UNROLL_FRAMES
+                || self.frame >= min_frames
+                    && s < t::ROLL_END_SPEED
+                    && -self.slope * self.facing.x <= 0.05)
+        {
+            self.enter(Move::RollEnd, "RollingEnd");
+        }
+        self.anim.rate = lerp_clamped(0.2, 1., (s - 5.) / (35. - 5.));
+    }
+    fn roll_end(&mut self, o: &Orders) {
+        let s = self.speed_h();
+        let s = if s > t::ROLL_END_BRAKE_END {
+            s * t::ROLL_END_BRAKE
+        } else {
+            (s - 1.).max(0.)
+        };
+        self.set_h(self.facing * s);
+        self.v.y = -t::GRAVITY;
+        if self.anim_done(clip::ROLLING_END) && s <= t::ROLL_END_BRAKE_END {
+            if o.crouch {
+                self.set(Move::Crouch);
+                self.play("SquatWait");
+            } else {
+                self.enter(Move::Idle, "Wait");
             }
         }
-        if self.mode == Move::WallSlide && (self.wall == Vec3::ZERO || self.grounded) {
-            self.set(Move::Fall);
-        }
-        self.distance += (self.pos - old).with_y(0.).length();
     }
-    fn update_cap(&mut self, o: &Orders, scene: &Course, dt: f32) {
-        let free = !matches!(
-            self.mode,
-            Move::Ledge | Move::Pole | Move::Swim | Move::SwimDash
+    fn belly_slide(&mut self, o: &Orders) {
+        if self.pre_jump > 0 {
+            self.pre_jump = 0;
+            self.jump_with(Move::Jump, "Jump", t::JUMP_POWER_MIN, t::JUMP_GRAVITY);
+            return;
+        }
+        let s = (self.speed_h() - t::HEAD_SLIDING_BRAKE).max(0.);
+        if self.tilt > 0.1 {
+            self.facing = turn(self.facing, self.stick, 0.02);
+        }
+        self.set_h(self.facing * s);
+        self.v.y = -t::GRAVITY;
+        if s <= 0. && self.frame > 10 {
+            if o.crouch {
+                self.start_squat();
+            } else {
+                self.enter(Move::Idle, "RollingStandUp");
+            }
+        }
+    }
+
+    // ---- Jumps ------------------------------------------------------------
+    fn jump_with(&mut self, mode: Move, anim: &'static str, power: f32, gravity: f32) {
+        self.enter(mode, anim);
+        self.v.y = power;
+        self.gravity = gravity;
+        self.jump_extend = true;
+        self.max_air_speed = self.speed_h().clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
+        self.grounded = false;
+        self.coyote = 0;
+        self.pre_jump = 0;
+        self.events.push(Fx::Jump(mode));
+    }
+    fn ground_jump(&mut self, _o: &Orders) {
+        let speed = self.speed_h();
+        if self.mode == Move::PoundLand
+            && (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&self.frame)
+        {
+            self.jump_with(
+                Move::PoundJump,
+                "JumpHipDrop",
+                t::HIP_DROP_JUMP_POWER,
+                t::JUMP_GRAVITY,
+            );
+            self.set_h(Vec3::ZERO);
+            self.jump_extend = false;
+            return;
+        }
+        if self.catch_window > 0 {
+            self.jump_with(
+                Move::CatchJump,
+                "JumpCapCatchCommon",
+                t::CAP_CATCH_JUMP_POWER,
+                t::CAP_CATCH_JUMP_GRAVITY,
+            );
+            self.jump_extend = false;
+            return;
+        }
+        if self.spin > 0 {
+            self.spin = 0;
+            self.jump_with(
+                Move::SpinJump,
+                "SpinJumpStart",
+                t::SPIN_JUMP_POWER,
+                t::SPIN_JUMP_GRAVITY,
+            );
+            self.jump_extend = false;
+            self.max_air_speed = t::SPIN_JUMP_MOVE_MAX;
+            return;
+        }
+        if matches!(self.mode, Move::Skid | Move::Turn)
+            || self.quick_turn > 0 && self.after_turn > 0
+        {
+            self.side_somersault();
+            return;
+        }
+        // Consecutive jumps: land and jump again within the window.
+        let next = if self.jump_timer < t::CONTINUOUS_JUMP_TIMER && speed > t::NORMAL_MIN {
+            (self.jump_count + 1) % 3
+        } else {
+            0
+        };
+        let next = if next == 2 && speed < 8. { 1 } else { next };
+        self.jump_count = next;
+        let rate = speed / t::NORMAL_MAX;
+        match next {
+            1 => self.jump_with(
+                Move::DoubleJump,
+                "Jump2",
+                lerp_clamped(t::CONTINUOUS_JUMP_POWER_MIN, t::JUMP_POWER_MAX_2ND, rate),
+                t::JUMP_GRAVITY_2ND,
+            ),
+            2 => {
+                self.jump_with(
+                    Move::TripleJump,
+                    "Jump3",
+                    t::JUMP_POWER_3RD,
+                    t::JUMP_GRAVITY_3RD,
+                );
+                self.jump_extend = false;
+            }
+            _ => {
+                // The first jump mirrors with whichever foot is planted in the run cycle.
+                let anim = if speed > t::NORMAL_MIN && (4. ..35.).contains(&self.step_phase) {
+                    "JumpReverse"
+                } else {
+                    "Jump"
+                };
+                self.jump_with(
+                    Move::Jump,
+                    anim,
+                    lerp_clamped(t::JUMP_POWER_MIN, t::JUMP_POWER_MAX, rate),
+                    t::JUMP_GRAVITY,
+                )
+            }
+        }
+    }
+    fn side_somersault(&mut self) {
+        if self.tilt > 0.05 {
+            self.facing = self.stick;
+        }
+        self.jump_with(
+            Move::Sideflip,
+            "JumpTurn",
+            t::TURN_JUMP_POWER,
+            t::TURN_JUMP_GRAVITY,
         );
-        let plain =
-            o.throw_pressed && !o.crouch && !matches!(self.mode, Move::Roll | Move::GroundPound);
-        if free
+        self.set_h(self.facing * t::TURN_JUMP_VEL_H);
+        self.max_air_speed = t::TURN_JUMP_VEL_H;
+        self.jump_extend = false;
+        self.quick_turn = 0;
+    }
+    fn backflip(&mut self) {
+        self.jump_with(
+            Move::Backflip,
+            "JumpBack",
+            t::SQUAT_JUMP_POWER,
+            t::SQUAT_JUMP_GRAVITY,
+        );
+        self.set_h(-self.facing * t::SQUAT_JUMP_BACK);
+        self.max_air_speed = t::SQUAT_JUMP_MOVE_MAX;
+        self.jump_extend = false;
+    }
+    fn long_jump(&mut self) {
+        const NAMES: [&str; 3] = ["JumpBroad", "JumpBroad2", "JumpBroad3"];
+        if self.long_jump_timer >= t::CONTINUOUS_LONG_JUMP_TIMER {
+            self.long_jump_count = 0;
+        }
+        let name = NAMES[self.long_jump_count as usize % 3];
+        self.long_jump_count = (self.long_jump_count + 1) % 3;
+        let speed = self.speed_h();
+        self.jump_with(
+            Move::LongJump,
+            name,
+            t::LONG_JUMP_POWER,
+            t::LONG_JUMP_GRAVITY,
+        );
+        let s = (speed + t::LONG_JUMP_MOVE_POW)
+            .max(t::LONG_JUMP_INIT_SPEED)
+            .max(t::LONG_JUMP_SPEED_MIN);
+        self.set_h(self.facing * s);
+        self.jump_extend = false;
+    }
+    /// Long jump flight: slow forward accel, stronger brake, light steering.
+    fn long_jump_air(&mut self, o: &Orders) {
+        if self.air_actions(o) {
+            return;
+        }
+        let h = self.v.with_y(0.);
+        let dir = h.normalize_or(self.facing);
+        let mut s = h.length();
+        let mut new_dir = dir;
+        if self.tilt > 0.05 {
+            let along = self.stick.dot(dir);
+            if along < -0.3 {
+                s = (s - t::LONG_JUMP_BRAKE * self.tilt).max(t::LONG_JUMP_SPEED_MIN);
+            } else if along > 0.3 {
+                s = (s + t::LONG_JUMP_ACCEL * self.tilt)
+                    .min(t::LONG_JUMP_SPEED.max(s.min(t::LONG_JUMP_SPEED)));
+            }
+            let side = (t::LONG_JUMP_SIDE_ACCEL * self.tilt / s.max(1.)).atan();
+            new_dir = turn(dir, self.stick, side);
+        }
+        self.facing = new_dir;
+        self.set_h(new_dir * s.min(t::LONG_JUMP_SPEED.max(s)));
+        self.v.y = (self.v.y - t::LONG_JUMP_GRAVITY).max(-t::FALL_MAX);
+        if self.anim.frame >= 37. && self.v.y < 0. && self.anim.name.starts_with("JumpBroad") {
+            self.play("Fall");
+        }
+    }
+    /// Generic airborne control for jumps and falls.
+    fn air(&mut self, o: &Orders) {
+        if self.air_actions(o) {
+            return;
+        }
+        let mut h = self.v.with_y(0.);
+        let speed = h.length();
+        let locked = self.mode == Move::WallJump && self.frame < t::WALL_JUMP_NO_INPUT;
+        if self.tilt > 0.05 && !locked {
+            let wish = self.stick;
+            let dir = h.normalize_or(self.facing);
+            let angle = wrap(yaw(wish) - yaw(dir)).abs().to_degrees();
+            let limit = if angle > t::JUMP_TURN_FAST_DEG {
+                t::JUMP_TURN_FAST_LIMIT_DEG
+            } else {
+                t::JUMP_TURN_LIMIT_DEG
+            };
+            if wish.dot(dir) < -0.2 {
+                h = dir * (speed - t::JUMP_ACCEL_BACK * self.tilt).max(0.);
+            } else {
+                let cap = self.max_air_speed.max(t::JUMP_MOVE_MIN * self.tilt);
+                let s = if speed < cap {
+                    (speed + t::JUMP_ACCEL_FRONT * self.tilt).min(cap)
+                } else {
+                    speed
+                };
+                h = turn(dir, wish, limit.to_radians()) * s;
+            }
+            if !matches!(self.mode, Move::Backflip | Move::Sideflip) {
+                self.facing = turn(self.facing, wish, 0.1);
+            }
+        } else if !locked {
+            h *= t::FRICTION_AIR;
+        }
+        self.set_h(h);
+        let extending =
+            self.jump_extend && o.jump_held && self.frame < t::EXTEND_FRAMES && self.v.y > 0.;
+        if !o.jump_held || self.frame >= t::EXTEND_FRAMES {
+            self.jump_extend = false;
+        }
+        if !extending {
+            self.v.y -= self.gravity;
+        }
+        let max = if self.mode == Move::SpinJump && self.v.y < 0. {
+            4.
+        } else {
+            t::FALL_MAX
+        };
+        self.v.y = self.v.y.max(-max);
+        if self.v.y < 0. && self.gravity != t::GRAVITY_AIR && !matches!(self.mode, Move::SpinJump) {
+            self.gravity = t::GRAVITY_AIR;
+        }
+        // Jump clips end in a fall pose; then the fall loop takes over.
+        let ends: Option<u32> = match self.anim.name {
+            "Jump" | "JumpReverse" => Some(84),
+            "Jump2" => Some(42),
+            "Jump3" | "JumpBack" => Some(68),
+            "JumpTurn" => Some(60),
+            "RollingJump" => Some(28),
+            "JumpHipDrop" => Some(46),
+            "WallJump" => Some(37),
+            "JumpCapLeapFrog" => Some(clip::JUMP_CAP_LEAP_FROG),
+            "JumpCapCatchCommon" => Some(27),
+            "SpinCapAirStart" | "SpinCapAirStartLeft" | "SpinCapAirStartRight" => Some(40),
+            _ => None,
+        };
+        if ends.is_some_and(|n| self.anim_done(n)) && self.v.y < 0. {
+            self.play("Fall");
+        }
+        if self.mode == Move::SpinJump && self.anim.name == "SpinJumpStart" && self.anim_done(26) {
+            self.play("SpinJumpLoop");
+        }
+    }
+    /// Airborne transitions shared by every free-flight state.
+    fn air_actions(&mut self, o: &Orders) -> bool {
+        if self.coyote > 0 && self.pre_jump > 0 {
+            self.coyote = 0;
+            self.ground_jump(o);
+            return true;
+        }
+        if (self.pre_throw > 0 || o.throw_pressed) && o.crouch && self.dive_possible {
+            self.pre_throw = 0;
+            self.dive();
+            return true;
+        }
+        if o.crouch_pressed && !matches!(self.mode, Move::Throw) {
+            if self.mode == Move::SpinJump {
+                self.enter(Move::SpinDrop, "SpinJumpDownFall");
+                self.v = Vec3::NEG_Y * t::SPIN_DOWN_FALL_INIT;
+            } else {
+                self.start_hip_drop();
+            }
+            return true;
+        }
+        if (self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw)
             && self.cap.is_none()
-            && (plain
-                || o.up_throw
-                || o.down_throw
-                || o.spin_throw
-                || self.mode == Move::PoundLand && o.throw_pressed && !o.crouch)
         {
-            let kind = if o.up_throw {
-                Throw::Up
-            } else if o.down_throw || self.mode == Move::PoundLand {
-                Throw::Down
-            } else if o.spin_throw || self.spin > 0. {
-                Throw::Spin
-            } else {
-                Throw::Forward
-            };
-            let aim = Vec3::new(o.direction.x, 0., o.direction.y)
-                .try_normalize()
-                .unwrap_or(self.facing);
-            if kind == Throw::Forward && self.grounded {
-                self.facing = aim;
+            self.pre_throw = 0;
+            let kind = self.throw_kind(o);
+            self.start_throw(kind);
+            return true;
+        }
+        false
+    }
+
+    // ---- Ground pound and dive ----------------------------------------------
+    fn start_hip_drop(&mut self) {
+        self.enter(Move::GroundPound, "HipDropStart");
+        self.v = Vec3::ZERO;
+        self.events.push(Fx::PoundStart);
+    }
+    fn hip_drop(&mut self, o: &Orders) {
+        // A throw during the pound turns it into a dive.
+        if self.pre_throw > 0 || o.throw_pressed {
+            self.pre_throw = 0;
+            if self.tilt > 0.1 {
+                self.facing = self.stick;
             }
-            let (dir, reach) = match kind {
-                Throw::Up => (Vec3::Y, 4.5),
-                Throw::Down if self.grounded => (self.facing, 3.5),
-                Throw::Down => ((self.facing * 0.6 - Vec3::Y).normalize(), 3.5),
-                _ => (self.facing, 5.2),
-            };
-            let origin = self.pos + Vec3::Y * 0.9;
-            self.cap = Some(Cap {
-                pos: origin,
-                origin,
-                dir,
-                reach,
-                age: 0.,
-                returning: false,
-                kind,
-            });
-            self.spin = 0.;
-            self.events.push(Fx::Throw(kind));
-            if !self.grounded && !self.air_throw && !matches!(self.mode, Move::Dive) {
-                // One small hang per airtime, like the original's midair throw.
-                self.vel.y = self.vel.y.max(if kind == Throw::Spin { 4. } else { 2.5 });
-                self.air_throw = true;
+            self.dive();
+            return;
+        }
+        if self.anim.name == "HipDropStart" {
+            self.v = Vec3::ZERO;
+            if self.anim_done(clip::HIP_DROP_START) {
+                self.play("HipDrop");
+                self.v = Vec3::NEG_Y * t::HIP_DROP_SPEED;
+            }
+        } else {
+            self.v = Vec3::NEG_Y * t::HIP_DROP_SPEED;
+        }
+    }
+    fn hip_drop_land(&mut self, o: &Orders) {
+        self.set_h(Vec3::ZERO);
+        self.v.y = -t::GRAVITY;
+        if self.pre_jump > 0
+            && (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&self.frame)
+        {
+            self.ground_jump(o);
+            return;
+        }
+        if (self.pre_throw > 0 || o.throw_pressed) && self.frame <= t::HIP_DROP_JUMP_END {
+            self.pre_throw = 0;
+            if o.crouch {
+                // Roll straight out of the pound with a strong start.
+                self.start_roll(t::ROLL_BOOST, true);
+            } else if self.cap.is_none() {
+                self.start_throw(Throw::Down);
+            }
+            return;
+        }
+        let can_move = self.frame >= t::HIP_DROP_LAND_CANCEL;
+        if can_move && (self.tilt > 0.1 || o.crouch) || self.anim_done(clip::HIP_DROP_LAND) {
+            if o.crouch {
+                self.start_squat();
+            } else {
+                self.enter(Move::Idle, "Wait");
             }
         }
+    }
+    fn dive(&mut self) {
+        self.enter(Move::Dive, "HeadSlidingStart");
+        let mut h = self.v.with_y(0.).normalize_or(self.facing);
+        if self.tilt > 0.1 {
+            h = self.stick;
+        }
+        self.facing = h;
+        let up = self.v.y.max(0.) + t::HEAD_SLIDING_JUMP;
+        self.v = h * t::HEAD_SLIDING_SPEED + Vec3::Y * up;
+        self.dive_possible = false;
+        self.events.push(Fx::Dive);
+    }
+    fn head_sliding(&mut self, _o: &Orders) {
+        // Diving flight: no forward accel, a light side push, braking when pulled back.
+        let mut h = self.v.with_y(0.);
+        let dir = h.normalize_or(self.facing);
+        let mut s = h.length();
+        if self.tilt > 0.1 {
+            if self.stick.dot(dir) < -0.3 {
+                s = (s - t::HEAD_SLIDING_BRAKE).max(t::HEAD_SLIDING_SPEED_MIN);
+            }
+            let side = (t::HEAD_SLIDING_SIDE_ACCEL / s.max(1.)).atan();
+            h = turn(dir, self.stick, side) * s;
+        } else {
+            h = dir * s;
+        }
+        self.facing = h.normalize_or(self.facing);
+        self.set_h(h);
+        self.v.y = (self.v.y - t::HEAD_SLIDING_GRAVITY).max(-t::FALL_MAX);
+        if self.anim.name == "HeadSlidingStart" && self.anim_done(clip::HEAD_SLIDING_START) {
+            self.play("HeadSliding");
+        }
+    }
+
+    // ---- Walls, ledges, poles --------------------------------------------
+    fn wall_slide(&mut self, o: &Orders) {
+        if self.pre_jump > 0 {
+            self.facing = self.wall;
+            self.jump_with(
+                Move::WallJump,
+                "WallJump",
+                t::WALL_JUMP_POWER,
+                t::WALL_JUMP_GRAVITY,
+            );
+            self.set_h(self.wall * t::WALL_JUMP_H);
+            self.max_air_speed = t::WALL_JUMP_H;
+            self.jump_extend = false;
+            self.dive_possible = true;
+            return;
+        }
+        if o.crouch_pressed || self.wall == Vec3::ZERO {
+            self.pos += self.wall * 0.1;
+            self.enter(Move::Fall, "Fall");
+            return;
+        }
+        if self.frame >= t::WALL_KEEP_FRAMES {
+            self.keep("WallSlideL");
+        }
+        self.set_h(-self.wall * 2.);
+        self.v.y = (self.v.y - t::WALL_SLIDE_GRAVITY).max(-t::WALL_SLIDE_MAX);
+    }
+    fn wall_catch(&mut self, o: &Orders) {
+        self.v = Vec3::ZERO;
+        let toward = self.stick.dot(-self.wall) * self.tilt;
+        if self.anim.name == "WallCatchStart" && self.anim_done(clip::WALL_CATCH_START) {
+            self.play("WallCatch");
+        }
+        if self.anim.name == "WallCatchEnd" {
+            // Pull up onto the ledge over the climb clip.
+            let k = (self.anim.frame / clip::WALL_CATCH_END as f32).min(1.);
+            let target = self.ledge - self.wall * 0.5;
+            self.pos = self.pos.lerp(target, (k * 0.25).min(1.));
+            if self.anim_done(clip::WALL_CATCH_END) {
+                self.pos = target;
+                self.grounded = true;
+                self.enter(Move::Idle, "Wait");
+            }
+            return;
+        }
+        if o.crouch_pressed || toward < -0.4 {
+            self.pos += self.wall * 0.25;
+            self.enter(Move::Fall, "Fall");
+        } else if self.frame > 8 && self.pre_jump > 0 {
+            self.pos = self.ledge - self.wall * 0.3;
+            self.jump_with(
+                Move::Jump,
+                "WallCatchEndJump",
+                t::WALL_CLIMB_JUMP_V,
+                t::WALL_CLIMB_JUMP_GRAVITY,
+            );
+            self.set_h(-self.wall * t::WALL_CLIMB_JUMP_H);
+            self.jump_extend = false;
+        } else if self.frame > 8 && toward > 0.5 {
+            self.play("WallCatchEnd");
+        }
+    }
+    fn grab_pole(&mut self, scene: &Course) {
+        if self.grounded || matches!(self.mode, Move::Pole | Move::GroundPound | Move::Dive) {
+            return;
+        }
+        for pole in &scene.poles {
+            if (self.pos - pole.center).with_y(0.).length() < 0.6
+                && (pole.center.y..pole.center.y + pole.height).contains(&self.pos.y)
+            {
+                self.enter(Move::Pole, "PoleCatch");
+                self.pole = Vec3::new(pole.center.x, pole.center.y, pole.height);
+                if let Some(d) = (self.pos - pole.center).with_y(0.).try_normalize() {
+                    self.facing = -d;
+                }
+                self.pos.x = pole.center.x - self.facing.x * 0.35;
+                self.pos.z = pole.center.z - self.facing.z * 0.35;
+                self.v = Vec3::ZERO;
+                self.events.push(Fx::Pole);
+                return;
+            }
+        }
+    }
+    fn pole_climb(&mut self, o: &Orders) {
+        self.v = Vec3::ZERO;
+        if self.pre_jump > 0 {
+            self.pos += self.facing * -0.4;
+            self.facing = -self.facing;
+            self.jump_with(Move::Jump, "Jump", t::WALL_JUMP_POWER, t::WALL_JUMP_GRAVITY);
+            self.set_h(self.facing * t::WALL_JUMP_H);
+            self.jump_extend = false;
+            return;
+        }
+        if o.crouch_pressed {
+            self.pos -= self.facing * 0.3;
+            self.enter(Move::Fall, "Fall");
+            return;
+        }
+        let (bottom, top) = (self.pole.y, self.pole.y + self.pole.z - 0.6);
+        let up = -o.direction.y;
+        if self.anim.name == "PoleCatch" && !self.anim_done(clip::POLE_CATCH) {
+            return;
+        }
+        if up > 0.3 && self.pos.y < top {
+            self.keep("PoleClimb");
+            self.pos.y = (self.pos.y + t::POLE_UP_DIST / t::POLE_UP_FRAMES as f32 * UNIT).min(top);
+        } else if up < -0.3 && self.pos.y > bottom + 0.05 {
+            self.keep("PoleFall");
+            self.pos.y = (self.pos.y - t::POLE_DOWN_SPEED * UNIT).max(bottom);
+        } else {
+            self.keep("PoleWait");
+        }
+        if o.direction.x.abs() > 0.3 {
+            // Circle the pole.
+            let center = Vec3::new(self.pole.x, self.pos.y, self.pole.z);
+            let a = 0.05 * o.direction.x.signum();
+            let off = Quat::from_rotation_y(a) * (self.pos - center);
+            self.pos = center + off;
+            self.facing = (center - self.pos).with_y(0.).normalize_or(self.facing);
+        }
+    }
+
+    // ---- Swimming ---------------------------------------------------------
+    fn swim(&mut self, o: &Orders) {
+        if self.pre_throw > 0 || o.throw_pressed {
+            self.pre_throw = 0;
+            self.enter(Move::SwimDash, "SwimDive");
+            self.set_h(self.facing * t::SWIM_DIVE_SPEED);
+            self.events.push(Fx::SwimStroke);
+        }
+        if self.pre_jump > 0 {
+            self.pre_jump = 0;
+            self.swim_rise = t::SWIM_RISE_FRAMES;
+            self.play("SwimWalk");
+            self.events.push(Fx::SwimStroke);
+        }
+        let mut h = self.v.with_y(0.);
+        if self.mode == Move::SwimDash {
+            h *= t::SWIM_DIVE_BRAKE;
+            if h.length() < t::SWIM_SPEED_MAX_H {
+                self.set(Move::Swim);
+            }
+        } else if self.tilt > 0.05 {
+            self.facing = turn(self.facing, self.stick, 0.08);
+            h = (h + self.stick * t::SWIM_ACCEL_H * self.tilt)
+                .clamp_length_max(t::SWIM_SPEED_MAX_H);
+        } else {
+            h *= t::SWIM_BRAKE_H;
+        }
+        self.set_h(h);
+        if self.swim_rise > 0 {
+            self.swim_rise -= 1;
+            self.v.y = (self.v.y + t::SWIM_RISE_POWER * 4.).min(t::SWIM_RISE_MAX);
+        } else if o.crouch {
+            self.v.y = (self.v.y - t::SWIM_GRAVITY * 2.).max(-t::SWIM_FALL_MAX);
+        } else {
+            self.v.y = (self.v.y - t::SWIM_GRAVITY).max(-t::SWIM_FALL_MAX);
+        }
+        if self.mode == Move::Swim && self.anim.name != "SwimWalk" || self.anim.frame > 60. {
+            self.keep(if h.length() > 1. {
+                "SwimWalk"
+            } else {
+                "SwimWait"
+            });
+        }
+    }
+    fn spin_drop(&mut self, _o: &Orders) {
+        self.set_h(Vec3::ZERO);
+        self.v.y = (self.v.y - t::SPIN_DOWN_FALL_POWER).max(-t::SPIN_DOWN_FALL_MAX);
+    }
+
+    // ---- Cap ---------------------------------------------------------------
+    fn throw_kind(&self, o: &Orders) -> Throw {
+        if o.up_throw {
+            Throw::Up
+        } else if o.down_throw {
+            Throw::Down
+        } else if o.spin_throw || self.spin > 0 {
+            Throw::Spin
+        } else {
+            Throw::Forward
+        }
+    }
+    fn start_throw(&mut self, kind: Throw) {
+        if self.cap.is_some() {
+            return;
+        }
+        let air = !self.grounded;
+        // Repeated throws alternate sides and use the follow-up clips.
+        self.throw_count = if self.throw_timer > 0 {
+            (self.throw_count + 1).min(2)
+        } else {
+            0
+        };
+        self.throw_side = !self.throw_side;
+        let name = match (kind, air) {
+            (Throw::Up, false) => "SpinCapStartDoubleUp",
+            (Throw::Up, true) => "SpinCapAirStartDoubleUp",
+            (Throw::Down, false) => "SpinCapStartDoubleDown",
+            (Throw::Down, true) => "SpinCapAirStartDoubleDown",
+            (Throw::Spin, false) => {
+                if self.throw_side {
+                    "SpinCapStartDoubleRight"
+                } else {
+                    "SpinCapStartDoubleLeft"
+                }
+            }
+            (Throw::Spin, true) => {
+                if self.throw_side {
+                    "SpinCapAirStartDoubleRight"
+                } else {
+                    "SpinCapAirStartDoubleLeft"
+                }
+            }
+            (Throw::Forward, true) => {
+                if self.throw_side {
+                    "SpinCapAirStart"
+                } else {
+                    "SpinCapAirStartLeft"
+                }
+            }
+            (Throw::Forward, false) => match (self.throw_count, self.throw_side) {
+                (1, true) => "SpinCapStart2Right",
+                (1, false) => "SpinCapStart2Left",
+                (2, true) => "SpinCapStart3Right",
+                (2, false) => "SpinCapStart3Left",
+                (_, true) => "SpinCapStart",
+                (_, false) => "SpinCapStartLeft",
+            },
+        };
+        self.enter(Move::Throw, name);
+        if air && !self.air_throw_used {
+            // One small hang per airtime.
+            self.v.y = self.v.y.max(t::SPIN_AIR_JUMP);
+            self.air_throw_used = true;
+        }
+        self.pending_throw = Some(kind);
+    }
+    fn throw_state(&mut self, o: &Orders) {
+        let air = !self.grounded;
+        let release = if air {
+            t::SPIN_CAP_THROW_FRAME_AIR
+        } else if self.throw_count > 0 {
+            2
+        } else {
+            t::SPIN_CAP_THROW_FRAME
+        };
+        if let Some(kind) = self.pending_throw
+            && self.frame >= release
+        {
+            self.pending_throw = None;
+            self.launch_cap(kind);
+        }
+        if air {
+            let h = self.v.with_y(0.).clamp_length_max(
+                t::SPIN_AIR_SPEED_MAX.max(self.max_air_speed.min(t::SPIN_AIR_SPEED_MAX)),
+            );
+            self.set_h(h);
+            self.v.y = (self.v.y - t::SPIN_AIR_GRAVITY).max(-t::FALL_MAX);
+            if self.frame >= 24
+                || self.pending_throw.is_none()
+                    && self.frame >= release + 6
+                    && (self.pre_jump > 0 || o.crouch_pressed)
+            {
+                self.set(Move::Fall);
+                self.gravity = t::GRAVITY_AIR;
+                if o.crouch_pressed {
+                    self.start_hip_drop();
+                }
+            }
+        } else {
+            if self.frame < t::SPIN_BRAKE_FRAMES {
+                let h = self.v.with_y(0.) * t::SPIN_BRAKE_RATE;
+                self.set_h(h);
+            }
+            self.v.y = -t::GRAVITY;
+            let after = self.pending_throw.is_none() && self.frame >= release + 2;
+            if after && (self.pre_jump > 0 || self.tilt > 0.3 || o.crouch)
+                || self.anim_done(clip::SPIN_CAP_START)
+            {
+                self.throw_timer = 30;
+                self.enter(Move::Idle, "Wait");
+                if self.pre_jump > 0 {
+                    self.ground_jump(o);
+                }
+            }
+        }
+    }
+    fn launch_cap(&mut self, kind: Throw) {
+        let hand = self.pos + Vec3::Y * t::CAP_HEIGHT * UNIT;
+        let dir = match kind {
+            Throw::Up => Vec3::Y,
+            Throw::Down if self.grounded => self.facing,
+            Throw::Down => (self.facing * 0.5 - Vec3::Y).normalize(),
+            _ => self.facing,
+        };
+        self.cap = Some(Cap {
+            pos: hand,
+            age: 0.,
+            returning: false,
+            kind,
+            phase: CapPhase::Out,
+            vel: dir * t::CAP_SPEED,
+            dir,
+            travelled: 0.,
+            frames: 0,
+            stay: 0,
+        });
+        self.events.push(Fx::Throw(kind));
+    }
+    fn update_cap(&mut self, o: &Orders, scene: &Course) {
+        let hand = self.pos + Vec3::Y * t::CAP_HEIGHT * UNIT;
+        let facing = self.facing;
         let Some(cap) = &mut self.cap else {
             return;
         };
-        cap.age += dt;
-        let hand = self.pos + Vec3::Y * 0.9;
-        if o.homing && !cap.returning && cap.kind != Throw::Spin {
+        cap.frames += 1;
+        cap.age = cap.frames as f32 / FPS;
+        if o.homing && cap.phase != CapPhase::Return && cap.kind != Throw::Spin {
+            // A flick redirects the cap toward a nearby target or the stick.
             let target = scene
                 .targets
                 .iter()
@@ -1082,37 +1921,326 @@ impl Player {
                     a.distance_squared(cap.pos)
                         .total_cmp(&b.distance_squared(cap.pos))
                 });
-            let dir = target
+            cap.dir = target
                 .map(|t| (*t - cap.pos).normalize_or_zero())
                 .or_else(|| Vec3::new(o.direction.x, 0., o.direction.y).try_normalize())
                 .unwrap_or(cap.dir);
-            cap.reach = target.map_or(4.5, |t| t.distance(cap.pos));
-            cap.origin = cap.pos;
-            cap.dir = dir;
-            cap.age = 0.;
+            cap.phase = CapPhase::Out;
+            cap.travelled = t::CAP_REACH * 0.4;
+            cap.vel = cap.dir * t::CAP_SPEED;
         }
-        let hold = if cap.kind == Throw::Spin { 0.65 } else { 0.32 };
-        if cap.age > 1.8 || cap.age > hold && !o.throw_held {
+        match cap.phase {
+            CapPhase::Out => {
+                if cap.kind == Throw::Spin {
+                    let a = cap.frames as f32 * 0.25;
+                    let r = t::CAP_SPIN_RADIUS * (cap.frames as f32 / 8.).min(1.) * UNIT;
+                    cap.pos = hand + Vec3::new(a.cos(), 0., a.sin()) * r;
+                    if cap.frames >= t::CAP_SPIN_FRAMES {
+                        cap.phase = CapPhase::Return;
+                    }
+                } else {
+                    let (reach, speed) = if cap.kind == Throw::Down && cap.dir.y.abs() < 0.1 {
+                        (t::CAP_ROLL_REACH, t::CAP_ROLL_SPEED)
+                    } else {
+                        (t::CAP_REACH, t::CAP_SPEED)
+                    };
+                    // Constant speed, then a brake over the final stretch.
+                    let brake_dist = speed * t::CAP_BRAKE_FRAMES / 2.;
+                    let left = reach - cap.travelled;
+                    let s = if left > brake_dist {
+                        speed
+                    } else {
+                        (speed * left / brake_dist).max(1.5)
+                    };
+                    cap.vel = cap.dir * s;
+                    cap.pos += cap.vel * UNIT;
+                    cap.travelled += s;
+                    if cap.travelled >= reach - 1. {
+                        cap.phase = CapPhase::Stay;
+                        cap.vel = Vec3::ZERO;
+                    }
+                }
+            }
+            CapPhase::Stay => {
+                cap.stay += 1;
+                if cap.stay >= t::CAP_STAY_MAX || cap.stay >= t::CAP_STAY && !o.throw_held {
+                    cap.phase = CapPhase::Return;
+                }
+            }
+            CapPhase::Return => {}
+        }
+        if cap.phase == CapPhase::Return {
             cap.returning = true;
+            let to = hand - cap.pos;
+            let speed = (cap.vel.length() + t::CAP_RETURN_ACCEL).min(t::CAP_RETURN_MAX);
+            cap.vel = to.normalize_or_zero() * speed;
+            let step = (speed * UNIT).min(to.length());
+            cap.pos += to.normalize_or_zero() * step;
+            if cap.pos.distance(hand) < 0.4 {
+                self.cap = None;
+                self.events.push(Fx::Catch);
+                self.catch_window = t::CAP_CATCH_WINDOW;
+                self.throw_timer = 30;
+                if !self.grounded && self.mode.airborne_jump() && self.v.y < 0. {
+                    // Catching in midair gives a small pop.
+                    self.v.y = t::CAP_CATCH_POP_POWER;
+                    self.gravity = t::CAP_CATCH_POP_GRAVITY;
+                    self.play("JumpCapCatchCommon");
+                }
+            }
         }
-        if cap.returning {
-            let speed = 16. + cap.age * 30.;
-            cap.pos +=
-                (hand - cap.pos).normalize_or_zero() * (speed * dt).min(cap.pos.distance(hand));
-        } else if cap.kind == Throw::Spin {
-            let radius = 2.6 * (cap.age / 0.12).min(1.);
-            cap.pos = hand + Vec3::new((cap.age * 15.).cos(), 0., (cap.age * 15.).sin()) * radius;
+        let _ = facing;
+    }
+    fn cap_contact(&mut self) {
+        let Some(cap) = &self.cap else {
+            return;
+        };
+        if !self.cap_jump_possible
+            || cap.returning
+            || cap.frames < 6
+            || cap.kind == Throw::Up
+            || matches!(
+                self.mode,
+                Move::GroundPound
+                    | Move::Ledge
+                    | Move::Pole
+                    | Move::Swim
+                    | Move::SwimDash
+                    | Move::Throw
+                    | Move::PoundLand
+            )
+        {
+            return;
+        }
+        let body = self.pos + Vec3::Y * 0.8;
+        let d = cap.pos - body;
+        if d.with_y(0.).length() > 0.95 || d.y.abs() > 1.1 {
+            return;
+        }
+        let ground = self.grounded || matches!(self.mode, Move::Roll);
+        if !ground && self.v.y > 8. && self.mode != Move::Dive {
+            return;
+        }
+        let keep = self.speed_h();
+        if ground {
+            self.jump_with(
+                Move::CapVault,
+                "JumpCapLeapFrog",
+                t::CAP_LEAPFROG_POWER,
+                t::CAP_LEAPFROG_GRAVITY,
+            );
         } else {
-            // Ease out to full reach, then hover with a gentle bob.
-            let t = (cap.age / 0.24).min(1.);
-            let reach = cap.reach * (1. - (1. - t) * (1. - t));
-            cap.pos = cap.origin
-                + cap.dir * reach
-                + Vec3::Y * ((cap.age - 0.24).max(0.) * 7.).sin() * 0.08;
+            self.jump_with(
+                Move::CapBounce,
+                "JumpCapLeapFrog",
+                t::CAP_LEAPFROG_POWER_AIR,
+                t::CAP_LEAPFROG_GRAVITY,
+            );
         }
-        if cap.returning && cap.pos.distance(hand) < 0.6 {
-            self.cap = None;
-            self.events.push(Fx::Catch);
+        self.set_h(self.facing * keep.min(t::JUMP_MOVE_MAX));
+        self.max_air_speed = keep.clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
+        self.jump_extend = false;
+        self.cap_jump_possible = false;
+        self.dive_possible = true;
+        self.air_throw_used = false;
+        self.hitstop = 0.035;
+        self.cap = None;
+        self.events.push(Fx::CapBounce);
+    }
+
+    // ---- Landing and collision ------------------------------------------------
+    fn land(&mut self, o: &Orders) {
+        let fall = (self.peak - self.pos.y) / UNIT;
+        let speed = self.speed_h();
+        self.land_frames = 0;
+        self.jump_timer = 0;
+        self.long_jump_timer = 0;
+        self.cap_jump_possible = true;
+        self.dive_possible = true;
+        self.air_throw_used = false;
+        self.gravity = t::GRAVITY_AIR;
+        self.hard_land =
+            fall > t::LONG_FALL && !matches!(self.mode, Move::GroundPound | Move::Dive);
+        let mode = self.mode;
+        match mode {
+            Move::GroundPound => {
+                self.enter(Move::PoundLand, "HipDropLand");
+                self.hitstop = 0.05;
+                self.events.push(Fx::PoundLand);
+                return;
+            }
+            Move::SpinDrop => {
+                self.enter(Move::Idle, "LandDownFall");
+                self.events.push(Fx::PoundLand);
+                return;
+            }
+            Move::Dive | Move::LongJump | Move::RollJump if o.crouch && speed > t::NORMAL_MIN => {
+                self.start_roll(speed.max(t::ROLL_START), false);
+                self.play("LandRolling");
+            }
+            Move::Dive => self.enter(Move::Slide, "HeadSliding"),
+            Move::Roll => {}
+            _ => {
+                if self.hard_land {
+                    self.set_h(Vec3::ZERO);
+                    self.enter(Move::Idle, "LandStiffen");
+                } else if o.crouch {
+                    self.start_squat();
+                } else if self.tilt > 0.05 && speed > 0.5 {
+                    self.set(Move::Run);
+                    self.run_frames = t::BRAKE_ON_COUNTER;
+                    self.play("Move");
+                } else {
+                    self.set_h(self.v.with_y(0.) * 0.3);
+                    let anim = match mode {
+                        Move::TripleJump => "LandJump3",
+                        Move::Sideflip | Move::Backflip => "LandTurn",
+                        _ => "Land",
+                    };
+                    self.enter(Move::Idle, anim);
+                }
+            }
+        }
+        self.events.push(Fx::Land {
+            hard: self.hard_land,
+        });
+    }
+    fn collide(&mut self, o: &Orders, scene: &Course) {
+        let crouched = matches!(
+            self.mode,
+            Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd | Move::Slide | Move::Dive
+        ) || self.grounded && o.crouch;
+        let height = if crouched { SQUAT_HEIGHT } else { HEIGHT };
+        let old = self.pos;
+        let was_grounded = self.grounded;
+        self.grounded = false;
+        self.wall = Vec3::ZERO;
+        let motion = self.v * UNIT;
+        // Sub-steps keep each move shorter than the collider radius.
+        let steps = (motion.length() / (RADIUS * 0.8)).ceil().max(1.) as usize;
+        for _ in 0..steps {
+            let step = motion / steps as f32;
+            for axis in [0, 2, 1] {
+                let before = self.pos;
+                self.pos[axis] += step[axis];
+                for b in &scene.solids {
+                    let lo = b.center - b.half;
+                    let hi = b.center + b.half;
+                    if self.pos.x + RADIUS <= lo.x
+                        || self.pos.x - RADIUS >= hi.x
+                        || self.pos.z + RADIUS <= lo.z
+                        || self.pos.z - RADIUS >= hi.z
+                    {
+                        continue;
+                    }
+                    let top = b.top(self.pos.x.clamp(lo.x, hi.x));
+                    if axis == 1 {
+                        if self.v.y <= 0.
+                            && before.y >= b.top(before.x.clamp(lo.x, hi.x)) - 0.15
+                            && self.pos.y <= top
+                            && self.pos.y + height > lo.y
+                        {
+                            self.pos.y = top;
+                            self.v.y = 0.;
+                            self.grounded = true;
+                            self.slope = if (self.pos.x - b.center.x).abs() < b.half.x {
+                                b.slope
+                            } else {
+                                0.
+                            };
+                            self.slick = b.slippery;
+                        } else if self.v.y > 0.
+                            && before.y + height <= lo.y + 0.1
+                            && self.pos.y + height >= lo.y
+                        {
+                            self.pos.y = lo.y - height;
+                            self.v.y = 0.;
+                        }
+                    } else if self.pos.y + 0.12 < top && self.pos.y + height > lo.y + 0.05 {
+                        // Short steps are walkable.
+                        if before.y >= top - t::WALL_CATCH_EDGE_TOP * UNIT * 0.2
+                            && self.v.y <= 0.
+                            && !matches!(self.mode, Move::GroundPound | Move::Dive)
+                        {
+                            self.pos.y = top;
+                            self.v.y = 0.;
+                            self.grounded = true;
+                            continue;
+                        }
+                        let sign = if before[axis] < b.center[axis] {
+                            -1.
+                        } else {
+                            1.
+                        };
+                        self.pos[axis] = b.center[axis] + sign * (b.half[axis] + RADIUS);
+                        let into = -self.v[axis] * sign;
+                        self.wall = Vec3::ZERO;
+                        self.wall[axis] = sign;
+                        self.v[axis] = 0.;
+                        if self.mode == Move::Roll && into > 12. {
+                            // Rolling into a wall knocks the roll back out.
+                            self.facing = (self.facing
+                                - self.wall * 2. * self.facing.dot(self.wall))
+                            .normalize_or(self.wall);
+                            self.set_h(self.facing * 6.);
+                            self.enter(Move::RollEnd, "RollingEnd");
+                        }
+                        if !was_grounded && self.v.y < 0. && into > 0.5 {
+                            self.touch_wall(top, o);
+                        }
+                    }
+                }
+            }
+        }
+        if self.mode == Move::WallSlide
+            && (self.wall == Vec3::ZERO || self.grounded)
+            && !self.grounded
+        {
+            // Lost the wall: keep falling.
+            self.enter(Move::Fall, "Fall");
+        }
+        // Stay glued to ramps and steps down.
+        if !self.grounded
+            && was_grounded
+            && self.v.y <= 0.
+            && let Some(ground) = scene.ground(self.pos)
+            && self.pos.y - ground < 0.3
+        {
+            self.pos.y = ground;
+            self.grounded = true;
+        }
+        self.distance += (self.pos - old).with_y(0.).length();
+    }
+    fn touch_wall(&mut self, top: f32, o: &Orders) {
+        if matches!(
+            self.mode,
+            Move::Dive
+                | Move::GroundPound
+                | Move::LongJump
+                | Move::RollJump
+                | Move::Roll
+                | Move::WallSlide
+                | Move::Throw
+                | Move::SpinDrop
+        ) {
+            return;
+        }
+        let reach = top - self.pos.y;
+        if reach * 100. < t::WALL_CATCH_BOTTOM
+            && reach * 100. > t::WALL_CATCH_EDGE_TOP * 0.6
+            && o.direction.length() > 0.1
+        {
+            self.enter(Move::Ledge, "WallCatchStart");
+            self.ledge = Vec3::new(self.pos.x, top, self.pos.z);
+            self.pos.y = top - t::WALL_CATCH_EDGE_TOP * UNIT;
+            self.facing = -self.wall;
+            self.v = Vec3::ZERO;
+            self.events.push(Fx::Ledge);
+        } else if self.mode != Move::WallSlide {
+            self.enter(Move::WallSlide, "WallKeep");
+            self.facing = self.wall;
+            self.v.y = self.v.y.max(-t::WALL_SLIDE_MAX * 0.5);
+            self.events.push(Fx::WallSlide);
         }
     }
 }
@@ -1128,65 +2256,69 @@ pub fn self_check() {
         }],
         ..default()
     };
-    let dt = 1. / 120.;
     let fwd = |extra: Orders| Orders {
         direction: Vec2::NEG_Y,
         ..extra
     };
-    let run_up = |p: &mut Player, scene: &Course| {
-        for _ in 0..90 {
-            p.step(&fwd(default()), scene, dt);
+    let frames = |p: &mut Player, o: Orders, scene: &Course, n: usize| {
+        for _ in 0..n {
+            p.step(&o, scene);
         }
     };
+    let until_ground = |p: &mut Player, o: Orders, scene: &Course| -> f32 {
+        let mut high = p.pos.y;
+        for _ in 0..600 {
+            p.step(&o, scene);
+            high = high.max(p.pos.y);
+            if p.grounded {
+                break;
+            }
+        }
+        high
+    };
+    // Running reaches the original top speed after its 40-frame ramp.
     let mut p = Player::default();
-    p.step(
+    frames(&mut p, fwd(default()), &floor, 45);
+    assert_eq!(p.mode, Move::Run);
+    assert!((p.move_speed - 14.).abs() < 0.01, "{}", p.move_speed);
+    assert_eq!(p.anim.name, "Move");
+    // Holding jump extends the first jump; tapping gives a lower hop.
+    let mut held = Player::default();
+    held.step(
         &Orders {
             jump: true,
             jump_held: true,
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::Jump);
-    assert!(p.vel.y > 9.);
-    let mut high = p.pos.y;
-    for _ in 0..200 {
-        p.step(
-            &Orders {
-                jump_held: true,
-                ..default()
-            },
-            &floor,
-            dt,
-        );
-        high = high.max(p.pos.y);
-    }
-    assert!(
-        high > 2. && p.grounded && p.pos.y.abs() < 0.001,
-        "high {high}"
+    assert_eq!((held.mode, held.anim.name), (Move::Jump, "Jump"));
+    let high = until_ground(
+        &mut held,
+        Orders {
+            jump_held: true,
+            ..default()
+        },
+        &floor,
     );
-    let mut short = Player::default();
-    short.step(
+    let mut tap = Player::default();
+    tap.step(
         &Orders {
             jump: true,
             ..default()
         },
         &floor,
-        dt,
     );
-    let mut low = 0_f32;
-    for _ in 0..200 {
-        short.step(&Orders::default(), &floor, dt);
-        low = low.max(short.pos.y);
-    }
-    assert!(low < high * 0.7, "releasing jump early gives a short hop");
-    // Chain actual landings rather than setting jump counters directly.
+    let low = until_ground(&mut tap, Orders::default(), &floor);
+    assert!(high > low + 1. && low > 0.8, "held {high} tap {low}");
+    // Chained jumps while running: Jump, Jump2, Jump3.
     p = Player::default();
-    run_up(&mut p, &floor);
-    assert_eq!(p.mode, Move::Run);
-    assert!((p.flat_speed() - RUN).abs() < 0.1);
-    for expected in [Move::Jump, Move::DoubleJump, Move::TripleJump] {
+    frames(&mut p, fwd(default()), &floor, 45);
+    for (mode, anim) in [
+        (Move::Jump, "Jump"),
+        (Move::DoubleJump, "Jump2"),
+        (Move::TripleJump, "Jump3"),
+    ] {
         p.step(
             &fwd(Orders {
                 jump: true,
@@ -1194,88 +2326,33 @@ pub fn self_check() {
                 ..default()
             }),
             &floor,
-            dt,
         );
-        assert_eq!(p.mode, expected);
-        for _ in 0..300 {
-            p.step(
-                &fwd(Orders {
-                    jump_held: true,
-                    ..default()
-                }),
-                &floor,
-                dt,
-            );
-            if p.grounded {
-                break;
-            }
-        }
-        assert!(p.grounded);
-    }
-    for (o, expected) in [
-        (
-            Orders {
-                direction: Vec2::NEG_Y * 0.3,
+        let name = if p.anim.name == "JumpReverse" {
+            "Jump"
+        } else {
+            p.anim.name
+        };
+        assert_eq!((p.mode, name), (mode, anim));
+        until_ground(
+            &mut p,
+            fwd(Orders {
+                jump_held: true,
                 ..default()
-            },
-            Move::Walk,
-        ),
-        (
-            Orders {
-                crouch: true,
-                ..default()
-            },
-            Move::Crouch,
-        ),
-        (
-            Orders {
-                direction: Vec2::NEG_Y,
-                crouch: true,
-                ..default()
-            },
-            Move::Crawl,
-        ),
-    ] {
-        p = Player::default();
-        for _ in 0..30 {
-            p.step(&o, &floor, dt);
-        }
-        assert_eq!(p.mode, expected);
-    }
-    // Circling the stick then jumping gives a spin jump.
-    p = Player::default();
-    for i in 0..40 {
-        let a = i as f32 * 0.35;
-        p.step(
-            &Orders {
-                direction: Vec2::new(a.cos(), a.sin()),
-                ..default()
-            },
+            }),
             &floor,
-            dt,
         );
     }
-    p.step(
-        &Orders {
-            jump: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::SpinJump);
-    // Reversing at speed skids; jumping out of a skid is a side somersault.
+    // Reversing at speed brakes; jumping out of it is a side somersault.
     p = Player::default();
-    run_up(&mut p, &floor);
+    frames(&mut p, fwd(default()), &floor, 45);
     p.step(
         &Orders {
             direction: Vec2::Y,
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::Skid);
+    assert_eq!((p.mode, p.anim.name), (Move::Skid, "Brake"));
     p.step(
         &Orders {
             direction: Vec2::Y,
@@ -1283,11 +2360,20 @@ pub fn self_check() {
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::Sideflip);
-    assert!(p.vel.z > 0., "side somersault goes the new way");
+    assert_eq!((p.mode, p.anim.name), (Move::Sideflip, "JumpTurn"));
+    assert!(p.vel.z > 0.);
+    // Crouch then jump: backflip at rest, long jump while sliding forward.
     p = Player::default();
+    frames(
+        &mut p,
+        Orders {
+            crouch: true,
+            ..default()
+        },
+        &floor,
+        5,
+    );
     p.step(
         &Orders {
             crouch: true,
@@ -1295,11 +2381,17 @@ pub fn self_check() {
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::Backflip);
+    assert_eq!((p.mode, p.anim.name), (Move::Backflip, "JumpBack"));
     p = Player::default();
-    run_up(&mut p, &floor);
+    frames(&mut p, fwd(default()), &floor, 45);
+    p.step(
+        &fwd(Orders {
+            crouch: true,
+            ..default()
+        }),
+        &floor,
+    );
     p.step(
         &fwd(Orders {
             crouch: true,
@@ -1307,175 +2399,14 @@ pub fn self_check() {
             ..default()
         }),
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::LongJump);
-    assert!(p.flat_speed() >= 14.);
-    // Roll, boost on the rhythm, then the roll runs out on flat ground.
+    assert_eq!((p.mode, p.anim.name), (Move::LongJump, "JumpBroad"));
+    assert!(p.move_speed >= 14.);
+    // Ground pound: hang through the start clip, drop at 45, land, jump.
     p = Player::default();
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::Roll);
-    assert!(p.cap.is_none(), "roll input does not throw the cap");
-    for _ in 0..50 {
-        p.step(
-            &Orders {
-                crouch: true,
-                ..default()
-            },
-            &floor,
-            dt,
-        );
-    }
-    let speed = p.flat_speed();
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert!(p.flat_speed() > speed + 4., "rhythm boost");
-    let mut ended = false;
-    for _ in 0..1200 {
-        p.step(
-            &Orders {
-                crouch: true,
-                ..default()
-            },
-            &floor,
-            dt,
-        );
-        if p.mode == Move::Crouch {
-            ended = true;
-            break;
-        }
-    }
-    assert!(ended, "a roll on flat ground slows back into a crouch");
-    p = Player::default();
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    for _ in 0..20 {
-        p.step(&Orders::default(), &floor, dt);
-    }
-    assert_ne!(p.mode, Move::Roll, "releasing crouch stops the roll");
-    p = Player::default();
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    p.step(
-        &Orders {
-            crouch: true,
-            jump: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::RollJump);
-    p = Player::default();
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    p.step(
-        &Orders {
-            jump: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::Run, "roll cancel stands up at speed");
-    assert!(p.flat_speed() > RUN);
-    // Dive, then belly slide; diving while holding crouch lands into a roll.
-    p = Player::default();
-    p.pos.y = 5.;
+    p.pos.y = 6.;
     p.grounded = false;
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::Dive);
-    p.step(
-        &Orders {
-            crouch_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::Dive);
-    for _ in 0..200 {
-        p.step(&Orders::default(), &floor, dt);
-        if p.grounded {
-            break;
-        }
-    }
-    assert_eq!(p.mode, Move::Slide);
-    p = Player::default();
-    p.pos.y = 5.;
-    p.grounded = false;
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    for _ in 0..200 {
-        p.step(
-            &Orders {
-                crouch: true,
-                ..default()
-            },
-            &floor,
-            dt,
-        );
-        if p.grounded {
-            break;
-        }
-    }
-    assert_eq!(p.mode, Move::Roll);
-    // Ground pound: hang, drop, impact; jump on impact or throw into a dive.
-    p = Player::default();
-    p.pos.y = 5.;
-    p.grounded = false;
+    p.mode = Move::Fall;
     p.step(
         &Orders {
             crouch_pressed: true,
@@ -1483,33 +2414,27 @@ pub fn self_check() {
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::GroundPound);
-    p.step(&Orders::default(), &floor, dt);
-    assert!(p.pos.y > 4.99, "pound starts with a hang");
-    for _ in 0..200 {
-        p.step(&Orders::default(), &floor, dt);
-        if p.grounded {
-            break;
-        }
-    }
-    assert_eq!(p.mode, Move::PoundLand);
-    for _ in 0..10 {
-        p.step(&Orders::default(), &floor, dt);
-    }
+    assert_eq!((p.mode, p.anim.name), (Move::GroundPound, "HipDropStart"));
+    frames(&mut p, Orders::default(), &floor, 10);
+    assert!((p.pos.y - 6.).abs() < 0.001, "pound hangs first");
+    until_ground(&mut p, Orders::default(), &floor);
+    assert_eq!((p.mode, p.anim.name), (Move::PoundLand, "HipDropLand"));
+    p.hitstop = 0.;
+    frames(&mut p, Orders::default(), &floor, 6);
     p.step(
         &Orders {
             jump: true,
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::PoundJump);
+    assert_eq!((p.mode, p.anim.name), (Move::PoundJump, "JumpHipDrop"));
+    // Throw during the pound start: dive with the original head-slide clip.
     p = Player::default();
-    p.pos.y = 5.;
+    p.pos.y = 6.;
     p.grounded = false;
+    p.mode = Move::Fall;
     p.step(
         &Orders {
             crouch_pressed: true,
@@ -1517,7 +2442,6 @@ pub fn self_check() {
             ..default()
         },
         &floor,
-        dt,
     );
     p.step(
         &Orders {
@@ -1526,87 +2450,194 @@ pub fn self_check() {
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::Dive);
-    assert!(p.vel.x > 9.);
-    // Cap jump: dive onto a held cap; vault a cap from the ground.
+    assert_eq!((p.mode, p.anim.name), (Move::Dive, "HeadSlidingStart"));
+    assert!(p.vel.x > 10. && p.vel.y > 0.);
+    until_ground(&mut p, Orders::default(), &floor);
+    assert_eq!(p.mode, Move::Slide);
+    // Roll: starts at 20, decays, and on flat ground ends in a crouch.
+    p = Player::default();
+    frames(
+        &mut p,
+        Orders {
+            crouch: true,
+            ..default()
+        },
+        &floor,
+        3,
+    );
+    p.step(
+        &Orders {
+            crouch: true,
+            throw_pressed: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!((p.mode, p.anim.name), (Move::Roll, "RollingStart"));
+    assert!(p.cap.is_none(), "rolling does not throw the cap");
+    let mut ended = None;
+    for i in 0..900 {
+        p.step(
+            &Orders {
+                crouch: true,
+                ..default()
+            },
+            &floor,
+        );
+        if p.mode == Move::Crouch {
+            ended = Some(i);
+            break;
+        }
+    }
+    assert!(
+        ended.is_some_and(|f| f > 45),
+        "roll lasts its minimum then ends: {ended:?}"
+    );
+    // Boosting extends the roll.
+    p = Player::default();
+    frames(
+        &mut p,
+        Orders {
+            crouch: true,
+            ..default()
+        },
+        &floor,
+        3,
+    );
+    p.step(
+        &Orders {
+            crouch: true,
+            throw_pressed: true,
+            ..default()
+        },
+        &floor,
+    );
+    frames(
+        &mut p,
+        Orders {
+            crouch: true,
+            ..default()
+        },
+        &floor,
+        20,
+    );
+    let before = p.move_speed;
+    p.step(
+        &Orders {
+            crouch: true,
+            throw_pressed: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert!(p.move_speed >= t::ROLL_BOOST && p.move_speed > before);
+    // Releasing crouch unrolls after five frames.
+    frames(&mut p, Orders::default(), &floor, 30);
+    assert_ne!(p.mode, Move::Roll);
+    // Standing cap throw: the spin clip, then the cap leaves on frame 12.
+    p = Player::default();
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            throw_held: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!((p.mode, p.anim.name), (Move::Throw, "SpinCapStart"));
+    frames(
+        &mut p,
+        Orders {
+            throw_held: true,
+            ..default()
+        },
+        &floor,
+        10,
+    );
+    assert!(p.cap.is_none());
+    frames(
+        &mut p,
+        Orders {
+            throw_held: true,
+            ..default()
+        },
+        &floor,
+        3,
+    );
+    assert!(p.cap.is_some());
+    // The cap travels its reach, hovers while held, then returns.
+    frames(
+        &mut p,
+        Orders {
+            throw_held: true,
+            ..default()
+        },
+        &floor,
+        40,
+    );
+    let cap = p.cap.as_ref().unwrap();
+    assert_eq!(cap.phase, CapPhase::Stay);
+    assert!(((cap.pos - p.pos).with_y(0.).length() - 5.).abs() < 0.3);
+    frames(&mut p, Orders::default(), &floor, 120);
+    assert!(p.cap.is_none());
+    // Running throw keeps running with the upper-body clip.
+    p = Player::default();
+    frames(&mut p, fwd(default()), &floor, 45);
+    p.step(
+        &fwd(Orders {
+            throw_pressed: true,
+            throw_held: true,
+            ..default()
+        }),
+        &floor,
+    );
+    assert_eq!(p.mode, Move::Run);
+    assert_eq!(p.sub_anim.map(|a| a.name), Some("ThrowCapParts"));
+    assert!(p.cap.is_some());
+    // Cap jump: dive into a hovering cap.
     p = Player::default();
     p.pos.y = 3.;
     p.grounded = false;
+    p.mode = Move::Fall;
     p.cap = Some(Cap {
-        pos: p.pos + Vec3::Y * 0.7,
-        origin: p.pos + Vec3::Y * 0.7,
-        dir: Vec3::NEG_Z,
-        reach: 0.,
-        age: 0.3,
+        pos: p.pos + Vec3::Y * 0.8,
+        age: 0.5,
         returning: false,
         kind: Throw::Forward,
+        phase: CapPhase::Stay,
+        vel: Vec3::ZERO,
+        dir: Vec3::NEG_Z,
+        travelled: t::CAP_REACH,
+        frames: 30,
+        stay: 0,
     });
+    p.v.y = -5.;
     p.step(
         &Orders {
             throw_held: true,
             ..default()
         },
         &floor,
-        dt,
     );
-    assert_eq!(p.mode, Move::CapBounce);
-    assert!(p.cap_bounced && !p.dive_used);
-    p = Player::default();
-    p.cap = Some(Cap {
-        pos: p.pos + Vec3::Y * 0.7,
-        origin: p.pos + Vec3::Y * 0.7,
-        dir: Vec3::NEG_Z,
-        reach: 0.,
-        age: 0.3,
-        returning: false,
-        kind: Throw::Forward,
-    });
-    p.step(
-        &Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        dt,
-    );
-    assert_eq!(p.mode, Move::CapVault);
-    for kind in [Throw::Forward, Throw::Up, Throw::Down, Throw::Spin] {
-        p = Player::default();
-        let o = Orders {
-            throw_pressed: kind == Throw::Forward,
-            throw_held: true,
-            up_throw: kind == Throw::Up,
-            down_throw: kind == Throw::Down,
-            spin_throw: kind == Throw::Spin,
-            ..default()
-        };
-        p.step(&o, &floor, dt);
-        assert_eq!(p.cap.as_ref().unwrap().kind, kind);
-        for _ in 0..500 {
-            p.step(&Orders::default(), &floor, dt);
-        }
-        assert!(p.cap.is_none());
-    }
+    assert_eq!((p.mode, p.anim.name), (Move::CapBounce, "JumpCapLeapFrog"));
+    // Wall slide then wall jump.
     let mut wall = floor.clone();
     wall.solids.push(Solid {
-        center: Vec3::new(0., 2., -2.),
-        half: Vec3::new(3., 2., 0.3),
+        center: Vec3::new(0., 3., -2.),
+        half: Vec3::new(3., 3., 0.3),
         slope: 0.,
         moving: false,
         slippery: false,
     });
     p = Player::default();
-    p.pos = Vec3::new(0., 1., -1.35);
+    p.pos = Vec3::new(0., 1.5, -1.2);
     p.grounded = false;
-    p.coyote = 0.;
-    p.vel = Vec3::new(0., -2., -4.);
-    p.step(&fwd(default()), &wall, dt);
+    p.v = Vec3::new(0., -2., -8.);
+    p.mode = Move::Fall;
+    p.step(&fwd(default()), &wall);
     assert_eq!(p.mode, Move::WallSlide);
-    for _ in 0..10 {
-        p.step(&Orders::default(), &wall, dt);
-    }
+    frames(&mut p, Orders::default(), &wall, 5);
     assert_eq!(p.mode, Move::WallSlide, "wall slide holds contact");
     p.step(
         &Orders {
@@ -1614,76 +2645,60 @@ pub fn self_check() {
             ..default()
         },
         &wall,
-        dt,
     );
-    assert_eq!(p.mode, Move::WallJump);
-    assert!(p.vel.z > 0. && p.vel.y > 10.);
-    p.pos = Vec3::new(0., 2.5, -1.35);
-    p.vel = Vec3::new(0., -2., -4.);
-    p.step(&fwd(default()), &wall, dt);
-    assert_eq!(p.mode, Move::Ledge);
-    for _ in 0..30 {
-        p.step(&Orders::default(), &wall, dt);
+    assert_eq!((p.mode, p.anim.name), (Move::WallJump, "WallJump"));
+    assert!(p.vel.z > 0.);
+    // Ledge grab and climb.
+    p = Player::default();
+    p.pos = Vec3::new(0., 4.75, -1.2);
+    p.grounded = false;
+    p.mode = Move::Fall;
+    p.v = Vec3::new(0., -2., -8.);
+    p.step(&fwd(default()), &wall);
+    assert_eq!((p.mode, p.anim.name), (Move::Ledge, "WallCatchStart"));
+    for _ in 0..200 {
+        p.step(&fwd(default()), &wall);
+        if p.grounded {
+            break;
+        }
     }
-    p.step(
-        &Orders {
-            jump: true,
-            ..default()
-        },
-        &wall,
-        dt,
+    assert!(
+        p.grounded && p.pos.y >= 5.99 && p.pos.z < -1.7,
+        "{:?}",
+        p.pos
     );
-    assert!(p.pos.y >= 4. && p.pos.z < -1.7);
-
+    // Water.
     let mut water = floor.clone();
     water.water = Some((Vec3::Y * 5., Vec3::splat(100.)));
     p = Player::default();
-    for _ in 0..20 {
-        p.step(
-            &Orders {
-                jump_held: true,
-                ..default()
-            },
-            &water,
-            dt,
-        );
-    }
-    assert_eq!(p.mode, Move::Swim);
-    assert!(p.vel.y > 0.);
-    p.step(
-        &fwd(Orders {
-            throw_pressed: true,
-            throw_held: true,
+    frames(
+        &mut p,
+        Orders {
+            jump: true,
+            jump_held: true,
             ..default()
-        }),
+        },
         &water,
-        dt,
+        3,
     );
-    assert_eq!(p.mode, Move::SwimDash);
-    assert!(p.vel.z < 0.);
+    assert!(matches!(p.mode, Move::Swim | Move::SwimDash));
+    // Poles.
     let mut pole = floor.clone();
     pole.poles.push(Pole {
         center: Vec3::ZERO,
         height: 8.,
     });
     p = Player::default();
-    p.pos = Vec3::Y * 2.;
+    p.pos = Vec3::new(0., 2., 0.3);
     p.grounded = false;
-    p.coyote = 0.;
-    p.step(&Orders::default(), &pole, dt);
+    p.mode = Move::Fall;
+    p.step(&Orders::default(), &pole);
     assert_eq!(p.mode, Move::Pole);
+    frames(&mut p, Orders::default(), &pole, 10);
     let y = p.pos.y;
-    p.step(&fwd(default()), &pole, dt);
+    frames(&mut p, fwd(default()), &pole, 5);
     assert!(p.pos.y > y);
-    p.step(
-        &fwd(Orders {
-            jump: true,
-            ..default()
-        }),
-        &pole,
-        dt,
-    );
-    assert_eq!(p.mode, Move::Backflip);
+    // Low ceilings force a crouch.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {
         center: Vec3::new(0., 1.5, 5.),
@@ -1693,47 +2708,21 @@ pub fn self_check() {
         slippery: false,
     });
     p = Player::default();
-    p.step(&Orders::default(), &tunnel, dt);
-    assert_eq!(p.mode, Move::Crouch);
-    p.step(
-        &Orders {
+    frames(
+        &mut p,
+        Orders {
             jump: true,
             ..default()
         },
         &tunnel,
-        dt,
+        2,
     );
-    assert!(
-        p.grounded && p.pos.y == 0.,
-        "a blocked backflip must not expand through the ceiling"
-    );
-    let mut targets = floor.clone();
+    assert!(p.grounded && p.pos.y == 0.);
+    // Walls block.
     p = Player::default();
-    targets.targets.push(p.pos + Vec3::new(4., 1., 0.));
-    p.step(
-        &Orders {
-            throw_pressed: true,
-            throw_held: true,
-            ..default()
-        },
-        &targets,
-        dt,
-    );
-    p.step(
-        &Orders {
-            homing: true,
-            throw_held: true,
-            ..default()
-        },
-        &targets,
-        dt,
-    );
-    assert!(p.cap.as_ref().unwrap().dir.x > 0.9);
-    p = Player::default();
-    for _ in 0..300 {
-        p.step(&fwd(default()), &wall, dt);
-    }
-    assert!(p.pos.z >= -1.36);
+    frames(&mut p, fwd(default()), &wall, 300);
+    assert!(p.pos.z >= -1.26);
+    // Stress: random input stays finite and emits events.
     let mut events = 0;
     for i in 0..10_000 {
         let o = Orders {
@@ -1746,7 +2735,7 @@ pub fn self_check() {
             throw_held: i % 107 < 40,
             ..default()
         };
-        p.step(&o, &wall, dt);
+        p.step(&o, &wall);
         events += p.events.drain(..).count();
         assert!(p.pos.is_finite() && p.vel.is_finite());
     }

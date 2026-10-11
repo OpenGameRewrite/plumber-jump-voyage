@@ -130,6 +130,7 @@ impl Spawner<'_, '_, '_> {
             0 => (&kit.ball, &kit.dust, true),
             1 => (&kit.chip, &kit.spark, false),
             2 => (&kit.chip, &kit.white, false),
+            4 => (&kit.ball, &kit.wave, false),
             _ => (&kit.ball, &kit.water, false),
         };
         let spin = self.rand() * 12. - 6.;
@@ -175,6 +176,28 @@ impl Spawner<'_, '_, '_> {
             );
         }
     }
+    /// The white sweep around the body when the cap is spun out.
+    fn swoosh(&mut self, center: Vec3, facing: Vec3, clockwise: bool, up: bool) {
+        let base = facing.x.atan2(facing.z);
+        let turn = if clockwise { -1. } else { 1. };
+        for i in 0..14 {
+            let a = base + turn * (i as f32 / 14. * 5.2 - 1.);
+            let (radial, tangent) = (
+                Vec3::new(a.sin(), 0., a.cos()),
+                Vec3::new(a.cos(), 0., -a.sin()) * turn,
+            );
+            let height = if up { i as f32 * 0.08 } else { 0. };
+            self.particle(
+                center + radial * 0.75 + Vec3::Y * height,
+                tangent * 6. + radial,
+                0.2 + 0.1 * (i as f32 / 14.),
+                0.18 + i as f32 * 0.006,
+                0.,
+                3.,
+                2,
+            );
+        }
+    }
     fn ring(&mut self, at: Vec3, radius: f32, life: f32, gold: bool) {
         self.commands.spawn((
             Ring {
@@ -215,7 +238,13 @@ fn react(
     for f in fx.read() {
         match *f {
             Fx::Jump(kind) => {
-                if matches!(kind, Move::CapBounce | Move::CapVault) {
+                // The original puffs smoke on every ground jump clip except the
+                // cap leapfrog and the roll jump; wall jumps burst off the wall.
+                if matches!(kind, Move::CapBounce | Move::CapVault | Move::RollJump) {
+                    continue;
+                }
+                if kind == Move::WallJump {
+                    s.dust_ring(feet + Vec3::Y * 0.9 - p.facing * 0.4, 6, 2.5, 0.4);
                     continue;
                 }
                 let n = match kind {
@@ -239,7 +268,7 @@ fn react(
                     shake.0 = shake.0.max(0.45);
                 }
             }
-            Fx::Step if p.flat_speed() > 5. => {
+            Fx::Step { .. } if p.flat_speed() > 5. => {
                 s.particle(
                     feet + back * 0.2 + Vec3::Y * 0.1,
                     back * 1.2 + Vec3::Y * 0.5,
@@ -250,7 +279,21 @@ fn react(
                     0,
                 );
             }
-            Fx::Skid => s.dust_ring(feet + p.facing * 0.3, 4, 2., 0.5),
+            Fx::Skid => s.dust_ring(feet + p.facing * 0.3, 6, 2.5, 0.5),
+            Fx::TurnDust => {
+                for _ in 0..5 {
+                    let side = Vec3::new(s.rand() - 0.5, 0., s.rand() - 0.5) * 0.4;
+                    s.particle(
+                        feet + back * 0.3 + side + Vec3::Y * 0.1,
+                        back * 3. + Vec3::Y,
+                        0.5,
+                        0.4,
+                        0.,
+                        4.,
+                        0,
+                    );
+                }
+            }
             Fx::PoundStart => s.sparks(feet + Vec3::Y * 0.9, 6, 3., 2),
             Fx::PoundLand => {
                 s.dust_ring(feet, 16, 7., 0.75);
@@ -279,8 +322,19 @@ fn react(
             }
             Fx::Dive => s.sparks(feet + Vec3::Y * 0.8, 4, 2., 2),
             Fx::Throw(kind) => {
+                // The spin that flings the cap leaves a sweep around the body.
                 let hand = feet + Vec3::Y * 0.9 + p.facing * 0.4;
-                s.sparks(hand, if kind == Throw::Spin { 8 } else { 4 }, 2.5, 2);
+                let clockwise = !p.anim.name.contains("Left");
+                s.swoosh(
+                    feet + Vec3::Y * 0.85,
+                    p.facing,
+                    clockwise,
+                    kind == Throw::Up,
+                );
+                if kind == Throw::Spin {
+                    s.swoosh(feet + Vec3::Y * 0.5, -p.facing, clockwise, false);
+                }
+                s.sparks(hand, 4, 2.5, 2);
             }
             Fx::Catch => s.sparks(feet + Vec3::Y * 1.6, 5, 1.8, 2),
             Fx::CapBounce => {
@@ -374,16 +428,32 @@ fn trails(
                 0,
             );
         }
-        Move::Roll if p.grounded && p.flat_speed() > 8. => {
-            let side = Vec3::new(s.rand() - 0.5, 0., s.rand() - 0.5) * 0.5;
+        Move::Roll => {
+            // The rolling ball's blur, and its dust while on the ground.
+            s.particle(p.pos + Vec3::Y * 0.45, p.vel * 0.3, 1.3, 0.1, 0., 0., 4);
+            if p.grounded && p.flat_speed() > 3. {
+                let side = Vec3::new(s.rand() - 0.5, 0., s.rand() - 0.5) * 0.5;
+                s.particle(
+                    p.pos + side + Vec3::Y * 0.1,
+                    back * 2. + Vec3::Y * 0.6,
+                    0.45,
+                    0.35,
+                    0.,
+                    4.,
+                    0,
+                );
+            }
+        }
+        Move::SpinDrop | Move::GroundSpin => {
+            let d = s.dir().with_y(0.).normalize_or(Vec3::X) * 0.6;
             s.particle(
-                p.pos + side + Vec3::Y * 0.1,
-                back * 2. + Vec3::Y * 0.6,
-                0.45,
-                0.35,
+                p.pos + Vec3::Y * 0.6 + d,
+                Vec3::new(d.z, 0., -d.x) * 4.,
+                0.16,
+                0.2,
                 0.,
-                4.,
-                0,
+                2.,
+                2,
             );
         }
         Move::WallSlide => {
@@ -397,7 +467,13 @@ fn trails(
                 0,
             );
         }
-        Move::TripleJump | Move::Backflip | Move::Sideflip | Move::SpinJump | Move::PoundJump
+        Move::TripleJump
+        | Move::Backflip
+        | Move::Sideflip
+        | Move::SpinJump
+        | Move::PoundJump
+        | Move::CapVault
+        | Move::CapBounce
             if !p.grounded && p.timer < 0.7 =>
         {
             let d = s.dir() * 0.3;

@@ -41,7 +41,6 @@ fn main() {
                 ..default()
             }),
     )
-    .insert_resource(Time::<Fixed>::from_hz(120.0))
     .insert_resource(ClearColor(Color::srgb(0.47, 0.76, 0.88)))
     .add_plugins((
         input::plugin,

@@ -70,9 +70,10 @@ The game-data build starts in Mario's classic outfit. Pick other outfits in
 **Change outfit** in the pause menu; the original outfits are listed first,
 then the ROMless explorers.
 
-**Converted before October 2026?** Repeat steps 2 and 3 with `--force` on step 3
-(`python tools/convert-outfits.py --force`). That fixes the eyes not following
-the head, and the oversized hands and body in the jump and roll animations.
+**Converted before 11 October 2026?** Repeat steps 2 to 4, with `--force` on
+step 3 (`python tools/convert-outfits.py --force`). The current version exports
+the dash run cycle, keeps glove and visor textures apart, uses the original
+scale, and installs sounds with their original triggers and volumes.
 
 More options, such as converting only some outfits or installing GLBs you
 exported yourself, are in [the local outfit guide](docs/LOCAL-OUTFITS.md).
@@ -108,17 +109,31 @@ Every action can be rebound in **Rebind controls**.
 - Crouch in the air to ground pound. Jump on impact for a higher jump; throw
   during the pound to dive.
 - Crouch + throw to roll. Tap throw in rhythm to boost. Keep crouch held or the
-  roll stops; on flat ground it slows back into a crouch.
+  roll stops; on flat ground it slows back into a crouch. Press jump and throw
+  together to stand up at speed (roll cancel).
 - Throw your cap, hold it, then dive into it (crouch + throw in the air) to
   bounce off it. You get another throw and dive after each bounce.
 - Slide down walls and jump to kick off. Grab ledges and push toward the wall
   or jump to climb up.
 
-## Limitations
+## Fidelity
 
-The movement is an approximation tuned by feel, not a measured reconstruction
-of the original controller, so speeds and timings differ. The 8-bit outfit is
-a rigid voxel figure in the original data, so it moves as one piece. Captures, enemies and kingdoms are out of scope.
+The controller runs at the original's 60 frames per second in its units
+(1 unit = 1 cm) with the original tuning constants: speeds, acceleration and
+brake frames, jump powers, gravities, chained-jump windows, long-jump, dive,
+ground-pound, roll, wall and cap values. The game-data build plays the
+original clips by name, blends the walk, run, dash and fast-dash cycles at the
+original border speeds and rates, crossfades with the original blend table,
+and plays sounds from the original per-animation sound triggers.
+
+What is still inferred: the public decompilation covers only some player
+states, so the logic that joins states (exact input windows, the order of
+checks, collision response) is reconstructed from the constants' names and
+observed behaviour. Effects are original procedural particles placed on the
+original trigger frames, not the game's effect files. The outfit-to-footwear
+sound choice is in game code, so it is inferred for a few outfits. The 8-bit
+outfit is a rigid voxel figure in the original data, so it moves as one
+piece. Captures, enemies and kingdoms are out of scope.
 
 ## About
 

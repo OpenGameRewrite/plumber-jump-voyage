@@ -142,76 +142,67 @@ fn colors(
         };
     }
 }
-/// Animation state for the current movement, as a manifest key.
-/// Returns (key, loops, playback speed, blend seconds).
+/// Frames the original blends over when a clip starts (its interpolation
+/// table; anything unlisted starts at once). Jumps out of the run cycle use
+/// the table's short "interp" entries.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
-pub fn pose(p: &crate::movement::Player) -> (&'static str, bool, f32, f32) {
-    use crate::movement::{Move, Throw};
-    let speed = p.flat_speed();
-    let throwing = p.cap.as_ref().filter(|c| c.age < 0.35 && !c.returning);
-    if let Some(cap) = throwing {
-        if cap.kind == Throw::Spin {
-            return ("spin_throw", false, 1., 0.06);
-        }
-        if p.grounded && p.mode == Move::Idle {
-            return ("throw", false, 1., 0.06);
-        }
-        if !p.grounded && matches!(p.mode, Move::Jump | Move::Fall | Move::DoubleJump) {
-            return ("throw_air", false, 1., 0.06);
-        }
-    }
-    match p.mode {
-        Move::Idle if p.since_land < 0.3 && p.hard_land => ("land_hard", false, 1., 0.05),
-        Move::Idle if p.since_land < 0.2 => ("land", false, 1., 0.05),
-        Move::Idle => ("idle", true, 1., 0.22),
-        Move::Walk => ("walk", true, (speed / 2.6).clamp(0.5, 1.6), 0.15),
-        Move::Run => ("run", true, (speed / 8.).clamp(0.75, 1.5), 0.12),
-        Move::Skid => ("brake", false, 1., 0.06),
-        Move::Crouch => ("crouch", true, 1., 0.1),
-        Move::Crawl => ("crawl", true, (speed / 1.6).clamp(0.5, 1.5), 0.1),
-        Move::Fall => ("fall", true, 1., 0.2),
-        Move::Jump | Move::CapBounce if p.vel.y < -2. && p.timer > 0.5 => ("fall", true, 1., 0.25),
-        Move::Jump => ("jump", false, 1., 0.05),
-        Move::DoubleJump => ("double_jump", false, 1., 0.05),
-        Move::TripleJump => ("triple_jump", false, 1., 0.05),
-        Move::LongJump => ("long_jump", false, 1., 0.05),
-        Move::Backflip => ("backflip", false, 1., 0.05),
-        Move::Sideflip => ("sideflip", false, 1., 0.05),
-        Move::SpinJump => ("spin_jump", true, 1., 0.05),
-        Move::GroundPound if p.timer < 0.28 => ("pound_start", false, 1., 0.04),
-        Move::GroundPound => ("pound", true, 1., 0.05),
-        Move::PoundLand => ("pound_land", false, 1., 0.03),
-        Move::PoundJump => ("pound_jump", false, 1., 0.05),
-        Move::Roll => ("roll", true, (speed / 13.).clamp(0.7, 1.8), 0.06),
-        Move::RollEnd => ("roll_end", false, 1., 0.08),
-        Move::RollJump => ("roll_jump", false, 1., 0.05),
-        Move::Dive => ("dive", false, 1., 0.05),
-        Move::Slide => ("slide", true, 1., 0.1),
-        Move::WallSlide => ("wall_slide", true, 1., 0.08),
-        Move::WallJump => ("wall_jump", false, 1., 0.04),
-        Move::Ledge if p.timer < 0.25 => ("ledge_start", false, 1., 0.05),
-        Move::Ledge => ("ledge", true, 1., 0.1),
-        Move::Pole => ("pole", true, 1., 0.1),
-        Move::Swim if speed > 1. => ("swim_move", true, 1., 0.2),
-        Move::Swim => ("swim", true, 1., 0.2),
-        Move::SwimDash => ("swim_dash", false, 1., 0.08),
-        Move::CapBounce => ("cap_bounce", false, 1., 0.04),
-        Move::CapVault => ("cap_vault", false, 1., 0.04),
+pub fn interp_frames(name: &str, from: &str) -> f32 {
+    match name {
+        "Jump" | "JumpReverse" if from == "Move" => 3.,
+        "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
+        "Wait" | "Fall" => 6.,
+        "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
+        | "SquatWait" | "SwimWait" | "SwimLand" | "SwimStand" => 3.,
+        "SpinJumpDownFall" => 4.,
+        "SwimWalk" => 7.,
+        "PoleWait" => 8.,
+        _ => 0.,
     }
 }
-/// Key to fall back on when an outfit's manifest lacks a clip.
+/// Clips that cycle; every other clip holds its last frame.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
-fn fallback(key: &str) -> &'static str {
-    match key {
-        "land" | "land_hard" | "brake" | "crouch" => "idle",
-        "fall" | "throw_air" | "pound_jump" | "roll_jump" | "spin_jump" | "cap_bounce" => "jump",
-        "pound_start" | "pound_land" => "pound",
-        "roll_end" => "crouch",
-        "ledge_start" => "ledge",
-        "swim_move" | "swim_dash" => "swim",
-        "crawl" => "crouch",
-        "spin_throw" => "throw",
-        _ => "idle",
+pub fn looping(name: &str) -> bool {
+    matches!(
+        name,
+        "Wait"
+            | "Fall"
+            | "Rolling"
+            | "HeadSliding"
+            | "HipDrop"
+            | "SquatWait"
+            | "SquatWalk"
+            | "WallSlideL"
+            | "WallCatch"
+            | "PoleWait"
+            | "PoleClimb"
+            | "PoleFall"
+            | "SwimWait"
+            | "SwimWalk"
+            | "SpinJumpLoop"
+            | "SpinJumpDownFall"
+            | "SpinCapWait"
+    )
+}
+/// Clip to use when an outfit lacks one (older conversions skipped some).
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub fn fallback(name: &str) -> &'static str {
+    match name {
+        "Dash" | "DashFast" | "RunStart" => "Run",
+        "JumpReverse" | "JumpCapCatchCommon" | "WallCatchEndJump" | "JumpInterp" => "Jump",
+        "LandJump3" | "LandTurn" | "LandStiffen" | "LandDownFall" | "LandRolling" => "Land",
+        "TurnPoint" | "Turn" => "Brake",
+        "SpinJumpStart" | "SpinJumpLoop" | "SpinJumpDownFall" => "SpinJump",
+        "RollingStandUp" => "RollingEnd",
+        "WallKeep" => "WallSlideL",
+        "WallCatchEnd" => "WallCatch",
+        "PoleCatch" | "PoleFall" => "PoleWait",
+        "SwimFallIn" => "SwimWait",
+        "SquatEnd" | "SquatStart" => "SquatWait",
+        "SpinGroundL" | "SpinGroundR" => "SpinCapStart",
+        "JumpBroad" => "Jump",
+        n if n.starts_with("JumpBroad") => "JumpBroad",
+        n if n.starts_with("SpinCap") && n != "SpinCapStart" => "SpinCapStart",
+        _ => "Wait",
     }
 }
 #[cfg(feature = "local-assets")]
@@ -226,8 +217,8 @@ mod imported {
         selection: Option<usize>,
         gltf: Handle<bevy::gltf::Gltf>,
         graph: Handle<AnimationGraph>,
-        nodes: std::collections::BTreeMap<String, AnimationNodeIndex>,
-        last: String,
+        /// Clip name to graph node and length in seconds.
+        nodes: std::collections::BTreeMap<String, (AnimationNodeIndex, f32)>,
         ready: bool,
         model_visible: bool,
         cap_loaded: bool,
@@ -236,6 +227,21 @@ mod imported {
         overlay: Option<(AnimationNodeIndex, AnimationNodeIndex)>,
         overlay_weight: f32,
         masked: bool,
+        blend: Blend,
+    }
+    /// One pose source: weighted clips at fixed times.
+    #[derive(Clone, Default)]
+    struct Pose {
+        clips: Vec<(AnimationNodeIndex, f32, f32)>,
+    }
+    /// The playing request and the frozen poses it is blending away from.
+    #[derive(Default)]
+    struct Blend {
+        name: &'static str,
+        serial: u32,
+        current: Pose,
+        /// Outgoing poses with their weight and fade per second.
+        old: Vec<(Pose, f32, f32)>,
     }
     /// Mask group for hips and legs; the throw overlay leaves them alone.
     const LEGS: u32 = 0;
@@ -266,6 +272,7 @@ mod imported {
         mut wardrobe: ResMut<Wardrobe>,
         server: Res<AssetServer>,
         models: Res<Assets<bevy::gltf::Gltf>>,
+        clips: Res<Assets<AnimationClip>>,
         mut graphs: ResMut<Assets<AnimationGraph>>,
         mut loaded: ResMut<Loaded>,
         pivot: Single<Entity, With<crate::world::Pivot>>,
@@ -312,7 +319,8 @@ mod imported {
             let mut graph = AnimationGraph::new();
             for (name, clip) in &gltf.named_animations {
                 let node = graph.add_clip(clip.clone(), 1., graph.root);
-                loaded.nodes.insert(name.to_string(), node);
+                let length = clips.get(clip).map_or(1., |c| c.duration());
+                loaded.nodes.insert(name.to_string(), (node, length));
             }
             // Blending is a normalized weighted average, so a heavy overlay
             // node dominates the arms and torso while its mask keeps the
@@ -404,76 +412,97 @@ mod imported {
         }
         loaded.masked = found;
     }
+    /// Look up a clip, following the fallback chain for missing ones.
+    fn clip(loaded: &Loaded, mut name: &str) -> Option<(AnimationNodeIndex, f32)> {
+        for _ in 0..4 {
+            if let Some(found) = loaded.nodes.get(name) {
+                return Some(*found);
+            }
+            name = fallback(name);
+        }
+        loaded.nodes.get("Wait").copied()
+    }
+    /// The pose the controller asks for, with clip times in seconds. The run
+    /// cycle blends Walk, Run, Dash and DashFast on one shared phase.
+    fn target(loaded: &Loaded, p: &crate::movement::Player, ahead: f32) -> Pose {
+        let anim = p.anim;
+        if anim.name == "Move" {
+            let phase = ((anim.frame + anim.rate * ahead) / 60.).rem_euclid(1.);
+            let weights = crate::movement::move_weights(p.move_speed);
+            let clips = ["Walk", "Run", "Dash", "DashFast"]
+                .iter()
+                .zip(weights)
+                .filter(|(_, w)| *w > 0.001)
+                .filter_map(|(n, w)| clip(loaded, n).map(|(node, len)| (node, w, phase * len)))
+                .collect();
+            return Pose { clips };
+        }
+        let Some((node, len)) = clip(loaded, anim.name) else {
+            return Pose::default();
+        };
+        let seconds = (anim.frame + anim.rate * ahead).max(0.) / 60.;
+        let time = if looping(anim.name) {
+            seconds.rem_euclid(len.max(1e-3))
+        } else {
+            seconds.min(len)
+        };
+        Pose {
+            clips: vec![(node, 1., time)],
+        }
+    }
     fn animation(
         mut commands: Commands,
         time: Res<Time>,
+        fixed: Res<Time<Fixed>>,
         p: Single<&crate::movement::Player>,
-        settings: Res<crate::input::Settings>,
-        wardrobe: Res<Wardrobe>,
         mut loaded: ResMut<Loaded>,
-        mut fx: MessageReader<crate::movement::Fx>,
-        mut players: Query<(
-            Entity,
-            &mut AnimationPlayer,
-            Option<&AnimationGraphHandle>,
-            Option<&mut AnimationTransitions>,
-        )>,
+        mut players: Query<(Entity, &mut AnimationPlayer, Option<&AnimationGraphHandle>)>,
     ) {
-        use crate::movement::{Fx, Move, Throw};
-        // A repeated move (two cap jumps, a second roll boost) restarts its clip.
-        let mut restarts = 0;
-        let mut thrown = false;
-        for f in fx.read() {
-            match f {
-                Fx::Jump(_) | Fx::RollBoost { .. } => restarts += 1,
-                Fx::Throw(kind) => thrown |= *kind != Throw::Spin,
-                _ => {}
-            }
-        }
         if !loaded.ready || loaded.nodes.is_empty() {
             return;
         }
-        let Some(outfit) = settings
-            .outfit
-            .checked_sub(3)
-            .and_then(|i| wardrobe.outfits.get(i))
-        else {
-            return;
-        };
-        let (mut key, repeat, speed, blend) = pose(&p);
-        let mut name = outfit.animations.get(key);
-        for _ in 0..3 {
-            if name.is_some_and(|n| loaded.nodes.contains_key(n)) {
-                break;
+        // Render between fixed steps without waiting for the next one.
+        let ahead = fixed.overstep_fraction();
+        let next = target(&loaded, &p, ahead);
+        let blend = &mut loaded.blend;
+        if blend.name != p.anim.name || blend.serial != p.anim.serial {
+            let frames = interp_frames(p.anim.name, blend.name);
+            let old = std::mem::take(&mut blend.current);
+            if frames > 0. && !old.clips.is_empty() {
+                // The outgoing pose freezes and fades over the clip's blend frames.
+                let total: f32 = 1. - blend.old.iter().map(|o| o.1).sum::<f32>();
+                blend.old.push((old, total.max(0.), 60. / frames));
+            } else {
+                blend.old.clear();
             }
-            key = fallback(key);
-            name = outfit.animations.get(key);
+            blend.name = p.anim.name;
+            blend.serial = p.anim.serial;
         }
-        let Some(name) = name.cloned() else {
-            return;
-        };
-        let Some(node) = loaded.nodes.get(&name).copied() else {
-            return;
-        };
-        let restart = restarts > 0 && key != "roll";
-        let changed = loaded.last != name || restart;
-        // Throwing while moving: the upper-body clip over whatever the legs do.
-        let full_body = matches!(key, "throw" | "throw_air" | "spin_throw");
-        let throwing = !full_body
-            && p.cap
-                .as_ref()
-                .is_some_and(|c| c.age < 0.4 && !c.returning && c.kind != Throw::Spin)
-            && !matches!(
-                p.mode,
-                Move::Roll
-                    | Move::Dive
-                    | Move::Slide
-                    | Move::GroundPound
-                    | Move::Swim
-                    | Move::SwimDash
-            );
-        let fade = time.delta_secs() / if throwing { 0.06 } else { 0.15 };
-        loaded.overlay_weight = if throwing {
+        blend.current = next;
+        let dt = time.delta_secs();
+        for (_, weight, fade) in &mut blend.old {
+            *weight -= *fade * dt;
+        }
+        blend.old.retain(|o| o.1 > 0.);
+        // Final weights: outgoing poses keep their share, the rest is current.
+        let kept: f32 = blend.old.iter().map(|o| o.1).sum::<f32>().min(1.);
+        let mut weights: std::collections::BTreeMap<AnimationNodeIndex, (f32, f32)> = default();
+        for (pose, share) in blend
+            .old
+            .iter()
+            .map(|o| (&o.0, o.1))
+            .chain([(&blend.current, 1. - kept)])
+        {
+            for &(node, w, t) in &pose.clips {
+                let entry = weights.entry(node).or_insert((0., t));
+                entry.0 += w * share;
+                entry.1 = t;
+            }
+        }
+        // Throwing while running: the upper-body clip over the legs.
+        let sub = p.sub_anim;
+        let fade = dt / 0.05;
+        loaded.overlay_weight = if sub.is_some() {
             (loaded.overlay_weight + fade).min(1.)
         } else {
             (loaded.overlay_weight - fade).max(0.)
@@ -485,42 +514,39 @@ mod imported {
                 (air, ground)
             }
         });
-        for (e, mut player, graph, transitions) in &mut players {
-            let mut fresh = AnimationTransitions::new();
-            if changed || graph.is_none() {
-                let fade = std::time::Duration::from_secs_f32(blend);
-                let animation = if let Some(mut transitions) = transitions {
-                    transitions.play(&mut player, node, fade)
-                } else {
-                    fresh.play(&mut player, node, std::time::Duration::ZERO)
-                };
-                if repeat {
-                    animation.repeat();
+        for (e, mut player, graph) in &mut players {
+            let playing: Vec<AnimationNodeIndex> =
+                player.playing_animations().map(|(n, _)| *n).collect();
+            for node in playing {
+                let is_overlay = overlay.is_some_and(|(on, off)| node == on || node == off);
+                if !weights.contains_key(&node) && !is_overlay {
+                    player.stop(node);
                 }
-                animation.replay();
             }
-            if let Some(active) = player.animation_mut(node) {
-                active.set_speed(speed);
+            for (&node, &(weight, seconds)) in &weights {
+                let active = player.play(node);
+                active.set_weight(weight).set_speed(0.).seek_to(seconds);
+                active.repeat();
             }
             if let Some((on, off)) = overlay {
-                if thrown && throwing {
-                    player.stop(off);
-                    player.start(on);
-                }
+                player.stop(off);
                 if loaded.overlay_weight == 0. {
                     player.stop(on);
-                    player.stop(off);
-                } else if let Some(active) = player.animation_mut(on) {
-                    active.set_weight(loaded.overlay_weight);
+                } else {
+                    let frame = sub.map_or(15., |s| s.frame + ahead);
+                    player
+                        .play(on)
+                        .set_weight(loaded.overlay_weight)
+                        .set_speed(0.)
+                        .seek_to(frame / 60.);
                 }
             }
             if graph.is_none() {
                 commands
                     .entity(e)
-                    .insert((AnimationGraphHandle(loaded.graph.clone()), fresh));
+                    .insert(AnimationGraphHandle(loaded.graph.clone()));
             }
         }
-        loaded.last = name;
     }
     fn parts(
         time: Res<Time>,
@@ -621,14 +647,20 @@ mod imported {
             // both sides; the export loses that flag.
             m.double_sided = true;
             m.cull_mode = None;
+            if name.as_str().contains("Glass") {
+                // Visors and goggles are tinted see-through glass in the original (its
+                // glass shader is not exported); the face stays visible behind them.
+                m.base_color_texture = None;
+                m.base_color = Color::srgba(0.27, 0.27, 0.29, 0.35);
+                m.alpha_mode = AlphaMode::Blend;
+                m.perceptual_roughness = 0.05;
+                m.reflectance = 0.9;
+                continue;
+            }
             if m.base_color_texture.is_some() {
                 continue;
             }
-            if name.as_str().contains("Glass") {
-                m.base_color = Color::srgba(0.75, 0.9, 1., 0.3);
-                m.alpha_mode = AlphaMode::Blend;
-                m.perceptual_roughness = 0.05;
-            } else if metal {
+            if metal {
                 m.base_color = Color::srgb(0.86, 0.88, 0.92);
                 m.metallic = 1.;
                 m.perceptual_roughness = 0.12;
@@ -669,10 +701,21 @@ pub fn self_check() {
         status: String::new(),
     };
     assert_eq!(empty.slot(1), 1);
-    // Every movement state maps to a clip key with a fallback chain ending in idle.
-    let mut p = crate::movement::Player::default();
-    let (key, ..) = pose(&p);
-    assert_eq!(key, "idle");
-    p.mode = crate::movement::Move::RollEnd;
-    assert_eq!(fallback(fallback(pose(&p).0)), "idle");
+    // Missing clips fall back along a chain that ends in the idle loop.
+    for name in [
+        "DashFast",
+        "SpinCapStart3Left",
+        "JumpBroad3",
+        "LandJump3",
+        "Anything",
+    ] {
+        let mut n = name;
+        for _ in 0..4 {
+            n = fallback(n);
+        }
+        assert_eq!(fallback(n), "Wait", "{name}");
+    }
+    assert_eq!(interp_frames("Jump", "Move"), 3.);
+    assert_eq!(interp_frames("Jump", "Wait"), 0.);
+    assert!(looping("Wait") && !looping("Jump"));
 }

@@ -107,7 +107,9 @@ def main():
         """The costume's attachment joint and local rotation/offset for one part."""
         raw=files.get(f'InitPartsFixInfo{suffix}.byml') or base_files.get(f'InitPartsFixInfo{suffix}.byml')
         if not raw:return ''
-        info=byml(raw);rot=info.get('LocalRotate') or {};trans=info.get('LocalTrans') or {}
+        info=byml(raw)
+        if not info.get('JointName'):return ''
+        rot=info.get('LocalRotate') or {};trans=info.get('LocalTrans') or {}
         values=[rot.get(k,0.) for k in 'XYZ']+[trans.get(k,0.) for k in 'XYZ']
         return '|'+info['JointName']+''.join(f'|{float(v):g}' for v in values)
     for name in names:
@@ -152,7 +154,7 @@ def main():
         if result.returncode:raise ValueError('Cap eyes conversion failed; see '+str(eyes.with_suffix('.log')))
         packer.pack(eyes.with_suffix('.gltf'))
     shutil.copyfile(eyes,cap_output/eyes.name)
-    extract.install_exports(exports,extract.ROOT/'assets/local',0.012,3.141592653589793)
+    extract.install_exports(exports,extract.ROOT/'assets/local',0.01,3.141592653589793)
 
 if __name__=='__main__':
     try:main()
