@@ -256,6 +256,8 @@ pub fn looping(name: &str) -> bool {
             | "SwimWait"
             | "SwimWalk"
             | "SpinJumpLoop"
+            | "SpinGroundL"
+            | "SpinGroundR"
             | "SpinJumpDownFall"
             | "SpinCapWait"
     )
@@ -960,6 +962,10 @@ pub fn self_check() {
     assert_eq!(interp_frames("Jump", "Move"), 3.);
     assert_eq!(interp_frames("Jump", "Wait"), 0.);
     assert!(looping("Wait") && !looping("Jump"));
+    assert!(
+        looping("SpinGroundL") && looping("SpinGroundR"),
+        "the stick spin cycles"
+    );
     let mut o = w.outfits[0].clone();
     std::sync::Arc::make_mut(&mut o.expressions).insert(
         "Jump".into(),

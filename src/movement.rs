@@ -205,8 +205,21 @@ pub mod clip {
     pub const ROLLING_END: u32 = 12;
     pub const HEAD_SLIDING_START: u32 = 48;
     pub const LAND_ROLLING: u32 = 36;
+    /// Lengths of the cap-throw clips (the spin family).
+    pub fn throw(name: &str) -> u32 {
+        match name {
+            "SpinCapStartLeft" | "SpinCapStartRight" => 17,
+            "SpinCapStart2Left" | "SpinCapStart2Right" => 32,
+            "SpinCapStart3Left" | "SpinCapStart3Right" => 42,
+            "SpinCapStartDoubleUp" | "SpinCapStartDoubleDown" | "SpinCapAirStartDoubleUp" => 26,
+            "SpinCapAirStartDoubleDown" => 28,
+            "SpinCapStartDoubleLeft" | "SpinCapStartDoubleRight" => 44,
+            "SpinCapAirStartLeft" | "SpinCapAirStartRight" => 70,
+            "SpinCapAirStart" | "SpinCapAirStartDoubleLeft" | "SpinCapAirStartDoubleRight" => 72,
+            _ => 22,
+        }
+    }
     pub const LAND: u32 = 26;
-    pub const SPIN_CAP_START: u32 = 22;
     pub const TURN: u32 = 12;
     pub const WALL_CATCH_START: u32 = 55;
     pub const WALL_CATCH_END: u32 = 46;
@@ -1520,7 +1533,7 @@ impl Player {
             "WallJump" => Some(37),
             "JumpCapLeapFrog" => Some(clip::JUMP_CAP_LEAP_FROG),
             "JumpCapCatchCommon" => Some(27),
-            "SpinCapAirStart" | "SpinCapAirStartLeft" | "SpinCapAirStartRight" => Some(40),
+            n if n.starts_with("SpinCapAirStart") => Some(clip::throw(n)),
             _ => None,
         };
         if ends.is_some_and(|n| self.anim_done(n)) && self.v.y < 0. {
@@ -1999,9 +2012,14 @@ impl Player {
                 self.set_h(h);
             }
             self.v.y = -t::GRAVITY;
+            // Jumping or crouching cancels once the cap is out. Moving cancels only
+            // the tail of a plain throw; spin and motion throws play out in full.
+            let length = clip::throw(self.anim.name);
             let after = self.pending_throw.is_none() && self.frame >= release + 2;
-            if after && (self.pre_jump > 0 || self.tilt > 0.3 || o.crouch)
-                || self.anim_done(clip::SPIN_CAP_START)
+            let tail = !self.anim.name.contains("Double") && self.frame * 4 >= length * 3;
+            if after && (self.pre_jump > 0 || o.crouch)
+                || tail && self.tilt > 0.3
+                || self.anim_done(length)
             {
                 self.throw_timer = 30;
                 self.enter(Move::Idle, "Wait");
@@ -2781,6 +2799,34 @@ pub fn self_check() {
     assert!(((cap.pos - p.pos).with_y(0.).length() - 5.).abs() < 0.3);
     frames(&mut p, Orders::default(), &floor, 120);
     assert!(p.cap.is_none());
+    // A spin throw plays its whole clip even while the stick keeps circling.
+    p = Player::default();
+    p.step(
+        &Orders {
+            spin_throw: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!(p.mode, Move::Throw);
+    assert!(
+        p.anim.name.starts_with("SpinCapStartDouble"),
+        "{}",
+        p.anim.name
+    );
+    let length = clip::throw(p.anim.name) as usize;
+    frames(
+        &mut p,
+        Orders {
+            direction: Vec2::X,
+            ..default()
+        },
+        &floor,
+        length - 3,
+    );
+    assert_eq!(p.mode, Move::Throw, "moving does not cut the spin throw");
+    frames(&mut p, Orders::default(), &floor, 4);
+    assert_ne!(p.mode, Move::Throw);
     // Running throw keeps running with the upper-body clip.
     p = Player::default();
     frames(&mut p, fwd(default()), &floor, 45);

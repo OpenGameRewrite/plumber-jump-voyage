@@ -421,6 +421,22 @@ pub fn read(
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
+        if script == "spin" {
+            // Circle the stick into a ground spin, then throw while still circling.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                direction: if started && now < 2.6 {
+                    Vec2::new((now * 14.).cos(), (now * 14.).sin())
+                } else {
+                    Vec2::ZERO
+                },
+                throw_pressed: *smoke_last < 1.2 && now >= 1.2,
+                ..default()
+            };
+            *smoke_last = now;
+            *frame = f;
+            return;
+        }
         if script == "dive" || script == "diveroll" {
             // Run, jump, pound, dive forward; "diveroll" keeps crouch held to land rolling.
             let now = time.elapsed_secs() - delay;
