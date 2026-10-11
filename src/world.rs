@@ -591,9 +591,19 @@ fn setup(
         Transform::from_xyz(14., 4.8, -39.),
         Checkpoint,
     ));
+    // PJV_SPAWN=x,y,z (debugging) moves the start and checkpoint.
+    let spawn = std::env::var("PJV_SPAWN").ok().and_then(|s| {
+        let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+    });
+    let mut start = Player::default();
+    if let Some(at) = spawn {
+        start.checkpoint = at;
+        start.reset();
+    }
     let player = commands
         .spawn((
-            Player::default(),
+            start,
             Transform::from_translation(SPAWN),
             Visibility::default(),
         ))
@@ -755,7 +765,7 @@ pub fn animate(
     // Damped spring: a quick squash on landing, a stretch on take-off.
     vis.squash_vel += (-180. * vis.squash - 14. * vis.squash_vel) * dt;
     vis.squash = (vis.squash + vis.squash_vel * dt).clamp(-0.3, 0.3);
-    t.translation = p.pos;
+    t.translation = p.shown;
     let target = (-p.facing.x).atan2(-p.facing.z);
     let yaw = vis.yaw.unwrap_or(target);
     let snap = matches!(
@@ -803,15 +813,13 @@ pub fn animate(
         Move::LongJump | Move::RollJump => Quat::from_rotation_x(-0.6),
         _ => Quat::IDENTITY,
     };
-    body.translation = Vec3::Y
-        * if matches!(
-            p.mode,
-            Move::Crouch | Move::Crawl | Move::Roll | Move::PoundLand
-        ) {
-            -0.45
-        } else {
-            0.
-        };
+    // The actor sits on a held edge or pole; the explorer hangs below/behind it.
+    body.translation = match p.mode {
+        Move::Crouch | Move::Crawl | Move::Roll | Move::PoundLand => Vec3::Y * -0.45,
+        Move::Ledge if p.anim.name != "WallCatchEnd" => Vec3::new(0., -1.45, 0.25),
+        Move::Pole => Vec3::new(0., 0., 0.3),
+        _ => Vec3::ZERO,
+    };
     body.scale = if matches!(p.mode, Move::Crouch | Move::Crawl | Move::PoundLand) {
         Vec3::new(1., 0.7, 1.)
     } else if p.mode == Move::Roll {
@@ -836,11 +844,11 @@ pub fn animate(
     }
     *hat.1 = Visibility::Visible;
     if let Some(cap) = &p.cap {
-        hat.0.translation = cap.pos;
+        hat.0.translation = p.shown_cap.unwrap_or(cap.pos);
         hat.0.rotation = Quat::from_rotation_y(time.elapsed_secs() * 18.);
         hat.0.scale = Vec3::splat(1.2);
     } else {
-        hat.0.translation = p.pos + Vec3::Y * 1.75;
+        hat.0.translation = p.shown + Vec3::Y * 1.75;
         hat.0.rotation = t.rotation;
         hat.0.scale = Vec3::ONE;
     }
@@ -968,7 +976,7 @@ fn camera(
     let rate = if p.pos.y < orbit.anchor { 9. } else { 5. };
     orbit.anchor += (target - orbit.anchor) * (1. - (-dt * rate).exp());
     let ahead = (p.vel.with_y(0.) * 0.12).clamp_length_max(1.5);
-    let focus_target = Vec3::new(p.pos.x, orbit.anchor + 1.25, p.pos.z) + ahead;
+    let focus_target = Vec3::new(p.shown.x, orbit.anchor + 1.25, p.shown.z) + ahead;
     orbit.focus = orbit.focus.lerp(focus_target, 1. - (-dt * 9.).exp());
     if orbit.focus.distance(focus_target) > 12. {
         orbit.focus = focus_target;

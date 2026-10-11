@@ -35,7 +35,8 @@ fn main() {
                 primary_window: Some(Window {
                     title: "Plumber Jump Voyage".into(),
                     resolution: (1440, 900).into(),
-                    focused: false,
+                    // Take focus so input works at once (scripted captures stay in the background).
+                    focused: std::env::var_os("PJV_SHOT").is_none(),
                     ..default()
                 }),
                 ..default()

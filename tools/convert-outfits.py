@@ -128,12 +128,15 @@ def main():
         if output.is_file() and not a.force:
             if not extract.glb_json(output).get('animations') and base.is_file():packer.pack(output.with_suffix('.gltf'),base)
             continue
-        animation=['--geometry-only'] if name!='Mario' and base.is_file() else [str(model('PlayerAnimation'))]
+        # Mario carries the clips (body plus the hand set that poses the fingers);
+        # other outfits share them by bone name.
+        animation=['--geometry-only'] if name!='Mario' and base.is_file() else [str(model('PlayerAnimation')),
+            '--hand-l='+str(model('PlayerAnimationHandL')),'--hand-r='+str(model('PlayerAnimationHandR'))]
         command=[str(a.adapter.resolve()),str(model(name)),str(output)]+animation+['--part='+str(model(part))+fix for part,fix in parts.items()]
         log=output.with_suffix('.log')
         with log.open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
         if result.returncode:raise ValueError(f'{name} conversion failed; details in {log}')
-        packer.pack(output.with_suffix('.gltf'),base if animation==['--geometry-only'] else None)
+        packer.pack(output.with_suffix('.gltf'),base if animation[0]=='--geometry-only' else None)
     caps=exports/'caps';caps.mkdir(exist_ok=True)
     cap_output=extract.ROOT/'assets/local/caps';cap_output.mkdir(parents=True,exist_ok=True)
     for name in names:

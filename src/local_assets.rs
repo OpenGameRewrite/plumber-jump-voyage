@@ -579,7 +579,7 @@ mod imported {
                 Visibility::Hidden
             };
             if let Some(cap) = &p.cap {
-                transform.translation = cap.pos;
+                transform.translation = p.shown_cap.unwrap_or(cap.pos);
                 transform.rotation = Quat::from_rotation_y(cap.age * 18.);
             }
         }
@@ -589,7 +589,12 @@ mod imported {
             (t % 3.7) < 0.11 || (t % 11.3) < 0.09 || p.mode == crate::movement::Move::PoundLand;
         for (name, mut visibility) in &mut meshes {
             let n = name.as_str();
-            let show = if n.starts_with("EyelidClose") {
+            // The thrown cap's eye model holds every lid state; it flies wide-eyed.
+            let show = if n.starts_with("EyeClose") || n.starts_with("EyeHalf") {
+                Some(false)
+            } else if n.starts_with("EyeOpen") {
+                Some(true)
+            } else if n.starts_with("EyelidClose") {
                 Some(blink)
             } else if n.starts_with("Eyeball__EyePupil") {
                 Some(!blink)

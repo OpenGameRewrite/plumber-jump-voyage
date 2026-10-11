@@ -13,6 +13,8 @@ pub const UNIT: f32 = 0.01;
 /// Simulation rate, matching the original.
 pub const FPS: f32 = 60.;
 pub const RADIUS: f32 = 0.45;
+/// Radius of the course's climbable poles.
+pub const POLE_RADIUS: f32 = 0.18;
 pub const HEIGHT: f32 = 1.6;
 const SQUAT_HEIGHT: f32 = 0.9;
 pub const SPAWN: Vec3 = Vec3::new(0.0, 0.0, 5.0);
@@ -182,7 +184,17 @@ mod t {
 
     pub const POLE_UP_DIST: f32 = 100.;
     pub const POLE_UP_FRAMES: u32 = 25;
-    pub const POLE_DOWN_SPEED: f32 = 15.;
+    pub const POLE_DOWN_SPEED: f32 = 10.;
+    pub const POLE_DOWN_SPEED_FAST: f32 = 15.;
+    pub const POLE_CATCH_RANGE: f32 = 50.;
+    pub const POLE_TURN_DIST: f32 = 40.;
+    pub const POLE_TURN_FRAMES: f32 = 15.;
+    pub const POLE_UP_MARGIN: f32 = 40.;
+    /// The ledge-hang clips hang the body 141 below the actor, which sits on the edge.
+    pub const WALL_CATCH_HANG: f32 = 141.;
+    pub const WALL_CATCH_INSET: f32 = 8.;
+    pub const WALL_CATCH_MOVE: f32 = 70.;
+    pub const WALL_CATCH_MOVE_FRAMES: f32 = 20.;
 }
 
 /// Frame counts of clips whose end the controller waits for.
@@ -384,6 +396,12 @@ pub struct Player {
     pub sub_anim: Option<Anim>,
     /// Horizontal speed in original units per frame, for animation blending.
     pub move_speed: f32,
+    /// Where to draw the player and cap: between the last two simulation
+    /// steps, so the 60 Hz simulation moves smoothly on faster displays.
+    pub shown: Vec3,
+    pub shown_cap: Option<Vec3>,
+    prev: Vec3,
+    prev_cap: Option<Vec3>,
     /// Units per frame.
     v: Vec3,
     frame: u32,
@@ -423,7 +441,11 @@ pub struct Player {
     slope: f32,
     slick: bool,
     ledge: Vec3,
+    /// Pole axis base, its height, the climb cycle in progress and a re-grab delay.
     pole: Vec3,
+    pole_height: f32,
+    pole_climb: u32,
+    pole_cooldown: u32,
     swim_rise: u32,
     step_phase: f32,
 }
@@ -452,6 +474,10 @@ impl Default for Player {
             },
             sub_anim: None,
             move_speed: 0.,
+            shown: SPAWN,
+            shown_cap: None,
+            prev: SPAWN,
+            prev_cap: None,
             v: Vec3::ZERO,
             frame: 0,
             land_frames: 300,
@@ -491,6 +517,9 @@ impl Default for Player {
             slick: false,
             ledge: Vec3::ZERO,
             pole: Vec3::ZERO,
+            pole_height: 0.,
+            pole_climb: 0,
+            pole_cooldown: 0,
             swim_rise: 0,
             step_phase: 0.,
         }
@@ -544,7 +573,8 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Course>()
         .add_message::<Fx>()
         .insert_resource(Time::<Fixed>::from_hz(FPS as f64))
-        .add_systems(FixedUpdate, simulate);
+        .add_systems(FixedUpdate, simulate)
+        .add_systems(Update, present.before(crate::world::animate));
 }
 fn simulate(
     mut players: Query<&mut Player>,
@@ -562,6 +592,21 @@ fn simulate(
         fx.write_batch(p.events.drain(..));
     }
     orders.clear_edges();
+}
+fn present(mut players: Query<&mut Player>, fixed: Res<Time<Fixed>>) {
+    let a = fixed.overstep_fraction().clamp(0., 1.);
+    for mut p in &mut players {
+        // Teleports (respawn, ledge climbs) snap instead of sliding.
+        p.shown = if p.prev.distance(p.pos) > 2. {
+            p.pos
+        } else {
+            p.prev.lerp(p.pos, a)
+        };
+        p.shown_cap = p.cap.as_ref().map(|c| match p.prev_cap {
+            Some(prev) if prev.distance(c.pos) < 3. => prev.lerp(c.pos, a),
+            _ => c.pos,
+        });
+    }
 }
 fn yaw(v: Vec3) -> f32 {
     v.x.atan2(v.z)
@@ -651,6 +696,8 @@ impl Player {
 
     /// Advance one original frame.
     pub fn step(&mut self, o: &Orders, scene: &Course) {
+        self.prev = self.pos;
+        self.prev_cap = self.cap.as_ref().map(|c| c.pos);
         if self.hitstop > 0. {
             self.hitstop -= 1. / FPS;
             return;
@@ -696,8 +743,8 @@ impl Player {
             Move::Slide => self.belly_slide(&o),
             Move::LongJump => self.long_jump_air(&o),
             Move::WallSlide => self.wall_slide(&o),
-            Move::Ledge => self.wall_catch(&o),
-            Move::Pole => self.pole_climb(&o),
+            Move::Ledge => self.wall_catch(&o, scene),
+            Move::Pole => self.pole_climb(&o, scene),
             Move::Swim | Move::SwimDash => self.swim(&o),
             Move::SpinDrop => self.spin_drop(&o),
             _ => self.air(&o),
@@ -708,6 +755,10 @@ impl Player {
             return;
         }
         self.grab_pole(scene);
+        if self.mode == Move::Pole {
+            self.finish_frame(was_grounded);
+            return;
+        }
         self.cap_contact();
         self.collide(&o, scene);
         if self.grounded && !was_grounded {
@@ -776,6 +827,7 @@ impl Player {
         self.spin = self.spin.saturating_sub(1);
         self.last_stick = o.direction;
         self.catch_window = self.catch_window.saturating_sub(1);
+        self.pole_cooldown = self.pole_cooldown.saturating_sub(1);
         self.after_turn = self.after_turn.saturating_sub(1);
         self.quick_turn = self.quick_turn.saturating_sub(1);
         self.throw_run = self.throw_run.saturating_sub(1);
@@ -1620,29 +1672,29 @@ impl Player {
         self.set_h(-self.wall * 2.);
         self.v.y = (self.v.y - t::WALL_SLIDE_GRAVITY).max(-t::WALL_SLIDE_MAX);
     }
-    fn wall_catch(&mut self, o: &Orders) {
+    /// Hanging from a ledge. The actor sits on the edge itself; the hang and
+    /// climb clips carry the body below and up over it, as in the original.
+    fn wall_catch(&mut self, o: &Orders, scene: &Course) {
         self.v = Vec3::ZERO;
+        self.pos = self.ledge;
         let toward = self.stick.dot(-self.wall) * self.tilt;
+        let right = self.facing.cross(Vec3::Y);
+        let along = self.stick.dot(right) * self.tilt;
         if self.anim.name == "WallCatchStart" && self.anim_done(clip::WALL_CATCH_START) {
             self.play("WallCatch");
         }
         if self.anim.name == "WallCatchEnd" {
-            // Pull up onto the ledge over the climb clip.
-            let k = (self.anim.frame / clip::WALL_CATCH_END as f32).min(1.);
-            let target = self.ledge - self.wall * 0.5;
-            self.pos = self.pos.lerp(target, (k * 0.25).min(1.));
             if self.anim_done(clip::WALL_CATCH_END) {
-                self.pos = target;
                 self.grounded = true;
                 self.enter(Move::Idle, "Wait");
             }
             return;
         }
+        let hang_out = self.wall * (RADIUS + 0.05 + t::WALL_CATCH_INSET * UNIT);
         if o.crouch_pressed || toward < -0.4 {
-            self.pos += self.wall * 0.25;
+            self.pos = self.ledge + hang_out - Vec3::Y * t::WALL_CATCH_HANG * UNIT;
             self.enter(Move::Fall, "Fall");
         } else if self.frame > 8 && self.pre_jump > 0 {
-            self.pos = self.ledge - self.wall * 0.3;
             self.jump_with(
                 Move::Jump,
                 "WallCatchEndJump",
@@ -1653,65 +1705,138 @@ impl Player {
             self.jump_extend = false;
         } else if self.frame > 8 && toward > 0.5 {
             self.play("WallCatchEnd");
+        } else if self.frame > 8 && along.abs() > 0.5 {
+            // Shimmy along the edge while it continues.
+            let step =
+                right * along.signum() * t::WALL_CATCH_MOVE / t::WALL_CATCH_MOVE_FRAMES * UNIT;
+            let next = self.ledge + step;
+            if scene
+                .ground(next + Vec3::Y * 0.02)
+                .is_some_and(|g| (g - self.ledge.y).abs() < 0.05)
+            {
+                self.ledge = next;
+                self.pos = next;
+                self.keep(if along > 0. {
+                    "WallCatchMoveR"
+                } else {
+                    "WallCatchMoveL"
+                });
+            }
+        } else if self.anim.name.starts_with("WallCatchMove") {
+            self.play("WallCatch");
         }
     }
     fn grab_pole(&mut self, scene: &Course) {
-        if self.grounded || matches!(self.mode, Move::Pole | Move::GroundPound | Move::Dive) {
+        if self.grounded
+            || self.pole_cooldown > 0
+            || matches!(
+                self.mode,
+                Move::Pole | Move::GroundPound | Move::Dive | Move::Swim | Move::SwimDash
+            )
+        {
             return;
         }
         for pole in &scene.poles {
-            if (self.pos - pole.center).with_y(0.).length() < 0.6
-                && (pole.center.y..pole.center.y + pole.height).contains(&self.pos.y)
+            let d = (self.pos - pole.center).with_y(0.);
+            let top = pole.center.y + pole.height - t::POLE_UP_MARGIN * UNIT;
+            if d.length() < POLE_RADIUS + t::POLE_CATCH_RANGE * UNIT
+                && (pole.center.y..top).contains(&self.pos.y)
             {
                 self.enter(Move::Pole, "PoleCatch");
-                self.pole = Vec3::new(pole.center.x, pole.center.y, pole.height);
-                if let Some(d) = (self.pos - pole.center).with_y(0.).try_normalize() {
-                    self.facing = -d;
-                }
-                self.pos.x = pole.center.x - self.facing.x * 0.35;
-                self.pos.z = pole.center.z - self.facing.z * 0.35;
+                self.pole = pole.center;
+                self.pole_height = pole.height;
+                self.pole_climb = 0;
+                self.facing = (-d).normalize_or(self.facing);
+                // The actor sits on the pole's axis; the clips hang the body behind it.
+                self.pos = Vec3::new(pole.center.x, self.pos.y, pole.center.z);
                 self.v = Vec3::ZERO;
                 self.events.push(Fx::Pole);
                 return;
             }
         }
     }
-    fn pole_climb(&mut self, o: &Orders) {
+    fn pole_climb(&mut self, o: &Orders, scene: &Course) {
         self.v = Vec3::ZERO;
+        let axis = Vec3::new(self.pole.x, self.pos.y, self.pole.z);
+        // Climbing stops below the top margin, or under anything the pole passes through.
+        let ceiling = scene
+            .solids
+            .iter()
+            .filter(|b| {
+                (axis.x - b.center.x).abs() < b.half.x + 0.3
+                    && (axis.z - b.center.z).abs() < b.half.z + 0.3
+                    && b.center.y - b.half.y > self.pos.y
+            })
+            .map(|b| b.center.y - b.half.y - 0.8)
+            .fold(f32::MAX, f32::min);
+        let (bottom, top) = (
+            self.pole.y,
+            (self.pole.y + self.pole_height - t::POLE_UP_MARGIN * UNIT - 0.3).min(ceiling),
+        );
+        let clear = POLE_RADIUS + RADIUS + 0.05;
         if self.pre_jump > 0 {
-            self.pos += self.facing * -0.4;
-            self.facing = -self.facing;
+            // Kick off away from the pole.
+            let away = -self.facing;
+            self.facing = away;
+            self.pos = axis + away * clear;
+            self.pole_cooldown = 20;
             self.jump_with(Move::Jump, "Jump", t::WALL_JUMP_POWER, t::WALL_JUMP_GRAVITY);
-            self.set_h(self.facing * t::WALL_JUMP_H);
+            self.set_h(away * t::WALL_JUMP_H);
             self.jump_extend = false;
             return;
         }
         if o.crouch_pressed {
-            self.pos -= self.facing * 0.3;
+            self.pos = axis - self.facing * clear;
+            self.pole_cooldown = 20;
             self.enter(Move::Fall, "Fall");
             return;
         }
-        let (bottom, top) = (self.pole.y, self.pole.y + self.pole.z - 0.6);
-        let up = -o.direction.y;
         if self.anim.name == "PoleCatch" && !self.anim_done(clip::POLE_CATCH) {
             return;
         }
-        if up > 0.3 && self.pos.y < top {
-            self.keep("PoleClimb");
-            self.pos.y = (self.pos.y + t::POLE_UP_DIST / t::POLE_UP_FRAMES as f32 * UNIT).min(top);
-        } else if up < -0.3 && self.pos.y > bottom + 0.05 {
+        // Screen up climbs, down slides, left and right swing round the pole.
+        let (stick, yaw) = if o.stick == Vec2::ZERO {
+            (o.direction, 0.)
+        } else {
+            (o.stick, o.camera_yaw)
+        };
+        let toward = -stick.y;
+        let right = crate::input::rotate(Vec2::new(stick.x, 0.), yaw);
+        let side = Vec3::new(right.x, 0., right.y);
+        if self.pole_climb > 0 || toward > 0.5 && self.pos.y < top && toward > stick.x.abs() {
+            if self.pole_climb == 0 {
+                self.pole_climb = t::POLE_UP_FRAMES;
+                self.play("PoleClimb");
+            }
+            self.pole_climb -= 1;
+            self.pos.y += t::POLE_UP_DIST / t::POLE_UP_FRAMES as f32 * UNIT;
+            if self.pos.y >= top {
+                self.pos.y = top;
+                self.pole_climb = 0;
+            }
+        } else if toward < -0.5 && -toward > stick.x.abs() {
+            if self.pos.y <= bottom + 0.01 {
+                self.pos = axis - self.facing * clear;
+                self.pole_cooldown = 20;
+                self.grounded = true;
+                self.enter(Move::Idle, "Wait");
+                return;
+            }
+            let speed = if o.crouch {
+                t::POLE_DOWN_SPEED_FAST
+            } else {
+                t::POLE_DOWN_SPEED
+            };
             self.keep("PoleFall");
-            self.pos.y = (self.pos.y - t::POLE_DOWN_SPEED * UNIT).max(bottom);
+            self.pos.y = (self.pos.y - speed * UNIT).max(bottom);
+        } else if side.length() > 0.5 {
+            // Swing round the pole toward the stick, the hands' arc at the original rate.
+            let hands = -self.facing * 0.3;
+            let moved = hands + side.normalize() * t::POLE_TURN_DIST / t::POLE_TURN_FRAMES * UNIT;
+            self.facing = (-moved).with_y(0.).normalize_or(self.facing);
+            self.keep("PoleWait");
         } else {
             self.keep("PoleWait");
-        }
-        if o.direction.x.abs() > 0.3 {
-            // Circle the pole.
-            let center = Vec3::new(self.pole.x, self.pos.y, self.pole.z);
-            let a = 0.05 * o.direction.x.signum();
-            let off = Quat::from_rotation_y(a) * (self.pos - center);
-            self.pos = center + off;
-            self.facing = (center - self.pos).with_y(0.).normalize_or(self.facing);
         }
     }
 
@@ -2185,11 +2310,29 @@ impl Player {
                             self.set_h(self.facing * 6.);
                             self.enter(Move::RollEnd, "RollingEnd");
                         }
-                        if !was_grounded && self.v.y < 0. && into > 0.5 {
+                        if !was_grounded && self.v.y < 0. && into > 0.1 {
                             self.touch_wall(top, o);
                         }
                     }
                 }
+            }
+        }
+        if self.mode == Move::Ledge {
+            // Just caught an edge: the actor moves onto it.
+            self.pos = self.ledge;
+            self.grounded = false;
+            self.v = Vec3::ZERO;
+            return;
+        }
+        // Poles are solid when not held.
+        for pole in &scene.poles {
+            let d = (self.pos - pole.center).with_y(0.);
+            let min = POLE_RADIUS + RADIUS;
+            if d.length() < min
+                && self.pos.y < pole.center.y + pole.height
+                && self.pos.y + HEIGHT > pole.center.y
+            {
+                self.pos += d.normalize_or(-self.facing) * (min - d.length());
             }
         }
         if self.mode == Move::WallSlide
@@ -2231,8 +2374,9 @@ impl Player {
             && o.direction.length() > 0.1
         {
             self.enter(Move::Ledge, "WallCatchStart");
-            self.ledge = Vec3::new(self.pos.x, top, self.pos.z);
-            self.pos.y = top - t::WALL_CATCH_EDGE_TOP * UNIT;
+            // The edge point, just inside the top, straight ahead of the body.
+            let corner = self.pos - self.wall * (RADIUS + t::WALL_CATCH_INSET * UNIT);
+            self.ledge = Vec3::new(corner.x, top, corner.z);
             self.facing = -self.wall;
             self.v = Vec3::ZERO;
             self.events.push(Fx::Ledge);
@@ -2656,6 +2800,11 @@ pub fn self_check() {
     p.v = Vec3::new(0., -2., -8.);
     p.step(&fwd(default()), &wall);
     assert_eq!((p.mode, p.anim.name), (Move::Ledge, "WallCatchStart"));
+    assert!(
+        (p.pos.y - 6.).abs() < 1e-4 && (p.pos.z + 1.78).abs() < 0.01,
+        "the hang sits on the edge: {:?}",
+        p.pos
+    );
     for _ in 0..200 {
         p.step(&fwd(default()), &wall);
         if p.grounded {
@@ -2694,10 +2843,38 @@ pub fn self_check() {
     p.mode = Move::Fall;
     p.step(&Orders::default(), &pole);
     assert_eq!(p.mode, Move::Pole);
+    assert!(
+        p.pos.x.abs() < 1e-4 && p.pos.z.abs() < 1e-4,
+        "held on the pole's axis"
+    );
     frames(&mut p, Orders::default(), &pole, 10);
+    frames(
+        &mut p,
+        Orders {
+            direction: Vec2::X,
+            ..default()
+        },
+        &pole,
+        30,
+    );
+    assert_eq!(p.mode, Move::Pole);
+    assert!(
+        p.pos.x.abs() < 1e-4 && p.pos.z.abs() < 1e-4,
+        "circling stays on the pole"
+    );
+    assert!(p.facing.x.abs() > 0.3, "circling turns round the pole");
     let y = p.pos.y;
     frames(&mut p, fwd(default()), &pole, 5);
     assert!(p.pos.y > y);
+    // Poles block running into them.
+    p = Player::default();
+    p.pos = Vec3::new(0., 0., 3.);
+    frames(&mut p, fwd(default()), &pole, 120);
+    assert!(
+        p.pos.with_y(0.).length() >= POLE_RADIUS + RADIUS - 0.01,
+        "{:?}",
+        p.pos
+    );
     // Low ceilings force a crouch.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {

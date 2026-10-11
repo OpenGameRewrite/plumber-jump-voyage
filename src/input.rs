@@ -218,6 +218,10 @@ pub fn label(binding: &str, device: usize) -> String {
 pub struct Orders {
     /// World-space XZ direction; length is analog tilt (walk < 0.5 < run).
     pub direction: Vec2,
+    /// The stick as held, relative to the camera (y negative is up), and the
+    /// camera yaw: climbing uses screen directions rather than world ones.
+    pub stick: Vec2,
+    pub camera_yaw: f32,
     pub look: Vec2,
     pub jump: bool,
     pub jump_held: bool,
@@ -379,6 +383,8 @@ pub fn read(
         *orders = Orders::default();
     } else {
         orders.direction = rotate(stick.clamp_length_max(1.), camera.yaw);
+        orders.stick = stick.clamp_length_max(1.);
+        orders.camera_yaw = camera.yaw;
         orders.look =
             look * settings.sensitivity * Vec2::new(1., if settings.invert { -1. } else { 1. });
         let dt = time.delta_secs().min(0.05);
@@ -413,6 +419,26 @@ pub fn read(
         let phase = ((time.elapsed_secs() - delay).max(0.) / 0.7) as u8;
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
+        let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
+        if script == "pole" || script == "ledge" {
+            // From PJV_SPAWN: catch a pole and climb then circle it, or catch an
+            // edge (forward is -Z), hang, then climb up.
+            let pole = script == "pole";
+            *orders = Orders {
+                reset: started && time.elapsed_secs() - delay < 0.04,
+                direction: match phase {
+                    _ if !started => Vec2::ZERO,
+                    0 if !pole && time.elapsed_secs() - delay < 0.25 => Vec2::NEG_Y,
+                    1..=3 if pole => Vec2::NEG_Y,
+                    4 | 5 if pole => Vec2::X,
+                    4 if !pole => Vec2::NEG_Y,
+                    _ => Vec2::ZERO,
+                },
+                ..default()
+            };
+            *frame = f;
+            return;
+        }
         *orders = Orders {
             // Across open ground: run, jump, throw mid-run, then roll back.
             direction: match phase {

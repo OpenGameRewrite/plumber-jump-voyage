@@ -547,7 +547,7 @@ fn shadow(
         return;
     }
     *shadow.1 = Visibility::Visible;
-    shadow.0.translation = Vec3::new(p.pos.x, ground + 0.03, p.pos.z);
+    shadow.0.translation = Vec3::new(p.shown.x, ground + 0.03, p.shown.z);
     let size = (0.95 - height * 0.04).clamp(0.45, 0.95);
     shadow.0.scale = Vec3::splat(size);
 }
