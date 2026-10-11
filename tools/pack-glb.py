@@ -74,12 +74,19 @@ def pack(path,animations_from=None):
         for accessor in shared['accessors']:accessor['bufferView']+=views
         model['accessors'].extend(shared['accessors'])
         nodes={n.get('name'):i for i,n in enumerate(model['nodes']) if n.get('name')}
+        def parents(document):
+            return {child:node.get('name') for node in document['nodes'] for child in node.get('children',[])}
+        source_parents=parents(shared);target_parents=parents(model)
         copied=[]
         for animation in shared.get('animations',[]):
             channels=[]
             for channel in animation['channels']:
                 name=shared['nodes'][channel['target']['node']].get('name')
-                if name in nodes:
+                # Same name alone is insufficient: the 64 eye is attached
+                # directly to the head, while the regular eye has a part root.
+                # Keep its local bind transform instead of replacing it with
+                # animation values expressed relative to a different parent.
+                if name in nodes and source_parents.get(channel['target']['node'])==target_parents.get(nodes[name]):
                     channel['target']['node']=nodes[name];channels.append(channel)
             if not channels:continue
             animation['channels']=channels
@@ -118,6 +125,10 @@ def self_check():
         assert copied['animations'][0]['channels'][0]['target']['node']==1
         assert copied['animations'][0]['samplers'][0]['input']==len(model['accessors'])
         assert copied['extras']['expressions']==expressions
+        model['nodes'][0]['children']=[1]
+        path.write_text(json.dumps(model),encoding='utf-8')
+        raw=pack(path,output).read_bytes();size=struct.unpack_from('<I',raw,12)[0]
+        assert not json.loads(raw[20:20+size])['animations'], 'Different attachment parents accepted'
         model['buffers'][0]['uri']='../escape.bin';path.write_text(json.dumps(model),encoding='utf-8')
         try:pack(path)
         except ValueError:pass

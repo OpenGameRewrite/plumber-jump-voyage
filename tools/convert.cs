@@ -12,6 +12,9 @@ using Toolbox.Library.Animations;
 using Assimp;
 
 class ConvertOutfit {
+    static TextureWrapMode Wrap(STTextureWrapMode mode) {
+        return mode==STTextureWrapMode.Clamp?TextureWrapMode.Clamp:mode==STTextureWrapMode.Mirror?TextureWrapMode.Mirror:TextureWrapMode.Wrap;
+    }
     static byte NormalBlue(byte red,byte green) {
         double x=red/127.5-1,y=green/127.5-1;
         return (byte)Math.Round(127.5*(1+Math.Sqrt(Math.Max(0,1-x*x-y*y))));
@@ -42,6 +45,8 @@ class ConvertOutfit {
     [STAThread] static int Main(string[] args) {
         try {
             if(args.Contains("--self-check")) {
+                if(Wrap(STTextureWrapMode.Clamp)!=TextureWrapMode.Clamp||Wrap(STTextureWrapMode.Mirror)!=TextureWrapMode.Mirror||Wrap(STTextureWrapMode.Repeat)!=TextureWrapMode.Wrap)
+                    throw new Exception("Texture wrapping failed");
                 if(NormalBlue(128,128)!=255||NormalBlue(255,255)!=128)throw new Exception("Normal reconstruction failed");
                 if(PartSet("MarioEye")!="Eye"||PartSet("MarioFaceRsv")!="Face"||PartSet("MarioAlohaHead")!="Head"
                     ||PartName("Eye","Eyeball")==PartName("Face","Eyeball")||PartName("L","HandL")!="HandL")
@@ -234,6 +239,20 @@ class ConvertOutfit {
             DAE.Export(dae,settings,meshList,materials,textures,model.Skeleton,model.Skeleton.Node_Array.ToList());
             using(var importer=new AssimpContext()) {
                 var scene=importer.ImportFile(dae,PostProcessSteps.Triangulate|PostProcessSteps.GenerateSmoothNormals);
+                // The Collada importer drops sampler wrapping. Restore it from
+                // each original material before exporting glTF (notably the 64 cap).
+                foreach(var material in scene.Materials) {
+                    var original=materials.FirstOrDefault(m=>m.Text==material.Name);
+                    if(original==null)continue;
+                    foreach(var map in original.TextureMaps) {
+                        bool diffuse=map.Type==STGenericMatTexture.TextureType.Diffuse;
+                        bool normal=map.Type==STGenericMatTexture.TextureType.Normal;
+                        if(!(diffuse&&material.HasTextureDiffuse||normal&&material.HasTextureNormal))continue;
+                        var slot=diffuse?material.TextureDiffuse:material.TextureNormal;
+                        slot.WrapModeU=Wrap(map.WrapModeS);slot.WrapModeV=Wrap(map.WrapModeT);
+                        if(diffuse)material.TextureDiffuse=slot;else material.TextureNormal=slot;
+                    }
+                }
                 var all=new List<FSKA>();all.AddRange(Animations<FSKA>(resource));
                 foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations<FSKA>(r));}
                 if(args.Contains("--geometry-only"))all.Clear();

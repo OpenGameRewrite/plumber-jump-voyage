@@ -800,10 +800,13 @@ mod imported {
                 m.reflectance = 0.9;
                 continue;
             }
-            if m.base_color_texture.is_some() {
+            // The metal head reuses the 64 cap's hair texture, but the game's
+            // reflection shader overrides that colour along with the rest.
+            if m.base_color_texture.is_some() && !(metal && name.as_str().ends_with("__HairMT")) {
                 continue;
             }
             if metal {
+                m.base_color_texture = None;
                 m.base_color = Color::srgb(0.86, 0.88, 0.92);
                 m.metallic = 1.;
                 m.perceptual_roughness = 0.12;
