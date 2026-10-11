@@ -102,25 +102,32 @@ def main():
         file=objects/name/(name+'.bfres')
         if not file.is_file():raise ValueError(f'Missing extracted model {name}; run extract.py first')
         return file
+    base_files=candidates.get('Mario') or archive(a.romfs/'ObjectData'/'Mario.szs')
+    def placement(files,suffix):
+        """The costume's attachment joint and local rotation/offset for one part."""
+        raw=files.get(f'InitPartsFixInfo{suffix}.byml') or base_files.get(f'InitPartsFixInfo{suffix}.byml')
+        if not raw:return ''
+        info=byml(raw);rot=info.get('LocalRotate') or {};trans=info.get('LocalTrans') or {}
+        values=[rot.get(k,0.) for k in 'XYZ']+[trans.get(k,0.) for k in 'XYZ']
+        return '|'+info['JointName']+''.join(f'|{float(v):g}' for v in values)
     for name in names:
         if name not in candidates:raise ValueError(f'No body outfit named {name}; use --list')
-        files=candidates[name];parts=[]
+        files=candidates[name];parts={}
         head=name+'Head' if (objects/(name+'Head')).is_dir() else 'MarioHead'
-        parts.append(head)
+        parts[head]=placement(files,'Head')
         for item in byml(files['InitSubActor.byml']).get('CreatorList',[]):
             if item.get('ClassName')=='PartsModel' and item.get('ModelName'):
-                parts.append(item['ModelName'])
+                parts.setdefault(item['ModelName'],placement(files,item.get('FixFileSuffixName','')))
         # Texture-only archives are not independent meshes.
         for part in [name+'BodyTexture',head+'Texture']+[p.replace('HandL','HandTexture').replace('HandR','HandTexture') for p in parts if 'Hand' in p]:
-            if (objects/part).is_dir():parts.append(part)
-        parts=list(dict.fromkeys(parts))
+            if (objects/part).is_dir():parts.setdefault(part,'')
         output=exports/(name+'.glb')
         base=exports/'Mario.glb'
         if output.is_file() and not a.force:
             if not extract.glb_json(output).get('animations') and base.is_file():packer.pack(output.with_suffix('.gltf'),base)
             continue
         animation=['--geometry-only'] if name!='Mario' and base.is_file() else [str(model('PlayerAnimation'))]
-        command=[str(a.adapter.resolve()),str(model(name)),str(output)]+animation+['--part='+str(model(part)) for part in parts]
+        command=[str(a.adapter.resolve()),str(model(name)),str(output)]+animation+['--part='+str(model(part))+fix for part,fix in parts.items()]
         log=output.with_suffix('.log')
         with log.open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
         if result.returncode:raise ValueError(f'{name} conversion failed; details in {log}')

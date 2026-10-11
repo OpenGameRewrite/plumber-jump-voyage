@@ -59,13 +59,28 @@ class ConvertOutfit {
             if(rigidFigure)Console.WriteLine("Rigid figure: parts follow the root");
             var meshList=model.Objects.ToList();var materials=model.Materials.ToList();var textures=resource.GetTextures();
             foreach(var part in args.Skip(2).Where(a=>a.StartsWith("--part="))) {
-                var path=part.Substring(7);var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};
+                // --part=model.bfres[|Joint|rotX|rotY|rotZ|transX|transY|transZ], from the
+                // costume's own placement table (joint plus local rotation in degrees).
+                var spec=part.Substring(7).Split('|');var path=spec[0];
+                var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};
                 using(var f=File.OpenRead(path))r.Load(f);textures.AddRange(r.GetTextures());
+                var file=Path.GetFileNameWithoutExtension(path);
+                // Fallback for parts without a table: the installed tool's placement and a name guess.
+                string anchor=file.Contains("HandL")?"HandL":file.Contains("HandR")?"HandR":file.Contains("Under")||file.Contains("Skirt")?"Hip":file.Contains("Shell")||file.Contains("Ruck")?"Spine2":"Head";
+                var place=r.BFRESRender.ModelTransform;
+                var joint=spec.Length>=8?model.Skeleton.bones.FirstOrDefault(b=>b.Text==spec[1]):null;
+                if(joint!=null) {
+                    Func<int,float> number=i=>float.Parse(spec[i],System.Globalization.CultureInfo.InvariantCulture);
+                    Func<int,float> radians=i=>number(i)*(float)Math.PI/180;
+                    model.Skeleton.reset(true);
+                    // Row vectors: local rotation X, then Y, then Z, then offset, then the joint's rest matrix.
+                    place=OpenTK.Matrix4.CreateRotationX(radians(2))*OpenTK.Matrix4.CreateRotationY(radians(3))*OpenTK.Matrix4.CreateRotationZ(radians(4))
+                        *OpenTK.Matrix4.CreateTranslation(number(5),number(6),number(7))*model.Skeleton.GetBoneTransform(joint);
+                    anchor=joint.Text;
+                }
                 foreach(var sub in r.ExportableModels.OfType<FMDL>()) {
                     // Parts have independent local skeletons. Move their bind geometry
                     // into the body's rest space before sharing its animation skeleton.
-                    var file=Path.GetFileNameWithoutExtension(path);
-                    string anchor=file.Contains("HandL")?"HandL":file.Contains("HandR")?"HandR":file.Contains("Under")||file.Contains("Skirt")?"Hip":file.Contains("Shell")||file.Contains("Ruck")?"Spine2":"Head";
                     foreach(var shape in sub.Objects) {
                         if(shape.MaterialIndex>=0)shape.MaterialIndex+=materials.Count;
                         foreach(var v in shape.vertices) {
@@ -77,15 +92,20 @@ class ConvertOutfit {
                                 source=Math.Max(0,source);string name=sub.Skeleton.bones[source].Text;
                                 int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==name);
                                 // Part roots share names with body roots; rigid face pieces belong to the anchor.
+                                // A bone the body lacks (coat flap, finger, cape segment) hangs from its
+                                // nearest ancestor that the body has, as the original part does.
+                                for(int up=sub.Skeleton.bones[source].parentIndex;destBone<0&&up>=0;up=sub.Skeleton.bones[up].parentIndex) {
+                                    var parentName=sub.Skeleton.bones[up].Text;
+                                    if(parentName=="nw4f_root"||parentName=="AllRoot"||parentName=="JointRoot")break;
+                                    destBone=model.Skeleton.bones.FindIndex(b=>b.Text==parentName);
+                                }
                                 if(destBone<0||name=="nw4f_root"||name=="AllRoot"||name=="JointRoot")destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
                                 if(rigidFigure)destBone=model.Skeleton.bones.FindIndex(b=>b.Text=="JointRoot");
                                 if(destBone<0)throw new InvalidDataException("No attachment bone for "+file);
                                 int dest=Array.IndexOf(model.Skeleton.Node_Array,destBone);
                                 if(dest<0){dest=model.Skeleton.Node_Array.Length;model.Skeleton.Node_Array=model.Skeleton.Node_Array.Concat(new[]{destBone}).ToArray();}
-                                // The installed tool supplies Odyssey's part bind placement.
-                                var transform=r.BFRESRender.ModelTransform;
-                                position+=OpenTK.Vector3.TransformPosition(v.pos,transform)*v.boneWeights[i];
-                                normal+=OpenTK.Vector3.TransformNormal(v.nrm,transform)*v.boneWeights[i];
+                                position+=OpenTK.Vector3.TransformPosition(v.pos,place)*v.boneWeights[i];
+                                normal+=OpenTK.Vector3.TransformNormal(v.nrm,place)*v.boneWeights[i];
                                 v.boneIds[i]=dest;
                             }
                             v.pos=position;v.nrm=normal.LengthSquared>0?normal.Normalized():normal;

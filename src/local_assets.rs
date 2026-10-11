@@ -617,6 +617,10 @@ mod imported {
             let Some(mut m) = materials.get_mut(&handle.0) else {
                 continue;
             };
+            // Capes, coats and skirts are single sheets the original draws from
+            // both sides; the export loses that flag.
+            m.double_sided = true;
+            m.cull_mode = None;
             if m.base_color_texture.is_some() {
                 continue;
             }
