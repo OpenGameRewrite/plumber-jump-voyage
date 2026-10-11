@@ -282,6 +282,7 @@ pub fn read(
     mut active: Local<Option<Entity>>,
     mut repeat: Local<f32>,
     mut smoke_phase: Local<u8>,
+    mut smoke_last: Local<f32>,
 ) {
     *repeat = (*repeat - time.delta_secs()).max(0.);
     let mut f = FrameInput::default();
@@ -420,6 +421,27 @@ pub fn read(
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
+        if script == "dive" || script == "diveroll" {
+            // Run, jump, pound, dive forward; "diveroll" keeps crouch held to land rolling.
+            let now = time.elapsed_secs() - delay;
+            let crossed = |at: f32| *smoke_last < at && now >= at;
+            *orders = Orders {
+                direction: if started && now < 1.1 {
+                    Vec2::Y
+                } else {
+                    Vec2::ZERO
+                },
+                jump: crossed(0.7),
+                jump_held: (0.7..0.9).contains(&now),
+                crouch_pressed: crossed(1.0),
+                crouch: now >= 1.0 && (script == "diveroll" || now < 1.1),
+                throw_pressed: crossed(1.08),
+                ..default()
+            };
+            *smoke_last = now;
+            *frame = f;
+            return;
+        }
         if script == "walk" {
             // A slow walk, then a full run, for close inspection.
             *orders = Orders {

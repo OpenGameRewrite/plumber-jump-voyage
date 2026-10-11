@@ -803,7 +803,9 @@ pub fn animate(
     let phase = time.elapsed_secs() * speed * 1.3;
     body.rotation = match p.mode {
         Move::Roll => Quat::from_rotation_x(-p.distance * 2.5),
-        Move::Dive | Move::Slide => Quat::from_rotation_x(-1.3),
+        Move::Dive => Quat::from_rotation_x(-1.3),
+        // The dive's landing roll: one forward turn over the clip.
+        Move::Slide => Quat::from_rotation_x(-(p.timer / 0.6).min(1.) * std::f32::consts::TAU),
         Move::Backflip => Quat::from_rotation_x((p.timer * 7.).min(std::f32::consts::TAU)),
         Move::Sideflip => Quat::from_rotation_z((p.timer * 7.).min(std::f32::consts::TAU)),
         Move::GroundPound if p.timer < 0.28 => {

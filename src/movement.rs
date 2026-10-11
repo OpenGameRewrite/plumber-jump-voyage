@@ -204,6 +204,7 @@ pub mod clip {
     pub const ROLLING_START: u32 = 6;
     pub const ROLLING_END: u32 = 12;
     pub const HEAD_SLIDING_START: u32 = 48;
+    pub const LAND_ROLLING: u32 = 36;
     pub const LAND: u32 = 26;
     pub const SPIN_CAP_START: u32 = 22;
     pub const TURN: u32 = 12;
@@ -278,7 +279,7 @@ impl Move {
             Self::Roll | Self::RollEnd => "Roll",
             Self::RollJump => "Roll jump",
             Self::Dive => "Dive",
-            Self::Slide => "Belly slide",
+            Self::Slide => "Dive landing",
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
             Self::Ledge => "Ledge hang",
@@ -1262,6 +1263,7 @@ impl Player {
             }
         }
     }
+    /// A dive's landing: the forward roll on the ground, slowing to a stop.
     fn belly_slide(&mut self, o: &Orders) {
         if self.pre_jump > 0 {
             self.pre_jump = 0;
@@ -1274,11 +1276,14 @@ impl Player {
         }
         self.set_h(self.facing * s);
         self.v.y = -t::GRAVITY;
-        if s <= 0. && self.frame > 10 {
+        if self.anim_done(clip::LAND_ROLLING) {
             if o.crouch {
                 self.start_squat();
+            } else if self.tilt > 0.05 && s > t::NORMAL_MIN {
+                self.set(Move::Run);
+                self.play("Move");
             } else {
-                self.enter(Move::Idle, "RollingStandUp");
+                self.enter(Move::Idle, "Wait");
             }
         }
     }
@@ -2199,11 +2204,12 @@ impl Player {
                 self.events.push(Fx::PoundLand);
                 return;
             }
+            // Holding crouch turns the momentum into a real roll; otherwise a
+            // dive lands in its forward roll and stands up.
             Move::Dive | Move::LongJump | Move::RollJump if o.crouch && speed > t::NORMAL_MIN => {
                 self.start_roll(speed.max(t::ROLL_START), false);
-                self.play("LandRolling");
             }
-            Move::Dive => self.enter(Move::Slide, "HeadSliding"),
+            Move::Dive => self.enter(Move::Slide, "LandRolling"),
             Move::Roll => {}
             _ => {
                 if self.hard_land {
@@ -2598,7 +2604,57 @@ pub fn self_check() {
     assert_eq!((p.mode, p.anim.name), (Move::Dive, "HeadSlidingStart"));
     assert!(p.vel.x > 10. && p.vel.y > 0.);
     until_ground(&mut p, Orders::default(), &floor);
-    assert_eq!(p.mode, Move::Slide);
+    assert_eq!((p.mode, p.anim.name), (Move::Slide, "LandRolling"));
+    frames(
+        &mut p,
+        Orders::default(),
+        &floor,
+        clip::LAND_ROLLING as usize,
+    );
+    assert_eq!(p.mode, Move::Idle, "the landing roll stands up");
+    // Holding crouch through the landing rolls on with the dive's speed.
+    p = Player::default();
+    p.pos.y = 6.;
+    p.grounded = false;
+    p.mode = Move::Fall;
+    let held = Orders {
+        crouch: true,
+        ..default()
+    };
+    p.step(
+        &Orders {
+            crouch_pressed: true,
+            crouch: true,
+            ..default()
+        },
+        &floor,
+    );
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            crouch: true,
+            direction: Vec2::X,
+            ..default()
+        },
+        &floor,
+    );
+    until_ground(&mut p, held.clone(), &floor);
+    assert_eq!(p.mode, Move::Roll);
+    let mut names = std::collections::BTreeSet::new();
+    let mut rolled = 0;
+    while p.mode == Move::Roll && rolled < 600 {
+        p.step(&held, &floor);
+        names.insert(p.anim.name);
+        rolled += 1;
+    }
+    assert!(
+        names.contains("Rolling"),
+        "the roll plays its loop: {names:?}"
+    );
+    assert!(
+        rolled < 200,
+        "the roll ends like any other: {rolled} frames"
+    );
     // Roll: starts at 20, decays, and on flat ground ends in a crouch.
     p = Player::default();
     frames(
