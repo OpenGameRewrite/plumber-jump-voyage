@@ -125,6 +125,8 @@ ground-pound, roll, wall and cap values. The game-data build plays the
 original clips by name, blends the walk, run, dash and fast-dash cycles at the
 original border speeds and rates, crossfades with the original blend table,
 and plays sounds from the original per-animation sound triggers.
+Eye, mouth, eyebrow and head animations follow the same action clips, with
+the original pupil movement and eyelid visibility tracks.
 
 What is still inferred: the public decompilation covers only some player
 states, so the logic that joins states (exact input windows, the order of

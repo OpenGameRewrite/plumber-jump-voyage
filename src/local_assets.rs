@@ -14,6 +14,62 @@ pub struct Outfit {
     pub animations: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub cap_file: Option<String>,
+    /// Discrete mesh visibility from the original eye/head action sets.
+    #[serde(default)]
+    pub expressions: std::sync::Arc<std::collections::BTreeMap<String, Expression>>,
+}
+#[derive(Clone, Deserialize)]
+pub struct Expression {
+    pub looping: bool,
+    pub tracks: std::collections::BTreeMap<String, Vec<bool>>,
+    #[serde(default)]
+    pub uv: std::collections::BTreeMap<String, Vec<[f32; 3]>>,
+}
+impl Outfit {
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    fn part_visibility(&self, clip: &str, seconds: f32, part: &str) -> Option<bool> {
+        let expression = self
+            .expressions
+            .get(clip)
+            .or_else(|| self.expressions.get("Wait"))?;
+        let frames = expression.tracks.get(part)?;
+        if frames.is_empty() {
+            return None;
+        }
+        let frame = (seconds.max(0.) * 60.).floor() as usize;
+        let frame = if expression.looping && frames.len() > 1 {
+            frame % (frames.len() - 1)
+        } else {
+            frame.min(frames.len() - 1)
+        };
+        Some(frames[frame])
+    }
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    fn pupil_uv(&self, clip: &str, seconds: f32, material: &str) -> Option<bevy::math::Affine2> {
+        let expression = self
+            .expressions
+            .get(clip)
+            .or_else(|| self.expressions.get("Wait"))?;
+        let frames = expression.uv.get(material)?;
+        if frames.is_empty() {
+            return None;
+        }
+        let at = (seconds.max(0.) * 60.).min(usize::MAX as f32);
+        let sample = |i: usize| {
+            frames[if expression.looping && frames.len() > 1 {
+                i % (frames.len() - 1)
+            } else {
+                i.min(frames.len() - 1)
+            }]
+        };
+        let a = Vec3::from_array(sample(at.floor() as usize));
+        let b = Vec3::from_array(sample((at.floor() as usize).saturating_add(1)));
+        let srt = a.lerp(b, at.fract());
+        // Maya's unit-scale texture matrix, with V flipped by the GLB exporter.
+        let rotation = bevy::math::Mat2::from_angle(-srt.x);
+        let offset = Vec2::splat(0.5) - rotation * (Vec2::splat(0.5) + Vec2::new(srt.y, -srt.z));
+        Some(bevy::math::Affine2::from_mat2_translation(rotation, offset))
+    }
 }
 fn one() -> f32 {
     1.
@@ -56,6 +112,8 @@ impl Wardrobe {
 #[derive(Deserialize)]
 struct Manifest {
     outfits: Vec<Outfit>,
+    #[serde(default)]
+    expressions: std::collections::BTreeMap<String, Expression>,
 }
 pub fn validate(outfit: &Outfit) -> bool {
     let p = std::path::Path::new(&outfit.file);
@@ -103,6 +161,14 @@ pub fn plugin(app: &mut App) {
     {
         Some(m) if !m.outfits.is_empty() && m.outfits.iter().all(validate) => {
             wardrobe.outfits = m.outfits;
+            // All converted costumes share one action table. Keep it once in
+            // the manifest and in memory; custom GLBs may supply an override.
+            let expressions = std::sync::Arc::new(m.expressions);
+            for outfit in &mut wardrobe.outfits {
+                if outfit.expressions.is_empty() {
+                    outfit.expressions = expressions.clone();
+                }
+            }
             wardrobe.status = format!(
                 "Game-data build: {} original outfits installed",
                 wardrobe.outfits.len()
@@ -246,6 +312,13 @@ mod imported {
     /// Mask group for hips and legs; the throw overlay leaves them alone.
     const LEGS: u32 = 0;
     fn legs(name: &str) -> bool {
+        let name = name.strip_prefix("Armature_").unwrap_or(name);
+        if ["Eye_", "Face_", "Head_"]
+            .iter()
+            .any(|p| name.starts_with(p))
+        {
+            return false;
+        }
         [
             "Hip",
             "Leg",
@@ -257,6 +330,12 @@ mod imported {
         ]
         .iter()
         .any(|n| name.contains(n))
+    }
+    pub fn self_check() {
+        assert!(legs("Armature_Hip") && legs("Armature_JointRoot"));
+        assert!(!legs("Armature_Eye_JointRoot"));
+        assert!(!legs("Armature_Face_AllRoot"));
+        assert!(!legs("Armature_Head_MarioHead"));
     }
     pub fn plugin(app: &mut App) {
         app.init_resource::<Loaded>().add_systems(
@@ -550,11 +629,15 @@ mod imported {
     }
     fn parts(
         time: Res<Time>,
+        fixed: Res<Time<Fixed>>,
         p: Single<&crate::movement::Player>,
         settings: Res<crate::input::Settings>,
         loaded: Res<Loaded>,
+        wardrobe: Res<Wardrobe>,
         mut hats: Query<&mut Visibility, With<crate::world::Hat>>,
         mut meshes: Query<(&Name, &mut Visibility), (With<Mesh3d>, Without<crate::world::Hat>)>,
+        eye_materials: Query<(&Name, &MeshMaterial3d<StandardMaterial>)>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
         mut caps: Query<
             (&mut Transform, &mut Visibility),
             (
@@ -587,6 +670,56 @@ mod imported {
         let t = time.elapsed_secs();
         let blink =
             (t % 3.7) < 0.11 || (t % 11.3) < 0.09 || p.mode == crate::movement::Move::PoundLand;
+        let outfit = settings
+            .outfit
+            .checked_sub(3)
+            .and_then(|i| wardrobe.outfits.get(i));
+        // Discrete visibility follows the dominant playing clip's actual sample
+        // time (including locomotion phase and the upper-body throw overlay).
+        let sample = if let Some(a) = p.sub_anim.filter(|_| loaded.overlay.is_some()) {
+            let (key, default) = if p.grounded {
+                ("throw_upper", "ThrowCapParts")
+            } else {
+                ("throw_upper_air", "ThrowCapJumpParts")
+            };
+            let name = outfit
+                .and_then(|o| o.animations.get(key))
+                .map_or(default, String::as_str);
+            Some((name, (a.frame + fixed.overstep_fraction()) / 60.))
+        } else {
+            loaded
+                .blend
+                .current
+                .clips
+                .iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .and_then(|(node, _, seconds)| {
+                    loaded
+                        .nodes
+                        .iter()
+                        .find(|(_, value)| value.0 == *node)
+                        .map(|(name, _)| (name.as_str(), *seconds))
+                })
+        };
+        let part_show = |part: &str| {
+            sample.and_then(|(clip, seconds)| outfit?.part_visibility(clip, seconds, part))
+        };
+        let legacy = outfit.is_none_or(|o| o.expressions.is_empty());
+        let closed_left = part_show("EyelidCloseLeft").unwrap_or(legacy && blink);
+        let closed_right = part_show("EyelidCloseRight").unwrap_or(legacy && blink);
+        for (name, handle) in &eye_materials {
+            if let Some((_, material)) = name.as_str().split_once("__")
+                && material.starts_with("EyePupil")
+                && let Some(mut m) = materials.get_mut(&handle.0)
+            {
+                let uv = sample
+                    .and_then(|(clip, seconds)| outfit?.pupil_uv(clip, seconds, material))
+                    .unwrap_or(bevy::math::Affine2::IDENTITY);
+                if m.uv_transform != uv {
+                    m.uv_transform = uv;
+                }
+            }
+        }
         for (name, mut visibility) in &mut meshes {
             let n = name.as_str();
             // The thrown cap's eye model holds every lid state; it flies wide-eyed.
@@ -594,17 +727,22 @@ mod imported {
                 Some(false)
             } else if n.starts_with("EyeOpen") {
                 Some(true)
-            } else if n.starts_with("EyelidClose") {
-                Some(blink)
-            } else if n.starts_with("Eyeball__EyePupil") {
-                Some(!blink)
-            } else if n.starts_with("Eyelid")
-                || n.starts_with("EyeHalf")
-                || n.starts_with("Eyeball__EyeMT")
-            {
+            } else if n.starts_with("EyelidCloseLeft") {
+                Some(closed_left)
+            } else if n.starts_with("EyelidCloseRight") {
+                Some(closed_right)
+            } else if n.starts_with("Eyeball__EyePupilLeft") {
+                Some(!closed_left)
+            } else if n.starts_with("Eyeball__EyePupilRight") {
+                Some(!closed_right)
+            } else if n.starts_with("Eyelid") {
+                Some(part_show(n.split("__").next().unwrap_or(n)).unwrap_or(false))
+            } else if n.starts_with("Eyeball__EyeMT") {
                 Some(false)
             } else if n.starts_with("Cap__") || n.starts_with("CapHair__") {
-                Some(p.cap.is_none())
+                Some(
+                    p.cap.is_none() && part_show(n.split("__").next().unwrap_or(n)).unwrap_or(true),
+                )
             } else if n.starts_with("Hair__") {
                 Some(p.cap.is_some())
             } else {
@@ -675,6 +813,8 @@ mod imported {
     }
 }
 pub fn self_check() {
+    #[cfg(feature = "local-assets")]
+    imported::self_check();
     let mut o = Outfit {
         name: "Local outfit".into(),
         file: "local/outfit.glb".into(),
@@ -682,6 +822,7 @@ pub fn self_check() {
         yaw: 0.,
         animations: default(),
         cap_file: None,
+        expressions: default(),
     };
     assert!(validate(&o));
     for path in [
@@ -723,4 +864,41 @@ pub fn self_check() {
     assert_eq!(interp_frames("Jump", "Move"), 3.);
     assert_eq!(interp_frames("Jump", "Wait"), 0.);
     assert!(looping("Wait") && !looping("Jump"));
+    let mut o = w.outfits[0].clone();
+    std::sync::Arc::make_mut(&mut o.expressions).insert(
+        "Jump".into(),
+        Expression {
+            looping: false,
+            tracks: [("EyelidLeft".into(), vec![true, false, true])].into(),
+            uv: [("EyePupilLeftMT".into(), vec![[0., 0., 0.], [0., 0.2, 0.4]])].into(),
+        },
+    );
+    std::sync::Arc::make_mut(&mut o.expressions).insert(
+        "Wait".into(),
+        Expression {
+            looping: true,
+            tracks: [("EyelidLeft".into(), vec![false, true, false])].into(),
+            uv: default(),
+        },
+    );
+    assert_eq!(
+        o.part_visibility("Jump", 1. / 60., "EyelidLeft"),
+        Some(false)
+    );
+    assert_eq!(o.part_visibility("Jump", 20., "EyelidLeft"), Some(true));
+    assert_eq!(
+        o.part_visibility("Missing", 3. / 60., "EyelidLeft"),
+        Some(true)
+    );
+    assert_eq!(
+        o.part_visibility("Wait", 2. / 60., "EyelidLeft"),
+        Some(false)
+    );
+    assert_eq!(o.part_visibility("Jump", 0., "Unknown"), None);
+    let uv = o.pupil_uv("Jump", 0.5 / 60., "EyePupilLeftMT").unwrap();
+    assert!(
+        uv.transform_point2(Vec2::splat(0.5))
+            .distance(Vec2::new(0.4, 0.7))
+            < 1e-5
+    );
 }

@@ -28,18 +28,25 @@ class ConvertOutfit {
             return i>=0&&IsRoot(bones[i].Text);
         }));
     }
-    class Finger {public string Name,Side;public FMDL Part;public STBone Bone;public bool Chained;public OpenTK.Matrix4 Fix;}
-    static IEnumerable<FSKA> Animations(TreeNode node) {
-        var animation = node as FSKA;
+    class PartBone {public string Name,Set;public FMDL Part;public STBone Bone;public bool Chained;public OpenTK.Matrix4 Fix;}
+    static string PartSet(string file) {
+        return file.Contains("HandL")?"L":file.Contains("HandR")?"R":file.EndsWith("Eye")||file.EndsWith("EyeRsv")?"Eye":file.EndsWith("Face")||file.EndsWith("FaceRsv")?"Face":file.EndsWith("Head")||file.EndsWith("HeadRsv")?"Head":null;
+    }
+    static string PartName(string set,string name) {return set=="L"||set=="R"?name:set+"_"+name;}
+    static IEnumerable<T> Animations<T>(TreeNode node) where T:TreeNode {
+        var animation = node as T;
         if (animation != null) yield return animation;
         foreach (TreeNode child in node.Nodes)
-            foreach (var a in Animations(child)) yield return a;
+            foreach (var a in Animations<T>(child)) yield return a;
     }
     [STAThread] static int Main(string[] args) {
         try {
             if(args.Contains("--self-check")) {
                 if(NormalBlue(128,128)!=255||NormalBlue(255,255)!=128)throw new Exception("Normal reconstruction failed");
-                Console.WriteLine("Normal map check passed");return 0;
+                if(PartSet("MarioEye")!="Eye"||PartSet("MarioFaceRsv")!="Face"||PartSet("MarioAlohaHead")!="Head"
+                    ||PartName("Eye","Eyeball")==PartName("Face","Eyeball")||PartName("L","HandL")!="HandL")
+                    throw new Exception("Part rig naming failed");
+                Console.WriteLine("Normal map and part rig checks passed");return 0;
             }
             if (args.Length < 3) { Console.Error.WriteLine("Usage: convert.exe model.bfres output.glb animations.bfres [more-animation-files]"); return 2; }
             var modelPath=Path.GetFullPath(args[0]);
@@ -61,15 +68,55 @@ class ConvertOutfit {
             var meshList=model.Objects.ToList();var materials=model.Materials.ToList();var textures=resource.GetTextures();
             // Materials per part file, so a part's texture archive binds only to that part.
             var partMaterials=new Dictionary<string,List<FMAT>>();
-            // Hand parts keep their finger bones; the original poses them with its own
-            // hand animation set (fists, open palms) alongside each body clip.
-            var fingers=new List<Finger>();
-            var handClips=new Dictionary<string,Dictionary<string,FSKA>>();
-            foreach(var arg in args.Where(a=>a.StartsWith("--hand-l=")||a.StartsWith("--hand-r="))) {
-                var hr=new BFRES {FileName=Path.GetFileName(arg.Substring(9)),FilePath=Path.GetFullPath(arg.Substring(9))};
-                using(var f=File.OpenRead(arg.Substring(9)))hr.Load(f);
-                handClips[arg.Substring(7,1).ToUpper()]=Animations(hr).GroupBy(x=>x.Text).ToDictionary(g=>g.Key,g=>g.First());
+            // Keep the independent finger, face, eye and head rigs. Each action
+            // samples its matching part clips alongside the body clip.
+            var partBones=new List<PartBone>();
+            var partClips=new Dictionary<string,Dictionary<string,FSKA>>();
+            var visibility=new Dictionary<string,Dictionary<string,bool[]>>();
+            var visibilityLoops=new Dictionary<string,bool>();
+            var pupilUv=new Dictionary<string,Dictionary<string,float[][]>>();
+            foreach(var arg in args.Where(a=>a.StartsWith("--hand-l=")||a.StartsWith("--hand-r=")||a.StartsWith("--eye=")||a.StartsWith("--face=")||a.StartsWith("--head="))) {
+                int separator=arg.IndexOf('=');var path=arg.Substring(separator+1);
+                string set=arg.StartsWith("--hand-")?arg.Substring(7,1).ToUpper():arg.Substring(2,separator-2);
+                set=char.ToUpper(set[0])+set.Substring(1);
+                var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};
+                using(var f=File.OpenRead(path))r.Load(f);
+                partClips[set]=Animations<FSKA>(r).GroupBy(x=>x.Text).ToDictionary(g=>g.Key,g=>g.First());
+                foreach(var v in Animations<FVIS>(r)) {
+                    v.OpenAnimationData();
+                    var raw=v.VisibilityAnim;
+                    if(!visibility.ContainsKey(v.Text))visibility[v.Text]=new Dictionary<string,bool[]>();
+                    visibilityLoops[v.Text]=raw.Loop;
+                    for(int i=0;i<raw.Names.Count;i++) {
+                        var curve=v.Values.FirstOrDefault(g=>g.AnimDataOffset==i);
+                        visibility[v.Text][raw.Names[i]]=Enumerable.Range(0,raw.FrameCount+1)
+                            .Select(frame=>curve==null?raw.BaseDataList[i]:curve.GetValue(frame)).ToArray();
+                    }
+                }
+                // Eye-pupil SRT tracks use mode 0, rotation and UV offsets;
+                // their scale stays at one. Keep them alongside mesh visibility.
+                foreach(var a in Animations<FMAA>(r).Where(a=>set=="Eye"&&a.Text.EndsWith("_fts"))) {
+                    a.OpenAnimationData();var name=a.Text.Substring(0,a.Text.Length-4);
+                    if(!visibility.ContainsKey(name))visibility[name]=new Dictionary<string,bool[]>();
+                    visibilityLoops[name]=a.CanLoop;
+                    pupilUv[name]=new Dictionary<string,float[][]>();
+                    foreach(var material in a.Materials.Where(m=>m.Text.StartsWith("EyePupil"))) {
+                        var param=material.Params.FirstOrDefault(p=>p.Text=="tex_mtx0");
+                        if(param==null)continue;
+                        if(param.Values.Any(v=>v.AnimDataOffset!=0&&v.AnimDataOffset!=12&&v.AnimDataOffset!=16&&v.AnimDataOffset!=20))
+                            throw new InvalidDataException("Unsupported pupil SRT scale in "+a.Text);
+                        pupilUv[name][material.Text]=Enumerable.Range(0,a.FrameCount+1).Select(frame=>
+                            new uint[]{12,16,20}.Select(offset=>{
+                                var curve=param.Values.FirstOrDefault(v=>v.AnimDataOffset==offset);
+                                return curve==null?0:curve.GetValue(frame);
+                            }).ToArray()).ToArray();
+                    }
+                }
             }
+            var expressions=visibility.ToDictionary(k=>k.Key,k=>(object)new {looping=visibilityLoops[k.Key],tracks=k.Value,
+                uv=pupilUv.ContainsKey(k.Key)?pupilUv[k.Key]:new Dictionary<string,float[][]>()});
+            File.WriteAllText(Path.ChangeExtension(dst,"expressions.json"),new System.Web.Script.Serialization.JavaScriptSerializer {MaxJsonLength=int.MaxValue}.Serialize(expressions));
+            if(args.Contains("--expressions-only"))return 0;
             foreach(var part in args.Skip(2).Where(a=>a.StartsWith("--part="))) {
                 // --part=model.bfres[|Joint|rotX|rotY|rotZ|transX|transY|transZ], from the
                 // costume's own placement table (joint plus local rotation in degrees).
@@ -105,25 +152,28 @@ class ConvertOutfit {
                     anchor=joint.Text;
                 }
                 foreach(var sub in r.ExportableModels.OfType<FMDL>()) {
-                    string side=file.Contains("HandL")?"L":file.Contains("HandR")?"R":null;
-                    if(side!=null&&!rigidFigure) {
+                    string set=PartSet(file);bool hand=set=="L"||set=="R";
+                    if(set!=null&&!rigidFigure) {
                         sub.Skeleton.reset(true);model.Skeleton.reset(true);
                         foreach(var pb in sub.Skeleton.bones) {
-                            if(pb.parentIndex<0||model.Skeleton.boneIndex(pb.Text)>=0)continue;
-                            var parentName=sub.Skeleton.bones[pb.parentIndex].Text;
-                            int parent=IsRoot(parentName)?-1:model.Skeleton.boneIndex(parentName);
+                            string name=PartName(set,pb.Text);
+                            if(model.Skeleton.boneIndex(name)>=0||hand&&pb.parentIndex<0)continue;
+                            var parentName=pb.parentIndex>=0?PartName(set,sub.Skeleton.bones[pb.parentIndex].Text):null;
+                            int parent=parentName==null?-1:model.Skeleton.boneIndex(parentName);
+                            bool chained=partBones.Any(x=>x.Name==parentName);
+                            if(!hand&&parent<0)parent=model.Skeleton.boneIndex(anchor);
                             if(parent<0)continue;
-                            bool chained=fingers.Any(x=>x.Name==parentName);
-                            // First-level fingers hang from the body's hand at the part's rest placement.
+                            // Independent face/eye/head roots attach to the body head; their
+                            // namespaces keep duplicate names (notably Eyeball) separate.
                             var fix=place*model.Skeleton.GetBoneTransform(parent).Inverted();
-                            var local=chained?sub.Skeleton.bones[sub.Skeleton.bones.IndexOf(pb)].GetTransform():sub.Skeleton.GetBoneTransform(pb)*fix;
-                            var nb=new STBone(model.Skeleton) {Text=pb.Text,parentIndex=parent,RotationType=STBone.BoneRotationType.Quaternion};
+                            var local=chained?pb.GetTransform():sub.Skeleton.GetBoneTransform(pb)*fix;
+                            var nb=new STBone(model.Skeleton) {Text=name,parentIndex=parent,RotationType=STBone.BoneRotationType.Quaternion};
                             nb.FromTransform(local);
                             model.Skeleton.bones.Add(nb);
-                            fingers.Add(new Finger {Name=pb.Text,Side=side,Part=sub,Bone=pb,Chained=chained,Fix=fix});
+                            partBones.Add(new PartBone {Name=name,Set=set,Part=sub,Bone=pb,Chained=chained,Fix=fix});
                         }
                         model.Skeleton.reset(true);
-                        if(fingers.Any(x=>x.Part==sub))Console.WriteLine("Finger bones from "+file+": "+fingers.Count(x=>x.Part==sub));
+                        Console.WriteLine("Part bones from "+file+": "+partBones.Count(x=>x.Part==sub));
                     }
                     // Parts have independent local skeletons. Move their bind geometry
                     // into the body's rest space before sharing its animation skeleton.
@@ -136,7 +186,8 @@ class ConvertOutfit {
                             for(int i=0;i<v.boneIds.Count;i++) {
                                 int source=v.boneIds[i]<0?shape.BoneIndex:sub.Skeleton.Node_Array[v.boneIds[i]];
                                 source=Math.Max(0,source);string name=sub.Skeleton.bones[source].Text;
-                                int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==name);
+                                var ownBone=partBones.FirstOrDefault(x=>x.Part==sub&&x.Bone==sub.Skeleton.bones[source]);
+                                int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==(ownBone==null?name:ownBone.Name));
                                 // Part roots share names with body roots; rigid face pieces belong to the anchor.
                                 // A bone the body lacks (coat flap, finger, cape segment) hangs from its
                                 // nearest ancestor that the body has, as the original part does.
@@ -145,7 +196,7 @@ class ConvertOutfit {
                                     if(parentName=="nw4f_root"||parentName=="AllRoot"||parentName=="JointRoot")break;
                                     destBone=model.Skeleton.bones.FindIndex(b=>b.Text==parentName);
                                 }
-                                if(destBone<0||name=="nw4f_root"||name=="AllRoot"||name=="JointRoot")destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
+                                if(destBone<0||ownBone==null&&IsRoot(name))destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
                                 if(rigidFigure)destBone=model.Skeleton.bones.FindIndex(b=>b.Text=="JointRoot");
                                 if(destBone<0)throw new InvalidDataException("No attachment bone for "+file);
                                 int dest=Array.IndexOf(model.Skeleton.Node_Array,destBone);
@@ -183,8 +234,8 @@ class ConvertOutfit {
             DAE.Export(dae,settings,meshList,materials,textures,model.Skeleton,model.Skeleton.Node_Array.ToList());
             using(var importer=new AssimpContext()) {
                 var scene=importer.ImportFile(dae,PostProcessSteps.Triangulate|PostProcessSteps.GenerateSmoothNormals);
-                var all=new List<FSKA>();all.AddRange(Animations(resource));
-                foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations(r));}
+                var all=new List<FSKA>();all.AddRange(Animations<FSKA>(resource));
+                foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations<FSKA>(r));}
                 if(args.Contains("--geometry-only"))all.Clear();
                 Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
                 File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
@@ -194,14 +245,18 @@ class ConvertOutfit {
                     var channels=new Dictionary<string,NodeAnimationChannel>();
                     foreach(var bone in model.Skeleton.bones) {var node=scene.RootNode.FindNode(bone.Text)??scene.RootNode.FindNode("Armature_"+bone.Text);if(node==null)continue;var ch=new NodeAnimationChannel {NodeName=node.Name};channels[bone.Text]=ch;anim.NodeAnimationChannels.Add(ch);}
                     model.Skeleton.reset();
-                    foreach(var part in fingers.Select(x=>x.Part).Distinct())part.Skeleton.reset();
+                    foreach(var part in partBones.Select(x=>x.Part).Distinct())part.Skeleton.reset();
                     for(int frame=0;frame<=clip.FrameCount;frame++) {
                         clip.SetFrame(frame);clip.NextFrame(model.Skeleton,false,false);
                         var posed=new Dictionary<string,OpenTK.Matrix4>();
-                        foreach(var group in fingers.GroupBy(x=>x.Part)) {
-                            var side=group.First().Side;FSKA hand=null;
-                            if(handClips.ContainsKey(side)&&handClips[side].TryGetValue(clip.Text,out hand)) {
-                                hand.SetFrame(Math.Min(frame,hand.FrameCount));hand.NextFrame(group.Key.Skeleton,false,false);
+                        foreach(var group in partBones.GroupBy(x=>x.Part)) {
+                            var set=group.First().Set;FSKA partClip=null;
+                            if(partClips.ContainsKey(set)) {
+                                if(!partClips[set].TryGetValue(clip.Text,out partClip))partClips[set].TryGetValue("Wait",out partClip);
+                            }
+                            if(partClip!=null) {
+                                float at=partClip.CanLoop&&partClip.FrameCount>0?frame%partClip.FrameCount:Math.Min(frame,partClip.FrameCount);
+                                partClip.SetFrame(at);partClip.NextFrame(group.Key.Skeleton,false,false);
                             }
                             foreach(var x in group) {
                                 var b=x.Bone;
@@ -212,9 +267,9 @@ class ConvertOutfit {
                         foreach(var bone in model.Skeleton.bones) {
                             NodeAnimationChannel ch;if(!channels.TryGetValue(bone.Text,out ch))continue;
                             var p=bone.GetPosition();var s=bone.GetScale();var q=bone.rot;
-                            OpenTK.Matrix4 fingerPose;
-                            if(posed.TryGetValue(bone.Text,out fingerPose)) {
-                                p=fingerPose.ExtractTranslation();s=fingerPose.ExtractScale();q=fingerPose.ExtractRotation();
+                            OpenTK.Matrix4 partPose;
+                            if(posed.TryGetValue(bone.Text,out partPose)) {
+                                p=partPose.ExtractTranslation();s=partPose.ExtractScale();q=partPose.ExtractRotation();
                                 ch.PositionKeys.Add(new VectorKey(frame,new Vector3D(p.X,p.Y,p.Z)));
                                 ch.ScalingKeys.Add(new VectorKey(frame,new Vector3D(s.X,s.Y,s.Z)));
                                 ch.RotationKeys.Add(new QuaternionKey(frame,new Assimp.Quaternion(q.W,q.X,q.Y,q.Z)));

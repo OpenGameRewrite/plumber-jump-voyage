@@ -220,6 +220,8 @@ def install_exports(exports, output, scale, yaw):
     if not files:
         raise ValueError('No exported GLB outfits found')
     parsed = [(p, glb_json(p)) for p in files]
+    shared=next((m.get('extras',{}).get('expressions',{}) for p,m in parsed if p.stem=='Mario'),{})
+    if not shared:shared=next((m['extras']['expressions'] for _,m in parsed if m.get('extras',{}).get('expressions')), {})
     output.mkdir(parents=True, exist_ok=True)
     aliases = {'idle':('Wait','Idle'),'walk':('Walk',),'run':('Run','Dash','Walk'),'run_start':('RunStart',),'brake':('Brake',),
         'land':('Land',),'land_hard':('LandStiffen','Land'),'jump':('Jump','Fall'),'fall':('Fall',),
@@ -244,12 +246,14 @@ def install_exports(exports, output, scale, yaw):
         name=re.sub(r'([a-z0-9])([A-Z])',r'\1 \2',name).replace('_',' ') or 'Classic plumber'
         name={'Dot3d':'8-bit'}.get(name,name)
         outfits.append({'name':name, 'file':'local/' + file.name, 'scale':scale,'yaw':yaw,'animations':mapping})
+        expressions=model.get('extras',{}).get('expressions')
+        if expressions and expressions!=shared:outfits[-1]['expressions']=expressions
         cap=file.stem+'Cap.glb'
         if not (output/'caps'/cap).is_file():cap='MarioCap.glb'
         if (output/'caps'/cap).is_file():outfits[-1]['cap_file']='local/caps/'+cap
     manifest = output / 'manifest.json'
     partial = manifest.with_suffix('.partial')
-    partial.write_text(json.dumps({'outfits':outfits}, indent=2), encoding='utf-8')
+    partial.write_text(json.dumps({'outfits':outfits, 'expressions':shared}, separators=(',',':')), encoding='utf-8')
     partial.replace(manifest)
     print(f'Installed {len(outfits)} local outfits. Launch with cargo run --features local-assets; choose Outfit in the menu.')
 

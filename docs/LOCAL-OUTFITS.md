@@ -87,9 +87,13 @@ wardrobe displays a live preview. The three original explorer palettes remain
 available alongside your local outfits. Missing or unreadable packs fall back
 to the explorer.
 
-Movement animations blend between the demo's states. The conversion targets
-the player rig; it does not reproduce every facial animation, material shader,
-cloth simulation or accessory behavior. Some specialty costumes may need
+Movement animations blend between the demo's states. Eye, mouth, eyebrow and
+head animation sets follow each action alongside the fingers, including pupil
+movement and eyelid visibility. To update an older local pack, rebuild the
+adapter and run the outfit conversion again with `--force`.
+
+The conversion does not reproduce every material shader, cloth simulation or
+accessory behavior. Some specialty costumes may need
 further visual tuning. The movement controller is an original approximation,
 so timings still differ from the game.
 

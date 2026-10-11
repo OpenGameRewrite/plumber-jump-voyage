@@ -128,10 +128,11 @@ def main():
         if output.is_file() and not a.force:
             if not extract.glb_json(output).get('animations') and base.is_file():packer.pack(output.with_suffix('.gltf'),base)
             continue
-        # Mario carries the clips (body plus the hand set that poses the fingers);
+        # Mario carries the body, fingers and facial clips;
         # other outfits share them by bone name.
         animation=['--geometry-only'] if name!='Mario' and base.is_file() else [str(model('PlayerAnimation')),
             '--hand-l='+str(model('PlayerAnimationHandL')),'--hand-r='+str(model('PlayerAnimationHandR'))]
+        animation+=['--'+part.lower()+'='+str(model('PlayerAnimation'+part)) for part in ('Eye','Face','Head')]
         command=[str(a.adapter.resolve()),str(model(name)),str(output)]+animation+['--part='+str(model(part))+fix for part,fix in parts.items()]
         log=output.with_suffix('.log')
         with log.open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)

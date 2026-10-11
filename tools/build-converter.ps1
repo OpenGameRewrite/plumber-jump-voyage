@@ -4,8 +4,8 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskToolbox = (Resolve-Path -LiteralPath $Toolbox).Path
 $taskOutput = Join-Path $taskRoot 'local\converter'
 New-Item -ItemType Directory -Path $taskOutput -Force | Out-Null
-$taskNames = @('Toolbox.Library.dll','FirstPlugin.Plg.dll','AssimpNet.dll','OpenTK.dll','Gl_EditorFramework.dll')
-$taskRefs = @('/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Core.dll')
+$taskNames = @('Toolbox.Library.dll','FirstPlugin.Plg.dll','AssimpNet.dll','OpenTK.dll','Gl_EditorFramework.dll','Syroot.NintenTools.NSW.Bfres.dll')
+$taskRefs = @('/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Core.dll','/r:System.Web.Extensions.dll')
 foreach ($taskName in $taskNames) {
     $taskDll = Get-ChildItem -LiteralPath $taskToolbox -Filter $taskName -Recurse | Select-Object -First 1
     if (!$taskDll) { throw "Missing installed tool dependency: $taskName" }

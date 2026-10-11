@@ -12,6 +12,9 @@ def pack(path,animations_from=None):
     if model.get('asset',{}).get('version')!='2.0':raise ValueError('Expected glTF 2.0')
     clips=path.with_suffix('.clips.txt')
     animations=model.get('animations',[])
+    expressions=path.with_suffix('.expressions.json')
+    if expressions.is_file():
+        model.setdefault('extras',{})['expressions']=json.loads(expressions.read_text(encoding='utf-8-sig'))
     if clips.is_file() and animations:
         groups=[line.rsplit('\t',1) for line in clips.read_text().splitlines()]
         if len(animations)==sum(int(count) for _,count in groups) and len(animations)!=len(groups):
@@ -62,6 +65,7 @@ def pack(path,animations_from=None):
     if animations_from:
         source=Path(animations_from).read_bytes();json_size=struct.unpack_from('<I',source,12)[0]
         shared=json.loads(source[20:20+json_size]);binary=source[28+json_size:]
+        model.setdefault('extras',{})['expressions']=shared.get('extras',{}).get('expressions',{})
         # ponytail: copy the whole shared buffer; compact it if pack size matters.
         offset=append(binary);views=len(model['bufferViews']);accessors=len(model['accessors'])
         for view in shared['bufferViews']:
@@ -98,10 +102,13 @@ def self_check():
             'animations':[{'name':'jump','samplers':[{'input':0,'output':0}], 'channels':[{'sampler':0,'target':{'node':0,'path':'translation'}}]}]}
         (path.parent/'mesh.bin').write_bytes(struct.pack('<4f',0,1,2,3))
         model['animations']*=2
+        expressions={'jump':{'looping':False,'tracks':{'EyelidLeft':[True,False]},'uv':{'EyePupilLeftMT':[[0,0,0],[0,0.1,0.2]]}}}
+        path.with_suffix('.expressions.json').write_text(json.dumps(expressions),encoding='utf-8')
         path.with_suffix('.clips.txt').write_text('jump\t2\n',encoding='utf-8')
         path.write_text(json.dumps(model),encoding='utf-8');output=pack(path)
         raw=output.read_bytes();size=struct.unpack_from('<I',raw,12)[0];packed=json.loads(raw[20:20+size])
         assert packed['accessors'][0]['componentType']==5123
+        assert packed['extras']['expressions']==expressions
         assert len(packed['animations'])==1 and len(packed['animations'][0]['channels'])==2
         assert packed['animations'][0]['channels'][1]['sampler']==1
         assert struct.unpack_from('<4H',raw,28+size+packed['bufferViews'][1]['byteOffset'])==(0,1,2,3)
@@ -110,6 +117,7 @@ def self_check():
         raw=pack(path,output).read_bytes();size=struct.unpack_from('<I',raw,12)[0];copied=json.loads(raw[20:20+size])
         assert copied['animations'][0]['channels'][0]['target']['node']==1
         assert copied['animations'][0]['samplers'][0]['input']==len(model['accessors'])
+        assert copied['extras']['expressions']==expressions
         model['buffers'][0]['uri']='../escape.bin';path.write_text(json.dumps(model),encoding='utf-8')
         try:pack(path)
         except ValueError:pass
