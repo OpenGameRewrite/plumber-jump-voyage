@@ -14,6 +14,10 @@ pub struct Outfit {
     pub animations: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub cap_file: Option<String>,
+    /// Another installed file whose clips this outfit plays (they are shared by
+    /// bone path instead of being copied into every outfit).
+    #[serde(default)]
+    pub animation_file: Option<String>,
     /// Discrete mesh visibility from the original eye/head action sets.
     #[serde(default)]
     pub expressions: std::sync::Arc<std::collections::BTreeMap<String, Expression>>,
@@ -128,6 +132,10 @@ pub fn validate(outfit: &Outfit) -> bool {
         && outfit.scale > 0.
         && outfit.scale < 100.
         && outfit.yaw.is_finite()
+        && outfit
+            .animation_file
+            .as_ref()
+            .is_none_or(|p| safe_local(p, "local/"))
         && outfit.cap_file.as_ref().is_none_or(|p| {
             p.starts_with("local/caps/")
                 && p.ends_with(".glb")
@@ -135,6 +143,9 @@ pub fn validate(outfit: &Outfit) -> bool {
                 && !p.contains('\\')
                 && !p.contains(':')
         })
+}
+fn safe_local(p: &str, prefix: &str) -> bool {
+    p.starts_with(prefix) && p.ends_with(".glb") && !p.contains("..") && !p.contains(['\\', ':'])
 }
 pub fn asset_dir() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default().join("assets");
@@ -282,6 +293,8 @@ mod imported {
     struct Loaded {
         selection: Option<usize>,
         gltf: Handle<bevy::gltf::Gltf>,
+        /// The file the clips come from (the outfit itself, or a shared one).
+        clip_file: Handle<bevy::gltf::Gltf>,
         graph: Handle<AnimationGraph>,
         /// Clip name to graph node and length in seconds.
         nodes: std::collections::BTreeMap<String, (AnimationNodeIndex, f32)>,
@@ -294,6 +307,9 @@ mod imported {
         overlay_weight: f32,
         masked: bool,
         blend: Blend,
+        /// The clip file's animation target for each (bone, parent bone) name pair.
+        targets: std::collections::HashMap<(String, String), bevy::animation::AnimationTargetId>,
+        retargeted: bool,
     }
     /// One pose source: weighted clips at fixed times.
     #[derive(Clone, Default)]
@@ -340,7 +356,7 @@ mod imported {
     pub fn plugin(app: &mut App) {
         app.init_resource::<Loaded>().add_systems(
             Update,
-            (select, mask, animation, parts, finish)
+            (select, retarget, mask, animation, parts, finish)
                 .chain()
                 .after(crate::world::animate),
         );
@@ -352,6 +368,7 @@ mod imported {
         server: Res<AssetServer>,
         models: Res<Assets<bevy::gltf::Gltf>>,
         clips: Res<Assets<AnimationClip>>,
+        gltf_nodes: Res<Assets<bevy::gltf::GltfNode>>,
         mut graphs: ResMut<Assets<AnimationGraph>>,
         mut loaded: ResMut<Loaded>,
         pivot: Single<Entity, With<crate::world::Pivot>>,
@@ -375,14 +392,24 @@ mod imported {
                 .and_then(|i| wardrobe.outfits.get(i))
             {
                 loaded.gltf = server.load(outfit.file.clone());
+                loaded.clip_file = server.load(
+                    outfit
+                        .animation_file
+                        .clone()
+                        .unwrap_or_else(|| outfit.file.clone()),
+                );
                 wardrobe.status = format!("Loading {}...", outfit.name);
             }
         }
         if loaded.ready || settings.outfit < 3 {
             return;
         }
-        if server.is_loaded_with_dependencies(&loaded.gltf) {
-            let Some(gltf) = models.get(&loaded.gltf) else {
+        if server.is_loaded_with_dependencies(&loaded.gltf)
+            && server.is_loaded_with_dependencies(&loaded.clip_file)
+        {
+            let (Some(gltf), Some(source)) =
+                (models.get(&loaded.gltf), models.get(&loaded.clip_file))
+            else {
                 return;
             };
             let Some(scene) = gltf
@@ -396,7 +423,8 @@ mod imported {
             };
             let outfit = &wardrobe.outfits[settings.outfit - 3];
             let mut graph = AnimationGraph::new();
-            for (name, clip) in &gltf.named_animations {
+            loaded.targets = target_ids(source, &gltf_nodes);
+            for (name, clip) in &source.named_animations {
                 let node = graph.add_clip(clip.clone(), 1., graph.root);
                 let length = clips.get(clip).map_or(1., |c| c.duration());
                 loaded.nodes.insert(name.to_string(), (node, length));
@@ -406,7 +434,7 @@ mod imported {
             // running legs from the locomotion clip underneath.
             let upper = |key: &str, default: &str| {
                 let name = outfit.animations.get(key).map_or(default, String::as_str);
-                gltf.named_animations.get(name).cloned()
+                source.named_animations.get(name).cloned()
             };
             if let (Some(ground), Some(air)) = (
                 upper("throw_upper", "ThrowCapParts"),
@@ -462,13 +490,77 @@ mod imported {
             } else {
                 format!("Wearing {} (original game data)", outfit.name)
             };
-        } else if matches!(
-            server.load_state(&loaded.gltf),
-            bevy::asset::LoadState::Failed(_)
-        ) {
+        } else if [&loaded.gltf, &loaded.clip_file]
+            .iter()
+            .any(|h| matches!(server.load_state(*h), bevy::asset::LoadState::Failed(_)))
+        {
             wardrobe.status = "This outfit failed to load. Using the explorer.".into();
             loaded.ready = true;
         }
+    }
+    /// Parent name for matching: some costumes lack the body's top `nw4f_root`
+    /// level, so it counts the same as the armature node above it.
+    fn parent_key(name: &str) -> String {
+        if matches!(name, "Armature" | "Armature_nw4f_root") {
+            String::new()
+        } else {
+            name.to_string()
+        }
+    }
+    /// Target ids the clip file's animations use, keyed by bone and parent name.
+    /// The loader derives them from each bone's name path below the root.
+    fn target_ids(
+        source: &bevy::gltf::Gltf,
+        nodes: &Assets<bevy::gltf::GltfNode>,
+    ) -> std::collections::HashMap<(String, String), bevy::animation::AnimationTargetId> {
+        let all: Vec<&bevy::gltf::GltfNode> =
+            source.nodes.iter().filter_map(|h| nodes.get(h)).collect();
+        let by_index: std::collections::HashMap<usize, &bevy::gltf::GltfNode> =
+            all.iter().map(|n| (n.index, *n)).collect();
+        let mut parent = std::collections::HashMap::new();
+        for n in &all {
+            for c in n.children.iter().filter_map(|h| nodes.get(h)) {
+                parent.insert(c.index, n.index);
+            }
+        }
+        let mut ids = std::collections::HashMap::new();
+        for n in &all {
+            let mut path = vec![Name::new(n.name.clone())];
+            let mut at = n.index;
+            while let Some(p) = parent.get(&at) {
+                path.push(Name::new(by_index[p].name.clone()));
+                at = *p;
+            }
+            path.reverse();
+            let parent_name = parent
+                .get(&n.index)
+                .map_or(String::new(), |p| parent_key(&by_index[p].name));
+            ids.entry((n.name.clone(), parent_name))
+                .or_insert_with(|| bevy::animation::AnimationTargetId::from_names(path.iter()));
+        }
+        ids
+    }
+    /// Outfits play the shared clips: once their bones spawn, each takes the
+    /// clip file's target for the bone of the same name under the same parent.
+    fn retarget(
+        mut loaded: ResMut<Loaded>,
+        mut bones: Query<(&Name, &ChildOf, &mut bevy::animation::AnimationTargetId)>,
+        names: Query<&Name>,
+    ) {
+        if !loaded.ready || loaded.retargeted || loaded.targets.is_empty() {
+            return;
+        }
+        let mut found = false;
+        for (name, child_of, mut id) in &mut bones {
+            let parent = names
+                .get(child_of.parent())
+                .map_or(String::new(), |n| parent_key(n.as_str()));
+            if let Some(target) = loaded.targets.get(&(name.to_string(), parent)) {
+                *id = *target;
+                found |= name.as_str().ends_with("Hip");
+            }
+        }
+        loaded.retargeted = found;
     }
     /// Bone entities exist only after the scene spawns; tag the legs then.
     fn mask(
@@ -476,7 +568,7 @@ mod imported {
         mut graphs: ResMut<Assets<AnimationGraph>>,
         targets: Query<(&bevy::animation::AnimationTargetId, &Name)>,
     ) {
-        if !loaded.ready || loaded.masked || loaded.overlay.is_none() {
+        if !loaded.ready || !loaded.retargeted || loaded.masked || loaded.overlay.is_none() {
             return;
         }
         let Some(mut graph) = graphs.get_mut(&loaded.graph) else {
@@ -825,6 +917,7 @@ pub fn self_check() {
         yaw: 0.,
         animations: default(),
         cap_file: None,
+        animation_file: None,
         expressions: default(),
     };
     assert!(validate(&o));

@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -178,13 +179,61 @@ def sarc(data):
         safe_name(name)
         yield name, data[payload + lo:payload + hi]
 
+# What the conversion and sound tools read from the RomFS; --clean keeps only these.
+OBJECT_WORDS = ('mario', 'player', 'cap', 'costume')
+SOUND_FILES = ('SeData.bfsar', 'SeDataBase.szs')
+
+def needed(path, romfs):
+    rel = path.relative_to(romfs).parts
+    if rel[0] == 'ObjectData':
+        return len(rel) == 2 and path.suffix == '.szs' and any(w in path.stem.lower() for w in OBJECT_WORDS)
+    if rel[0] == 'SoundData':
+        return len(rel) == 2 and (path.name in SOUND_FILES or path.name.startswith('SeResource'))
+    return False
+
+def place(source, target):
+    """Install a file without a second copy on disk when the volume allows it."""
+    if target.resolve() == source.resolve():
+        return
+    target.unlink(missing_ok=True)
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copyfile(source, target)
+
+def remove_intermediates(romfs=None):
+    """Delete local extraction leftovers; with romfs, also its unused files."""
+    local = (ROOT / 'local').resolve()
+    freed = 0
+    # Older manual extractions also left a decrypted base section and RomFS image.
+    targets = [local / n for n in ('nca', 'base-section-raw.bin', 'base-section.bin', 'base.romfs')]
+    if romfs is not None:
+        romfs = romfs.resolve()
+        if not romfs.is_relative_to(local):
+            raise ValueError('Only a RomFS inside local/ is pruned')
+        targets += [f for f in romfs.rglob('*') if f.is_file() and not needed(f, romfs)]
+    for target in targets:
+        if not target.resolve().is_relative_to(local) or not target.exists():
+            continue
+        files = [target] if target.is_file() else [f for f in target.rglob('*') if f.is_file()]
+        freed += sum(f.stat().st_size for f in files)
+        if target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+    if romfs is not None:
+        for folder in sorted((d for d in romfs.rglob('*') if d.is_dir()), key=lambda d: len(d.parts), reverse=True):
+            if not any(folder.iterdir()):
+                folder.rmdir()
+    print(f'Removed {freed / 1e9:.1f} GB of local extraction leftovers.')
+
 def extract_objects(romfs, output):
     obj = romfs / 'ObjectData'
     if not obj.is_dir():
         raise ValueError('RomFS extraction has no ObjectData folder')
     found = 0
     for archive in sorted(obj.glob('*.szs')):
-        if not any(word in archive.stem.lower() for word in ('mario', 'player', 'cap', 'costume')):
+        if not any(word in archive.stem.lower() for word in OBJECT_WORDS):
             continue
         raw = archive.read_bytes()
         for name, data in sarc(yaz0(raw)):
@@ -235,17 +284,22 @@ def install_exports(exports, output, scale, yaw):
         'swim':('SwimWait','Swim'),'swim_move':('SwimWalk','SwimWait'),'swim_dash':('SwimDive','SwimWait'),
         'crouch':('SquatWait','Squat','Crouch'),'crouch_start':('SquatStart',),'crawl':('SquatWalk','SquatWait')}
     outfits = []
+    sources = {p.name: m for p, m in parsed}
     for file, model in parsed:
-        names = [a.get('name', '') for a in model.get('animations', [])]
+        # Outfits that share another file's clips (by bone path) name it.
+        source = model.get('extras', {}).get('animation_source')
+        if source is not None and (source not in sources or not re.fullmatch(r'[A-Za-z0-9_.-]+\.glb', source)):
+            raise ValueError(f'{file.name} shares clips with a missing file {source}')
+        names = [a.get('name', '') for a in (sources[source] if source else model).get('animations', [])]
         mapping = {state: next((n for prefix in prefixes for n in names if n.lower()==prefix.lower()),next((n for prefix in prefixes for n in names if n.lower().startswith(prefix.lower())), '')) for state, prefixes in aliases.items()}
         mapping = {k:v for k,v in mapping.items() if v}
         target = output / file.name
-        if target.resolve() != file.resolve():
-            shutil.copyfile(file, target)
+        place(file, target)
         name=file.stem.removeprefix('Mario') if file.stem.startswith('Mario') else file.stem
         name=re.sub(r'([a-z0-9])([A-Z])',r'\1 \2',name).replace('_',' ') or 'Classic plumber'
         name={'Dot3d':'8-bit'}.get(name,name)
         outfits.append({'name':name, 'file':'local/' + file.name, 'scale':scale,'yaw':yaw,'animations':mapping})
+        if source:outfits[-1]['animation_file']='local/'+source
         expressions=model.get('extras',{}).get('expressions')
         if expressions and expressions!=shared:outfits[-1]['expressions']=expressions
         cap=file.stem+'Cap.glb'
@@ -258,6 +312,11 @@ def install_exports(exports, output, scale, yaw):
     print(f'Installed {len(outfits)} local outfits. Launch with cargo run --features local-assets; choose Outfit in the menu.')
 
 def self_check():
+    r = Path('romfs')
+    assert needed(r/'ObjectData'/'MarioAloha.szs', r) and needed(r/'ObjectData'/'PlayerAnimation.szs', r)
+    assert needed(r/'SoundData'/'SeData.bfsar', r) and needed(r/'SoundData'/'SeResource0.aras', r)
+    assert not needed(r/'ObjectData'/'Kuribo.szs', r) and not needed(r/'StageData'/'Stage.szs', r)
+    assert not needed(r/'SoundData'/'Bgm.bfstm', r)
     assert yaz0(b'Yaz0' + struct.pack('>I',3) + bytes(8) + b'\xe0abc') == b'abc'
     for name in ('../bad','/absolute','C:/bad','x/../../bad'):
         try: safe_name(name)
@@ -278,8 +337,11 @@ def main():
     p.add_argument('--exports',type=Path);p.add_argument('--scale',type=float,default=1.)
     p.add_argument('--yaw',type=float,default=0.);p.add_argument('--probe',action='store_true')
     p.add_argument('--self-check',action='store_true')
+    p.add_argument('--clean',action='store_true',help='Delete extraction leftovers and RomFS files the tools do not read')
+    p.add_argument('--keep-intermediates',action='store_true',help='Keep the temporary NCA copies after extracting')
     a=p.parse_args()
     if a.self_check: self_check();return
+    if a.clean: remove_intermediates(a.romfs or ROOT/'local/romfs');return
     if a.exports: install_exports(a.exports,ROOT/'assets/local',a.scale,a.yaw);return
     romfs=a.romfs
     if a.rom:
@@ -309,6 +371,9 @@ def main():
             run_tool(a.hactool.resolve(),keys,patch,titles,['--romfsdir',romfs,'--baseromfs',basefs])
         else:
             run_tool(a.hactool.resolve(),keys,base,titles,['--romfsdir',romfs])
+        # The NCA copies and base section only produce the RomFS, and the tools
+        # read a small part of that; the rest is removed unless kept on request.
+        if not a.keep_intermediates and (romfs/'ObjectData').is_dir():remove_intermediates(romfs)
     if not romfs:p.error('Choose --rom, --romfs or --exports')
     extract_objects(romfs,ROOT/'local/objects')
 

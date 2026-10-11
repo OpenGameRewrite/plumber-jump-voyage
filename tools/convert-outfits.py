@@ -79,6 +79,8 @@ def main():
     p.add_argument('--list',action='store_true')
     p.add_argument('--inspect',action='store_true')
     p.add_argument('--force',action='store_true',help='Regenerate existing local GLBs')
+    p.add_argument('--repack',action='store_true',help='Repack existing conversions (needs --keep-intermediates on the earlier run)')
+    p.add_argument('--keep-intermediates',action='store_true',help='Keep the converter working files (DAE, glTF, PNG)')
     p.add_argument('--self-check',action='store_true')
     a=p.parse_args()
     if a.self_check:self_check();return
@@ -126,7 +128,12 @@ def main():
         output=exports/(name+'.glb')
         base=exports/'Mario.glb'
         if output.is_file() and not a.force:
-            if not extract.glb_json(output).get('animations') and base.is_file():packer.pack(output.with_suffix('.gltf'),base)
+            # Outfits share Mario's clips; older packs carried a full copy each.
+            shares=extract.glb_json(output).get('extras',{}).get('animation_source')
+            if a.repack or name!='Mario' and base.is_file() and not shares:
+                if not output.with_suffix('.gltf').is_file():
+                    raise ValueError(f'{name}: the conversion files were cleaned up; run with --force instead')
+                packer.pack(output.with_suffix('.gltf'),None if name=='Mario' else base)
             continue
         # Mario carries the body, fingers and facial clips;
         # other outfits share them by bone name.
@@ -150,15 +157,23 @@ def main():
                 result=subprocess.run([str(a.adapter.resolve()),str(model(cap)),str(output),'--geometry-only','--part='+str(model(texture))],stdout=log,stderr=subprocess.STDOUT)
             if result.returncode:raise ValueError(f'{cap} conversion failed; see {output.with_suffix(".log")}')
             packer.pack(output.with_suffix('.gltf'))
-        shutil.copyfile(output,cap_output/output.name)
+        extract.place(output,cap_output/output.name)
     eyes=caps/'CapManHeroEyes.glb'
     if not eyes.is_file() or a.force:
         with eyes.with_suffix('.log').open('w',encoding='utf-8') as log:
             result=subprocess.run([str(a.adapter.resolve()),str(model('CapManHeroEyes')),str(eyes),'--geometry-only'],stdout=log,stderr=subprocess.STDOUT)
         if result.returncode:raise ValueError('Cap eyes conversion failed; see '+str(eyes.with_suffix('.log')))
         packer.pack(eyes.with_suffix('.gltf'))
-    shutil.copyfile(eyes,cap_output/eyes.name)
+    extract.place(eyes,cap_output/eyes.name)
     extract.install_exports(exports,extract.ROOT/'assets/local',0.01,3.141592653589793)
+    if not a.keep_intermediates:
+        # The packed GLBs hold everything; the converter's working files are large.
+        freed=0
+        for folder in (exports,caps):
+            for f in folder.iterdir():
+                if f.is_file() and (f.suffix in ('.dae','.gltf','.bin','.png') or f.name.endswith('.expressions.json')):
+                    freed+=f.stat().st_size;f.unlink()
+        print(f'Removed {freed/1e9:.1f} GB of conversion working files.')
 
 if __name__=='__main__':
     try:main()

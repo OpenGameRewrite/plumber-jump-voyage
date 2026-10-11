@@ -17,8 +17,10 @@ in this repository.
 - Windows with the .NET Framework compiler for the Toolbox adapter. The default
   game can also build on other Bevy-supported desktop platforms.
 
-Allow roughly 25 GB of free space for extraction and conversion, in addition to
-your NSPs. Run the commands below from the repository folder. Substitute your
+Allow roughly 20 GB of free space while extracting, in addition to your NSPs.
+Each tool deletes its own working files when it finishes (about 2.5 GB stays
+under `local/`); pass `--keep-intermediates` to keep them for debugging, and
+run `python tools/extract.py --clean` to remove leftovers from older runs. Run the commands below from the repository folder. Substitute your
 own paths; keys may sit beside a ROM symlink and need not sit beside its target.
 Do not download ROMs or keys from third parties.
 
@@ -30,8 +32,8 @@ python tools/extract.py --rom "path/to/base.nsp" --update "path/to/update.nsp" -
 
 Omit `--update` if you only have the base game. Add `--probe` to check your
 inputs before a full extraction. The wrapper invokes your installed tool,
-applies the update and unpacks player resources under `local/`. It never prints
-key contents. You can also supply an already accessible RomFS folder to the
+applies the update and unpacks player resources under `local/`, then keeps only
+the parts of the RomFS the other tools read. It never prints key contents. You can also supply an already accessible RomFS folder to the
 conversion and sound commands with `--romfs "path/to/romfs"`; models still need
 to be unpacked with `extract.py --romfs "path/to/romfs"` first.
 
@@ -49,9 +51,11 @@ Then convert the wardrobe:
 python tools/convert-outfits.py
 ```
 
-This assembles bodies, heads, hands and accessories, exports textures and a
-shared set of movement clips, and installs matching throwable caps. Existing
-conversions are reused; add `--force` to regenerate them. To select a smaller
+This assembles bodies, heads, hands and accessories, exports textures and the
+movement clips, and installs matching throwable caps. The clips are stored once,
+in `Mario.glb`; every other outfit plays them by bone name (its manifest entry
+names that file in `animation_file`). Existing conversions are reused; add
+`--force` to regenerate them. To select a smaller
 wardrobe, list the archive names and choose one or more:
 
 ```sh
@@ -68,13 +72,12 @@ GLBs and the outfit manifest go into `assets/local/`, which Git ignores.
 python tools/extract-sounds.py --vgmstream "C:/Tools/vgmstream/vgmstream-cli.exe"
 ```
 
-The script resolves movement events in your local sound archive, decodes
-selected samples and writes `assets/local/sounds/manifest.json`. The game uses
-them for jumps, rolling, diving, pounds, wall jumps, swimming, footsteps and cap
-throws/catches while wearing a local outfit. Adjust **Sound volume** in the
-pause menu. These are selected samples triggered by this demo's controller;
-the original game's complete audio mixer and environmental variations are
-not reproduced.
+The script reads the game's own sound tables (which sounds each animation plays
+on which frame, landing and cap events, volumes, pitch and speed curves),
+decodes those sounds, renders the sequence-driven ones from their instrument
+bank and writes `assets/local/sounds/player.json`. Adjust **Sound volume** in the
+pause menu. Surface materials, 3D positioning and the game's mixer are not
+reproduced.
 
 ## Play
 
@@ -87,22 +90,19 @@ wardrobe displays a live preview. The three original explorer palettes remain
 available alongside your local outfits. Missing or unreadable packs fall back
 to the explorer.
 
-Movement animations blend between the demo's states. Eye, mouth, eyebrow and
-head animation sets follow each action alongside the fingers, including pupil
-movement and eyelid visibility. To update an older local pack, rebuild the
+Hand, eye, mouth, eyebrow and head animation sets follow each action, including
+pupil movement and eyelid visibility. To update an older local pack, rebuild the
 adapter and run the outfit conversion again with `--force`.
 
 The conversion does not reproduce every material shader, cloth simulation or
-accessory behavior. Some specialty costumes may need
-further visual tuning. The movement controller is an original approximation,
-so timings still differ from the game.
+accessory behavior, so some specialty costumes may need further visual tuning.
 
 ## Already exported GLBs
 
 Self-contained GLB 2.0 files can be installed without the Toolbox conversion:
 
 ```sh
-python tools/extract.py --exports "path/to/glbs" --scale 0.012 --yaw 3.141592653589793
+python tools/extract.py --exports "path/to/glbs" --scale 0.01 --yaw 3.141592653589793
 ```
 
 Adjust scale and yaw to match your exporter. The manifest maps named clips to
@@ -114,7 +114,8 @@ edit its `animations` entries to map your own clip names, and its optional
 
 If extraction fails, use `--probe` to distinguish a key/package problem from
 conversion. Ensure the base and update belong to the same title. Conversion
-logs live beside each export in `local/outfits/`; sound events are listed in
+logs live beside each export in `local/outfits/` (add `--keep-intermediates` to
+also keep the converter's DAE/glTF files); sound events are listed in
 `local/audio/events.json`. A missing optional pack does not prevent ROMless play.
 
 Keep ROMs, keys, extracted files, logs containing sensitive data and external

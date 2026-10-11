@@ -36,6 +36,11 @@ class ConvertOutfit {
         return file.Contains("HandL")?"L":file.Contains("HandR")?"R":file.EndsWith("Eye")||file.EndsWith("EyeRsv")?"Eye":file.EndsWith("Face")||file.EndsWith("FaceRsv")?"Face":file.EndsWith("Head")||file.EndsWith("HeadRsv")?"Head":null;
     }
     static string PartName(string set,string name) {return set=="L"||set=="R"?name:set+"_"+name;}
+    static string PartAction(string set,string clip) {
+        // Move blends body clips, not separate facial expressions. In
+        // particular the stand-alone Run face opens and translates the jaw.
+        return set=="Face"&&new[]{"Walk","Run","Dash","DashFast","RunStart"}.Contains(clip)?"Move":clip;
+    }
     static IEnumerable<T> Animations<T>(TreeNode node) where T:TreeNode {
         var animation = node as T;
         if (animation != null) yield return animation;
@@ -47,6 +52,8 @@ class ConvertOutfit {
             if(args.Contains("--self-check")) {
                 if(Wrap(STTextureWrapMode.Clamp)!=TextureWrapMode.Clamp||Wrap(STTextureWrapMode.Mirror)!=TextureWrapMode.Mirror||Wrap(STTextureWrapMode.Repeat)!=TextureWrapMode.Wrap)
                     throw new Exception("Texture wrapping failed");
+                if(PartAction("Face","Run")!="Move"||PartAction("Face","Walk")!="Move"||PartAction("Face","Jump")!="Jump"||PartAction("Eye","Run")!="Run")
+                    throw new Exception("Facial locomotion action failed");
                 if(NormalBlue(128,128)!=255||NormalBlue(255,255)!=128)throw new Exception("Normal reconstruction failed");
                 if(PartSet("MarioEye")!="Eye"||PartSet("MarioFaceRsv")!="Face"||PartSet("MarioAlohaHead")!="Head"
                     ||PartName("Eye","Eyeball")==PartName("Face","Eyeball")||PartName("L","HandL")!="HandL")
@@ -271,7 +278,7 @@ class ConvertOutfit {
                         foreach(var group in partBones.GroupBy(x=>x.Part)) {
                             var set=group.First().Set;FSKA partClip=null;
                             if(partClips.ContainsKey(set)) {
-                                if(!partClips[set].TryGetValue(clip.Text,out partClip))partClips[set].TryGetValue("Wait",out partClip);
+                                if(!partClips[set].TryGetValue(PartAction(set,clip.Text),out partClip))partClips[set].TryGetValue("Wait",out partClip);
                             }
                             if(partClip!=null) {
                                 float at=partClip.CanLoop&&partClip.FrameCount>0?frame%partClip.FrameCount:Math.Min(frame,partClip.FrameCount);

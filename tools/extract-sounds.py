@@ -266,6 +266,7 @@ def main():
     p.add_argument('--vgmstream',type=Path)
     p.add_argument('--list',action='store_true')
     p.add_argument('--self-check',action='store_true')
+    p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
     a=p.parse_args()
     if a.self_check:self_check();return
     if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
@@ -364,6 +365,8 @@ def main():
     (output/'player.json').write_text(json.dumps(out,indent=1,ensure_ascii=False),encoding='utf-8')
     (output/'manifest.json').unlink(missing_ok=True)
     if skipped:print('Skipped sequences this tool cannot render: '+', '.join(skipped))
+    if not a.keep_intermediates:
+        for f in list(temp.glob('*.bfwav'))+list(temp.glob('*.wav')):f.unlink()
     print(f"Installed {len(needed)} sounds for {len(out['mario']['actions'])} animations, "
         f"{len(out['mario']['reactions'])+len(out['cap']['reactions'])} events and the cap.")
 

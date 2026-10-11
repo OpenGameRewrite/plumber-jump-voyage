@@ -420,6 +420,19 @@ pub fn read(
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
+        if script == "walk" {
+            // A slow walk, then a full run, for close inspection.
+            *orders = Orders {
+                direction: match phase {
+                    _ if !started => Vec2::ZERO,
+                    0..=3 => Vec2::Y * 0.3,
+                    _ => Vec2::Y,
+                },
+                ..default()
+            };
+            *frame = f;
+            return;
+        }
         if script == "pole" || script == "ledge" {
             // From PJV_SPAWN: catch a pole and climb then circle it, or catch an
             // edge (forward is -Z), hang, then climb up.
