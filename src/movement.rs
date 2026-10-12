@@ -129,6 +129,8 @@ mod t {
     pub const DAMAGE_FIRE_RUN_TIME: u32 = 60;
     pub const DAMAGE_FIRE_RUN_SPEED: f32 = 18.;
     pub const DAMAGE_FIRE_RUN_BRAKE_FRAMES: f32 = 20.;
+    pub const DAMAGE_FIRE_RUN_ANIM_RATE: f32 = 0.3;
+    pub const JUMP_ACCEL_TURN: f32 = 0.3;
     pub const SLOPE_SLIDE_ANGLE_START: f32 = 26.;
     pub const SLOPE_SLIDE_ANGLE_END: f32 = 10.;
     pub const SLOPE_SLIDE_ACCEL: f32 = 0.3;
@@ -278,6 +280,7 @@ pub enum Move {
     Slide,
     SlopeSlide,
     BurnJump,
+    BurnBounce,
     FireRun,
     WallSlide,
     WallJump,
@@ -318,6 +321,7 @@ impl Move {
             Self::Slide => "Dive landing",
             Self::SlopeSlide => "Slope slide",
             Self::BurnJump => "Hot!",
+            Self::BurnBounce => "Hot! (bounce)",
             Self::FireRun => "Fire run",
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
@@ -383,7 +387,7 @@ pub enum Fx {
     Ledge,
     Pole,
     Splash,
-    /// Touched hot ground (true for a bounce while already burning).
+    /// Hot ground: the leap (false) or the bounce where it lands (true).
     Burned(bool),
     SwimStroke,
 }
@@ -494,8 +498,14 @@ pub struct Player {
     pole_height: f32,
     pole_climb: u32,
     pole_cooldown: u32,
-    /// Frames into the fire run.
+    /// Frames since the burn's bounce landed (run and falls together).
     fire_frames: u32,
+    /// Burn leap: horizontal direction its air control works along.
+    fire_dir: Vec3,
+    /// Burn leap frames left without gravity.
+    fire_extend: u32,
+    /// Fire run frames since the stick was released, capped at the brake time.
+    fire_brake: u32,
     swim_rise: u32,
     step_phase: f32,
 }
@@ -571,6 +581,9 @@ impl Default for Player {
             pole_climb: 0,
             pole_cooldown: 0,
             fire_frames: 0,
+            fire_dir: Vec3::Z,
+            fire_extend: 0,
+            fire_brake: 0,
             swim_rise: 0,
             step_phase: 0.,
         }
@@ -801,7 +814,7 @@ impl Player {
             Move::Dive => self.head_sliding(&o),
             Move::Slide => self.belly_slide(&o),
             Move::SlopeSlide => self.slope_slide(&o),
-            Move::BurnJump => self.burn_jump(&o),
+            Move::BurnJump | Move::BurnBounce => self.burn_air(&o),
             Move::FireRun => self.fire_run(&o),
             Move::LongJump => self.long_jump_air(&o),
             Move::WallSlide => self.wall_slide(&o),
@@ -823,10 +836,12 @@ impl Player {
         }
         self.cap_contact();
         self.collide(&o, scene);
-        if self.grounded && !was_grounded {
+        // Hot ground takes over any landing.
+        let hot = self.grounded && scene.hot(self.pos);
+        if self.grounded && !was_grounded && !hot {
             self.land(&o);
         }
-        if self.grounded && scene.hot(self.pos) {
+        if hot {
             self.burn();
         } else if !self.grounded
             && was_grounded
@@ -843,7 +858,6 @@ impl Player {
                     | Move::GroundSpin
                     | Move::Throw
                     | Move::Slide
-                    | Move::FireRun
             )
         {
             self.coyote = 3;
@@ -1249,53 +1263,166 @@ impl Player {
         self.set_h(sliding);
         self.v.y = -t::GRAVITY;
     }
-    /// Hot ground: Mario leaps up clutching his seat, then runs off at speed.
+    /// Hot ground, as the original's fire damage: Mario leaps clutching his
+    /// seat, bounces once where he lands, then runs flat out for a second
+    /// before the normal run takes over. Touching hot ground again restarts it.
     fn burn(&mut self) {
-        let again = matches!(self.mode, Move::BurnJump | Move::FireRun);
         self.enter(Move::BurnJump, "FireRunStart");
-        let power = if again {
-            t::DAMAGE_FIRE_JUMP_POWER_2ND
+        // The leap keeps the current speed, turned along the stick; with the
+        // stick at rest it goes straight up.
+        let h = if self.tilt > 0.05 {
+            self.stick * self.speed_h()
         } else {
-            t::DAMAGE_FIRE_JUMP_POWER_1ST
+            Vec3::ZERO
         };
-        self.v = self.facing * t::DAMAGE_FIRE_JUMP_MOVE + Vec3::Y * power;
+        self.fire_leap(
+            h,
+            t::DAMAGE_FIRE_JUMP_POWER_1ST,
+            t::DAMAGE_FIRE_NO_GRAVITY_FRAMES,
+        );
+        self.events.push(Fx::Burned(false));
+    }
+    fn fire_leap(&mut self, h: Vec3, power: f32, extend: u32) {
+        let h = h.clamp_length_max(t::DAMAGE_FIRE_JUMP_MOVE);
+        self.fire_dir = h.normalize_or(self.facing);
+        self.v = h + Vec3::Y * power;
+        self.fire_extend = extend;
         self.grounded = false;
         self.coyote = 0;
         self.cap_jump_possible = true;
-        self.events.push(Fx::Burned(again));
     }
-    fn burn_jump(&mut self, _o: &Orders) {
+    /// The bounce after the leap: a second, lower hop without the float.
+    fn fire_bounce(&mut self) {
+        self.enter(Move::BurnBounce, "FireRunStart");
+        let h = if self.tilt > 0.05 {
+            self.stick * self.speed_h()
+        } else {
+            Vec3::ZERO
+        };
+        self.fire_leap(h, t::DAMAGE_FIRE_JUMP_POWER_2ND, 0);
+        self.events.push(Fx::Burned(true));
+    }
+    /// Throws while burning: the cap flies without interrupting the burn, except
+    /// a spin throw once Mario has landed, which ends it.
+    fn fire_throws(&mut self, o: &Orders) -> bool {
+        let pressed = self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw;
+        if !pressed || self.cap.is_some() {
+            return false;
+        }
+        self.pre_throw = 0;
+        let kind = self.throw_kind(o);
+        if kind == Throw::Spin && self.mode != Move::BurnJump {
+            self.start_throw(kind);
+            return true;
+        }
+        self.sub_anim = Some(Anim {
+            name: "ThrowCapParts",
+            serial: self.anim.serial.wrapping_add(7),
+            frame: 0.,
+            rate: 1.,
+        });
+        self.launch_cap(if kind == Throw::Spin {
+            Throw::Forward
+        } else {
+            kind
+        });
+        false
+    }
+    fn burn_air(&mut self, o: &Orders) {
+        if self.fire_throws(o) {
+            return;
+        }
+        self.fire_air(t::DAMAGE_FIRE_GRAVITY);
+    }
+    /// Air control during the burn: the stick pushes along and across the
+    /// leap's direction, within the leap's speed.
+    fn fire_air(&mut self, gravity: f32) {
+        if self.fire_extend > 0 {
+            self.fire_extend -= 1;
+        } else {
+            self.v.y = (self.v.y - gravity).max(-t::FALL_MAX);
+        }
+        let mut h = self.v.with_y(0.);
+        if h.dot(self.fire_dir) < 0. {
+            self.fire_dir = -self.fire_dir;
+        }
+        let dir = self.fire_dir;
+        let side = Vec3::Y.cross(dir);
+        let input = self.stick * self.tilt;
+        let along = input.dot(dir);
+        let accel = if along > 0. || along.abs() < 0.001 {
+            t::JUMP_ACCEL_FRONT
+        } else {
+            t::JUMP_ACCEL_BACK
+        };
+        h += dir * along * accel + (input - dir * along) * t::JUMP_ACCEL_TURN;
+        let limit = t::DAMAGE_FIRE_JUMP_MOVE;
+        self.set_h(dir * h.dot(dir).clamp(-limit, limit) + side * h.dot(side).clamp(-limit, limit));
         if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, 2_f32.to_radians());
-        }
-        self.set_h(self.facing * t::DAMAGE_FIRE_JUMP_MOVE);
-        // The leap rises at full power for a moment before gravity takes it.
-        if self.frame >= t::DAMAGE_FIRE_NO_GRAVITY_FRAMES {
-            self.v.y = (self.v.y - t::DAMAGE_FIRE_GRAVITY).max(-t::FALL_MAX);
+            self.facing = turn(self.facing, self.stick, 0.1);
         }
     }
-    /// Running off the burn: fast and unstoppable, steerable, then easing back.
+    fn start_fire_run(&mut self) {
+        self.fire_frames = 0;
+        self.fire_run_landed();
+    }
+    /// The run phase restarts on every landing; the burn's clock does not.
+    fn fire_run_landed(&mut self) {
+        self.set(Move::FireRun);
+        self.frame = 0;
+        if self.anim.name != "FireRun" {
+            self.play("FireRun");
+            self.anim.rate = t::DAMAGE_FIRE_RUN_SPEED * t::DAMAGE_FIRE_RUN_ANIM_RATE;
+        }
+        self.fire_brake = t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32;
+    }
+    /// Running on the burn: full fire speed while the stick is held, easing to
+    /// a stop when released. Only now can Mario jump out of it.
     fn fire_run(&mut self, o: &Orders) {
+        if self.fire_frames >= t::DAMAGE_FIRE_RUN_TIME {
+            self.end_burn();
+            return;
+        }
+        self.fire_frames += 1;
+        if self.fire_throws(o) {
+            return;
+        }
+        if !self.grounded {
+            // Off a ledge: a plain fall within the leap's speed, still burning.
+            if self.frame == 0 {
+                self.fire_leap(self.v.with_y(0.), 0., 0);
+            }
+            self.frame = 1;
+            self.fire_air(t::GRAVITY_AIR);
+            return;
+        }
         if self.pre_jump > 0 {
             self.ground_jump(o);
             return;
         }
-        self.fire_frames += 1;
         if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, t::ROUND_LIMIT_DEG.to_radians());
+            let limit = lerp_clamped(
+                t::ROUND_LIMIT_DEG,
+                t::ROUND_LIMIT_DEG_MIN,
+                t::DAMAGE_FIRE_RUN_SPEED / t::NORMAL_MAX,
+            );
+            self.facing = turn(self.facing, self.stick, limit.to_radians());
+            self.fire_brake = 0;
+        } else {
+            self.fire_brake = (self.fire_brake + 1).min(t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32);
         }
-        let past = self.fire_frames.saturating_sub(t::DAMAGE_FIRE_RUN_TIME) as f32;
-        let speed = lerp_clamped(
-            t::DAMAGE_FIRE_RUN_SPEED,
-            t::NORMAL_MAX,
-            past / t::DAMAGE_FIRE_RUN_BRAKE_FRAMES,
-        );
-        self.set_h(self.facing * speed);
+        let k = self.fire_brake as f32 / t::DAMAGE_FIRE_RUN_BRAKE_FRAMES;
+        let ease = k * (1.5 - 0.5 * k * k);
+        self.set_h(self.facing * t::DAMAGE_FIRE_RUN_SPEED * (1. - ease).clamp(0., 1.));
         self.v.y = -t::GRAVITY;
-        if past >= t::DAMAGE_FIRE_RUN_BRAKE_FRAMES {
+    }
+    fn end_burn(&mut self) {
+        if self.grounded {
             self.run_frames = t::BRAKE_ON_COUNTER;
             self.set(Move::Run);
-            self.play("Move");
+            self.play(if self.speed_h() > 0.5 { "Move" } else { "Wait" });
+        } else {
+            self.enter(Move::Fall, "Fall");
         }
     }
     fn squat(&mut self, o: &Orders) {
@@ -2386,8 +2513,11 @@ impl Player {
         self.dive_possible = true;
         self.air_throw_used = false;
         self.gravity = t::GRAVITY_AIR;
-        self.hard_land =
-            fall > t::LONG_FALL && !matches!(self.mode, Move::GroundPound | Move::Dive);
+        self.hard_land = fall > t::LONG_FALL
+            && !matches!(
+                self.mode,
+                Move::GroundPound | Move::Dive | Move::BurnJump | Move::BurnBounce | Move::FireRun
+            );
         let mode = self.mode;
         match mode {
             Move::GroundPound => {
@@ -2408,9 +2538,24 @@ impl Player {
             }
             Move::Dive => self.enter(Move::Slide, "LandRolling"),
             Move::Roll | Move::SlopeSlide => {}
+            // The leap lands in a bounce, keeping speed only along the stick.
             Move::BurnJump => {
-                self.fire_frames = 0;
-                self.enter(Move::FireRun, "FireRun");
+                if self.tilt <= 0.05 {
+                    self.set_h(Vec3::ZERO);
+                }
+                self.fire_bounce();
+                return;
+            }
+            Move::BurnBounce => {
+                if self.tilt <= 0.05 {
+                    self.set_h(Vec3::ZERO);
+                }
+                self.start_fire_run();
+                return;
+            }
+            Move::FireRun => {
+                self.fire_run_landed();
+                return;
             }
             _ => {
                 if self.hard_land {
@@ -3214,7 +3359,8 @@ pub fn self_check() {
         Move::Crouch,
         "the slide ends once the ground is flat"
     );
-    // Hot ground: a leap, then a fast run that eases back to a normal run.
+    // Hot ground: a floating leap, a bounce where it lands, then a short fire
+    // run; jumping is only possible during the run.
     let mut lava = floor.clone();
     lava.hot
         .push((Vec3::new(0., 0., 0.), Vec3::new(1., 1., 1.)));
@@ -3222,16 +3368,67 @@ pub fn self_check() {
     p.pos = Vec3::ZERO;
     p.step(&Orders::default(), &lava);
     assert_eq!((p.mode, p.anim.name), (Move::BurnJump, "FireRunStart"));
-    let peak = until_ground(&mut p, Orders::default(), &lava);
-    assert!(peak > 3., "the burn leap is high: {peak}");
-    assert_eq!((p.mode, p.anim.name), (Move::FireRun, "FireRun"));
-    p.step(&Orders::default(), &lava);
+    assert_eq!(p.move_speed, 0., "no stick: the leap goes straight up");
+    frames(&mut p, Orders::default(), &lava, 20);
     assert!(
-        (p.move_speed - t::DAMAGE_FIRE_RUN_SPEED).abs() < 0.01,
-        "runs without input"
+        (p.vel.y - t::DAMAGE_FIRE_JUMP_POWER_1ST * UNIT * FPS).abs() < 0.01,
+        "floats up"
     );
-    frames(&mut p, Orders::default(), &lava, 90);
-    assert_ne!(p.mode, Move::FireRun);
+    p.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..default()
+        },
+        &lava,
+    );
+    assert_eq!(p.mode, Move::BurnJump, "no jumping out of the leap");
+    let (mut peak, mut fell) = (0_f32, false);
+    for _ in 0..300 {
+        p.step(&Orders::default(), &lava);
+        peak = peak.max(p.pos.y);
+        fell |= p.vel.y < 0.;
+        if fell && p.frame == 1 {
+            break;
+        }
+    }
+    assert!(peak > 5.5 && peak < 7., "the burn leap: {peak}");
+    assert_eq!(
+        (p.mode, p.frame),
+        (Move::BurnJump, 1),
+        "landing back on the lava burns again"
+    );
+    let mut cool = floor.clone();
+    cool.hot.clear();
+    p = Player::default();
+    p.pos = Vec3::ZERO;
+    p.step(&Orders::default(), &lava);
+    let push = Orders {
+        direction: Vec2::new(0., 1.),
+        ..default()
+    };
+    let until_change = |p: &mut Player, o: &Orders, scene: &Course| -> f32 {
+        let (mode, mut high) = (p.mode, p.pos.y);
+        for _ in 0..600 {
+            p.step(o, scene);
+            high = high.max(p.pos.y);
+            if p.mode != mode {
+                break;
+            }
+        }
+        high
+    };
+    until_change(&mut p, &push, &cool);
+    assert_eq!((p.mode, p.anim.name), (Move::BurnBounce, "FireRunStart"));
+    let peak = until_change(&mut p, &push, &cool);
+    assert!(peak > 2. && peak < 2.5, "the bounce: {peak}");
+    assert_eq!((p.mode, p.anim.name), (Move::FireRun, "FireRun"));
+    p.step(&push, &cool);
+    assert!((p.move_speed - t::DAMAGE_FIRE_RUN_SPEED).abs() < 0.01);
+    frames(&mut p, Orders::default(), &cool, 20);
+    assert!(p.move_speed < 0.01, "releasing the stick stops the run");
+    frames(&mut p, Orders::default(), &cool, 45);
+    assert_ne!(p.mode, Move::FireRun, "the run lasts a second");
     // Low ceilings force a crouch.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {

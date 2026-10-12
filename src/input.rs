@@ -422,11 +422,11 @@ pub fn read(
         *smoke_phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
         if script == "lava" {
-            // From PJV_SPAWN: walk +X briefly (onto the lava plate), then let go.
+            // From PJV_SPAWN: run +X onto the lava plate and keep going, then let go.
             let now = time.elapsed_secs() - delay;
             *orders = Orders {
                 reset: started && now < 0.04,
-                direction: if (0.1..0.8).contains(&now) {
+                direction: if (0.1..3.0).contains(&now) {
                     Vec2::X * 0.6
                 } else {
                     Vec2::ZERO

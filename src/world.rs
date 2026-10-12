@@ -498,8 +498,8 @@ fn setup(
         emissive: LinearRgba::rgb(6., 1.6, 0.2),
         ..default()
     });
-    let lava_center = Vec3::new(15., 0.1, -1.5);
-    let lava_half = Vec3::new(2., 0.1, 1.25);
+    let lava_center = Vec3::new(4., 0.1, -1.);
+    let lava_half = Vec3::new(1.5, 0.1, 1.25);
     course.solids.push(Solid {
         center: lava_center,
         half: lava_half,

@@ -437,7 +437,21 @@ fn trails(
     };
     let back = -p.facing;
     match p.mode {
-        Move::Skid | Move::Slide | Move::SlopeSlide if p.grounded => {
+        Move::SlopeSlide if p.grounded => {
+            // Kicked out to either side at ground level, clear of the body
+            // lying along the slide.
+            let side = Vec3::Y.cross(p.facing) * if s.rand() < 0.5 { 0.3 } else { -0.3 };
+            s.particle(
+                p.pos + side + Vec3::Y * 0.05,
+                side * 2. + Vec3::Y * 0.5 + back * 0.5,
+                0.3,
+                0.35,
+                0.,
+                4.,
+                0,
+            );
+        }
+        Move::Skid | Move::Slide if p.grounded => {
             s.particle(
                 p.pos + p.facing * 0.3 + Vec3::Y * 0.1,
                 Vec3::Y * 0.8 + back,
@@ -464,7 +478,7 @@ fn trails(
                 );
             }
         }
-        Move::BurnJump | Move::FireRun => {
+        Move::BurnJump | Move::BurnBounce | Move::FireRun => {
             // Smoke trailing from the seat, with the odd ember.
             let hip = p.pos + Vec3::Y * 0.55 - p.facing * 0.25;
             let d = s.dir() * 0.1;
