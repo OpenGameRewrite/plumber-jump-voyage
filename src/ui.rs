@@ -19,6 +19,58 @@ enum Page {
     Guide,
     Wardrobe,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MainItem {
+    Resume,
+    Guide,
+    Wardrobe,
+    Controls,
+    Sensitivity,
+    Invert,
+    Restart,
+    Volume,
+    Defaults,
+    Quit,
+}
+const MAIN_ITEMS: [MainItem; 10] = [
+    MainItem::Resume,
+    MainItem::Guide,
+    MainItem::Wardrobe,
+    MainItem::Controls,
+    MainItem::Sensitivity,
+    MainItem::Invert,
+    MainItem::Restart,
+    MainItem::Volume,
+    MainItem::Defaults,
+    MainItem::Quit,
+];
+impl MainItem {
+    fn index(self) -> usize {
+        MAIN_ITEMS
+            .iter()
+            .position(|item| *item == self)
+            .expect("menu item is listed")
+    }
+    fn label(self, m: &Menu, s: &Settings, outfit: &str) -> String {
+        match self {
+            Self::Resume => if m.begun {
+                "Resume exploring"
+            } else {
+                "Let's explore"
+            }
+            .into(),
+            Self::Guide => "Movement guide".into(),
+            Self::Wardrobe => format!("Change outfit   /   {outfit}"),
+            Self::Controls => "Rebind controls".into(),
+            Self::Sensitivity => format!("Camera sensitivity   <  {:.2}  >", s.sensitivity),
+            Self::Invert => format!("Invert camera Y   {}", if s.invert { "On" } else { "Off" }),
+            Self::Restart => "Restart the course".into(),
+            Self::Volume => format!("Sound volume   <  {:.0}%  >", s.volume * 100.),
+            Self::Defaults => "Reset control settings".into(),
+            Self::Quit => "Quit".into(),
+        }
+    }
+}
 #[derive(Resource)]
 pub struct Menu {
     pub open: bool,
@@ -76,7 +128,7 @@ pub fn plugin(app: &mut App) {
         .add_message::<Click>()
         .add_systems(Startup, (spawn, system_font).chain())
         .add_systems(PreUpdate, handle.after(crate::input::read))
-        .add_systems(Update, (render, cursor));
+        .add_systems(Update, (render, render_hud, cursor));
 }
 fn text(t: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     (
@@ -236,7 +288,7 @@ fn system_font(mut fonts: ResMut<Assets<Font>>, mut texts: Query<&mut TextFont>)
 }
 fn count(page: Page, outfits: usize) -> usize {
     match page {
-        Page::Main => 10,
+        Page::Main => MAIN_ITEMS.len(),
         Page::Controls => ACTIONS.len() + 2,
         Page::Guide => 1,
         Page::Wardrobe => outfits + 4,
@@ -254,46 +306,46 @@ fn execute(
 ) {
     let previous = s.clone();
     match m.page {
-        Page::Main => match index {
-            0 => {
+        Page::Main => match MAIN_ITEMS.get(index).copied() {
+            Some(MainItem::Resume) => {
                 m.open = false;
                 m.begun = true;
             }
-            1 => {
+            Some(MainItem::Guide) => {
                 m.page = Page::Guide;
                 m.selected = 0;
                 m.offset = 0;
             }
-            2 => {
+            Some(MainItem::Wardrobe) => {
                 m.page = Page::Wardrobe;
                 m.selected = assets.row(s.outfit);
                 m.offset = m.selected.saturating_sub(8);
             }
-            3 => {
+            Some(MainItem::Controls) => {
                 m.page = Page::Controls;
                 m.selected = 0;
                 m.offset = 0;
             }
-            4 => {
+            Some(MainItem::Sensitivity) => {
                 s.sensitivity = (s.sensitivity + step as f32 * 0.25).clamp(0.25, 3.);
             }
-            5 => s.invert = !s.invert,
-            6 => {
+            Some(MainItem::Invert) => s.invert = !s.invert,
+            Some(MainItem::Restart) => {
                 p.checkpoint = crate::movement::SPAWN;
                 p.reset();
                 *progress = Progress::default();
                 m.open = false;
                 m.begun = true;
             }
-            7 => s.volume = (s.volume + step as f32 * 0.1).clamp(0., 1.),
-            8 => {
+            Some(MainItem::Volume) => s.volume = (s.volume + step as f32 * 0.1).clamp(0., 1.),
+            Some(MainItem::Defaults) => {
                 *s = Settings {
                     outfit: s.outfit,
                     best: s.best,
                     ..default()
                 };
             }
-            9 => {
+            Some(MainItem::Quit) => {
                 exit.write(AppExit::Success);
             }
             _ => {}
@@ -306,13 +358,13 @@ fn execute(
                 s.bindings = Settings::default().bindings;
             } else {
                 m.page = Page::Main;
-                m.selected = 3;
+                m.selected = MainItem::Controls.index();
                 m.offset = 0;
             }
         }
         Page::Guide => {
             m.page = Page::Main;
-            m.selected = 1;
+            m.selected = MainItem::Guide.index();
         }
         Page::Wardrobe => {
             if index < 3 + assets.outfits.len() {
@@ -322,7 +374,7 @@ fn execute(
                 }
             } else {
                 m.page = Page::Main;
-                m.selected = 2;
+                m.selected = MainItem::Wardrobe.index();
                 m.offset = 0;
             }
         }
@@ -347,7 +399,9 @@ fn handle(
     mut orders: ResMut<Orders>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    m.cooldown = (m.cooldown - time.delta_secs()).max(0.);
+    if m.cooldown > 0. {
+        m.cooldown = (m.cooldown - time.delta_secs()).max(0.);
+    }
     if (!window.focused
         || keys.any_pressed([
             KeyCode::SuperLeft,
@@ -359,9 +413,9 @@ fn handle(
         m.open = true;
         *orders = Orders::default();
     }
-    if frame.pad {
+    if frame.pad && !m.pad {
         m.pad = true;
-    } else if frame.raw.as_ref().is_some_and(|r| r.0 == 0) {
+    } else if m.pad && frame.raw.as_ref().is_some_and(|r| r.0 == 0) {
         m.pad = false;
     }
     if m.capture {
@@ -435,8 +489,6 @@ fn handle(
 fn render(
     m: Res<Menu>,
     s: Res<Settings>,
-    p: Single<&Player>,
-    progress: Res<Progress>,
     assets: Res<crate::local_assets::Wardrobe>,
     mut panel: Single<&mut Visibility, With<Panel>>,
     mut background: Single<&mut BackgroundColor, (With<Panel>, Without<Row>)>,
@@ -472,26 +524,6 @@ fn render(
             Without<RowText>,
         ),
     >,
-    mut hud: Single<
-        &mut Text,
-        (
-            With<Hud>,
-            Without<Header>,
-            Without<Help>,
-            Without<Bottom>,
-            Without<RowText>,
-        ),
-    >,
-    mut bottom: Single<
-        &mut Text,
-        (
-            With<Bottom>,
-            Without<Header>,
-            Without<Help>,
-            Without<Hud>,
-            Without<RowText>,
-        ),
-    >,
 ) {
     **panel = if m.open {
         Visibility::Visible
@@ -505,45 +537,36 @@ fn render(
             Visibility::Visible
         };
     }
-    header.0 = match m.page {
+    let next_header = match m.page {
         Page::Main => "VOYAGE",
         Page::Controls => "CONTROLS",
         Page::Guide => "MOVE GUIDE",
         Page::Wardrobe => "WARDROBE",
     }
     .into();
+    if header.0 != next_header {
+        header.0 = next_header;
+    }
     for mut color in &mut menu_ink {
         color.0 = if m.page == Page::Wardrobe { INK } else { PAPER };
     }
     let outfit = assets.name(s.outfit);
-    let main = vec![
-        if m.begun {
-            "Resume exploring".into()
-        } else {
-            "Let's explore".into()
-        },
-        "Movement guide".into(),
-        format!("Change outfit   /   {outfit}"),
-        "Rebind controls".into(),
-        format!("Camera sensitivity   <  {:.2}  >", s.sensitivity),
-        format!("Invert camera Y   {}", if s.invert { "On" } else { "Off" }),
-        "Restart the course".into(),
-        format!("Sound volume   <  {:.0}%  >", s.volume * 100.),
-        "Reset control settings".into(),
-        "Quit".into(),
-    ];
     for (row, mut color, mut node) in &mut rows {
         let index = row.0 + m.offset;
-        node.display = if index < count(m.page, assets.outfits.len()) {
+        let display = if index < count(m.page, assets.outfits.len()) {
             Display::Flex
         } else {
             Display::None
         };
-        *color = BackgroundColor(if m.selected == index {
+        if node.display != display {
+            node.display = display;
+        }
+        let next = BackgroundColor(if m.selected == index {
             Color::WHITE
         } else {
             Color::NONE
         });
+        color.set_if_neq(next);
     }
     for (row, mut text, mut color) in &mut texts {
         let i = row.0 + m.offset;
@@ -552,8 +575,11 @@ fn render(
         } else {
             PAPER
         };
-        text.0 = match m.page {
-            Page::Main => main.get(i).cloned().unwrap_or_default(),
+        let next = match m.page {
+            Page::Main => MAIN_ITEMS
+                .get(i)
+                .map(|item| item.label(&m, &s, &outfit))
+                .unwrap_or_default(),
             Page::Controls => {
                 if i < ACTIONS.len() {
                     format!(
@@ -582,13 +608,16 @@ fn render(
                 }
             }
         };
+        if text.0 != next {
+            text.0 = next;
+        }
     }
     background.0 = if m.page == Page::Wardrobe {
         Color::srgb(0.98, 0.77, 0.02)
     } else {
         Color::srgb(0.93, 0.06, 0.16)
     };
-    help.0 = if m.capture {
+    let next_help = if m.capture {
         format!(
             "Press a key, mouse button or gamepad button for {}. Escape cancels. A binding already in use moves to the old one.",
             ACTIONS[m.selected].0
@@ -615,7 +644,20 @@ fn render(
             assets.status
         )
     };
-    hud.0 = format!(
+    if help.0 != next_help {
+        help.0 = next_help;
+    }
+}
+
+fn render_hud(
+    m: Res<Menu>,
+    s: Res<Settings>,
+    p: Single<&Player>,
+    progress: Res<Progress>,
+    mut hud: Single<&mut Text, (With<Hud>, Without<Bottom>)>,
+    mut bottom: Single<&mut Text, (With<Bottom>, Without<Hud>)>,
+) {
+    let next_hud = format!(
         "SUN SPARKS  {:02} / 15     CAP TARGETS  {} / 3     {:02}:{:04.1}\n{}",
         progress.gems.len(),
         progress.targets.len(),
@@ -623,6 +665,9 @@ fn render(
         progress.time % 60.,
         p.mode.label().to_uppercase(),
     );
+    if hud.0 != next_hud {
+        hud.0 = next_hud;
+    }
     let k = |a: usize| {
         if m.pad {
             label(&s.bindings[a][1], 1)
@@ -630,7 +675,7 @@ fn render(
             label(&s.bindings[a][0], 0)
         }
     };
-    bottom.0 = if progress.message_time > 0. {
+    let next_bottom = if progress.message_time > 0. {
         progress.message.clone()
     } else if p.pos.z > 19. {
         format!(
@@ -662,7 +707,11 @@ fn render(
             k(act::PAUSE)
         )
     };
+    if bottom.0 != next_bottom {
+        bottom.0 = next_bottom;
+    }
 }
+
 fn guide(s: &Settings, pad: bool) -> String {
     let k = |a: usize| {
         if pad {
@@ -697,60 +746,9 @@ fn cursor(m: Res<Menu>, mut window: Single<(&Window, &mut CursorOptions), With<P
         CursorGrabMode::None
     };
 }
+#[path = "tests/ui.rs"]
+mod checks;
+
 pub fn self_check() {
-    let mut world = World::new();
-    world.insert_resource(Time::<Real>::default());
-    world.insert_resource(ButtonInput::<KeyCode>::default());
-    world.insert_resource(FrameInput {
-        back: true,
-        ..default()
-    });
-    let menu = Menu {
-        open: false,
-        begun: true,
-        page: Page::Main,
-        ..default()
-    };
-    world.insert_resource(menu);
-    world.insert_resource(Settings::default());
-    world.insert_resource(Progress::default());
-    world.insert_resource(crate::local_assets::Wardrobe {
-        outfits: vec![],
-        status: String::new(),
-    });
-    world.insert_resource(Orders {
-        down_throw: true,
-        ..default()
-    });
-    world.insert_resource(bevy::ecs::message::Messages::<Click>::default());
-    world.insert_resource(bevy::ecs::message::Messages::<AppExit>::default());
-    world.spawn(Window {
-        focused: true,
-        ..default()
-    });
-    world.spawn(Player::default());
-    let system = world.register_system(handle);
-    world.run_system(system).unwrap();
-    assert!(
-        !world.resource::<Menu>().open,
-        "gamepad B throws downward during play"
-    );
-    assert!(world.resource::<Orders>().down_throw);
-    world.resource_mut::<FrameInput>().edge[act::PAUSE] = true;
-    world.run_system(system).unwrap();
-    assert!(world.resource::<Menu>().open);
-    assert!(!world.resource::<Orders>().down_throw);
-    world
-        .resource_mut::<Time<Real>>()
-        .advance_by(std::time::Duration::from_millis(300));
-    world.resource_mut::<FrameInput>().edge[act::PAUSE] = false;
-    world.resource_mut::<FrameInput>().back = false;
-    world
-        .resource_mut::<bevy::ecs::message::Messages<Click>>()
-        .write(Click(0));
-    world.run_system(system).unwrap();
-    assert!(
-        !world.resource::<Menu>().open,
-        "mouse activation resumes play"
-    );
+    checks::run();
 }

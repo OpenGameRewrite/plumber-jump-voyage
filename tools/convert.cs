@@ -11,7 +11,7 @@ using Toolbox.Library;
 using Toolbox.Library.Animations;
 using Assimp;
 
-class ConvertOutfit {
+partial class ConvertOutfit {
     static TextureWrapMode Wrap(STTextureWrapMode mode) {
         return mode==STTextureWrapMode.Clamp?TextureWrapMode.Clamp:mode==STTextureWrapMode.Mirror?TextureWrapMode.Mirror:TextureWrapMode.Wrap;
     }
@@ -41,52 +41,79 @@ class ConvertOutfit {
         // particular the stand-alone Run face opens and translates the jaw.
         return set=="Face"&&new[]{"Walk","Run","Dash","DashFast","RunStart"}.Contains(clip)?"Move":clip;
     }
+    static OpenTK.Matrix4 PartPose(STBone bone, bool chained, OpenTK.Matrix4 parent, OpenTK.Matrix4 fix) {
+        var local=OpenTK.Matrix4.CreateScale(bone.sca)*OpenTK.Matrix4.CreateFromQuaternion(bone.rot)*OpenTK.Matrix4.CreateTranslation(bone.pos);
+        return chained?local:local*parent*fix;
+    }
     static IEnumerable<T> Animations<T>(TreeNode node) where T:TreeNode {
         var animation = node as T;
         if (animation != null) yield return animation;
         foreach (TreeNode child in node.Nodes)
             foreach (var a in Animations<T>(child)) yield return a;
     }
+    static BFRES Load(string path) {
+        var full=Path.GetFullPath(path);
+        var resource=new BFRES {FileName=Path.GetFileName(full),FilePath=full};
+        using(var file=File.OpenRead(full))resource.Load(file);
+        return resource;
+    }
     [STAThread] static int Main(string[] args) {
         try {
-            if(args.Contains("--self-check")) {
-                if(Wrap(STTextureWrapMode.Clamp)!=TextureWrapMode.Clamp||Wrap(STTextureWrapMode.Mirror)!=TextureWrapMode.Mirror||Wrap(STTextureWrapMode.Repeat)!=TextureWrapMode.Wrap)
-                    throw new Exception("Texture wrapping failed");
-                if(PartAction("Face","Run")!="Move"||PartAction("Face","Walk")!="Move"||PartAction("Face","Jump")!="Jump"||PartAction("Eye","Run")!="Run")
-                    throw new Exception("Facial locomotion action failed");
-                if(NormalBlue(128,128)!=255||NormalBlue(255,255)!=128)throw new Exception("Normal reconstruction failed");
-                if(PartSet("MarioEye")!="Eye"||PartSet("MarioFaceRsv")!="Face"||PartSet("MarioAlohaHead")!="Head"
-                    ||PartName("Eye","Eyeball")==PartName("Face","Eyeball")||PartName("L","HandL")!="HandL")
-                    throw new Exception("Part rig naming failed");
-                Console.WriteLine("Normal map and part rig checks passed");return 0;
-            }
-            if (args.Length < 3) { Console.Error.WriteLine("Usage: convert.exe model.bfres output.glb animations.bfres [more-animation-files]"); return 2; }
-            var modelPath=Path.GetFullPath(args[0]);
-            // The library expects an MDI host even for CPU-only parsing; never show it.
+            if(args.Contains("--self-check")) { SelfCheck();return 0; }
+            if(args.Length<3) { Console.Error.WriteLine("Usage: convert.exe model.bfres output.glb animations.bfres [more-animation-files]");return 2; }
+            // The installed parser needs an MDI host even for CPU-only work.
             Toolbox.Library.Runtime.MainForm=new Form {IsMdiContainer=true,ShowInTaskbar=false};
             Toolbox.Library.Runtime.ExecutableDir=AppDomain.CurrentDomain.BaseDirectory;
             Toolbox.Library.Runtime.UseDirectXTexDecoder=false;
             GenericPluginLoader.LoadPlugin();
-            var dst=Path.GetFullPath(args[1]);
+            new Export(args).Run();
+            return 0;
+        } catch(Exception e) { Console.Error.WriteLine(e.ToString());return 1; }
+    }
+    sealed class Export {
+        readonly string[] args;
+        readonly string dst;
+        readonly BFRES resource;
+        readonly FMDL model;
+        readonly bool rigidFigure;
+        readonly List<STGenericObject> meshList;
+        readonly List<STGenericMaterial> materials;
+        List<STGenericTexture> textures;
+        readonly Dictionary<string,List<FMAT>> partMaterials=new Dictionary<string,List<FMAT>>();
+        readonly List<PartBone> partBones=new List<PartBone>();
+        readonly Dictionary<string,Dictionary<string,FSKA>> partClips=new Dictionary<string,Dictionary<string,FSKA>>();
+        readonly Dictionary<string,Dictionary<string,bool[]>> visibility=new Dictionary<string,Dictionary<string,bool[]>>();
+        readonly Dictionary<string,bool> visibilityLoops=new Dictionary<string,bool>();
+        readonly Dictionary<string,Dictionary<string,float[][]>> pupilUv=new Dictionary<string,Dictionary<string,float[][]>>();
+        public Export(string[] args) {
+            this.args=args;
+            dst=Path.GetFullPath(args[1]);
             Directory.CreateDirectory(Path.GetDirectoryName(dst));
-            var resource=new BFRES {FileName=Path.GetFileName(modelPath),FilePath=modelPath};
-            using (var f=File.OpenRead(modelPath)) resource.Load(f);
-            var models=resource.ExportableModels.OfType<FMDL>().ToArray();
-            if(models.Length==0) throw new InvalidDataException("BFRES has no exportable model");
-            // Export the model through the installed tool's standard interchange exporter.
-            var model=models[0];var dae=Path.ChangeExtension(dst,"dae");
-            bool rigidFigure=RigidFigure(model);
+            resource=Load(args[0]);
+            model=resource.ExportableModels.OfType<FMDL>().FirstOrDefault();
+            if(model==null)throw new InvalidDataException("BFRES has no exportable model");
+            rigidFigure=RigidFigure(model);
             if(rigidFigure)Console.WriteLine("Rigid figure: parts follow the root");
-            var meshList=model.Objects.ToList();var materials=model.Materials.ToList();var textures=resource.GetTextures();
-            // Materials per part file, so a part's texture archive binds only to that part.
-            var partMaterials=new Dictionary<string,List<FMAT>>();
-            // Keep the independent finger, face, eye and head rigs. Each action
-            // samples its matching part clips alongside the body clip.
-            var partBones=new List<PartBone>();
-            var partClips=new Dictionary<string,Dictionary<string,FSKA>>();
-            var visibility=new Dictionary<string,Dictionary<string,bool[]>>();
-            var visibilityLoops=new Dictionary<string,bool>();
-            var pupilUv=new Dictionary<string,Dictionary<string,float[][]>>();
+            meshList=model.Objects.ToList();materials=model.Materials.ToList();textures=resource.GetTextures();
+        }
+        public void Run() {
+            ReadExpressions();
+            if(args.Contains("--expressions-only"))return;
+            AssembleParts();
+            ExportTextures();
+            var dae=Path.ChangeExtension(dst,"dae");
+            var settings=new DAE.ExportSettings {ExportTextures=false,SuppressConfirmDialog=true,OnlyExportRiggedBones=false};
+            DAE.Export(dae,settings,meshList,materials,textures,model.Skeleton,model.Skeleton.Node_Array.ToList());
+            using(var importer=new AssimpContext()) {
+                var scene=importer.ImportFile(dae,PostProcessSteps.Triangulate|PostProcessSteps.GenerateSmoothNormals);
+                RestoreSamplers(scene);
+                BakeAnimations(scene);
+                if(!importer.ExportFile(scene,Path.ChangeExtension(dst,"gltf"),"gltf2"))throw new IOException("Installed Assimp cannot export glTF 2.0");
+                File.WriteAllLines(Path.ChangeExtension(dst,"clips.txt"),scene.Animations.Select(a=>a.Name+"\t"+a.NodeAnimationChannels.Count));
+                Console.WriteLine(Path.GetFileName(dst)+": "+scene.MeshCount+" meshes, "+scene.AnimationCount+" animations");
+            }
+        }
+        void ReadExpressions() {
             foreach(var arg in args.Where(a=>a.StartsWith("--hand-l=")||a.StartsWith("--hand-r=")||a.StartsWith("--eye=")||a.StartsWith("--face=")||a.StartsWith("--head="))) {
                 int separator=arg.IndexOf('=');var path=arg.Substring(separator+1);
                 string set=arg.StartsWith("--hand-")?arg.Substring(7,1).ToUpper():arg.Substring(2,separator-2);
@@ -128,7 +155,8 @@ class ConvertOutfit {
             var expressions=visibility.ToDictionary(k=>k.Key,k=>(object)new {looping=visibilityLoops[k.Key],tracks=k.Value,
                 uv=pupilUv.ContainsKey(k.Key)?pupilUv[k.Key]:new Dictionary<string,float[][]>()});
             File.WriteAllText(Path.ChangeExtension(dst,"expressions.json"),new System.Web.Script.Serialization.JavaScriptSerializer {MaxJsonLength=int.MaxValue}.Serialize(expressions));
-            if(args.Contains("--expressions-only"))return 0;
+        }
+        void AssembleParts() {
             foreach(var part in args.Skip(2).Where(a=>a.StartsWith("--part="))) {
                 // --part=model.bfres[|Joint|rotX|rotY|rotZ|transX|transY|transZ], from the
                 // costume's own placement table (joint plus local rotation in degrees).
@@ -165,68 +193,76 @@ class ConvertOutfit {
                 }
                 foreach(var sub in r.ExportableModels.OfType<FMDL>()) {
                     string set=PartSet(file);bool hand=set=="L"||set=="R";
-                    if(set!=null&&!rigidFigure) {
-                        sub.Skeleton.reset(true);model.Skeleton.reset(true);
-                        foreach(var pb in sub.Skeleton.bones) {
-                            string name=PartName(set,pb.Text);
-                            if(model.Skeleton.boneIndex(name)>=0||hand&&pb.parentIndex<0)continue;
-                            var parentName=pb.parentIndex>=0?PartName(set,sub.Skeleton.bones[pb.parentIndex].Text):null;
-                            int parent=parentName==null?-1:model.Skeleton.boneIndex(parentName);
-                            bool chained=partBones.Any(x=>x.Name==parentName);
-                            if(!hand&&parent<0)parent=model.Skeleton.boneIndex(anchor);
-                            if(parent<0)continue;
-                            // Independent face/eye/head roots attach to the body head; their
-                            // namespaces keep duplicate names (notably Eyeball) separate.
-                            var fix=place*model.Skeleton.GetBoneTransform(parent).Inverted();
-                            var local=chained?pb.GetTransform():sub.Skeleton.GetBoneTransform(pb)*fix;
-                            var nb=new STBone(model.Skeleton) {Text=name,parentIndex=parent,RotationType=STBone.BoneRotationType.Quaternion};
-                            nb.FromTransform(local);
-                            model.Skeleton.bones.Add(nb);
-                            partBones.Add(new PartBone {Name=name,Set=set,Part=sub,Bone=pb,Chained=chained,Fix=fix});
-                        }
-                        model.Skeleton.reset(true);
-                        Console.WriteLine("Part bones from "+file+": "+partBones.Count(x=>x.Part==sub));
-                    }
+                    AttachRig(sub, set, hand, anchor, place, file);
                     // Parts have independent local skeletons. Move their bind geometry
                     // into the body's rest space before sharing its animation skeleton.
-                    foreach(var shape in sub.Objects) {
-                        if(shape.MaterialIndex>=0)shape.MaterialIndex+=materials.Count;
-                        foreach(var v in shape.vertices) {
-                            if(v.boneIds.Count==0){v.boneIds.Add(-1);v.boneWeights.Add(1);}
-                            while(v.boneWeights.Count<v.boneIds.Count)v.boneWeights.Add(1);
-                            var position=OpenTK.Vector3.Zero;var normal=OpenTK.Vector3.Zero;
-                            for(int i=0;i<v.boneIds.Count;i++) {
-                                int source=v.boneIds[i]<0?shape.BoneIndex:sub.Skeleton.Node_Array[v.boneIds[i]];
-                                source=Math.Max(0,source);string name=sub.Skeleton.bones[source].Text;
-                                var ownBone=partBones.FirstOrDefault(x=>x.Part==sub&&x.Bone==sub.Skeleton.bones[source]);
-                                int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==(ownBone==null?name:ownBone.Name));
-                                // Part roots share names with body roots; rigid face pieces belong to the anchor.
-                                // A bone the body lacks (coat flap, finger, cape segment) hangs from its
-                                // nearest ancestor that the body has, as the original part does.
-                                for(int up=sub.Skeleton.bones[source].parentIndex;destBone<0&&up>=0;up=sub.Skeleton.bones[up].parentIndex) {
-                                    var parentName=sub.Skeleton.bones[up].Text;
-                                    if(parentName=="nw4f_root"||parentName=="AllRoot"||parentName=="JointRoot")break;
-                                    destBone=model.Skeleton.bones.FindIndex(b=>b.Text==parentName);
-                                }
-                                if(destBone<0||ownBone==null&&IsRoot(name))destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
-                                if(rigidFigure)destBone=model.Skeleton.bones.FindIndex(b=>b.Text=="JointRoot");
-                                if(destBone<0)throw new InvalidDataException("No attachment bone for "+file);
-                                int dest=Array.IndexOf(model.Skeleton.Node_Array,destBone);
-                                if(dest<0){dest=model.Skeleton.Node_Array.Length;model.Skeleton.Node_Array=model.Skeleton.Node_Array.Concat(new[]{destBone}).ToArray();}
-                                position+=OpenTK.Vector3.TransformPosition(v.pos,place)*v.boneWeights[i];
-                                normal+=OpenTK.Vector3.TransformNormal(v.nrm,place)*v.boneWeights[i];
-                                v.boneIds[i]=dest;
-                            }
-                            v.pos=position;v.nrm=normal.LengthSquared>0?normal.Normalized():normal;
-                        }
-                        shape.VertexSkinCount=(byte)Math.Max(1,(int)shape.VertexSkinCount);
-                        if(shape.BoneIndex>=0){var name=sub.Skeleton.bones[shape.BoneIndex].Text;shape.BoneIndex=model.Skeleton.bones.FindIndex(b=>b.Text==name);}
-                    }
+                    PlaceGeometry(sub, place, anchor, file);
                     meshList.AddRange(sub.Objects);materials.AddRange(sub.Materials);
                     if(!partMaterials.ContainsKey(file))partMaterials[file]=new List<FMAT>();
                     partMaterials[file].AddRange(sub.Materials.OfType<FMAT>());
                 }
             }
+        }
+        void AttachRig(FMDL sub, string set, bool hand, string anchor, OpenTK.Matrix4 place, string file) {
+            if(set!=null&&!rigidFigure) {
+                sub.Skeleton.reset(true);model.Skeleton.reset(true);
+                foreach(var pb in sub.Skeleton.bones) {
+                    string name=PartName(set,pb.Text);
+                    if(model.Skeleton.boneIndex(name)>=0||hand&&pb.parentIndex<0)continue;
+                    var parentName=pb.parentIndex>=0?PartName(set,sub.Skeleton.bones[pb.parentIndex].Text):null;
+                    int parent=parentName==null?-1:model.Skeleton.boneIndex(parentName);
+                    bool chained=partBones.Any(x=>x.Name==parentName);
+                    if(!hand&&parent<0)parent=model.Skeleton.boneIndex(anchor);
+                    if(parent<0)continue;
+                    // Independent face/eye/head roots attach to the body head; their
+                    // namespaces keep duplicate names (notably Eyeball) separate.
+                    var fix=place*model.Skeleton.GetBoneTransform(parent).Inverted();
+                    var local=chained?pb.GetTransform():sub.Skeleton.GetBoneTransform(pb)*fix;
+                    var nb=new STBone(model.Skeleton) {Text=name,parentIndex=parent,RotationType=STBone.BoneRotationType.Quaternion};
+                    nb.FromTransform(local);
+                    model.Skeleton.bones.Add(nb);
+                    partBones.Add(new PartBone {Name=name,Set=set,Part=sub,Bone=pb,Chained=chained,Fix=fix});
+                }
+                model.Skeleton.reset(true);
+                Console.WriteLine("Part bones from "+file+": "+partBones.Count(x=>x.Part==sub));
+            }
+        }
+        void PlaceGeometry(FMDL sub, OpenTK.Matrix4 place, string anchor, string file) {
+            foreach(var shape in sub.Objects) {
+                if(shape.MaterialIndex>=0)shape.MaterialIndex+=materials.Count;
+                foreach(var v in shape.vertices) {
+                    if(v.boneIds.Count==0){v.boneIds.Add(-1);v.boneWeights.Add(1);}
+                    while(v.boneWeights.Count<v.boneIds.Count)v.boneWeights.Add(1);
+                    var position=OpenTK.Vector3.Zero;var normal=OpenTK.Vector3.Zero;
+                    for(int i=0;i<v.boneIds.Count;i++) {
+                        int source=v.boneIds[i]<0?shape.BoneIndex:sub.Skeleton.Node_Array[v.boneIds[i]];
+                        source=Math.Max(0,source);string name=sub.Skeleton.bones[source].Text;
+                        var ownBone=partBones.FirstOrDefault(x=>x.Part==sub&&x.Bone==sub.Skeleton.bones[source]);
+                        int destBone=model.Skeleton.bones.FindIndex(b=>b.Text==(ownBone==null?name:ownBone.Name));
+                        // Part roots share names with body roots; rigid face pieces belong to the anchor.
+                        // A bone the body lacks (coat flap, finger, cape segment) hangs from its
+                        // nearest ancestor that the body has, as the original part does.
+                        for(int up=sub.Skeleton.bones[source].parentIndex;destBone<0&&up>=0;up=sub.Skeleton.bones[up].parentIndex) {
+                            var parentName=sub.Skeleton.bones[up].Text;
+                            if(parentName=="nw4f_root"||parentName=="AllRoot"||parentName=="JointRoot")break;
+                            destBone=model.Skeleton.bones.FindIndex(b=>b.Text==parentName);
+                        }
+                        if(destBone<0||ownBone==null&&IsRoot(name))destBone=model.Skeleton.bones.FindIndex(b=>b.Text==anchor);
+                        if(rigidFigure)destBone=model.Skeleton.bones.FindIndex(b=>b.Text=="JointRoot");
+                        if(destBone<0)throw new InvalidDataException("No attachment bone for "+file);
+                        int dest=Array.IndexOf(model.Skeleton.Node_Array,destBone);
+                        if(dest<0){dest=model.Skeleton.Node_Array.Length;model.Skeleton.Node_Array=model.Skeleton.Node_Array.Concat(new[]{destBone}).ToArray();}
+                        position+=OpenTK.Vector3.TransformPosition(v.pos,place)*v.boneWeights[i];
+                        normal+=OpenTK.Vector3.TransformNormal(v.nrm,place)*v.boneWeights[i];
+                        v.boneIds[i]=dest;
+                    }
+                    v.pos=position;v.nrm=normal.LengthSquared>0?normal.Normalized():normal;
+                }
+                shape.VertexSkinCount=(byte)Math.Max(1,(int)shape.VertexSkinCount);
+                if(shape.BoneIndex>=0){var name=sub.Skeleton.bones[shape.BoneIndex].Text;shape.BoneIndex=model.Skeleton.bones.FindIndex(b=>b.Text==name);}
+            }
+        }
+        void ExportTextures() {
             textures=textures.GroupBy(t=>t.Text).Select(g=>g.First()).ToList();
             for(int i=0;i<materials.Count;i++)materials[i].Text="material"+i+"_"+materials[i].Text;
             foreach(var texture in textures) {
@@ -240,89 +276,88 @@ class ConvertOutfit {
                     }
                     bitmap.Save(Path.Combine(Path.GetDirectoryName(dst),texture.Text+".png"));
                 }}
-                catch(Exception e) {Console.Error.WriteLine("Texture "+texture.Text+": "+e.GetType().Name+" "+e.Message);}
-            }
-            var settings=new DAE.ExportSettings {ExportTextures=false,SuppressConfirmDialog=true,OnlyExportRiggedBones=false};
-            DAE.Export(dae,settings,meshList,materials,textures,model.Skeleton,model.Skeleton.Node_Array.ToList());
-            using(var importer=new AssimpContext()) {
-                var scene=importer.ImportFile(dae,PostProcessSteps.Triangulate|PostProcessSteps.GenerateSmoothNormals);
-                // The Collada importer drops sampler wrapping. Restore it from
-                // each original material before exporting glTF (notably the 64 cap).
-                foreach(var material in scene.Materials) {
-                    var original=materials.FirstOrDefault(m=>m.Text==material.Name);
-                    if(original==null)continue;
-                    foreach(var map in original.TextureMaps) {
-                        bool diffuse=map.Type==STGenericMatTexture.TextureType.Diffuse;
-                        bool normal=map.Type==STGenericMatTexture.TextureType.Normal;
-                        if(!(diffuse&&material.HasTextureDiffuse||normal&&material.HasTextureNormal))continue;
-                        var slot=diffuse?material.TextureDiffuse:material.TextureNormal;
-                        slot.WrapModeU=Wrap(map.WrapModeS);slot.WrapModeV=Wrap(map.WrapModeT);
-                        if(diffuse)material.TextureDiffuse=slot;else material.TextureNormal=slot;
-                    }
+                catch(Exception e) {
+                    if(materials.SelectMany(m=>m.TextureMaps).Any(t=>t.Name==texture.Text&&(t.Type==STGenericMatTexture.TextureType.Diffuse||t.Type==STGenericMatTexture.TextureType.Normal)))
+                        throw new InvalidDataException("Cannot export required texture "+texture.Text,e);
+                    Console.Error.WriteLine("Optional texture "+texture.Text+": "+e.Message);
                 }
-                var all=new List<FSKA>();all.AddRange(Animations<FSKA>(resource));
-                foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations<FSKA>(r));}
-                if(args.Contains("--geometry-only"))all.Clear();
-                Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
-                File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
-                var prefixes=new[]{"Wait","Run","Dash","Fire","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
-                foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
-                    var anim=new Assimp.Animation {Name=clip.Text,DurationInTicks=clip.FrameCount,TicksPerSecond=60.0};
-                    var channels=new Dictionary<string,NodeAnimationChannel>();
-                    foreach(var bone in model.Skeleton.bones) {var node=scene.RootNode.FindNode(bone.Text)??scene.RootNode.FindNode("Armature_"+bone.Text);if(node==null)continue;var ch=new NodeAnimationChannel {NodeName=node.Name};channels[bone.Text]=ch;anim.NodeAnimationChannels.Add(ch);}
-                    model.Skeleton.reset();
-                    foreach(var part in partBones.Select(x=>x.Part).Distinct())part.Skeleton.reset();
-                    for(int frame=0;frame<=clip.FrameCount;frame++) {
-                        clip.SetFrame(frame);clip.NextFrame(model.Skeleton,false,false);
-                        var posed=new Dictionary<string,OpenTK.Matrix4>();
-                        foreach(var group in partBones.GroupBy(x=>x.Part)) {
-                            var set=group.First().Set;FSKA partClip=null;
-                            if(partClips.ContainsKey(set)) {
-                                if(!partClips[set].TryGetValue(PartAction(set,clip.Text),out partClip))partClips[set].TryGetValue("Wait",out partClip);
-                            }
-                            if(partClip!=null) {
-                                float at=partClip.CanLoop&&partClip.FrameCount>0?frame%partClip.FrameCount:Math.Min(frame,partClip.FrameCount);
-                                partClip.SetFrame(at);partClip.NextFrame(group.Key.Skeleton,false,false);
-                            }
-                            foreach(var x in group) {
-                                var b=x.Bone;
-                                var localPose=OpenTK.Matrix4.CreateScale(b.sca)*OpenTK.Matrix4.CreateFromQuaternion(b.rot)*OpenTK.Matrix4.CreateTranslation(b.pos);
-                                posed[x.Name]=x.Chained?localPose:localPose*(b.parentIndex>=0?group.Key.Skeleton.bones[b.parentIndex].Transform:OpenTK.Matrix4.Identity)*x.Fix;
-                            }
-                        }
-                        foreach(var bone in model.Skeleton.bones) {
-                            NodeAnimationChannel ch;if(!channels.TryGetValue(bone.Text,out ch))continue;
-                            var p=bone.GetPosition();var s=bone.GetScale();var q=bone.rot;
-                            OpenTK.Matrix4 partPose;
-                            if(posed.TryGetValue(bone.Text,out partPose)) {
-                                p=partPose.ExtractTranslation();s=partPose.ExtractScale();q=partPose.ExtractRotation();
-                                ch.PositionKeys.Add(new VectorKey(frame,new Vector3D(p.X,p.Y,p.Z)));
-                                ch.ScalingKeys.Add(new VectorKey(frame,new Vector3D(s.X,s.Y,s.Z)));
-                                ch.RotationKeys.Add(new QuaternionKey(frame,new Assimp.Quaternion(q.W,q.X,q.Y,q.Z)));
-                                continue;
-                            }
-                            // Odyssey rigs use segment scale compensation: a stretched arm
-                            // must not inflate its hand. glTF always inherits parent scale,
-                            // so divide it back out (exact for uniform parent scale).
-                            var parent=bone.parentIndex>=0?model.Skeleton.bones[bone.parentIndex]:null;
-                            if(bone.UseSegmentScaleCompensate&&parent!=null) {
-                                var ps=parent.GetScale();
-                                if(ps.X!=0&&ps.Y!=0&&ps.Z!=0)s=new OpenTK.Vector3(s.X/ps.X,s.Y/ps.Y,s.Z/ps.Z);
-                            }
+            }
+        }
+        void RestoreSamplers(Scene scene) {
+            foreach(var material in scene.Materials) {
+                var original=materials.FirstOrDefault(m=>m.Text==material.Name);
+                if(original==null)continue;
+                foreach(var map in original.TextureMaps) {
+                    bool diffuse=map.Type==STGenericMatTexture.TextureType.Diffuse;
+                    bool normal=map.Type==STGenericMatTexture.TextureType.Normal;
+                    if(!(diffuse&&material.HasTextureDiffuse||normal&&material.HasTextureNormal))continue;
+                    var slot=diffuse?material.TextureDiffuse:material.TextureNormal;
+                    slot.WrapModeU=Wrap(map.WrapModeS);slot.WrapModeV=Wrap(map.WrapModeT);
+                    if(diffuse)material.TextureDiffuse=slot;else material.TextureNormal=slot;
+                }
+            }
+        }
+        void BakeAnimations(Scene scene) {
+            var all=new List<FSKA>();all.AddRange(Animations<FSKA>(resource));
+            foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations<FSKA>(r));}
+            if(args.Contains("--geometry-only"))all.Clear();
+            Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
+            File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
+            var prefixes=new[]{"Wait","Run","Dash","Fire","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
+            foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
+                var anim=new Assimp.Animation {Name=clip.Text,DurationInTicks=clip.FrameCount,TicksPerSecond=60.0};
+                var channels=new Dictionary<string,NodeAnimationChannel>();
+                foreach(var bone in model.Skeleton.bones) {var node=scene.RootNode.FindNode(bone.Text)??scene.RootNode.FindNode("Armature_"+bone.Text);if(node==null)continue;var ch=new NodeAnimationChannel {NodeName=node.Name};channels[bone.Text]=ch;anim.NodeAnimationChannels.Add(ch);}
+                model.Skeleton.reset();
+                foreach(var part in partBones.Select(x=>x.Part).Distinct())part.Skeleton.reset();
+                for(int frame=0;frame<=clip.FrameCount;frame++) {
+                    clip.SetFrame(frame);clip.NextFrame(model.Skeleton,false,false);
+                    var posed=SampleParts(clip, frame);
+                    foreach(var bone in model.Skeleton.bones) {
+                        NodeAnimationChannel ch;if(!channels.TryGetValue(bone.Text,out ch))continue;
+                        var p=bone.GetPosition();var s=bone.GetScale();var q=bone.rot;
+                        OpenTK.Matrix4 partPose;
+                        if(posed.TryGetValue(bone.Text,out partPose)) {
+                            p=partPose.ExtractTranslation();s=partPose.ExtractScale();q=partPose.ExtractRotation();
                             ch.PositionKeys.Add(new VectorKey(frame,new Vector3D(p.X,p.Y,p.Z)));
                             ch.ScalingKeys.Add(new VectorKey(frame,new Vector3D(s.X,s.Y,s.Z)));
                             ch.RotationKeys.Add(new QuaternionKey(frame,new Assimp.Quaternion(q.W,q.X,q.Y,q.Z)));
+                            continue;
                         }
+                        // Odyssey rigs use segment scale compensation: a stretched arm
+                        // must not inflate its hand. glTF always inherits parent scale,
+                        // so divide it back out (exact for uniform parent scale).
+                        var parent=bone.parentIndex>=0?model.Skeleton.bones[bone.parentIndex]:null;
+                        if(bone.UseSegmentScaleCompensate&&parent!=null) {
+                            var ps=parent.GetScale();
+                            if(ps.X!=0&&ps.Y!=0&&ps.Z!=0)s=new OpenTK.Vector3(s.X/ps.X,s.Y/ps.Y,s.Z/ps.Z);
+                        }
+                        ch.PositionKeys.Add(new VectorKey(frame,new Vector3D(p.X,p.Y,p.Z)));
+                        ch.ScalingKeys.Add(new VectorKey(frame,new Vector3D(s.X,s.Y,s.Z)));
+                        ch.RotationKeys.Add(new QuaternionKey(frame,new Assimp.Quaternion(q.W,q.X,q.Y,q.Z)));
                     }
-                    scene.Animations.Add(anim);
                 }
-                if(!importer.ExportFile(scene,Path.ChangeExtension(dst,"gltf"),"gltf2")) throw new IOException("Installed Assimp cannot export glTF 2.0");
-                // Assimp 4.1 exports each bone as an unnamed glTF animation.
-                // Preserve original clip boundaries so the packer can join those tracks.
-                File.WriteAllLines(Path.ChangeExtension(dst,"clips.txt"),scene.Animations.Select(a=>a.Name+"\t"+a.NodeAnimationChannels.Count));
-                Console.WriteLine(Path.GetFileName(dst)+": "+scene.MeshCount+" meshes, "+scene.AnimationCount+" animations");
+                scene.Animations.Add(anim);
             }
-            return 0;
-        } catch(Exception e) {Console.Error.WriteLine(e.ToString());return 1;}
+        }
+        Dictionary<string,OpenTK.Matrix4> SampleParts(FSKA clip, int frame) {
+            var posed=new Dictionary<string,OpenTK.Matrix4>();
+            foreach(var group in partBones.GroupBy(x=>x.Part)) {
+                var set=group.First().Set;FSKA partClip=null;
+                if(partClips.ContainsKey(set)) {
+                    if(!partClips[set].TryGetValue(PartAction(set,clip.Text),out partClip))partClips[set].TryGetValue("Wait",out partClip);
+                }
+                if(partClip!=null) {
+                    float at=partClip.CanLoop&&partClip.FrameCount>0?frame%partClip.FrameCount:Math.Min(frame,partClip.FrameCount);
+                    partClip.SetFrame(at);partClip.NextFrame(group.Key.Skeleton,false,false);
+                }
+                foreach(var x in group) {
+                    var b=x.Bone;
+                    posed[x.Name]=PartPose(b,x.Chained,b.parentIndex>=0?group.Key.Skeleton.bones[b.parentIndex].Transform:OpenTK.Matrix4.Identity,x.Fix);
+                }
+            }
+
+            return posed;
+        }
     }
 }

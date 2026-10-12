@@ -1,10 +1,14 @@
 // Bevy system parameters declare ECS access directly; keep their query filters explicit.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod asset_contract;
 mod fx;
 mod input;
+#[cfg(feature = "local-assets")]
+mod legacy_assets;
 mod local_assets;
 mod movement;
+mod scripted_input;
 #[cfg(feature = "local-assets")]
 mod sound;
 mod ui;
@@ -18,6 +22,7 @@ fn main() {
         input::self_check();
         ui::self_check();
         local_assets::self_check();
+        asset_contract::self_check();
         fx::self_check();
         #[cfg(feature = "local-assets")]
         sound::self_check();

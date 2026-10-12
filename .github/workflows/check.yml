@@ -10,6 +10,9 @@ jobs:
           toolchain: '1.99.0'
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: python tools/asset_contract.py
+      - run: python tools/annotate-assets.py --self-check
+      - run: python tools/convert-outfits.py --self-check
       - run: python tools/check-repository.py
       - run: python tools/extract.py --self-check
       - run: python tools/pack-glb.py --self-check
@@ -17,4 +20,5 @@ jobs:
       - run: cargo fmt --check
       - run: cargo check --locked -j 2
       - run: cargo clippy --all-features --locked -j 2 -- -D warnings
+      - run: cargo test --locked -j 2 --all-features
       - run: cargo run --locked -j 2 --all-features -- --self-check

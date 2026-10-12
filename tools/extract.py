@@ -272,17 +272,7 @@ def install_exports(exports, output, scale, yaw):
     shared=next((m.get('extras',{}).get('expressions',{}) for p,m in parsed if p.stem=='Mario'),{})
     if not shared:shared=next((m['extras']['expressions'] for _,m in parsed if m.get('extras',{}).get('expressions')), {})
     output.mkdir(parents=True, exist_ok=True)
-    aliases = {'idle':('Wait','Idle'),'walk':('Walk',),'run':('Run','Dash','Walk'),'run_start':('RunStart',),'brake':('Brake',),
-        'land':('Land',),'land_hard':('LandStiffen','Land'),'jump':('Jump','Fall'),'fall':('Fall',),
-        'double_jump':('Jump2',),'triple_jump':('Jump3',),'long_jump':('JumpBroad',),'backflip':('JumpBack',),'sideflip':('JumpReverse',),
-        'spin_jump':('SpinJump',),'pound_start':('HipDropStart',),'pound':('HipDrop','GroundPound'),'pound_land':('HipDropLand',),'pound_jump':('JumpHipDrop',),
-        'roll_start':('RollingStart',),'roll':('Rolling','Roll'),'roll_end':('RollingEnd',),'roll_jump':('RollingJump',),
-        'dive':('Dive','HipDrop'),'slide':('HeadSliding','Slide'),'wall_slide':('WallSlideL','WallKeep'),'wall_jump':('WallJump',),
-        'ledge':('WallCatch',),'ledge_start':('WallCatchStart',),'pole':('PoleWait','PoleClimb'),'pole_climb':('PoleClimb','ClimbTree'),
-        'cap_vault':('JumpCapLeapFrog',),'cap_bounce':('JumpNpcTrample','JumpCapLeapFrog'),
-        'throw':('ThrowCap',),'throw_upper':('ThrowCapParts',),'throw_upper_air':('ThrowCapJumpParts',),'throw_air':('ThrowCapJump','ThrowCap'),'spin_throw':('SpinCapStart','SpinCap'),
-        'swim':('SwimWait','Swim'),'swim_move':('SwimWalk','SwimWait'),'swim_dash':('SwimDive','SwimWait'),
-        'crouch':('SquatWait','Squat','Crouch'),'crouch_start':('SquatStart',),'crawl':('SquatWalk','SquatWait')}
+    aliases = {'throw_upper': ('ThrowCapParts',), 'throw_upper_air': ('ThrowCapJumpParts',)}
     outfits = []
     sources = {p.name: m for p, m in parsed}
     for file, model in parsed:

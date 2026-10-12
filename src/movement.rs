@@ -451,8 +451,54 @@ pub struct Cap {
     frames: u32,
     stay: u32,
 }
+#[derive(Debug, Default)]
+struct ThrowControl {
+    run: u32,
+    count: u32,
+    side: bool,
+    timer: u32,
+    pending: Option<Throw>,
+}
+
+#[derive(Debug, Default)]
+struct RollControl {
+    boost_frames: u32,
+    last_boost: u32,
+    unroll: u32,
+}
+
+#[derive(Debug, Default)]
+struct ClimbControl {
+    base: Vec3,
+    height: f32,
+    frame: u32,
+    cooldown: u32,
+}
+
+#[derive(Debug)]
+struct FireControl {
+    frames: u32,
+    direction: Vec3,
+    extend: u32,
+    brake: u32,
+}
+impl Default for FireControl {
+    fn default() -> Self {
+        Self {
+            frames: 0,
+            direction: Vec3::Z,
+            extend: 0,
+            brake: 0,
+        }
+    }
+}
+
 #[derive(Component, Debug)]
 pub struct Player {
+    fire: FireControl,
+    climbing: ClimbControl,
+    rolling: RollControl,
+    throwing: ThrowControl,
     /// Metres.
     pub pos: Vec3,
     /// Metres per second, derived each frame from `v`.
@@ -497,18 +543,10 @@ pub struct Player {
     run_frames: u32,
     after_turn: u32,
     quick_turn: u32,
-    throw_run: u32,
-    throw_count: u32,
-    throw_side: bool,
-    throw_timer: u32,
-    pending_throw: Option<Throw>,
     catch_window: u32,
     cap_jump_possible: bool,
     air_throw_used: bool,
     dive_possible: bool,
-    roll_boost_frames: u32,
-    roll_last_boost: u32,
-    unroll: u32,
     gravity: f32,
     jump_extend: bool,
     max_air_speed: f32,
@@ -522,24 +560,20 @@ pub struct Player {
     slick: bool,
     ledge: Vec3,
     /// Pole axis base, its height, the climb cycle in progress and a re-grab delay.
-    pole: Vec3,
-    pole_height: f32,
-    pole_climb: u32,
-    pole_cooldown: u32,
     /// Frames since the burn's bounce landed (run and falls together).
-    fire_frames: u32,
     /// Burn leap: horizontal direction its air control works along.
-    fire_dir: Vec3,
     /// Burn leap frames left without gravity.
-    fire_extend: u32,
     /// Fire run frames since the stick was released, capped at the brake time.
-    fire_brake: u32,
     swim_rise: u32,
     step_phase: f32,
 }
 impl Default for Player {
     fn default() -> Self {
         Self {
+            fire: FireControl::default(),
+            climbing: ClimbControl::default(),
+            rolling: RollControl::default(),
+            throwing: ThrowControl::default(),
             pos: SPAWN,
             vel: Vec3::ZERO,
             facing: Vec3::NEG_Z,
@@ -581,18 +615,10 @@ impl Default for Player {
             run_frames: 0,
             after_turn: 0,
             quick_turn: 0,
-            throw_run: 0,
-            throw_count: 0,
-            throw_side: false,
-            throw_timer: 0,
-            pending_throw: None,
             catch_window: 0,
             cap_jump_possible: true,
             air_throw_used: false,
             dive_possible: true,
-            roll_boost_frames: 0,
-            roll_last_boost: 0,
-            unroll: 0,
             gravity: t::GRAVITY_AIR,
             jump_extend: false,
             max_air_speed: t::JUMP_MOVE_MIN,
@@ -605,14 +631,6 @@ impl Default for Player {
             slope: 0.,
             slick: false,
             ledge: Vec3::ZERO,
-            pole: Vec3::ZERO,
-            pole_height: 0.,
-            pole_climb: 0,
-            pole_cooldown: 0,
-            fire_frames: 0,
-            fire_dir: Vec3::Z,
-            fire_extend: 0,
-            fire_brake: 0,
             swim_rise: 0,
             step_phase: 0.,
         }
@@ -951,11 +969,11 @@ impl Player {
         self.spin = self.spin.saturating_sub(1);
         self.last_stick = o.direction;
         self.catch_window = self.catch_window.saturating_sub(1);
-        self.pole_cooldown = self.pole_cooldown.saturating_sub(1);
+        self.climbing.cooldown = self.climbing.cooldown.saturating_sub(1);
         self.after_turn = self.after_turn.saturating_sub(1);
         self.quick_turn = self.quick_turn.saturating_sub(1);
-        self.throw_run = self.throw_run.saturating_sub(1);
-        self.throw_timer = self.throw_timer.saturating_sub(1);
+        self.throwing.run = self.throwing.run.saturating_sub(1);
+        self.throwing.timer = self.throwing.timer.saturating_sub(1);
         self.coyote = self.coyote.saturating_sub(1);
         self.long_jump_timer = self.long_jump_timer.saturating_add(1);
         if self.grounded {
@@ -1030,7 +1048,7 @@ impl Player {
                 {
                     // Throwing on the run keeps the legs running; continuous
                     // throws push the run up to dash speed.
-                    self.throw_run = t::RUN_TIME_CONTINUOUS_THROW;
+                    self.throwing.run = t::RUN_TIME_CONTINUOUS_THROW;
                     self.sub_anim = Some(Anim {
                         name: "ThrowCapParts",
                         serial: self.anim.serial.wrapping_add(7),
@@ -1084,12 +1102,12 @@ impl Player {
             self.facing = turn(self.facing, wish, limit.to_radians());
             let max = if self.after_turn > 0 {
                 t::AFTER_TURN_MAX
-            } else if self.throw_run > 0 {
+            } else if self.throwing.run > 0 {
                 t::RUN_SPEED_CONTINUOUS_THROW
             } else {
                 t::NORMAL_MAX
             } * self.tilt.max(0.2);
-            let accel = if self.throw_run > 0 {
+            let accel = if self.throwing.run > 0 {
                 t::RUN_SPEED_CONTINUOUS_THROW / t::RUN_ACCEL_FRAMES_CONTINUOUS_THROW
             } else {
                 t::NORMAL_MAX / t::ACCEL_FRAMES
@@ -1386,9 +1404,9 @@ impl Player {
     }
     fn fire_leap(&mut self, h: Vec3, power: f32, extend: u32) {
         let h = h.clamp_length_max(t::DAMAGE_FIRE_JUMP_MOVE);
-        self.fire_dir = h.normalize_or(self.facing);
+        self.fire.direction = h.normalize_or(self.facing);
         self.v = h + Vec3::Y * power;
-        self.fire_extend = extend;
+        self.fire.extend = extend;
         self.grounded = false;
         self.coyote = 0;
         self.cap_jump_possible = true;
@@ -1439,16 +1457,16 @@ impl Player {
     /// Air control during the burn: the stick pushes along and across the
     /// leap's direction, within the leap's speed.
     fn fire_air(&mut self, gravity: f32) {
-        if self.fire_extend > 0 {
-            self.fire_extend -= 1;
+        if self.fire.extend > 0 {
+            self.fire.extend -= 1;
         } else {
             self.v.y = (self.v.y - gravity).max(-t::FALL_MAX);
         }
         let mut h = self.v.with_y(0.);
-        if h.dot(self.fire_dir) < 0. {
-            self.fire_dir = -self.fire_dir;
+        if h.dot(self.fire.direction) < 0. {
+            self.fire.direction = -self.fire.direction;
         }
-        let dir = self.fire_dir;
+        let dir = self.fire.direction;
         let side = Vec3::Y.cross(dir);
         let input = self.stick * self.tilt;
         let along = input.dot(dir);
@@ -1465,7 +1483,7 @@ impl Player {
         }
     }
     fn start_fire_run(&mut self) {
-        self.fire_frames = 0;
+        self.fire.frames = 0;
         self.fire_run_landed();
     }
     /// The run phase restarts on every landing; the burn's clock does not.
@@ -1476,16 +1494,16 @@ impl Player {
             self.play("FireRun");
             self.anim.rate = t::DAMAGE_FIRE_RUN_SPEED * t::DAMAGE_FIRE_RUN_ANIM_RATE;
         }
-        self.fire_brake = t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32;
+        self.fire.brake = t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32;
     }
     /// Running on the burn: full fire speed while the stick is held, easing to
     /// a stop when released. Only now can Mario jump out of it.
     fn fire_run(&mut self, o: &Orders) {
-        if self.fire_frames >= t::DAMAGE_FIRE_RUN_TIME {
+        if self.fire.frames >= t::DAMAGE_FIRE_RUN_TIME {
             self.end_burn();
             return;
         }
-        self.fire_frames += 1;
+        self.fire.frames += 1;
         if self.fire_throws(o) {
             return;
         }
@@ -1509,11 +1527,11 @@ impl Player {
                 t::DAMAGE_FIRE_RUN_SPEED / t::NORMAL_MAX,
             );
             self.facing = turn(self.facing, self.stick, limit.to_radians());
-            self.fire_brake = 0;
+            self.fire.brake = 0;
         } else {
-            self.fire_brake = (self.fire_brake + 1).min(t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32);
+            self.fire.brake = (self.fire.brake + 1).min(t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32);
         }
-        let k = self.fire_brake as f32 / t::DAMAGE_FIRE_RUN_BRAKE_FRAMES;
+        let k = self.fire.brake as f32 / t::DAMAGE_FIRE_RUN_BRAKE_FRAMES;
         let ease = k * (1.5 - 0.5 * k * k);
         self.set_h(self.facing * t::DAMAGE_FIRE_RUN_SPEED * (1. - ease).clamp(0., 1.));
         self.v.y = -t::GRAVITY;
@@ -1581,9 +1599,9 @@ impl Player {
         self.enter(Move::Roll, "RollingStart");
         self.set_h(self.facing * speed.min(t::ROLL_MAX));
         self.v.y = t::ROLL_START_JUMP * 0.25;
-        self.roll_boost_frames = if boosted { t::ROLL_FRAMES_MIN_BOOST } else { 0 };
-        self.roll_last_boost = 0;
-        self.unroll = 0;
+        self.rolling.boost_frames = if boosted { t::ROLL_FRAMES_MIN_BOOST } else { 0 };
+        self.rolling.last_boost = 0;
+        self.rolling.unroll = 0;
         self.events.push(Fx::RollStart);
     }
     fn roll(&mut self, o: &Orders) {
@@ -1594,7 +1612,7 @@ impl Player {
                 let s = self.speed_h().min(t::RUN_SPEED_CONTINUOUS_THROW);
                 self.enter(Move::Run, "Move");
                 self.set_h(self.facing * s);
-                self.throw_run = t::RUN_TIME_CONTINUOUS_THROW;
+                self.throwing.run = t::RUN_TIME_CONTINUOUS_THROW;
                 if self.cap.is_none() {
                     self.launch_cap(Throw::Forward);
                 }
@@ -1613,20 +1631,20 @@ impl Player {
         if self.anim.name == "RollingStart" && self.anim_done(clip::ROLLING_START) {
             self.play("Rolling");
         }
-        self.roll_last_boost += 1;
+        self.rolling.last_boost += 1;
         if (self.pre_throw > 0 || o.throw_pressed)
             && self.grounded
-            && self.roll_last_boost >= t::ROLL_RESTART_INTERVAL
+            && self.rolling.last_boost >= t::ROLL_RESTART_INTERVAL
         {
             self.pre_throw = 0;
             // Boost: a hop and a push; pressing on the roll's rhythm keeps it going.
-            let perfect = self.roll_last_boost <= t::ROLL_RESTART_INTERVAL * 3;
+            let perfect = self.rolling.last_boost <= t::ROLL_RESTART_INTERVAL * 3;
             let s = (self.speed_h() + t::ROLL_RESTART_ACCEL).clamp(t::ROLL_BOOST, t::ROLL_MAX);
             self.set_h(self.facing * s);
             self.v.y = t::ROLL_START_JUMP;
             self.grounded = false;
-            self.roll_last_boost = 0;
-            self.roll_boost_frames = 0;
+            self.rolling.last_boost = 0;
+            self.rolling.boost_frames = 0;
             self.frame = 0;
             self.events.push(Fx::RollBoost { perfect });
         }
@@ -1650,14 +1668,14 @@ impl Player {
         }
         s = s.min(t::ROLL_MAX);
         self.set_h(self.facing * s);
-        self.unroll = if o.crouch { 0 } else { self.unroll + 1 };
-        let min_frames = if self.roll_boost_frames > 0 {
+        self.rolling.unroll = if o.crouch { 0 } else { self.rolling.unroll + 1 };
+        let min_frames = if self.rolling.boost_frames > 0 {
             t::ROLL_FRAMES_MIN_BOOST
         } else {
             t::ROLL_FRAMES_MIN
         };
         if self.grounded
-            && (self.unroll >= t::ROLL_UNROLL_FRAMES
+            && (self.rolling.unroll >= t::ROLL_UNROLL_FRAMES
                 || self.frame >= min_frames
                     && s < t::ROLL_END_SPEED
                     && -self.slope * self.facing.x <= 0.05)
@@ -2154,7 +2172,7 @@ impl Player {
     }
     fn grab_pole(&mut self, scene: &Course) {
         if self.grounded
-            || self.pole_cooldown > 0
+            || self.climbing.cooldown > 0
             || matches!(
                 self.mode,
                 Move::Pole | Move::GroundPound | Move::Dive | Move::Swim | Move::SwimDash
@@ -2169,9 +2187,9 @@ impl Player {
                 && (pole.center.y..top).contains(&self.pos.y)
             {
                 self.enter(Move::Pole, "PoleCatch");
-                self.pole = pole.center;
-                self.pole_height = pole.height;
-                self.pole_climb = 0;
+                self.climbing.base = pole.center;
+                self.climbing.height = pole.height;
+                self.climbing.frame = 0;
                 self.facing = (-d).normalize_or(self.facing);
                 // The actor sits on the pole's axis; the clips hang the body behind it.
                 self.pos = Vec3::new(pole.center.x, self.pos.y, pole.center.z);
@@ -2183,7 +2201,7 @@ impl Player {
     }
     fn pole_climb(&mut self, o: &Orders, scene: &Course) {
         self.v = Vec3::ZERO;
-        let axis = Vec3::new(self.pole.x, self.pos.y, self.pole.z);
+        let axis = Vec3::new(self.climbing.base.x, self.pos.y, self.climbing.base.z);
         // Climbing stops below the top margin, or under anything the pole passes through.
         let ceiling = scene
             .solids
@@ -2196,8 +2214,9 @@ impl Player {
             .map(|b| b.center.y - b.half.y - 0.8)
             .fold(f32::MAX, f32::min);
         let (bottom, top) = (
-            self.pole.y,
-            (self.pole.y + self.pole_height - t::POLE_UP_MARGIN * UNIT - 0.3).min(ceiling),
+            self.climbing.base.y,
+            (self.climbing.base.y + self.climbing.height - t::POLE_UP_MARGIN * UNIT - 0.3)
+                .min(ceiling),
         );
         let clear = POLE_RADIUS + RADIUS + 0.05;
         if self.pre_jump > 0 {
@@ -2205,7 +2224,7 @@ impl Player {
             let away = -self.facing;
             self.facing = away;
             self.pos = axis + away * clear;
-            self.pole_cooldown = 20;
+            self.climbing.cooldown = 20;
             self.jump_with(Move::Jump, "Jump", t::WALL_JUMP_POWER, t::WALL_JUMP_GRAVITY);
             self.set_h(away * t::WALL_JUMP_H);
             self.jump_extend = false;
@@ -2213,7 +2232,7 @@ impl Player {
         }
         if o.crouch_pressed {
             self.pos = axis - self.facing * clear;
-            self.pole_cooldown = 20;
+            self.climbing.cooldown = 20;
             self.enter(Move::Fall, "Fall");
             return;
         }
@@ -2229,21 +2248,21 @@ impl Player {
         let toward = -stick.y;
         let right = crate::input::rotate(Vec2::new(stick.x, 0.), yaw);
         let side = Vec3::new(right.x, 0., right.y);
-        if self.pole_climb > 0 || toward > 0.5 && self.pos.y < top && toward > stick.x.abs() {
-            if self.pole_climb == 0 {
-                self.pole_climb = t::POLE_UP_FRAMES;
+        if self.climbing.frame > 0 || toward > 0.5 && self.pos.y < top && toward > stick.x.abs() {
+            if self.climbing.frame == 0 {
+                self.climbing.frame = t::POLE_UP_FRAMES;
                 self.play("PoleClimb");
             }
-            self.pole_climb -= 1;
+            self.climbing.frame -= 1;
             self.pos.y += t::POLE_UP_DIST / t::POLE_UP_FRAMES as f32 * UNIT;
             if self.pos.y >= top {
                 self.pos.y = top;
-                self.pole_climb = 0;
+                self.climbing.frame = 0;
             }
         } else if toward < -0.5 && -toward > stick.x.abs() {
             if self.pos.y <= bottom + 0.01 {
                 self.pos = axis - self.facing * clear;
-                self.pole_cooldown = 20;
+                self.climbing.cooldown = 20;
                 self.grounded = true;
                 self.enter(Move::Idle, "Wait");
                 return;
@@ -2333,39 +2352,39 @@ impl Player {
         }
         let air = !self.grounded;
         // Repeated throws alternate sides and use the follow-up clips.
-        self.throw_count = if self.throw_timer > 0 {
-            (self.throw_count + 1).min(2)
+        self.throwing.count = if self.throwing.timer > 0 {
+            (self.throwing.count + 1).min(2)
         } else {
             0
         };
-        self.throw_side = !self.throw_side;
+        self.throwing.side = !self.throwing.side;
         let name = match (kind, air) {
             (Throw::Up, false) => "SpinCapStartDoubleUp",
             (Throw::Up, true) => "SpinCapAirStartDoubleUp",
             (Throw::Down, false) => "SpinCapStartDoubleDown",
             (Throw::Down, true) => "SpinCapAirStartDoubleDown",
             (Throw::Spin, false) => {
-                if self.throw_side {
+                if self.throwing.side {
                     "SpinCapStartDoubleRight"
                 } else {
                     "SpinCapStartDoubleLeft"
                 }
             }
             (Throw::Spin, true) => {
-                if self.throw_side {
+                if self.throwing.side {
                     "SpinCapAirStartDoubleRight"
                 } else {
                     "SpinCapAirStartDoubleLeft"
                 }
             }
             (Throw::Forward, true) => {
-                if self.throw_side {
+                if self.throwing.side {
                     "SpinCapAirStart"
                 } else {
                     "SpinCapAirStartLeft"
                 }
             }
-            (Throw::Forward, false) => match (self.throw_count, self.throw_side) {
+            (Throw::Forward, false) => match (self.throwing.count, self.throwing.side) {
                 (1, true) => "SpinCapStart2Right",
                 (1, false) => "SpinCapStart2Left",
                 (2, true) => "SpinCapStart3Right",
@@ -2380,21 +2399,21 @@ impl Player {
             self.v.y = self.v.y.max(t::SPIN_AIR_JUMP);
             self.air_throw_used = true;
         }
-        self.pending_throw = Some(kind);
+        self.throwing.pending = Some(kind);
     }
     fn throw_state(&mut self, o: &Orders) {
         let air = !self.grounded;
         let release = if air {
             t::SPIN_CAP_THROW_FRAME_AIR
-        } else if self.throw_count > 0 {
+        } else if self.throwing.count > 0 {
             2
         } else {
             t::SPIN_CAP_THROW_FRAME
         };
-        if let Some(kind) = self.pending_throw
+        if let Some(kind) = self.throwing.pending
             && self.frame >= release
         {
-            self.pending_throw = None;
+            self.throwing.pending = None;
             self.launch_cap(kind);
         }
         if air {
@@ -2404,7 +2423,7 @@ impl Player {
             self.set_h(h);
             self.v.y = (self.v.y - t::SPIN_AIR_GRAVITY).max(-t::FALL_MAX);
             if self.frame >= 24
-                || self.pending_throw.is_none()
+                || self.throwing.pending.is_none()
                     && self.frame >= release + 6
                     && (self.pre_jump > 0 || o.crouch_pressed)
             {
@@ -2423,13 +2442,13 @@ impl Player {
             // Jumping or crouching cancels once the cap is out. Moving cancels only
             // the tail of a plain throw; spin and motion throws play out in full.
             let length = clip::throw(self.anim.name);
-            let after = self.pending_throw.is_none() && self.frame >= release + 2;
+            let after = self.throwing.pending.is_none() && self.frame >= release + 2;
             let tail = !self.anim.name.contains("Double") && self.frame * 4 >= length * 3;
             if after && (self.pre_jump > 0 || o.crouch)
                 || tail && self.tilt > 0.3
                 || self.anim_done(length)
             {
-                self.throw_timer = 30;
+                self.throwing.timer = 30;
                 self.enter(Move::Idle, "Wait");
                 if self.pre_jump > 0 {
                     self.ground_jump(o);
@@ -2536,7 +2555,7 @@ impl Player {
                 self.cap = None;
                 self.events.push(Fx::Catch);
                 self.catch_window = t::CAP_CATCH_WINDOW;
-                self.throw_timer = 30;
+                self.throwing.timer = 30;
                 if !self.grounded && self.mode.airborne_jump() && self.v.y < 0. {
                     // Catching in midair gives a small pop.
                     self.v.y = t::CAP_CATCH_POP_POWER;
@@ -2843,803 +2862,9 @@ impl Player {
     }
 }
 
+#[path = "tests/movement.rs"]
+mod checks;
+
 pub fn self_check() {
-    let floor = Course {
-        solids: vec![Solid {
-            center: Vec3::new(0., -0.5, 0.),
-            half: Vec3::new(100., 0.5, 100.),
-            slope: 0.,
-            moving: false,
-            slippery: false,
-        }],
-        ..default()
-    };
-    let fwd = |extra: Orders| Orders {
-        direction: Vec2::NEG_Y,
-        ..extra
-    };
-    let frames = |p: &mut Player, o: Orders, scene: &Course, n: usize| {
-        for _ in 0..n {
-            p.step(&o, scene);
-        }
-    };
-    let until_ground = |p: &mut Player, o: Orders, scene: &Course| -> f32 {
-        let mut high = p.pos.y;
-        for _ in 0..600 {
-            p.step(&o, scene);
-            high = high.max(p.pos.y);
-            if p.grounded {
-                break;
-            }
-        }
-        high
-    };
-    // Running reaches the original top speed after its 40-frame ramp.
-    let mut p = Player::default();
-    frames(&mut p, fwd(default()), &floor, 45);
-    assert_eq!(p.mode, Move::Run);
-    assert!((p.move_speed - 14.).abs() < 0.01, "{}", p.move_speed);
-    assert_eq!(p.anim.name, "Move");
-    // Holding jump extends the first jump; tapping gives a lower hop.
-    let mut held = Player::default();
-    held.step(
-        &Orders {
-            jump: true,
-            jump_held: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((held.mode, held.anim.name), (Move::Jump, "Jump"));
-    let high = until_ground(
-        &mut held,
-        Orders {
-            jump_held: true,
-            ..default()
-        },
-        &floor,
-    );
-    let mut tap = Player::default();
-    tap.step(
-        &Orders {
-            jump: true,
-            ..default()
-        },
-        &floor,
-    );
-    let low = until_ground(&mut tap, Orders::default(), &floor);
-    assert!(high > low + 1. && low > 0.8, "held {high} tap {low}");
-    // Chained jumps while running: Jump, Jump2, Jump3.
-    p = Player::default();
-    frames(&mut p, fwd(default()), &floor, 45);
-    for (mode, anim) in [
-        (Move::Jump, "Jump"),
-        (Move::DoubleJump, "Jump2"),
-        (Move::TripleJump, "Jump3"),
-    ] {
-        p.step(
-            &fwd(Orders {
-                jump: true,
-                jump_held: true,
-                ..default()
-            }),
-            &floor,
-        );
-        let name = if p.anim.name == "JumpReverse" {
-            "Jump"
-        } else {
-            p.anim.name
-        };
-        assert_eq!((p.mode, name), (mode, anim));
-        until_ground(
-            &mut p,
-            fwd(Orders {
-                jump_held: true,
-                ..default()
-            }),
-            &floor,
-        );
-    }
-    // Reversing at speed brakes; jumping out of it is a side somersault.
-    p = Player::default();
-    frames(&mut p, fwd(default()), &floor, 45);
-    p.step(
-        &Orders {
-            direction: Vec2::Y,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Skid, "Brake"));
-    p.step(
-        &Orders {
-            direction: Vec2::Y,
-            jump: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Sideflip, "JumpTurn"));
-    assert!(p.vel.z > 0.);
-    // Crouch then jump: backflip at rest, long jump while sliding forward.
-    p = Player::default();
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &floor,
-        5,
-    );
-    p.step(
-        &Orders {
-            crouch: true,
-            jump: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Backflip, "JumpBack"));
-    p = Player::default();
-    frames(&mut p, fwd(default()), &floor, 45);
-    p.step(
-        &fwd(Orders {
-            crouch: true,
-            ..default()
-        }),
-        &floor,
-    );
-    p.step(
-        &fwd(Orders {
-            crouch: true,
-            jump: true,
-            ..default()
-        }),
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::LongJump, "JumpBroad"));
-    assert!(p.move_speed >= 14.);
-    // Ground pound: hang through the start clip, drop at 45, land, jump.
-    p = Player::default();
-    p.pos.y = 6.;
-    p.grounded = false;
-    p.mode = Move::Fall;
-    p.step(
-        &Orders {
-            crouch_pressed: true,
-            crouch: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::GroundPound, "HipDropStart"));
-    frames(&mut p, Orders::default(), &floor, 10);
-    assert!((p.pos.y - 6.).abs() < 0.001, "pound hangs first");
-    until_ground(&mut p, Orders::default(), &floor);
-    assert_eq!((p.mode, p.anim.name), (Move::PoundLand, "HipDropLand"));
-    p.hitstop = 0.;
-    frames(&mut p, Orders::default(), &floor, 6);
-    p.step(
-        &Orders {
-            jump: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::PoundJump, "JumpHipDrop"));
-    // Throw during the pound start: dive with the original head-slide clip.
-    p = Player::default();
-    p.pos.y = 6.;
-    p.grounded = false;
-    p.mode = Move::Fall;
-    p.step(
-        &Orders {
-            crouch_pressed: true,
-            crouch: true,
-            ..default()
-        },
-        &floor,
-    );
-    p.step(
-        &Orders {
-            throw_pressed: true,
-            direction: Vec2::X,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Dive, "HeadSlidingStart"));
-    assert!(p.vel.x > 10. && p.vel.y > 0.);
-    until_ground(&mut p, Orders::default(), &floor);
-    assert_eq!((p.mode, p.anim.name), (Move::Slide, "LandRolling"));
-    frames(
-        &mut p,
-        Orders::default(),
-        &floor,
-        clip::LAND_ROLLING as usize,
-    );
-    assert_eq!(p.mode, Move::Idle, "the landing roll stands up");
-    // Holding crouch through the landing rolls on with the dive's speed.
-    p = Player::default();
-    p.pos.y = 6.;
-    p.grounded = false;
-    p.mode = Move::Fall;
-    let held = Orders {
-        crouch: true,
-        ..default()
-    };
-    p.step(
-        &Orders {
-            crouch_pressed: true,
-            crouch: true,
-            ..default()
-        },
-        &floor,
-    );
-    p.step(
-        &Orders {
-            throw_pressed: true,
-            crouch: true,
-            direction: Vec2::X,
-            ..default()
-        },
-        &floor,
-    );
-    until_ground(&mut p, held.clone(), &floor);
-    assert_eq!(p.mode, Move::Roll);
-    let mut names = std::collections::BTreeSet::new();
-    let mut rolled = 0;
-    while p.mode == Move::Roll && rolled < 600 {
-        p.step(&held, &floor);
-        names.insert(p.anim.name);
-        rolled += 1;
-    }
-    assert!(
-        names.contains("Rolling"),
-        "the roll plays its loop: {names:?}"
-    );
-    assert!(
-        rolled < 200,
-        "the roll ends like any other: {rolled} frames"
-    );
-    // Roll: starts at 20, decays, and on flat ground ends in a crouch.
-    p = Player::default();
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &floor,
-        3,
-    );
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Roll, "RollingStart"));
-    assert!(p.cap.is_none(), "rolling does not throw the cap");
-    let mut ended = None;
-    for i in 0..900 {
-        p.step(
-            &Orders {
-                crouch: true,
-                ..default()
-            },
-            &floor,
-        );
-        if p.mode == Move::Crouch {
-            ended = Some(i);
-            break;
-        }
-    }
-    assert!(
-        ended.is_some_and(|f| f > 45),
-        "roll lasts its minimum then ends: {ended:?}"
-    );
-    // Boosting extends the roll.
-    p = Player::default();
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &floor,
-        3,
-    );
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-    );
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &floor,
-        20,
-    );
-    let before = p.move_speed;
-    p.step(
-        &Orders {
-            crouch: true,
-            throw_pressed: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert!(p.move_speed >= t::ROLL_BOOST && p.move_speed > before);
-    // Releasing crouch unrolls after five frames.
-    frames(&mut p, Orders::default(), &floor, 30);
-    assert_ne!(p.mode, Move::Roll);
-    // Standing cap throw: the spin clip, then the cap leaves on frame 12.
-    p = Player::default();
-    p.step(
-        &Orders {
-            throw_pressed: true,
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Throw, "SpinCapStart"));
-    frames(
-        &mut p,
-        Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        10,
-    );
-    assert!(p.cap.is_none());
-    frames(
-        &mut p,
-        Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        3,
-    );
-    assert!(p.cap.is_some());
-    // The cap travels its reach, hovers while held, then returns.
-    frames(
-        &mut p,
-        Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        40,
-    );
-    let cap = p.cap.as_ref().unwrap();
-    assert_eq!(cap.phase, CapPhase::Stay);
-    assert!(((cap.pos - p.pos).with_y(0.).length() - 5.).abs() < 0.3);
-    frames(&mut p, Orders::default(), &floor, 120);
-    assert!(p.cap.is_none());
-    // A spin throw plays its whole clip even while the stick keeps circling.
-    p = Player::default();
-    p.step(
-        &Orders {
-            spin_throw: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!(p.mode, Move::Throw);
-    assert!(
-        p.anim.name.starts_with("SpinCapStartDouble"),
-        "{}",
-        p.anim.name
-    );
-    let length = clip::throw(p.anim.name) as usize;
-    frames(
-        &mut p,
-        Orders {
-            direction: Vec2::X,
-            ..default()
-        },
-        &floor,
-        length - 3,
-    );
-    assert_eq!(p.mode, Move::Throw, "moving does not cut the spin throw");
-    frames(&mut p, Orders::default(), &floor, 4);
-    assert_ne!(p.mode, Move::Throw);
-    // Running throw keeps running with the upper-body clip.
-    p = Player::default();
-    frames(&mut p, fwd(default()), &floor, 45);
-    p.step(
-        &fwd(Orders {
-            throw_pressed: true,
-            throw_held: true,
-            ..default()
-        }),
-        &floor,
-    );
-    assert_eq!(p.mode, Move::Run);
-    assert_eq!(p.sub_anim.map(|a| a.name), Some("ThrowCapParts"));
-    assert!(p.cap.is_some());
-    // Cap jump: dive into a hovering cap.
-    p = Player::default();
-    p.pos.y = 3.;
-    p.grounded = false;
-    p.mode = Move::Fall;
-    p.cap = Some(Cap {
-        pos: p.pos + Vec3::Y * 0.8,
-        age: 0.5,
-        returning: false,
-        kind: Throw::Forward,
-        phase: CapPhase::Stay,
-        vel: Vec3::ZERO,
-        dir: Vec3::NEG_Z,
-        travelled: t::CAP_REACH,
-        frames: 30,
-        stay: 0,
-    });
-    p.v.y = -5.;
-    p.step(
-        &Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::CapBounce, "JumpCapLeapFrog"));
-    // Wall slide then wall jump.
-    let mut wall = floor.clone();
-    wall.solids.push(Solid {
-        center: Vec3::new(0., 3., -2.),
-        half: Vec3::new(3., 3., 0.3),
-        slope: 0.,
-        moving: false,
-        slippery: false,
-    });
-    p = Player::default();
-    p.pos = Vec3::new(0., 1.5, -1.2);
-    p.grounded = false;
-    p.v = Vec3::new(0., -2., -8.);
-    p.mode = Move::Fall;
-    p.step(&fwd(default()), &wall);
-    assert_eq!(p.mode, Move::WallSlide);
-    frames(&mut p, Orders::default(), &wall, 5);
-    assert_eq!(p.mode, Move::WallSlide, "wall slide holds contact");
-    p.step(
-        &Orders {
-            jump: true,
-            ..default()
-        },
-        &wall,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::WallJump, "WallJump"));
-    assert!(p.vel.z > 0.);
-    // Ledge grab and climb.
-    p = Player::default();
-    p.pos = Vec3::new(0., 4.75, -1.2);
-    p.grounded = false;
-    p.mode = Move::Fall;
-    p.v = Vec3::new(0., -2., -8.);
-    p.step(&fwd(default()), &wall);
-    assert_eq!((p.mode, p.anim.name), (Move::Ledge, "WallCatchStart"));
-    assert!(
-        (p.pos.y - 6.).abs() < 1e-4 && (p.pos.z + 1.78).abs() < 0.01,
-        "the hang sits on the edge: {:?}",
-        p.pos
-    );
-    for _ in 0..200 {
-        p.step(&fwd(default()), &wall);
-        if p.grounded {
-            break;
-        }
-    }
-    assert!(
-        p.grounded && p.pos.y >= 5.99 && p.pos.z < -1.7,
-        "{:?}",
-        p.pos
-    );
-    // Water.
-    let mut water = floor.clone();
-    water.water = Some((Vec3::Y * 5., Vec3::splat(100.)));
-    p = Player::default();
-    frames(
-        &mut p,
-        Orders {
-            jump: true,
-            jump_held: true,
-            ..default()
-        },
-        &water,
-        3,
-    );
-    assert!(matches!(p.mode, Move::Swim | Move::SwimDash));
-    // Poles.
-    let mut pole = floor.clone();
-    pole.poles.push(Pole {
-        center: Vec3::ZERO,
-        height: 8.,
-    });
-    p = Player::default();
-    p.pos = Vec3::new(0., 2., 0.3);
-    p.grounded = false;
-    p.mode = Move::Fall;
-    p.step(&Orders::default(), &pole);
-    assert_eq!(p.mode, Move::Pole);
-    assert!(
-        p.pos.x.abs() < 1e-4 && p.pos.z.abs() < 1e-4,
-        "held on the pole's axis"
-    );
-    frames(&mut p, Orders::default(), &pole, 10);
-    frames(
-        &mut p,
-        Orders {
-            direction: Vec2::X,
-            ..default()
-        },
-        &pole,
-        30,
-    );
-    assert_eq!(p.mode, Move::Pole);
-    assert!(
-        p.pos.x.abs() < 1e-4 && p.pos.z.abs() < 1e-4,
-        "circling stays on the pole"
-    );
-    assert!(p.facing.x.abs() > 0.3, "circling turns round the pole");
-    let y = p.pos.y;
-    frames(&mut p, fwd(default()), &pole, 5);
-    assert!(p.pos.y > y);
-    // Poles block running into them.
-    p = Player::default();
-    p.pos = Vec3::new(0., 0., 3.);
-    frames(&mut p, fwd(default()), &pole, 120);
-    assert!(
-        p.pos.with_y(0.).length() >= POLE_RADIUS + RADIUS - 0.01,
-        "{:?}",
-        p.pos
-    );
-    // Crouching on a steep slope slides down it, then stops on the flat.
-    let mut ramp = floor.clone();
-    ramp.solids.push(Solid {
-        center: Vec3::new(0., 1.4, 0.),
-        half: Vec3::new(4., 1.4, 2.),
-        slope: -0.7,
-        moving: false,
-        slippery: false,
-    });
-    p = Player::default();
-    p.pos = Vec3::new(-2., ramp.solids[1].top(-2.), 0.);
-    frames(&mut p, Orders::default(), &ramp, 5);
-    assert!(p.grounded);
-    p.step(
-        &Orders {
-            crouch: true,
-            crouch_pressed: true,
-            ..default()
-        },
-        &ramp,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::SlopeSlide, "Slide"));
-    let start_x = p.pos.x;
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &ramp,
-        30,
-    );
-    assert!(
-        p.pos.x > start_x + 1.5 && p.vel.x > 0.,
-        "slides downhill: {:?}",
-        p.pos
-    );
-    for _ in 0..300 {
-        p.step(
-            &Orders {
-                crouch: true,
-                ..default()
-            },
-            &ramp,
-        );
-        if p.mode != Move::SlopeSlide {
-            break;
-        }
-    }
-    assert_eq!(
-        p.mode,
-        Move::Crouch,
-        "the slide ends once the ground is flat"
-    );
-    // Hot ground: a floating leap, a bounce where it lands, then a short fire
-    // run; jumping is only possible during the run.
-    let mut lava = floor.clone();
-    lava.hot
-        .push((Vec3::new(0., 0., 0.), Vec3::new(1., 1., 1.)));
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    assert_eq!((p.mode, p.anim.name), (Move::BurnJump, "FireRunStart"));
-    assert_eq!(p.move_speed, 0., "no stick: the leap goes straight up");
-    frames(&mut p, Orders::default(), &lava, 20);
-    assert!(
-        (p.vel.y - t::DAMAGE_FIRE_JUMP_POWER_1ST * UNIT * FPS).abs() < 0.01,
-        "floats up"
-    );
-    p.step(
-        &Orders {
-            jump: true,
-            jump_held: true,
-            ..default()
-        },
-        &lava,
-    );
-    assert_eq!(p.mode, Move::BurnJump, "no jumping out of the leap");
-    let (mut peak, mut fell) = (0_f32, false);
-    for _ in 0..300 {
-        p.step(&Orders::default(), &lava);
-        peak = peak.max(p.pos.y);
-        fell |= p.vel.y < 0.;
-        if fell && p.frame == 1 {
-            break;
-        }
-    }
-    assert!(peak > 5.5 && peak < 7., "the burn leap: {peak}");
-    assert_eq!(
-        (p.mode, p.frame),
-        (Move::BurnJump, 1),
-        "landing back on the lava burns again"
-    );
-    let mut cool = floor.clone();
-    cool.hot.clear();
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    let push = Orders {
-        direction: Vec2::new(0., 1.),
-        ..default()
-    };
-    let until_change = |p: &mut Player, o: &Orders, scene: &Course| -> f32 {
-        let (mode, mut high) = (p.mode, p.pos.y);
-        for _ in 0..600 {
-            p.step(o, scene);
-            high = high.max(p.pos.y);
-            if p.mode != mode {
-                break;
-            }
-        }
-        high
-    };
-    until_change(&mut p, &push, &cool);
-    assert_eq!((p.mode, p.anim.name), (Move::BurnBounce, "FireRunStart"));
-    let peak = until_change(&mut p, &push, &cool);
-    assert!(peak > 2. && peak < 2.5, "the bounce: {peak}");
-    assert_eq!((p.mode, p.anim.name), (Move::FireRun, "FireRun"));
-    p.step(&push, &cool);
-    assert!((p.move_speed - t::DAMAGE_FIRE_RUN_SPEED).abs() < 0.01);
-    frames(&mut p, Orders::default(), &cool, 20);
-    assert!(p.move_speed < 0.01, "releasing the stick stops the run");
-    frames(&mut p, Orders::default(), &cool, 45);
-    assert_ne!(p.mode, Move::FireRun, "the run lasts a second");
-    // Shallow water puts the burn out on contact; deep water ends it in a swim.
-    let mut puddle = cool.clone();
-    puddle.puddles.push((Vec3::ZERO, Vec3::new(50., 0.1, 50.)));
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    until_change(&mut p, &push, &puddle);
-    assert_eq!(p.mode, Move::Run, "landing in shallow water ends the burn");
-    assert!(p.events.contains(&Fx::Quenched));
-    let mut pool = cool.clone();
-    pool.water = Some((Vec3::new(0., 2., 0.), Vec3::new(50., 4., 50.)));
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    p.step(&Orders::default(), &pool);
-    assert_eq!(p.mode, Move::Swim);
-    assert!(p.events.contains(&Fx::Quenched));
-    // The burn leaves soot: it smokes once strong, holds, then fades.
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    let mut burned = 0;
-    while p.burning() && burned < 600 {
-        p.step(&push, &cool);
-        burned += 1;
-    }
-    assert!(
-        p.soot.body > 0.75 && p.soot.smoking,
-        "soot after a full burn: {:?}",
-        p.soot
-    );
-    // The step that ended the burn already counted one held frame.
-    let full = p.soot.body;
-    frames(
-        &mut p,
-        Orders::default(),
-        &cool,
-        t::SOOT_HOLD_FRAMES as usize - 1,
-    );
-    assert_eq!(p.soot.body, full, "the stain holds for five seconds");
-    frames(&mut p, Orders::default(), &cool, 150);
-    assert!(p.soot.body < full - 0.45 && p.soot.smoking == (p.soot.body > 0.25));
-    frames(&mut p, Orders::default(), &cool, 300);
-    assert_eq!((p.soot.body, p.soot.smoking), (0., false), "faded away");
-    // Water washes it: steam once, then it drains while Mario drips.
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.soot.body = 1.;
-    p.soot.smoking = true;
-    p.soot.hold = t::SOOT_HOLD_FRAMES;
-    p.step(&Orders::default(), &puddle);
-    assert!(p.events.contains(&Fx::Quenched) && !p.soot.smoking);
-    p.events.clear();
-    frames(&mut p, Orders::default(), &puddle, 120);
-    assert!(
-        p.soot.body < 0.1 && !p.events.contains(&Fx::Quenched),
-        "{:?}",
-        p.soot
-    );
-    p = Player::default();
-    p.soot.body = 1.;
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &pool);
-    frames(&mut p, Orders::default(), &cool, 200);
-    assert!(
-        p.soot.body < 0.05,
-        "still dripping after the pool: {:?}",
-        p.soot
-    );
-    // Low ceilings force a crouch.
-    let mut tunnel = floor.clone();
-    tunnel.solids.push(Solid {
-        center: Vec3::new(0., 1.5, 5.),
-        half: Vec3::new(2., 0.3, 2.),
-        slope: 0.,
-        moving: false,
-        slippery: false,
-    });
-    p = Player::default();
-    frames(
-        &mut p,
-        Orders {
-            jump: true,
-            ..default()
-        },
-        &tunnel,
-        2,
-    );
-    assert!(p.grounded && p.pos.y == 0.);
-    // Walls block.
-    p = Player::default();
-    frames(&mut p, fwd(default()), &wall, 300);
-    assert!(p.pos.z >= -1.26);
-    // Stress: random input stays finite and emits events.
-    let mut events = 0;
-    for i in 0..10_000 {
-        let o = Orders {
-            direction: Vec2::new((i as f32 * 0.3).sin(), (i as f32 * 0.2).cos()),
-            jump: i % 79 == 0,
-            jump_held: i % 79 < 25,
-            crouch: i % 173 < 8,
-            crouch_pressed: i % 173 == 0,
-            throw_pressed: i % 107 == 0,
-            throw_held: i % 107 < 40,
-            ..default()
-        };
-        p.step(&o, &wall);
-        events += p.events.drain(..).count();
-        assert!(p.pos.is_finite() && p.vel.is_finite());
-    }
-    assert!(events > 0);
+    checks::run();
 }
