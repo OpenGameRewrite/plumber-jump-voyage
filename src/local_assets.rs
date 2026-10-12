@@ -314,6 +314,9 @@ mod imported {
         /// The clip file's animation target for each (bone, parent bone) name pair.
         targets: std::collections::HashMap<(String, String), bevy::animation::AnimationTargetId>,
         retargeted: bool,
+        /// Each model material's own colour, and the soot levels last applied.
+        stain_base: std::collections::HashMap<AssetId<StandardMaterial>, (Color, f32, f32)>,
+        stain_shown: Option<(f32, f32)>,
     }
     /// One pose source: weighted clips at fixed times.
     #[derive(Clone, Default)]
@@ -356,11 +359,14 @@ mod imported {
         assert!(!legs("Armature_Eye_JointRoot"));
         assert!(!legs("Armature_Face_AllRoot"));
         assert!(!legs("Armature_Head_MarioHead"));
+        assert_eq!(soot_blend(0.), 0.);
+        assert_eq!(soot_blend(1.), 1.);
+        assert!(soot_blend(0.25) > 0.6, "a fading stain still shows");
     }
     pub fn plugin(app: &mut App) {
         app.init_resource::<Loaded>().add_systems(
             Update,
-            (select, retarget, mask, animation, parts, finish)
+            (select, retarget, mask, animation, parts, finish, stain)
                 .chain()
                 .after(crate::world::animate),
         );
@@ -911,6 +917,69 @@ mod imported {
             }
         }
         loaded.finished = seen;
+    }
+    /// Soot strength as the original's stain blend: an ease-out of the level
+    /// scaled to 1.8, which saturates before the stain is at full strength.
+    pub fn soot_blend(level: f32) -> f32 {
+        let ease = level * (1.5 - 0.5 * level * level);
+        (1.8 * ease).min(1.)
+    }
+    /// Soot on the original model. The game blends a near-black soot colour in
+    /// through a stain pattern its shader masks; the export has neither, so
+    /// every body material is darkened evenly and turned matte (its sheen
+    /// would otherwise keep it bright), stopping short of black. The eyes
+    /// stay clear and the worn cap follows its own level.
+    fn stain(
+        p: Single<&crate::movement::Player>,
+        mut loaded: ResMut<Loaded>,
+        roots: Query<Entity, (With<Imported>, Without<ImportedCap>)>,
+        children: Query<&Children>,
+        meshes: Query<(&Name, &MeshMaterial3d<StandardMaterial>)>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+    ) {
+        let soot = p.soot;
+        if !loaded.finished || loaded.stain_shown == Some((soot.body, soot.cap)) {
+            return;
+        }
+        loaded.stain_shown = Some((soot.body, soot.cap));
+        for root in &roots {
+            for e in children.iter_descendants(root) {
+                let Ok((name, handle)) = meshes.get(e) else {
+                    continue;
+                };
+                let n = name.as_str();
+                if !n.contains("__") || n.contains("Eye") || n.contains("Glass") {
+                    continue;
+                }
+                let level = if n.starts_with("Cap__") || n.starts_with("CapHair__") {
+                    soot.cap
+                } else {
+                    soot.body
+                };
+                let Some(base) = loaded.stain_base.get(&handle.id()).copied().or_else(|| {
+                    let m = materials.get(&handle.0)?;
+                    Some((m.base_color, m.reflectance, m.perceptual_roughness))
+                }) else {
+                    continue;
+                };
+                loaded.stain_base.insert(handle.id(), base);
+                let (color, reflectance, roughness) = base;
+                let k = 0.97 * soot_blend(level);
+                let c = color.to_linear();
+                let soot_color = 0.01 * k;
+                let Some(mut m) = materials.get_mut(&handle.0) else {
+                    continue;
+                };
+                m.base_color = Color::LinearRgba(LinearRgba::new(
+                    c.red * (1. - k) + soot_color,
+                    c.green * (1. - k) + soot_color,
+                    c.blue * (1. - k) + soot_color,
+                    c.alpha,
+                ));
+                m.reflectance = reflectance * (1. - k);
+                m.perceptual_roughness = roughness + (1. - roughness) * k;
+            }
+        }
     }
 }
 pub fn self_check() {

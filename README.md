@@ -113,7 +113,9 @@ blend table, and plays sounds from the original per-animation triggers.
 Inferred rather than taken from the game: how states join (input windows,
 order of checks, collision response), since the public decompilation covers
 only some player states; the visual effects, which are original particles on
-the original trigger frames; and footwear sounds for a few outfits. Captures,
+the original trigger frames; the look of the soot a burn leaves, which keeps
+the original timing but darkens Mario evenly instead of in the game's soot
+pattern; and footwear sounds for a few outfits. Captures,
 enemies and kingdoms are out of scope.
 
 ## About

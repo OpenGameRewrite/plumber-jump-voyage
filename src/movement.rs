@@ -130,6 +130,15 @@ mod t {
     pub const DAMAGE_FIRE_RUN_SPEED: f32 = 18.;
     pub const DAMAGE_FIRE_RUN_BRAKE_FRAMES: f32 = 20.;
     pub const DAMAGE_FIRE_RUN_ANIM_RATE: f32 = 0.3;
+    // Soot after a burn, from the original stain control's fire entry.
+    pub const SOOT_GAIN: f32 = 0.005;
+    pub const SOOT_HOLD_FRAMES: u32 = 300;
+    pub const SOOT_FADE_FRAMES: f32 = 300.;
+    pub const SOOT_SMOKE_ON: f32 = 0.75;
+    pub const SOOT_SMOKE_OFF: f32 = 0.25;
+    pub const SOOT_WASH: f32 = 0.98;
+    /// Mario stays wet this long after leaving deep water.
+    pub const WET_FRAMES: u32 = 300;
     pub const JUMP_ACCEL_TURN: f32 = 0.3;
     pub const SLOPE_SLIDE_ANGLE_START: f32 = 26.;
     pub const SLOPE_SLIDE_ANGLE_END: f32 = 10.;
@@ -406,6 +415,20 @@ pub struct Anim {
     /// Playback rate in original frames per frame.
     pub rate: f32,
 }
+/// Soot left by a burn, as the original's stain control: it builds up while
+/// burning, stays for five seconds, then fades over five more. Water washes
+/// it off quickly, and keeps doing so while Mario drips afterwards.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Soot {
+    /// Stain strength on the body and on the worn cap, 0 to 1.
+    pub body: f32,
+    pub cap: f32,
+    /// Smoke wisps rise from a strong stain until it fades or gets wet.
+    pub smoking: bool,
+    hold: u32,
+    wet: u32,
+    washing: bool,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapPhase {
     Out,
@@ -450,6 +473,7 @@ pub struct Player {
     pub anim: Anim,
     /// Upper-body overlay clip while throwing on the run.
     pub sub_anim: Option<Anim>,
+    pub soot: Soot,
     /// Horizontal speed in original units per frame, for animation blending.
     pub move_speed: f32,
     /// Where to draw the player and cap: between the last two simulation
@@ -537,6 +561,7 @@ impl Default for Player {
                 rate: 1.,
             },
             sub_anim: None,
+            soot: Soot::default(),
             move_speed: 0.,
             shown: SPAWN,
             shown_cap: None,
@@ -841,12 +866,12 @@ impl Player {
         }
         self.update_cap(&o, scene);
         if matches!(self.mode, Move::Ledge | Move::Pole) {
-            self.finish_frame(was_grounded);
+            self.finish_frame(scene);
             return;
         }
         self.grab_pole(scene);
         if self.mode == Move::Pole {
-            self.finish_frame(was_grounded);
+            self.finish_frame(scene);
             return;
         }
         self.cap_contact();
@@ -882,7 +907,7 @@ impl Player {
             self.coyote = 3;
             self.enter(Move::Fall, "Fall");
         }
-        self.finish_frame(was_grounded);
+        self.finish_frame(scene);
     }
     fn read_input(&mut self, o: &Orders) {
         let stick = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
@@ -938,7 +963,8 @@ impl Player {
             self.land_frames = self.land_frames.saturating_add(1);
         }
     }
-    fn finish_frame(&mut self, _was_grounded: bool) {
+    fn finish_frame(&mut self, scene: &Course) {
+        self.update_soot(scene);
         self.frame += 1;
         if self.anim.name == "Move" {
             self.anim.frame = self.step_phase;
@@ -1306,6 +1332,57 @@ impl Player {
     }
     fn burning(&self) -> bool {
         matches!(self.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun)
+    }
+    /// The soot stain: every burning frame darkens it, up to full strength
+    /// after 200 frames, and restarts the hold. Water multiplies it down each
+    /// frame and cancels the hold, so a quick dip clears it within seconds.
+    fn update_soot(&mut self, scene: &Course) {
+        let cap_on = self.cap.is_none();
+        let burning = self.burning();
+        let s = &mut self.soot;
+        let submerged = scene.wet(self.pos + Vec3::Y * 0.8);
+        s.wet = if submerged {
+            t::WET_FRAMES
+        } else {
+            s.wet.saturating_sub(1)
+        };
+        let soaked = submerged || s.wet > 0 || self.grounded && scene.puddle(self.pos);
+        if soaked {
+            // A puff of steam when water first reaches a visible stain.
+            if !s.washing && s.body > t::SOOT_SMOKE_OFF && !self.events.contains(&Fx::Quenched) {
+                self.events.push(Fx::Quenched);
+            }
+            s.smoking = false;
+            s.hold = 0;
+            s.body *= t::SOOT_WASH;
+            s.cap *= t::SOOT_WASH;
+        } else if burning {
+            s.body = (s.body + t::SOOT_GAIN).min(1.);
+            s.cap = if cap_on {
+                (s.cap + t::SOOT_GAIN).min(1.)
+            } else {
+                0.
+            };
+            s.hold = t::SOOT_HOLD_FRAMES;
+            s.smoking |= s.body >= t::SOOT_SMOKE_ON;
+        } else if s.hold > 0 {
+            s.hold -= 1;
+            if !cap_on {
+                s.cap = 0.;
+            }
+        } else {
+            let step = 1. / t::SOOT_FADE_FRAMES;
+            s.body = (s.body - step).max(0.);
+            s.cap = if cap_on { (s.cap - step).max(0.) } else { 0. };
+        }
+        s.washing = soaked;
+        if s.body <= t::SOOT_SMOKE_OFF {
+            s.smoking = false;
+        }
+        if s.body < 0.001 && s.cap < 0.001 {
+            s.body = 0.;
+            s.cap = 0.;
+        }
     }
     fn fire_leap(&mut self, h: Vec3, power: f32, extend: u32) {
         let h = h.clamp_length_max(t::DAMAGE_FIRE_JUMP_MOVE);
@@ -3471,6 +3548,58 @@ pub fn self_check() {
     p.step(&Orders::default(), &pool);
     assert_eq!(p.mode, Move::Swim);
     assert!(p.events.contains(&Fx::Quenched));
+    // The burn leaves soot: it smokes once strong, holds, then fades.
+    p = Player::default();
+    p.pos = Vec3::ZERO;
+    p.step(&Orders::default(), &lava);
+    let mut burned = 0;
+    while p.burning() && burned < 600 {
+        p.step(&push, &cool);
+        burned += 1;
+    }
+    assert!(
+        p.soot.body > 0.75 && p.soot.smoking,
+        "soot after a full burn: {:?}",
+        p.soot
+    );
+    // The step that ended the burn already counted one held frame.
+    let full = p.soot.body;
+    frames(
+        &mut p,
+        Orders::default(),
+        &cool,
+        t::SOOT_HOLD_FRAMES as usize - 1,
+    );
+    assert_eq!(p.soot.body, full, "the stain holds for five seconds");
+    frames(&mut p, Orders::default(), &cool, 150);
+    assert!(p.soot.body < full - 0.45 && p.soot.smoking == (p.soot.body > 0.25));
+    frames(&mut p, Orders::default(), &cool, 300);
+    assert_eq!((p.soot.body, p.soot.smoking), (0., false), "faded away");
+    // Water washes it: steam once, then it drains while Mario drips.
+    p = Player::default();
+    p.pos = Vec3::ZERO;
+    p.soot.body = 1.;
+    p.soot.smoking = true;
+    p.soot.hold = t::SOOT_HOLD_FRAMES;
+    p.step(&Orders::default(), &puddle);
+    assert!(p.events.contains(&Fx::Quenched) && !p.soot.smoking);
+    p.events.clear();
+    frames(&mut p, Orders::default(), &puddle, 120);
+    assert!(
+        p.soot.body < 0.1 && !p.events.contains(&Fx::Quenched),
+        "{:?}",
+        p.soot
+    );
+    p = Player::default();
+    p.soot.body = 1.;
+    p.pos = Vec3::ZERO;
+    p.step(&Orders::default(), &pool);
+    frames(&mut p, Orders::default(), &cool, 200);
+    assert!(
+        p.soot.body < 0.05,
+        "still dripping after the pool: {:?}",
+        p.soot
+    );
     // Low ceilings force a crouch.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {

@@ -41,6 +41,7 @@ struct Kit {
     water: Handle<StandardMaterial>,
     wave: Handle<StandardMaterial>,
     smoke: Handle<StandardMaterial>,
+    wisp: Handle<StandardMaterial>,
     gold_wave: Handle<StandardMaterial>,
 }
 pub fn plugin(app: &mut App) {
@@ -85,6 +86,7 @@ fn setup(
         water: unlit(&mut materials, Color::srgba(0.55, 0.85, 1., 0.8), 0.5, true),
         wave: unlit(&mut materials, Color::srgba(1., 1., 1., 0.55), 1., true),
         smoke: unlit(&mut materials, Color::srgba(0.25, 0.22, 0.2, 0.6), 0., true),
+        wisp: unlit(&mut materials, Color::srgba(0.3, 0.29, 0.28, 0.4), 0., true),
         gold_wave: unlit(&mut materials, Color::srgba(1., 0.85, 0.3, 0.7), 4., true),
     };
     commands.spawn((
@@ -132,6 +134,7 @@ impl Spawner<'_, '_, '_> {
             0 => (&kit.ball, &kit.dust, true),
             1 => (&kit.chip, &kit.spark, false),
             2 => (&kit.chip, &kit.white, false),
+            3 => (&kit.ball, &kit.wisp, true),
             4 => (&kit.ball, &kit.wave, false),
             5 => (&kit.ball, &kit.smoke, true),
             _ => (&kit.ball, &kit.water, false),
@@ -542,6 +545,26 @@ fn trails(
             s.particle(p.pos + Vec3::Y * 0.8, Vec3::ZERO, 0.12, 0.25, 0., 0., 2);
         }
         _ => {}
+    }
+    // Soot smoulders after the burn: thin wisps from the seat, thinning out
+    // as the stain fades.
+    let burning = matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun);
+    if p.soot.smoking && !burning {
+        let k = ((p.soot.body - 0.25) / 0.5).clamp(0.2, 1.);
+        if s.rand() < 0.25 + 0.35 * k {
+            let hip = p.pos + Vec3::Y * 0.6 - p.facing * 0.2;
+            let d = s.dir() * 0.15;
+            let drift = Vec3::new(s.rand() - 0.5, 0., s.rand() - 0.5) * 0.4;
+            s.particle(
+                hip + d,
+                Vec3::Y * 0.9 + drift,
+                0.22 + 0.16 * k,
+                1.1,
+                -0.4,
+                1.,
+                3,
+            );
+        }
     }
     if let Some(cap) = &p.cap {
         let d = s.dir() * 0.15;

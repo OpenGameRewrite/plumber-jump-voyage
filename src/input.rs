@@ -436,6 +436,22 @@ pub fn read(
             *frame = f;
             return;
         }
+        if script == "soot" {
+            // From PJV_SPAWN: run +X across the lava plate, stand while the
+            // soot smoulders, then walk on into the puddle to wash it off.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                reset: started && now < 0.04,
+                direction: if (0.1..1.5).contains(&now) || (8.0..9.4).contains(&now) {
+                    Vec2::X * 0.6
+                } else {
+                    Vec2::ZERO
+                },
+                ..default()
+            };
+            *frame = f;
+            return;
+        }
         if script == "slide" {
             // From PJV_SPAWN on a slope: settle, then hold crouch.
             let now = time.elapsed_secs() - delay;
