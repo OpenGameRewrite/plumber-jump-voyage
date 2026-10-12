@@ -40,6 +40,7 @@ struct Kit {
     white: Handle<StandardMaterial>,
     water: Handle<StandardMaterial>,
     wave: Handle<StandardMaterial>,
+    smoke: Handle<StandardMaterial>,
     gold_wave: Handle<StandardMaterial>,
 }
 pub fn plugin(app: &mut App) {
@@ -83,6 +84,7 @@ fn setup(
         white: unlit(&mut materials, Color::srgb(1., 1., 0.95), 4., false),
         water: unlit(&mut materials, Color::srgba(0.55, 0.85, 1., 0.8), 0.5, true),
         wave: unlit(&mut materials, Color::srgba(1., 1., 1., 0.55), 1., true),
+        smoke: unlit(&mut materials, Color::srgba(0.25, 0.22, 0.2, 0.6), 0., true),
         gold_wave: unlit(&mut materials, Color::srgba(1., 0.85, 0.3, 0.7), 4., true),
     };
     commands.spawn((
@@ -131,6 +133,7 @@ impl Spawner<'_, '_, '_> {
             1 => (&kit.chip, &kit.spark, false),
             2 => (&kit.chip, &kit.white, false),
             4 => (&kit.ball, &kit.wave, false),
+            5 => (&kit.ball, &kit.smoke, true),
             _ => (&kit.ball, &kit.water, false),
         };
         let spin = self.rand() * 12. - 6.;
@@ -343,6 +346,23 @@ fn react(
                 shake.0 = shake.0.max(0.25);
             }
             Fx::Ledge => s.sparks(feet + Vec3::Y * 1.6 - back * 0.3, 4, 1.5, 2),
+            Fx::Burned(_) => {
+                // A burst of embers and smoke from the seat.
+                s.sparks(feet + Vec3::Y * 0.5, 12, 4., 1);
+                for _ in 0..6 {
+                    let d = s.dir() * 0.3;
+                    s.particle(
+                        feet + Vec3::Y * 0.5 + d,
+                        Vec3::Y * 2. + d,
+                        0.6,
+                        0.7,
+                        -1.,
+                        2.,
+                        5,
+                    );
+                }
+                shake.0 = shake.0.max(0.2);
+            }
             Fx::Splash => {
                 for _ in 0..16 {
                     let d = s.dir().with_y(0.).normalize_or(Vec3::X);
@@ -417,7 +437,7 @@ fn trails(
     };
     let back = -p.facing;
     match p.mode {
-        Move::Skid | Move::Slide if p.grounded => {
+        Move::Skid | Move::Slide | Move::SlopeSlide if p.grounded => {
             s.particle(
                 p.pos + p.facing * 0.3 + Vec3::Y * 0.1,
                 Vec3::Y * 0.8 + back,
@@ -442,6 +462,16 @@ fn trails(
                     4.,
                     0,
                 );
+            }
+        }
+        Move::BurnJump | Move::FireRun => {
+            // Smoke trailing from the seat, with the odd ember.
+            let hip = p.pos + Vec3::Y * 0.55 - p.facing * 0.25;
+            let d = s.dir() * 0.1;
+            s.particle(hip + d, Vec3::Y * 1.2 - p.facing + d, 0.45, 0.6, -1., 2., 5);
+            if s.rand() < 0.3 {
+                let up = Vec3::Y * 2. + s.dir();
+                s.particle(hip, up, 0.12, 0.4, 6., 1., 1);
             }
         }
         Move::SpinDrop | Move::GroundSpin => {

@@ -421,6 +421,51 @@ pub fn read(
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
+        if script == "lava" {
+            // From PJV_SPAWN: walk +X briefly (onto the lava plate), then let go.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                reset: started && now < 0.04,
+                direction: if (0.1..0.8).contains(&now) {
+                    Vec2::X * 0.6
+                } else {
+                    Vec2::ZERO
+                },
+                ..default()
+            };
+            *frame = f;
+            return;
+        }
+        if script == "slide" {
+            // From PJV_SPAWN on a slope: settle, then hold crouch.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                reset: started && now < 0.04,
+                crouch: now >= 0.4,
+                crouch_pressed: *smoke_last < 0.4 && now >= 0.4,
+                ..default()
+            };
+            *smoke_last = now;
+            *frame = f;
+            return;
+        }
+        if script == "crouchwalk" {
+            // Walk toward the camera, then crouch and keep holding it.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                direction: if started && now < 1.6 {
+                    Vec2::NEG_X * 0.4
+                } else {
+                    Vec2::ZERO
+                },
+                crouch: now >= 1.0,
+                crouch_pressed: *smoke_last < 1.0 && now >= 1.0,
+                ..default()
+            };
+            *smoke_last = now;
+            *frame = f;
+            return;
+        }
         if script == "spin" {
             // Circle the stick into a ground spin, then throw while still circling.
             let now = time.elapsed_secs() - delay;

@@ -256,6 +256,8 @@ pub fn looping(name: &str) -> bool {
             | "SwimWait"
             | "SwimWalk"
             | "SpinJumpLoop"
+            | "Slide"
+            | "FireRun"
             | "SpinGroundL"
             | "SpinGroundR"
             | "SpinJumpDownFall"
@@ -617,7 +619,9 @@ mod imported {
         let time = if looping(anim.name) {
             seconds.rem_euclid(len.max(1e-3))
         } else {
-            seconds.min(len)
+            // Hold just before the end: the player wraps a time equal to the
+            // clip's length back to its first frame.
+            seconds.min((len - 1e-4).max(0.))
         };
         Pose {
             clips: vec![(node, 1., time)],
@@ -706,7 +710,7 @@ mod imported {
                 if loaded.overlay_weight == 0. {
                     player.stop(on);
                 } else {
-                    let frame = sub.map_or(15., |s| s.frame + ahead);
+                    let frame = sub.map_or(15., |s| s.frame + ahead).min(15.9);
                     player
                         .play(on)
                         .set_weight(loaded.overlay_weight)

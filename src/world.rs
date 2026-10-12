@@ -322,10 +322,16 @@ fn setup(
             let mut normals = Vec::new();
             let mut uv = Vec::new();
             for f in faces {
-                let a = Vec3::from_array(points[f[0]]);
-                let b = Vec3::from_array(points[f[1]]);
-                let c = Vec3::from_array(points[f[2]]);
-                let n = (b - a).cross(c - a).normalize();
+                // Newell's normal stays valid when a ramp's end edge collapses
+                // two corners of a side face into one point.
+                let n = (0..4)
+                    .map(|k| {
+                        let a = Vec3::from_array(points[f[k]]);
+                        let b = Vec3::from_array(points[f[(k + 1) % 4]]);
+                        a.cross(b)
+                    })
+                    .sum::<Vec3>()
+                    .normalize_or(Vec3::Y);
                 for k in [0, 1, 2, 0, 2, 3] {
                     positions.push(points[f[k]]);
                     normals.push(n.to_array());
@@ -410,6 +416,15 @@ fn setup(
         false,
         false,
     );
+    // A 35-degree slide slope: steep enough to crouch-slide down (26 degrees or more).
+    add(
+        Vec3::new(11., 1.4, 4.),
+        Vec3::new(8., 2.8, 4.),
+        cream.clone(),
+        -0.7,
+        false,
+        false,
+    );
     add(
         Vec3::new(-15., 0.5, 12.),
         Vec3::new(4., 1., 5.),
@@ -477,6 +492,29 @@ fn setup(
         false,
     );
     course.water = Some((Vec3::new(9., 0., 25.), Vec3::new(6., 4., 5.)));
+    // A lava plate: touching it burns, as hot ground does in the original.
+    let lava = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.95, 0.32, 0.05),
+        emissive: LinearRgba::rgb(6., 1.6, 0.2),
+        ..default()
+    });
+    let lava_center = Vec3::new(15., 0.1, -1.5);
+    let lava_half = Vec3::new(2., 0.1, 1.25);
+    course.solids.push(Solid {
+        center: lava_center,
+        half: lava_half,
+        slope: 0.,
+        moving: false,
+        slippery: false,
+    });
+    course
+        .hot
+        .push((lava_center + Vec3::Y * lava_half.y, lava_half));
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::from_size(lava_half * 2.))),
+        MeshMaterial3d(lava),
+        Transform::from_translation(lava_center),
+    ));
     for (c, s) in [
         (Vec3::new(2., -1.5, 25.), Vec3::new(1., 5., 12.)),
         (Vec3::new(16., -1.5, 25.), Vec3::new(1., 5., 12.)),
@@ -804,6 +842,7 @@ pub fn animate(
     body.rotation = match p.mode {
         Move::Roll => Quat::from_rotation_x(-p.distance * 2.5),
         Move::Dive => Quat::from_rotation_x(-1.3),
+        Move::SlopeSlide => Quat::from_rotation_x(0.5),
         // The dive's landing roll: one forward turn over the clip.
         Move::Slide => Quat::from_rotation_x(-(p.timer / 0.6).min(1.) * std::f32::consts::TAU),
         Move::Backflip => Quat::from_rotation_x((p.timer * 7.).min(std::f32::consts::TAU)),

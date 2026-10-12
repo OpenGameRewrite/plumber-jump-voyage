@@ -207,7 +207,7 @@ CLIPS='''Wait RunStart Brake TurnPoint Turn Land LandStiffen LandJump3 LandTurn 
 Jump JumpReverse Jump2 Jump3 JumpBack JumpTurn JumpBroad JumpBroad2 JumpBroad3 Fall
 SpinJumpStart SpinJumpLoop SpinJumpDownFall SpinGroundL SpinGroundR
 HipDropStart HipDrop HipDropLand JumpHipDrop RollingStart Rolling RollingEnd RollingJump RollingStandUp
-HeadSlidingStart HeadSliding SquatStart SquatWait SquatWalk SquatEnd
+HeadSlidingStart HeadSliding Slide FireRunStart FireRun SquatStart SquatWait SquatWalk SquatEnd
 SpinCapStart SpinCapStartLeft SpinCapStartRight SpinCapStart2Left SpinCapStart2Right SpinCapStart3Left SpinCapStart3Right
 SpinCapStartDoubleUp SpinCapStartDoubleDown SpinCapStartDoubleLeft SpinCapStartDoubleRight
 SpinCapAirStart SpinCapAirStartLeft SpinCapAirStartRight SpinCapAirStartDoubleUp SpinCapAirStartDoubleDown
@@ -216,7 +216,8 @@ JumpCapLeapFrog JumpCapCatchCommon JumpCapCatch JumpCapCatchAir WallJump WallKee
 WallCatchEnd WallCatchEndJump PoleCatch PoleClimb PoleFall PoleWait SwimFallIn SwimWait SwimWalk SwimDive'''.split()
 # Event tables keyed by the original's reaction names.
 MARIO_REACTIONS={'着地':'Land','着地[走り]':'LandRun','転がり再加速[1回目]':'RollBoost',
-    '転がり再加速[2回目以降]':'RollBoostAgain','転がり着地':'RollLand'}
+    '転がり再加速[2回目以降]':'RollBoostAgain','転がり着地':'RollLand',
+    'あちちジャンプ':'BurnJump','あちちジャンプ(バウンド)':'BurnBounce'}
 CAP_ACTIONS=['FlyingWait','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
 CAP_REACTIONS={'帽子投げ':'Throw','帽子戻し':'Return','帽子キャッチ':'Catch'}
 # Footstep playback the controller triggers directly on its foot-print frames.

@@ -121,6 +121,26 @@ mod t {
     pub const ROLL_RESTART_ACCEL: f32 = 6.;
     pub const ROLL_RESTART_INTERVAL: u32 = 15;
 
+    pub const DAMAGE_FIRE_JUMP_POWER_1ST: f32 = 20.;
+    pub const DAMAGE_FIRE_JUMP_POWER_2ND: f32 = 20.;
+    pub const DAMAGE_FIRE_JUMP_MOVE: f32 = 10.;
+    pub const DAMAGE_FIRE_GRAVITY: f32 = 0.9;
+    pub const DAMAGE_FIRE_NO_GRAVITY_FRAMES: u32 = 20;
+    pub const DAMAGE_FIRE_RUN_TIME: u32 = 60;
+    pub const DAMAGE_FIRE_RUN_SPEED: f32 = 18.;
+    pub const DAMAGE_FIRE_RUN_BRAKE_FRAMES: f32 = 20.;
+    pub const SLOPE_SLIDE_ANGLE_START: f32 = 26.;
+    pub const SLOPE_SLIDE_ANGLE_END: f32 = 10.;
+    pub const SLOPE_SLIDE_ACCEL: f32 = 0.3;
+    pub const SLOPE_SLIDE_BRAKE: f32 = 0.9;
+    pub const SLOPE_SLIDE_MAX: f32 = 22.;
+    pub const SLOPE_SLIDE_SPEED_END: f32 = 3.;
+    pub const SLOPE_SLIDE_START_SPEED: f32 = 5.;
+    pub const SLOPE_SLIDE_SIDE_ACCEL: f32 = 0.6;
+    pub const SLOPE_SLIDE_SIDE_BRAKE: f32 = 0.98;
+    pub const SLOPE_SLIDE_SIDE_MAX: f32 = 10.;
+    pub const SLOPE_TURN_DEG: f32 = 5.;
+    pub const SLOPE_FORCE_FRAMES: u32 = 30;
     pub const SQUAT_BRAKE_END: f32 = 3.5;
     pub const SQUAT_ACCEL_RATE: f32 = 1.2;
     pub const SQUAT_BRAKE_RATE: f32 = 0.95;
@@ -256,6 +276,9 @@ pub enum Move {
     RollJump,
     Dive,
     Slide,
+    SlopeSlide,
+    BurnJump,
+    FireRun,
     WallSlide,
     WallJump,
     Ledge,
@@ -293,6 +316,9 @@ impl Move {
             Self::RollJump => "Roll jump",
             Self::Dive => "Dive",
             Self::Slide => "Dive landing",
+            Self::SlopeSlide => "Slope slide",
+            Self::BurnJump => "Hot!",
+            Self::FireRun => "Fire run",
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
             Self::Ledge => "Ledge hang",
@@ -335,14 +361,20 @@ pub enum Throw {
 #[derive(Clone, Copy, Debug, PartialEq, Message)]
 pub enum Fx {
     Jump(Move),
-    Land { hard: bool },
-    Step { left: bool },
+    Land {
+        hard: bool,
+    },
+    Step {
+        left: bool,
+    },
     Skid,
     TurnDust,
     PoundStart,
     PoundLand,
     RollStart,
-    RollBoost { perfect: bool },
+    RollBoost {
+        perfect: bool,
+    },
     Dive,
     Throw(Throw),
     Catch,
@@ -351,6 +383,8 @@ pub enum Fx {
     Ledge,
     Pole,
     Splash,
+    /// Touched hot ground (true for a bounce while already burning).
+    Burned(bool),
     SwimStroke,
 }
 /// Clip the presentation should play: an original animation name, or "Move"
@@ -460,6 +494,8 @@ pub struct Player {
     pole_height: f32,
     pole_climb: u32,
     pole_cooldown: u32,
+    /// Frames into the fire run.
+    fire_frames: u32,
     swim_rise: u32,
     step_phase: f32,
 }
@@ -534,6 +570,7 @@ impl Default for Player {
             pole_height: 0.,
             pole_climb: 0,
             pole_cooldown: 0,
+            fire_frames: 0,
             swim_rise: 0,
             step_phase: 0.,
         }
@@ -562,12 +599,20 @@ pub struct Course {
     pub solids: Vec<Solid>,
     pub poles: Vec<Pole>,
     pub water: Option<(Vec3, Vec3)>,
+    /// Hot surfaces (lava): centre of the top face and half extents.
+    pub hot: Vec<(Vec3, Vec3)>,
     pub targets: Vec<Vec3>,
 }
 impl Course {
     pub fn wet(&self, pos: Vec3) -> bool {
         self.water.is_some_and(|(c, h)| {
             (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && pos.y < c.y
+        })
+    }
+    /// Standing on a hot surface.
+    pub fn hot(&self, pos: Vec3) -> bool {
+        self.hot.iter().any(|(c, h)| {
+            (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && (pos.y - c.y).abs() < 0.1
         })
     }
     /// Highest walkable surface at or below `pos`, for shadows and the camera.
@@ -755,6 +800,9 @@ impl Player {
             Move::RollEnd => self.roll_end(&o),
             Move::Dive => self.head_sliding(&o),
             Move::Slide => self.belly_slide(&o),
+            Move::SlopeSlide => self.slope_slide(&o),
+            Move::BurnJump => self.burn_jump(&o),
+            Move::FireRun => self.fire_run(&o),
             Move::LongJump => self.long_jump_air(&o),
             Move::WallSlide => self.wall_slide(&o),
             Move::Ledge => self.wall_catch(&o, scene),
@@ -777,6 +825,9 @@ impl Player {
         self.collide(&o, scene);
         if self.grounded && !was_grounded {
             self.land(&o);
+        }
+        if self.grounded && scene.hot(self.pos) {
+            self.burn();
         } else if !self.grounded
             && was_grounded
             && self.v.y <= 0.
@@ -792,6 +843,7 @@ impl Player {
                     | Move::GroundSpin
                     | Move::Throw
                     | Move::Slide
+                    | Move::FireRun
             )
         {
             self.coyote = 3;
@@ -891,6 +943,10 @@ impl Player {
         let speed = self.speed_h();
         if self.pre_jump > 0 {
             self.ground_jump(o);
+            return true;
+        }
+        if o.crouch && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
+            self.start_slope_slide();
             return true;
         }
         if o.crouch && speed >= t::DASH_JUDGE {
@@ -1123,7 +1179,130 @@ impl Player {
         };
         self.set_h(self.facing * s);
     }
+    /// Ground at least this many degrees steep.
+    fn steep(&self, degrees: f32) -> bool {
+        self.grounded && self.slope.abs().atan().to_degrees() >= degrees
+    }
+    fn start_slope_slide(&mut self) {
+        let down = Vec3::new(-self.slope.signum(), 0., 0.);
+        let mut h = self.v.with_y(0.);
+        // Start at least gently downhill, never faster than the slide's limit.
+        let along = h.dot(down);
+        if along < t::SLOPE_SLIDE_START_SPEED {
+            h += down * (t::SLOPE_SLIDE_START_SPEED - along);
+        }
+        self.set_h(h.clamp_length_max(t::SLOPE_SLIDE_MAX));
+        self.enter(Move::SlopeSlide, "Slide");
+    }
+    /// Sliding down a slope on the seat: speeds up downhill, steers a little,
+    /// and brakes to a stop once the ground flattens out.
+    fn slope_slide(&mut self, o: &Orders) {
+        if self.pre_jump > 0 {
+            self.ground_jump(o);
+            return;
+        }
+        if (self.pre_throw > 0 || o.throw_pressed) && self.grounded {
+            self.pre_throw = 0;
+            self.start_roll(self.speed_h().max(t::ROLL_START), false);
+            return;
+        }
+        if !self.grounded {
+            self.v.y = (self.v.y - t::GRAVITY_AIR).max(-t::FALL_MAX);
+            return;
+        }
+        let h = self.v.with_y(0.);
+        let mut sliding = h;
+        if self.steep(t::SLOPE_SLIDE_ANGLE_END) {
+            let down = Vec3::new(-self.slope.signum(), 0., 0.);
+            let side_dir = Vec3::Y.cross(down);
+            let mut along = h.dot(down);
+            let mut side = h.dot(side_dir);
+            if along < 0. {
+                along *= t::SLOPE_SLIDE_BRAKE;
+            }
+            along = (along + t::SLOPE_SLIDE_ACCEL).min(t::SLOPE_SLIDE_MAX);
+            side *= t::SLOPE_SLIDE_SIDE_BRAKE;
+            if self.tilt > 0.05 {
+                side = (side + self.stick.dot(side_dir) * self.tilt * t::SLOPE_SLIDE_SIDE_ACCEL)
+                    .clamp(-t::SLOPE_SLIDE_SIDE_MAX, t::SLOPE_SLIDE_SIDE_MAX);
+            }
+            sliding = down * along + side_dir * side;
+        } else {
+            sliding *= t::SLOPE_SLIDE_BRAKE;
+            if sliding.length() <= t::SLOPE_SLIDE_SPEED_END && self.frame >= t::SLOPE_FORCE_FRAMES {
+                if o.crouch {
+                    self.start_squat();
+                } else {
+                    self.enter(Move::Idle, "Wait");
+                }
+                return;
+            }
+        }
+        let sliding = sliding.clamp_length_max(t::SLOPE_SLIDE_MAX);
+        if sliding.length() > 0.5 {
+            self.facing = turn(
+                self.facing,
+                sliding.normalize(),
+                t::SLOPE_TURN_DEG.to_radians(),
+            );
+        }
+        self.set_h(sliding);
+        self.v.y = -t::GRAVITY;
+    }
+    /// Hot ground: Mario leaps up clutching his seat, then runs off at speed.
+    fn burn(&mut self) {
+        let again = matches!(self.mode, Move::BurnJump | Move::FireRun);
+        self.enter(Move::BurnJump, "FireRunStart");
+        let power = if again {
+            t::DAMAGE_FIRE_JUMP_POWER_2ND
+        } else {
+            t::DAMAGE_FIRE_JUMP_POWER_1ST
+        };
+        self.v = self.facing * t::DAMAGE_FIRE_JUMP_MOVE + Vec3::Y * power;
+        self.grounded = false;
+        self.coyote = 0;
+        self.cap_jump_possible = true;
+        self.events.push(Fx::Burned(again));
+    }
+    fn burn_jump(&mut self, _o: &Orders) {
+        if self.tilt > 0.05 {
+            self.facing = turn(self.facing, self.stick, 2_f32.to_radians());
+        }
+        self.set_h(self.facing * t::DAMAGE_FIRE_JUMP_MOVE);
+        // The leap rises at full power for a moment before gravity takes it.
+        if self.frame >= t::DAMAGE_FIRE_NO_GRAVITY_FRAMES {
+            self.v.y = (self.v.y - t::DAMAGE_FIRE_GRAVITY).max(-t::FALL_MAX);
+        }
+    }
+    /// Running off the burn: fast and unstoppable, steerable, then easing back.
+    fn fire_run(&mut self, o: &Orders) {
+        if self.pre_jump > 0 {
+            self.ground_jump(o);
+            return;
+        }
+        self.fire_frames += 1;
+        if self.tilt > 0.05 {
+            self.facing = turn(self.facing, self.stick, t::ROUND_LIMIT_DEG.to_radians());
+        }
+        let past = self.fire_frames.saturating_sub(t::DAMAGE_FIRE_RUN_TIME) as f32;
+        let speed = lerp_clamped(
+            t::DAMAGE_FIRE_RUN_SPEED,
+            t::NORMAL_MAX,
+            past / t::DAMAGE_FIRE_RUN_BRAKE_FRAMES,
+        );
+        self.set_h(self.facing * speed);
+        self.v.y = -t::GRAVITY;
+        if past >= t::DAMAGE_FIRE_RUN_BRAKE_FRAMES {
+            self.run_frames = t::BRAKE_ON_COUNTER;
+            self.set(Move::Run);
+            self.play("Move");
+        }
+    }
     fn squat(&mut self, o: &Orders) {
+        if o.crouch && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
+            self.start_slope_slide();
+            return;
+        }
         let speed = self.speed_h();
         let sliding = speed > t::SQUAT_BRAKE_END;
         if self.pre_jump > 0 {
@@ -2228,7 +2407,11 @@ impl Player {
                 self.start_roll(speed.max(t::ROLL_START), false);
             }
             Move::Dive => self.enter(Move::Slide, "LandRolling"),
-            Move::Roll => {}
+            Move::Roll | Move::SlopeSlide => {}
+            Move::BurnJump => {
+                self.fire_frames = 0;
+                self.enter(Move::FireRun, "FireRun");
+            }
             _ => {
                 if self.hard_land {
                     self.set_h(Vec3::ZERO);
@@ -2977,6 +3160,78 @@ pub fn self_check() {
         "{:?}",
         p.pos
     );
+    // Crouching on a steep slope slides down it, then stops on the flat.
+    let mut ramp = floor.clone();
+    ramp.solids.push(Solid {
+        center: Vec3::new(0., 1.4, 0.),
+        half: Vec3::new(4., 1.4, 2.),
+        slope: -0.7,
+        moving: false,
+        slippery: false,
+    });
+    p = Player::default();
+    p.pos = Vec3::new(-2., ramp.solids[1].top(-2.), 0.);
+    frames(&mut p, Orders::default(), &ramp, 5);
+    assert!(p.grounded);
+    p.step(
+        &Orders {
+            crouch: true,
+            crouch_pressed: true,
+            ..default()
+        },
+        &ramp,
+    );
+    assert_eq!((p.mode, p.anim.name), (Move::SlopeSlide, "Slide"));
+    let start_x = p.pos.x;
+    frames(
+        &mut p,
+        Orders {
+            crouch: true,
+            ..default()
+        },
+        &ramp,
+        30,
+    );
+    assert!(
+        p.pos.x > start_x + 1.5 && p.vel.x > 0.,
+        "slides downhill: {:?}",
+        p.pos
+    );
+    for _ in 0..300 {
+        p.step(
+            &Orders {
+                crouch: true,
+                ..default()
+            },
+            &ramp,
+        );
+        if p.mode != Move::SlopeSlide {
+            break;
+        }
+    }
+    assert_eq!(
+        p.mode,
+        Move::Crouch,
+        "the slide ends once the ground is flat"
+    );
+    // Hot ground: a leap, then a fast run that eases back to a normal run.
+    let mut lava = floor.clone();
+    lava.hot
+        .push((Vec3::new(0., 0., 0.), Vec3::new(1., 1., 1.)));
+    p = Player::default();
+    p.pos = Vec3::ZERO;
+    p.step(&Orders::default(), &lava);
+    assert_eq!((p.mode, p.anim.name), (Move::BurnJump, "FireRunStart"));
+    let peak = until_ground(&mut p, Orders::default(), &lava);
+    assert!(peak > 3., "the burn leap is high: {peak}");
+    assert_eq!((p.mode, p.anim.name), (Move::FireRun, "FireRun"));
+    p.step(&Orders::default(), &lava);
+    assert!(
+        (p.move_speed - t::DAMAGE_FIRE_RUN_SPEED).abs() < 0.01,
+        "runs without input"
+    );
+    frames(&mut p, Orders::default(), &lava, 90);
+    assert_ne!(p.mode, Move::FireRun);
     // Low ceilings force a crouch.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {
