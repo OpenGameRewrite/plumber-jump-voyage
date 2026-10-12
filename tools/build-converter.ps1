@@ -12,7 +12,7 @@ foreach ($taskName in $taskNames) {
     $taskRefs += '/r:' + $taskDll.FullName
 }
 $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $taskCompiler /nologo /platform:x64 ('/out:' + (Join-Path $taskOutput 'convert.exe')) @taskRefs (Join-Path $PSScriptRoot 'convert.cs')
+& $taskCompiler /nologo /platform:x64 ('/out:' + (Join-Path $taskOutput 'convert.exe')) @taskRefs (Join-Path $PSScriptRoot 'convert.cs') (Join-Path $PSScriptRoot 'convert_checks.cs')
 if ($LASTEXITCODE) { throw 'Converter compilation failed' }
 # Assemblies resolve beside the adapter; files remain ignored and local.
 Get-ChildItem -LiteralPath $taskToolbox -File -Filter '*.dll' | Copy-Item -Destination $taskOutput -Force

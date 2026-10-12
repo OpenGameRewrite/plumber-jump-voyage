@@ -289,6 +289,7 @@ pub fn fallback(name: &str) -> &'static str {
 #[cfg(feature = "local-assets")]
 mod imported {
     use super::*;
+    use crate::asset_contract::{self, Bone, Part as AssetPart, Stain, Surface, VisibilityRole};
     #[derive(Component)]
     struct Imported;
     #[derive(Component)]
@@ -312,7 +313,7 @@ mod imported {
         masked: bool,
         blend: Blend,
         /// The clip file's animation target for each (bone, parent bone) name pair.
-        targets: std::collections::HashMap<(String, String), bevy::animation::AnimationTargetId>,
+        targets: std::collections::HashMap<[String; 2], bevy::animation::AnimationTargetId>,
         retargeted: bool,
         /// Each model material's own colour, and the soot levels last applied.
         stain_base: std::collections::HashMap<AssetId<StandardMaterial>, (Color, f32, f32)>,
@@ -334,39 +335,24 @@ mod imported {
     }
     /// Mask group for hips and legs; the throw overlay leaves them alone.
     const LEGS: u32 = 0;
-    fn legs(name: &str) -> bool {
-        let name = name.strip_prefix("Armature_").unwrap_or(name);
-        if ["Eye_", "Face_", "Head_"]
-            .iter()
-            .any(|p| name.starts_with(p))
-        {
-            return false;
-        }
-        [
-            "Hip",
-            "Leg",
-            "Foot",
-            "Toe",
-            "JointRoot",
-            "AllRoot",
-            "nw4f_root",
-        ]
-        .iter()
-        .any(|n| name.contains(n))
-    }
+    #[path = "../../tests/imported_assets.rs"]
+    mod checks;
     pub fn self_check() {
-        assert!(legs("Armature_Hip") && legs("Armature_JointRoot"));
-        assert!(!legs("Armature_Eye_JointRoot"));
-        assert!(!legs("Armature_Face_AllRoot"));
-        assert!(!legs("Armature_Head_MarioHead"));
-        assert_eq!(soot_blend(0.), 0.);
-        assert_eq!(soot_blend(1.), 1.);
-        assert!(soot_blend(0.25) > 0.6, "a fading stain still shows");
+        checks::run();
     }
     pub fn plugin(app: &mut App) {
         app.init_resource::<Loaded>().add_systems(
             Update,
-            (select, retarget, mask, animation, parts, finish, stain)
+            (
+                select,
+                bind_metadata,
+                retarget,
+                mask,
+                animation,
+                parts,
+                finish,
+                stain,
+            )
                 .chain()
                 .after(crate::world::animate),
         );
@@ -433,7 +419,19 @@ mod imported {
             };
             let outfit = &wardrobe.outfits[settings.outfit - 3];
             let mut graph = AnimationGraph::new();
-            loaded.targets = target_ids(source, &gltf_nodes);
+            loaded.targets = match target_ids(source, &gltf_nodes).and_then(|ids| {
+                target_ids(gltf, &gltf_nodes)?;
+                Ok(ids)
+            }) {
+                Ok(ids) => ids,
+                Err(error) => {
+                    wardrobe.status =
+                        format!("Invalid animation metadata: {error}. Using the explorer.");
+                    error!("{}", wardrobe.status);
+                    loaded.ready = true;
+                    return;
+                }
+            };
             for (name, clip) in &source.named_animations {
                 let node = graph.add_clip(clip.clone(), 1., graph.root);
                 let length = clips.get(clip).map_or(1., |c| c.duration());
@@ -508,21 +506,13 @@ mod imported {
             loaded.ready = true;
         }
     }
-    /// Parent name for matching: some costumes lack the body's top `nw4f_root`
-    /// level, so it counts the same as the armature node above it.
-    fn parent_key(name: &str) -> String {
-        if matches!(name, "Armature" | "Armature_nw4f_root") {
-            String::new()
-        } else {
-            name.to_string()
-        }
-    }
     /// Target ids the clip file's animations use, keyed by bone and parent name.
     /// The loader derives them from each bone's name path below the root.
     fn target_ids(
         source: &bevy::gltf::Gltf,
         nodes: &Assets<bevy::gltf::GltfNode>,
-    ) -> std::collections::HashMap<(String, String), bevy::animation::AnimationTargetId> {
+    ) -> Result<std::collections::HashMap<[String; 2], bevy::animation::AnimationTargetId>, String>
+    {
         let all: Vec<&bevy::gltf::GltfNode> =
             source.nodes.iter().filter_map(|h| nodes.get(h)).collect();
         let by_index: std::collections::HashMap<usize, &bevy::gltf::GltfNode> =
@@ -544,39 +534,98 @@ mod imported {
             path.reverse();
             let parent_name = parent
                 .get(&n.index)
-                .map_or(String::new(), |p| parent_key(&by_index[p].name));
-            ids.entry((n.name.clone(), parent_name))
-                .or_insert_with(|| bevy::animation::AnimationTargetId::from_names(path.iter()));
+                .map_or(String::new(), |p| by_index[p].name.clone());
+            let spec = n
+                .extras
+                .as_ref()
+                .map(|e| asset_contract::decode::<Bone>(&e.value, "pjv_bone"))
+                .transpose()?
+                .flatten()
+                .unwrap_or_else(|| crate::legacy_assets::bone(&n.name, &parent_name));
+            if spec.key[0].is_empty() {
+                return Err("Empty bone identity".into());
+            }
+            if ids
+                .insert(
+                    spec.key.clone(),
+                    bevy::animation::AnimationTargetId::from_names(path.iter()),
+                )
+                .is_some()
+            {
+                return Err(format!("Ambiguous bone identity {:?}", spec.key));
+            }
         }
-        ids
+        Ok(ids)
     }
-    /// Outfits play the shared clips: once their bones spawn, each takes the
-    /// clip file's target for the bone of the same name under the same parent.
+    fn bind_metadata(
+        mut commands: Commands,
+        settings: Res<crate::input::Settings>,
+        wardrobe: Res<Wardrobe>,
+        meshes: Query<
+            (Entity, &Name, Option<&bevy::gltf::GltfExtras>),
+            (With<Mesh3d>, Without<AssetPart>),
+        >,
+        bones: Query<
+            (Entity, &Name, &ChildOf, Option<&bevy::gltf::GltfExtras>),
+            (With<bevy::animation::AnimationTargetId>, Without<Bone>),
+        >,
+        names: Query<&Name>,
+    ) {
+        let legacy_metal = settings
+            .outfit
+            .checked_sub(3)
+            .and_then(|i| wardrobe.outfits.get(i))
+            .is_some_and(|o| o.file.contains("Metal"));
+        for (e, name, extras) in &meshes {
+            let spec = match extras
+                .map(|x| asset_contract::decode::<AssetPart>(&x.value, "pjv_part"))
+                .transpose()
+            {
+                Ok(Some(Some(spec))) => spec,
+                Ok(_) => crate::legacy_assets::part(name.as_str(), legacy_metal),
+                Err(error) => {
+                    error!("Invalid mesh metadata: {error}");
+                    AssetPart::default()
+                }
+            };
+            commands.entity(e).insert(spec);
+        }
+        for (e, name, parent, extras) in &bones {
+            let parent = names.get(parent.parent()).map_or("", Name::as_str);
+            let spec = match extras
+                .map(|x| asset_contract::decode::<Bone>(&x.value, "pjv_bone"))
+                .transpose()
+            {
+                Ok(Some(Some(spec))) => spec,
+                Ok(_) => crate::legacy_assets::bone(name.as_str(), parent),
+                Err(error) => {
+                    error!("Invalid bone metadata: {error}");
+                    continue;
+                }
+            };
+            commands.entity(e).insert(spec);
+        }
+    }
     fn retarget(
         mut loaded: ResMut<Loaded>,
-        mut bones: Query<(&Name, &ChildOf, &mut bevy::animation::AnimationTargetId)>,
-        names: Query<&Name>,
+        mut bones: Query<(&Bone, &mut bevy::animation::AnimationTargetId)>,
     ) {
         if !loaded.ready || loaded.retargeted || loaded.targets.is_empty() {
             return;
         }
         let mut found = false;
-        for (name, child_of, mut id) in &mut bones {
-            let parent = names
-                .get(child_of.parent())
-                .map_or(String::new(), |n| parent_key(n.as_str()));
-            if let Some(target) = loaded.targets.get(&(name.to_string(), parent)) {
+        for (bone, mut id) in &mut bones {
+            if let Some(target) = loaded.targets.get(&bone.key) {
                 *id = *target;
-                found |= name.as_str().ends_with("Hip");
+                found |= bone.hip;
             }
         }
         loaded.retargeted = found;
     }
-    /// Bone entities exist only after the scene spawns; tag the legs then.
     fn mask(
         mut loaded: ResMut<Loaded>,
         mut graphs: ResMut<Assets<AnimationGraph>>,
-        targets: Query<(&bevy::animation::AnimationTargetId, &Name)>,
+        targets: Query<(&bevy::animation::AnimationTargetId, &Bone)>,
     ) {
         if !loaded.ready || !loaded.retargeted || loaded.masked || loaded.overlay.is_none() {
             return;
@@ -585,10 +634,10 @@ mod imported {
             return;
         };
         let mut found = false;
-        for (id, name) in &targets {
-            if legs(name.as_str()) {
+        for (id, bone) in &targets {
+            if bone.leg {
                 graph.add_target_to_mask_group(*id, LEGS);
-                found |= name.as_str().ends_with("Hip");
+                found |= bone.hip;
             }
         }
         loaded.masked = found;
@@ -739,8 +788,11 @@ mod imported {
         loaded: Res<Loaded>,
         wardrobe: Res<Wardrobe>,
         mut hats: Query<&mut Visibility, With<crate::world::Hat>>,
-        mut meshes: Query<(&Name, &mut Visibility), (With<Mesh3d>, Without<crate::world::Hat>)>,
-        eye_materials: Query<(&Name, &MeshMaterial3d<StandardMaterial>)>,
+        mut meshes: Query<
+            (&AssetPart, &mut Visibility),
+            (With<Mesh3d>, Without<crate::world::Hat>),
+        >,
+        eye_materials: Query<(&AssetPart, &MeshMaterial3d<StandardMaterial>)>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut caps: Query<
             (&mut Transform, &mut Visibility),
@@ -811,9 +863,8 @@ mod imported {
         let legacy = outfit.is_none_or(|o| o.expressions.is_empty());
         let closed_left = part_show("EyelidCloseLeft").unwrap_or(legacy && blink);
         let closed_right = part_show("EyelidCloseRight").unwrap_or(legacy && blink);
-        for (name, handle) in &eye_materials {
-            if let Some((_, material)) = name.as_str().split_once("__")
-                && material.starts_with("EyePupil")
+        for (part, handle) in &eye_materials {
+            if let Some(material) = part.pupil.as_deref()
                 && let Some(mut m) = materials.get_mut(&handle.0)
             {
                 let uv = sample
@@ -824,33 +875,22 @@ mod imported {
                 }
             }
         }
-        for (name, mut visibility) in &mut meshes {
-            let n = name.as_str();
-            // The thrown cap's eye model holds every lid state; it flies wide-eyed.
-            let show = if n.starts_with("EyeClose") || n.starts_with("EyeHalf") {
-                Some(false)
-            } else if n.starts_with("EyeOpen") {
-                Some(true)
-            } else if n.starts_with("EyelidCloseLeft") {
-                Some(closed_left)
-            } else if n.starts_with("EyelidCloseRight") {
-                Some(closed_right)
-            } else if n.starts_with("Eyeball__EyePupilLeft") {
-                Some(!closed_left)
-            } else if n.starts_with("Eyeball__EyePupilRight") {
-                Some(!closed_right)
-            } else if n.starts_with("Eyelid") {
-                Some(part_show(n.split("__").next().unwrap_or(n)).unwrap_or(false))
-            } else if n.starts_with("Eyeball__EyeMT") {
-                Some(false)
-            } else if n.starts_with("Cap__") || n.starts_with("CapHair__") {
-                Some(
-                    p.cap.is_none() && part_show(n.split("__").next().unwrap_or(n)).unwrap_or(true),
-                )
-            } else if n.starts_with("Hair__") {
-                Some(p.cap.is_some())
-            } else {
-                None
+        for (part, mut visibility) in &mut meshes {
+            let show = match part.role {
+                VisibilityRole::Unchanged => None,
+                VisibilityRole::Hidden => Some(false),
+                VisibilityRole::Visible => Some(true),
+                VisibilityRole::ClosedLeft => Some(closed_left),
+                VisibilityRole::ClosedRight => Some(closed_right),
+                VisibilityRole::PupilLeft => Some(!closed_left),
+                VisibilityRole::PupilRight => Some(!closed_right),
+                VisibilityRole::Track => {
+                    Some(part.track.as_deref().and_then(part_show).unwrap_or(false))
+                }
+                VisibilityRole::WornCap => Some(
+                    p.cap.is_none() && part.track.as_deref().and_then(part_show).unwrap_or(true),
+                ),
+                VisibilityRole::UncappedHair => Some(p.cap.is_some()),
             };
             if let Some(show) = show {
                 visibility.set_if_neq(if show {
@@ -864,59 +904,52 @@ mod imported {
     /// Materials the export cannot express: the metal suit is shaded entirely
     /// by reflections in the original, and untextured glass is see-through.
     fn finish(
-        settings: Res<crate::input::Settings>,
-        wardrobe: Res<Wardrobe>,
         mut loaded: ResMut<Loaded>,
-        meshes: Query<(&Name, &MeshMaterial3d<StandardMaterial>)>,
+        meshes: Query<(&AssetPart, &MeshMaterial3d<StandardMaterial>)>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
         if !loaded.model_visible || loaded.finished {
             return;
         }
-        let Some(outfit) = settings
-            .outfit
-            .checked_sub(3)
-            .and_then(|i| wardrobe.outfits.get(i))
-        else {
-            return;
-        };
-        let metal = outfit.file.contains("Metal");
         let mut seen = false;
-        for (name, handle) in &meshes {
-            if !name.as_str().contains("__") {
+        for (part, handle) in &meshes {
+            if !part.exported {
                 continue;
             }
             seen = true;
             let Some(mut m) = materials.get_mut(&handle.0) else {
                 continue;
             };
-            // Capes, coats and skirts are single sheets the original draws from
-            // both sides; the export loses that flag.
-            m.double_sided = true;
-            m.cull_mode = None;
-            if name.as_str().contains("Glass") {
-                // Visors and goggles are tinted see-through glass in the original (its
-                // glass shader is not exported); the face stays visible behind them.
-                m.base_color_texture = None;
-                m.base_color = Color::srgba(0.27, 0.27, 0.29, 0.35);
-                m.alpha_mode = AlphaMode::Blend;
-                m.perceptual_roughness = 0.05;
-                m.reflectance = 0.9;
-                continue;
-            }
-            // The metal head reuses the 64 cap's hair texture, but the game's
-            // reflection shader overrides that colour along with the rest.
-            if m.base_color_texture.is_some() && !(metal && name.as_str().ends_with("__HairMT")) {
-                continue;
-            }
-            if metal {
-                m.base_color_texture = None;
-                m.base_color = Color::srgb(0.86, 0.88, 0.92);
-                m.metallic = 1.;
-                m.perceptual_roughness = 0.12;
-            }
+            finish_material(part, &mut m);
         }
         loaded.finished = seen;
+    }
+    fn finish_material(part: &AssetPart, m: &mut StandardMaterial) {
+        // Capes, coats and skirts are single sheets the original draws from
+        // both sides; the export loses that flag.
+        m.double_sided = true;
+        m.cull_mode = None;
+        if part.surface == Surface::Glass {
+            // Visors and goggles are tinted see-through glass in the original (its
+            // glass shader is not exported); the face stays visible behind them.
+            m.base_color_texture = None;
+            m.base_color = Color::srgba(0.27, 0.27, 0.29, 0.35);
+            m.alpha_mode = AlphaMode::Blend;
+            m.perceptual_roughness = 0.05;
+            m.reflectance = 0.9;
+            return;
+        }
+        // The metal head reuses the 64 cap's hair texture, but the game's
+        // reflection shader overrides that colour along with the rest.
+        if m.base_color_texture.is_some() && !(part.metal && part.surface == Surface::Hair) {
+            return;
+        }
+        if part.metal {
+            m.base_color_texture = None;
+            m.base_color = Color::srgb(0.86, 0.88, 0.92);
+            m.metallic = 1.;
+            m.perceptual_roughness = 0.12;
+        }
     }
     /// Soot strength as the original's stain blend: an ease-out of the level
     /// scaled to 1.8, which saturates before the stain is at full strength.
@@ -934,7 +967,7 @@ mod imported {
         mut loaded: ResMut<Loaded>,
         roots: Query<Entity, (With<Imported>, Without<ImportedCap>)>,
         children: Query<&Children>,
-        meshes: Query<(&Name, &MeshMaterial3d<StandardMaterial>)>,
+        meshes: Query<(&AssetPart, &MeshMaterial3d<StandardMaterial>)>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
         let soot = p.soot;
@@ -944,17 +977,13 @@ mod imported {
         loaded.stain_shown = Some((soot.body, soot.cap));
         for root in &roots {
             for e in children.iter_descendants(root) {
-                let Ok((name, handle)) = meshes.get(e) else {
+                let Ok((part, handle)) = meshes.get(e) else {
                     continue;
                 };
-                let n = name.as_str();
-                if !n.contains("__") || n.contains("Eye") || n.contains("Glass") {
-                    continue;
-                }
-                let level = if n.starts_with("Cap__") || n.starts_with("CapHair__") {
-                    soot.cap
-                } else {
-                    soot.body
+                let level = match part.stain {
+                    Stain::None => continue,
+                    Stain::Cap => soot.cap,
+                    Stain::Body => soot.body,
                 };
                 let Some(base) = loaded.stain_base.get(&handle.id()).copied().or_else(|| {
                     let m = materials.get(&handle.0)?;
@@ -982,98 +1011,9 @@ mod imported {
         }
     }
 }
+#[path = "tests/local_assets.rs"]
+mod checks;
+
 pub fn self_check() {
-    #[cfg(feature = "local-assets")]
-    imported::self_check();
-    let mut o = Outfit {
-        name: "Local outfit".into(),
-        file: "local/outfit.glb".into(),
-        scale: 1.,
-        yaw: 0.,
-        animations: default(),
-        cap_file: None,
-        animation_file: None,
-        expressions: default(),
-    };
-    assert!(validate(&o));
-    for path in [
-        "../file.glb",
-        "local/../../x.glb",
-        "C:/file.glb",
-        "local/x.nsp",
-    ] {
-        o.file = path.into();
-        assert!(!validate(&o));
-    }
-    o.file = "local/outfit.glb".into();
-    let w = Wardrobe {
-        outfits: vec![o.clone(), o],
-        status: String::new(),
-    };
-    assert_eq!(w.slot(0), 3, "original outfits are listed first");
-    assert_eq!(w.slot(2), 0);
-    assert_eq!(w.row(0), 2);
-    let empty = Wardrobe {
-        outfits: vec![],
-        status: String::new(),
-    };
-    assert_eq!(empty.slot(1), 1);
-    // Missing clips fall back along a chain that ends in the idle loop.
-    for name in [
-        "DashFast",
-        "SpinCapStart3Left",
-        "JumpBroad3",
-        "LandJump3",
-        "Anything",
-    ] {
-        let mut n = name;
-        for _ in 0..4 {
-            n = fallback(n);
-        }
-        assert_eq!(fallback(n), "Wait", "{name}");
-    }
-    assert_eq!(interp_frames("Jump", "Move"), 3.);
-    assert_eq!(interp_frames("Jump", "Wait"), 0.);
-    assert!(looping("Wait") && !looping("Jump"));
-    assert!(
-        looping("SpinGroundL") && looping("SpinGroundR"),
-        "the stick spin cycles"
-    );
-    let mut o = w.outfits[0].clone();
-    std::sync::Arc::make_mut(&mut o.expressions).insert(
-        "Jump".into(),
-        Expression {
-            looping: false,
-            tracks: [("EyelidLeft".into(), vec![true, false, true])].into(),
-            uv: [("EyePupilLeftMT".into(), vec![[0., 0., 0.], [0., 0.2, 0.4]])].into(),
-        },
-    );
-    std::sync::Arc::make_mut(&mut o.expressions).insert(
-        "Wait".into(),
-        Expression {
-            looping: true,
-            tracks: [("EyelidLeft".into(), vec![false, true, false])].into(),
-            uv: default(),
-        },
-    );
-    assert_eq!(
-        o.part_visibility("Jump", 1. / 60., "EyelidLeft"),
-        Some(false)
-    );
-    assert_eq!(o.part_visibility("Jump", 20., "EyelidLeft"), Some(true));
-    assert_eq!(
-        o.part_visibility("Missing", 3. / 60., "EyelidLeft"),
-        Some(true)
-    );
-    assert_eq!(
-        o.part_visibility("Wait", 2. / 60., "EyelidLeft"),
-        Some(false)
-    );
-    assert_eq!(o.part_visibility("Jump", 0., "Unknown"), None);
-    let uv = o.pupil_uv("Jump", 0.5 / 60., "EyePupilLeftMT").unwrap();
-    assert!(
-        uv.transform_point2(Vec2::splat(0.5))
-            .distance(Vec2::new(0.4, 0.7))
-            < 1e-5
-    );
+    checks::run();
 }

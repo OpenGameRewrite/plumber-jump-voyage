@@ -6,6 +6,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+import asset_contract
 from urllib.parse import unquote
 
 COMPONENTS={'SCALAR':1,'VEC2':2,'VEC3':3,'VEC4':4,'MAT4':16}
@@ -181,6 +182,7 @@ def pack(path,animations_from=None):
         n=len(model['accessors'])
         model['animations']=[{'name':'Rest','samplers':[{'input':n-2,'output':n-1}],
             'channels':[{'sampler':0,'target':{'node':bone,'path':'translation'}}]}]
+    asset_contract.annotate(model, metal='Metal' in path.stem)
     if model.get('animations') and not animations_from:data=compact(model,data)
     model['buffers']=[{'byteLength':len(data)}]
     encoded=json.dumps(model,separators=(',',':')).encode();encoded+=b' '*(-len(encoded)%4);data.extend(b'\0'*(-len(data)%4))

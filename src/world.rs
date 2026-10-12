@@ -640,6 +640,17 @@ fn setup(
         Transform::from_xyz(14., 4.8, -39.),
         Checkpoint,
     ));
+    spawn_player(&mut commands, &mut meshes, teal, skin, dark, white, gold);
+}
+fn spawn_player(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    teal: Handle<StandardMaterial>,
+    skin: Handle<StandardMaterial>,
+    dark: Handle<StandardMaterial>,
+    white: Handle<StandardMaterial>,
+    gold: Handle<StandardMaterial>,
+) {
     // PJV_SPAWN=x,y,z (debugging) moves the start and checkpoint.
     let spawn = std::env::var("PJV_SPAWN").ok().and_then(|s| {
         let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -705,14 +716,14 @@ fn setup(
         ),
     ];
     for (kind, base, size, mat) in pieces {
-        let e = block(&mut commands, &mut meshes, mat, base, size);
+        let e = block(commands, meshes, mat, base, size);
         commands.entity(e).insert(Part { kind, base });
         commands.entity(root).add_child(e);
     }
     // Single glowing visor instead of a familiar plumber face.
     let visor = block(
-        &mut commands,
-        &mut meshes,
+        commands,
+        meshes,
         dark,
         Vec3::new(0., 1.45, -0.26),
         Vec3::new(0.42, 0.14, 0.04),

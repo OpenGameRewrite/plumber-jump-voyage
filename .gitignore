@@ -10,6 +10,9 @@
 !/src/
 /src/*
 !/src/*.rs
+!/src/tests/
+/src/tests/*
+!/src/tests/*.rs
 !/tools/
 /tools/*
 !/tools/*.py

@@ -124,3 +124,10 @@ This independent project contains only original code and procedural visuals.
 No Nintendo assets, ROMs, keys, game code or extraction tools are included.
 Super Mario Odyssey is © Nintendo. [OMM](https://github.com/PeachyPeachSM64/sm64ex-omm)
 was consulted as a reference; its code and assets are not used.
+
+## Checking the source
+
+Run `cargo test --all-features --locked` for the named movement, input, UI,
+rendering and audio checks. `cargo run --all-features --locked -- --self-check`
+remains available for a headless check. Local model behavior is described in
+the [asset format](docs/asset-format.md).
