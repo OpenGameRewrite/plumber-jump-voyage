@@ -363,6 +363,21 @@ fn react(
                 }
                 shake.0 = shake.0.max(0.2);
             }
+            Fx::Quenched => {
+                // A puff of steam off the seat.
+                for _ in 0..10 {
+                    let d = s.dir() * 0.4;
+                    s.particle(
+                        feet + Vec3::Y * 0.5 + d,
+                        Vec3::Y * 2.5 + d,
+                        0.5,
+                        0.8,
+                        -1.,
+                        2.,
+                        0,
+                    );
+                }
+            }
             Fx::Splash => {
                 for _ in 0..16 {
                     let d = s.dir().with_y(0.).normalize_or(Vec3::X);

@@ -538,9 +538,20 @@ fn setup(
     block(
         &mut commands,
         &mut meshes,
-        water,
+        water.clone(),
         Vec3::new(9., -0.05, 25.),
         Vec3::new(13., 0.1, 11.),
+    );
+    // Shallow water past the lava: running into it puts a burn out.
+    let puddle_center = Vec3::new(14.5, 0.02, -1.);
+    let puddle_half = Vec3::new(1.6, 0.02, 1.3);
+    course.puddles.push((puddle_center, puddle_half));
+    block(
+        &mut commands,
+        &mut meshes,
+        water.clone(),
+        puddle_center,
+        puddle_half * 2.,
     );
     for c in [Vec3::new(0., 0., -8.), Vec3::new(-17., 0., -11.)] {
         course.poles.push(Pole {

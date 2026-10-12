@@ -217,7 +217,8 @@ WallCatchEnd WallCatchEndJump PoleCatch PoleClimb PoleFall PoleWait SwimFallIn S
 # Event tables keyed by the original's reaction names.
 MARIO_REACTIONS={'着地':'Land','着地[走り]':'LandRun','転がり再加速[1回目]':'RollBoost',
     '転がり再加速[2回目以降]':'RollBoostAgain','転がり着地':'RollLand',
-    'あちちジャンプ':'BurnJump','あちちジャンプ(バウンド)':'BurnBounce'}
+    'あちちジャンプ':'BurnJump','あちちジャンプ(バウンド)':'BurnBounce',
+    'アチチ走り浅瀬キャンセル':'FireQuench'}
 CAP_ACTIONS=['FlyingWait','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
 CAP_REACTIONS={'帽子投げ':'Throw','帽子戻し':'Return','帽子キャッチ':'Catch'}
 # Footstep playback the controller triggers directly on its foot-print frames.

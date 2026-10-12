@@ -341,6 +341,7 @@ fn play(
                 ctx.action(true, flight, -1., 0., "cap", &mut t);
             }
             Fx::CapBounce => ctx.action(true, "Trample", -1., 60., "none", &mut t),
+            Fx::Quenched => ctx.reaction(false, "FireQuench", &mut t),
             Fx::Burned(again) => {
                 ctx.reaction(false, if again { "BurnBounce" } else { "BurnJump" }, &mut t)
             }

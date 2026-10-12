@@ -248,6 +248,8 @@ pub mod clip {
     pub const POLE_CATCH: u32 = 8;
     pub const RUN_START: u32 = 30;
     pub const JUMP_CAP_LEAP_FROG: u32 = 36;
+    /// The fire run loop; its footsteps repeat every cycle.
+    pub const FIRE_RUN: f32 = 60.;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -389,6 +391,8 @@ pub enum Fx {
     Splash,
     /// Hot ground: the leap (false) or the bounce where it lands (true).
     Burned(bool),
+    /// Water put the burn out.
+    Quenched,
     SwimStroke,
 }
 /// Clip the presentation should play: an original animation name, or "Move"
@@ -614,6 +618,8 @@ pub struct Course {
     pub water: Option<(Vec3, Vec3)>,
     /// Hot surfaces (lava): centre of the top face and half extents.
     pub hot: Vec<(Vec3, Vec3)>,
+    /// Shallow water to stand in: centre of the surface and half extents.
+    pub puddles: Vec<(Vec3, Vec3)>,
     pub targets: Vec<Vec3>,
 }
 impl Course {
@@ -626,6 +632,12 @@ impl Course {
     pub fn hot(&self, pos: Vec3) -> bool {
         self.hot.iter().any(|(c, h)| {
             (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && (pos.y - c.y).abs() < 0.1
+        })
+    }
+    /// Feet in shallow water.
+    pub fn puddle(&self, pos: Vec3) -> bool {
+        self.puddles.iter().any(|(c, h)| {
+            (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && (pos.y - c.y).abs() < 0.2
         })
     }
     /// Highest walkable surface at or below `pos`, for shadows and the camera.
@@ -795,6 +807,9 @@ impl Player {
         let was_grounded = self.grounded;
         let wet = scene.wet(self.pos + Vec3::Y * 0.8);
         if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
+            if self.burning() {
+                self.events.push(Fx::Quenched);
+            }
             self.events.push(Fx::Splash);
             self.v *= 0.3;
             self.enter(Move::Swim, "SwimFallIn");
@@ -836,9 +851,13 @@ impl Player {
         }
         self.cap_contact();
         self.collide(&o, scene);
-        // Hot ground takes over any landing.
+        // Hot ground takes over any landing; shallow water puts a burn out.
         let hot = self.grounded && scene.hot(self.pos);
-        if self.grounded && !was_grounded && !hot {
+        let quench = self.grounded && !hot && self.burning() && scene.puddle(self.pos);
+        if quench {
+            self.events.push(Fx::Quenched);
+            self.end_burn();
+        } else if self.grounded && !was_grounded && !hot {
             self.land(&o);
         }
         if hot {
@@ -925,6 +944,9 @@ impl Player {
             self.anim.frame = self.step_phase;
         } else {
             self.anim.frame += self.anim.rate;
+            if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
+                self.anim.frame -= clip::FIRE_RUN;
+            }
         }
         if let Some(sub) = &mut self.sub_anim {
             sub.frame += 1.;
@@ -1281,6 +1303,9 @@ impl Player {
             t::DAMAGE_FIRE_NO_GRAVITY_FRAMES,
         );
         self.events.push(Fx::Burned(false));
+    }
+    fn burning(&self) -> bool {
+        matches!(self.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun)
     }
     fn fire_leap(&mut self, h: Vec3, power: f32, extend: u32) {
         let h = h.clamp_length_max(t::DAMAGE_FIRE_JUMP_MOVE);
@@ -3429,6 +3454,23 @@ pub fn self_check() {
     assert!(p.move_speed < 0.01, "releasing the stick stops the run");
     frames(&mut p, Orders::default(), &cool, 45);
     assert_ne!(p.mode, Move::FireRun, "the run lasts a second");
+    // Shallow water puts the burn out on contact; deep water ends it in a swim.
+    let mut puddle = cool.clone();
+    puddle.puddles.push((Vec3::ZERO, Vec3::new(50., 0.1, 50.)));
+    p = Player::default();
+    p.pos = Vec3::ZERO;
+    p.step(&Orders::default(), &lava);
+    until_change(&mut p, &push, &puddle);
+    assert_eq!(p.mode, Move::Run, "landing in shallow water ends the burn");
+    assert!(p.events.contains(&Fx::Quenched));
+    let mut pool = cool.clone();
+    pool.water = Some((Vec3::new(0., 2., 0.), Vec3::new(50., 4., 50.)));
+    p = Player::default();
+    p.pos = Vec3::ZERO;
+    p.step(&Orders::default(), &lava);
+    p.step(&Orders::default(), &pool);
+    assert_eq!(p.mode, Move::Swim);
+    assert!(p.events.contains(&Fx::Quenched));
     // Low ceilings force a crouch.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {
