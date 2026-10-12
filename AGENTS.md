@@ -1,7 +1,7 @@
 # Plumber Jump Voyage
 
 This standalone demo is separate from rewrite-engine, its modules and tracker.
-Use a codex/ branch. Keep changes here. READMEs address players, not agents.
+Keep changes here. READMEs address players, not agents.
 
 Only original source and public documentation may be committed.
 Never commit ROMs, keys, extracted assets, SDK files, raw disassembly,
