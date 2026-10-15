@@ -8,22 +8,39 @@ mod input;
 mod legacy_assets;
 mod local_assets;
 mod movement;
+mod replay;
 mod scripted_input;
 #[cfg(feature = "local-assets")]
 mod sound;
+// Pure sound rules, shared by the audio and the headless trace.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+mod sound_table;
+mod trace;
 mod ui;
 mod world;
 
 use bevy::prelude::*;
 
 fn main() {
-    if std::env::args().any(|a| a == "--self-check") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--replay") {
+        // Headless fidelity replay: no window, no rendering.
+        if let Err(error) = replay::run_cli(&args) {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--self-check") {
         movement::self_check();
         input::self_check();
         ui::self_check();
         local_assets::self_check();
         asset_contract::self_check();
         fx::self_check();
+        sound_table::self_check();
+        trace::self_check();
+        replay::self_check();
         #[cfg(feature = "local-assets")]
         sound::self_check();
         println!("Movement, collision, input, effects and local asset checks passed.");

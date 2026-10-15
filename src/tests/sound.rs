@@ -1,4 +1,5 @@
 use super::*;
+use crate::sound_table::{Play, Resource, Trigger};
 
 pub(super) fn run() {
     animation_sound_triggers();
@@ -82,6 +83,6 @@ fn animation_sound_triggers() {
     world.get_mut::<Player>(e).unwrap().anim.serial = 2;
     world.run_system(system).unwrap();
     assert_eq!(count(&mut world), 2, "menus suppress movement audio");
-    assert!((curve(Some([0.1, 6., 0.4, 1.]), 14.) - 1.).abs() < 1e-6);
-    assert!((curve(Some([0.1, 6., 0.4, 1.]), 0.1) - 0.4).abs() < 1e-6);
+    assert!((crate::sound_table::curve(Some([0.1, 6., 0.4, 1.]), 14.) - 1.).abs() < 1e-6);
+    assert!((crate::sound_table::curve(Some([0.1, 6., 0.4, 1.]), 0.1) - 0.4).abs() < 1e-6);
 }

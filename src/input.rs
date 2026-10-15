@@ -237,6 +237,27 @@ pub struct Orders {
     pub reset: bool,
 }
 impl Orders {
+    /// Button commands from the held and just-pressed actions. Edges
+    /// accumulate until the simulation consumes them; the headless replay
+    /// builds its orders through the same call as the windowed game.
+    pub fn apply_actions(&mut self, held: &[bool; ACTIONS.len()], edge: &[bool; ACTIONS.len()]) {
+        self.jump |= edge[act::JUMP];
+        self.jump_held = held[act::JUMP];
+        self.crouch = held[act::CROUCH];
+        self.crouch_pressed |= edge[act::CROUCH];
+        self.throw_pressed |= edge[act::THROW];
+        self.throw_held = held[act::THROW]
+            || held[act::UP_THROW]
+            || held[act::DOWN_THROW]
+            || held[act::SPIN_THROW]
+            || held[act::HOMING];
+        self.homing |= edge[act::HOMING];
+        self.up_throw |= edge[act::UP_THROW];
+        self.down_throw |= edge[act::DOWN_THROW];
+        self.spin_throw |= edge[act::SPIN_THROW];
+        self.recenter |= edge[act::RECENTER];
+        self.reset |= edge[act::RESET];
+    }
     pub fn clear_edges(&mut self) {
         self.jump = false;
         self.crouch_pressed = false;
@@ -392,22 +413,7 @@ pub fn read(
         orders.look.x +=
             (f.held[act::CAM_RIGHT] as i32 - f.held[act::CAM_LEFT] as i32) as f32 * dt * 2.4;
         orders.look.y += (f.held[act::CAM_UP] as i32 - f.held[act::CAM_DOWN] as i32) as f32 * dt;
-        orders.jump |= f.edge[act::JUMP];
-        orders.jump_held = f.held[act::JUMP];
-        orders.crouch = f.held[act::CROUCH];
-        orders.crouch_pressed |= f.edge[act::CROUCH];
-        orders.throw_pressed |= f.edge[act::THROW];
-        orders.throw_held = f.held[act::THROW]
-            || f.held[act::UP_THROW]
-            || f.held[act::DOWN_THROW]
-            || f.held[act::SPIN_THROW]
-            || f.held[act::HOMING];
-        orders.homing |= f.edge[act::HOMING];
-        orders.up_throw |= f.edge[act::UP_THROW];
-        orders.down_throw |= f.edge[act::DOWN_THROW];
-        orders.spin_throw |= f.edge[act::SPIN_THROW];
-        orders.recenter |= f.edge[act::RECENTER];
-        orders.reset |= f.edge[act::RESET];
+        orders.apply_actions(&f.held, &f.edge);
     }
     crate::scripted_input::apply(
         &time,

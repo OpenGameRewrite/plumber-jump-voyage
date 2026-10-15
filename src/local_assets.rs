@@ -236,6 +236,48 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
         _ => 0.,
     }
 }
+/// A pose the animation blend can freeze and fade out.
+pub trait Posed {
+    fn is_empty(&self) -> bool;
+}
+/// The playing request and the frozen poses it is blending away from. The
+/// renderer blends clip poses; the headless trace blends clip names, so both
+/// follow one set of crossfade rules.
+#[derive(Default)]
+pub struct Blend<P> {
+    pub name: &'static str,
+    pub serial: u32,
+    pub current: P,
+    /// Outgoing poses with their weight and fade per second.
+    pub old: Vec<(P, f32, f32)>,
+}
+impl<P: Default + Posed> Blend<P> {
+    /// Follow the requested clip: a new request freezes the pose it replaces
+    /// and fades it over the clip's blend frames; then age the fades by `dt`.
+    pub fn update(&mut self, name: &'static str, serial: u32, next: P, dt: f32) {
+        if self.name != name || self.serial != serial {
+            let frames = interp_frames(name, self.name);
+            let old = std::mem::take(&mut self.current);
+            if frames > 0. && !old.is_empty() {
+                let total: f32 = 1. - self.old.iter().map(|o| o.1).sum::<f32>();
+                self.old.push((old, total.max(0.), 60. / frames));
+            } else {
+                self.old.clear();
+            }
+            self.name = name;
+            self.serial = serial;
+        }
+        self.current = next;
+        for (_, weight, fade) in &mut self.old {
+            *weight -= *fade * dt;
+        }
+        self.old.retain(|o| o.1 > 0.);
+    }
+    /// Share of the final pose still held by outgoing poses.
+    pub fn kept(&self) -> f32 {
+        self.old.iter().map(|o| o.1).sum::<f32>().min(1.)
+    }
+}
 /// Clips that cycle; every other clip holds its last frame.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn looping(name: &str) -> bool {
@@ -324,15 +366,12 @@ mod imported {
     struct Pose {
         clips: Vec<(AnimationNodeIndex, f32, f32)>,
     }
-    /// The playing request and the frozen poses it is blending away from.
-    #[derive(Default)]
-    struct Blend {
-        name: &'static str,
-        serial: u32,
-        current: Pose,
-        /// Outgoing poses with their weight and fade per second.
-        old: Vec<(Pose, f32, f32)>,
+    impl Posed for Pose {
+        fn is_empty(&self) -> bool {
+            self.clips.is_empty()
+        }
     }
+    type Blend = super::Blend<Pose>;
     /// Mask group for hips and legs; the throw overlay leaves them alone.
     const LEGS: u32 = 0;
     #[path = "../../tests/imported_assets.rs"]
@@ -696,28 +735,11 @@ mod imported {
         // Render between fixed steps without waiting for the next one.
         let ahead = fixed.overstep_fraction();
         let next = target(&loaded, &p, ahead);
-        let blend = &mut loaded.blend;
-        if blend.name != p.anim.name || blend.serial != p.anim.serial {
-            let frames = interp_frames(p.anim.name, blend.name);
-            let old = std::mem::take(&mut blend.current);
-            if frames > 0. && !old.clips.is_empty() {
-                // The outgoing pose freezes and fades over the clip's blend frames.
-                let total: f32 = 1. - blend.old.iter().map(|o| o.1).sum::<f32>();
-                blend.old.push((old, total.max(0.), 60. / frames));
-            } else {
-                blend.old.clear();
-            }
-            blend.name = p.anim.name;
-            blend.serial = p.anim.serial;
-        }
-        blend.current = next;
         let dt = time.delta_secs();
-        for (_, weight, fade) in &mut blend.old {
-            *weight -= *fade * dt;
-        }
-        blend.old.retain(|o| o.1 > 0.);
+        let blend = &mut loaded.blend;
+        blend.update(p.anim.name, p.anim.serial, next, dt);
         // Final weights: outgoing poses keep their share, the rest is current.
-        let kept: f32 = blend.old.iter().map(|o| o.1).sum::<f32>().min(1.);
+        let kept = blend.kept();
         let mut weights: std::collections::BTreeMap<AnimationNodeIndex, (f32, f32)> = default();
         for (pose, share) in blend
             .old

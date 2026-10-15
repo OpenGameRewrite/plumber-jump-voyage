@@ -305,6 +305,48 @@ pub enum Move {
     Throw,
 }
 impl Move {
+    /// Every state, for mapping names back to states.
+    pub const ALL: [Move; 39] = [
+        Self::Idle,
+        Self::Walk,
+        Self::Run,
+        Self::Skid,
+        Self::Turn,
+        Self::Crouch,
+        Self::Crawl,
+        Self::Fall,
+        Self::Jump,
+        Self::DoubleJump,
+        Self::TripleJump,
+        Self::LongJump,
+        Self::Backflip,
+        Self::Sideflip,
+        Self::SpinJump,
+        Self::SpinDrop,
+        Self::GroundSpin,
+        Self::GroundPound,
+        Self::PoundLand,
+        Self::PoundJump,
+        Self::Roll,
+        Self::RollEnd,
+        Self::RollJump,
+        Self::Dive,
+        Self::Slide,
+        Self::SlopeSlide,
+        Self::BurnJump,
+        Self::BurnBounce,
+        Self::FireRun,
+        Self::WallSlide,
+        Self::WallJump,
+        Self::Ledge,
+        Self::Pole,
+        Self::Swim,
+        Self::SwimDash,
+        Self::CapBounce,
+        Self::CapVault,
+        Self::CatchJump,
+        Self::Throw,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Idle => "Ready",
@@ -364,6 +406,24 @@ impl Move {
                 | Self::Fall
         )
     }
+}
+/// Player state a replay can inject before a step (lockstep comparison). It
+/// holds what a trace records; internals the trace cannot see keep the values
+/// the rewrite's own simulation gave them.
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub mode: Option<Move>,
+    /// Metres.
+    pub pos: Vec3,
+    /// Units per frame.
+    pub v: Vec3,
+    pub facing: Vec3,
+    pub grounded: bool,
+    /// Clip and its frame (for "Move", the cycle phase).
+    pub anim: Option<(&'static str, f32)>,
+    pub state_frames: Option<u32>,
+    /// Counters by the names `Player::counters` lists.
+    pub counters: Vec<(String, i64)>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Throw {
@@ -785,6 +845,120 @@ impl Player {
     }
     fn speed_h(&self) -> f32 {
         self.v.with_y(0.).length()
+    }
+    /// A player standing at `pos` (metres) facing the horizontal direction `facing`.
+    pub fn spawn_at(pos: Vec3, facing: Vec3) -> Self {
+        Self {
+            pos,
+            prev: pos,
+            shown: pos,
+            peak: pos.y,
+            checkpoint: pos,
+            facing: facing.with_y(0.).normalize_or(Vec3::NEG_Z),
+            ..Self::default()
+        }
+    }
+    /// Velocity in original units per frame, after the last step.
+    pub fn units_per_frame(&self) -> Vec3 {
+        self.v
+    }
+    /// Frames spent in the current state.
+    pub fn state_frames(&self) -> u32 {
+        self.frame
+    }
+    /// The counters that gate moves, by name (frames left or elapsed, uses).
+    pub fn counters(&self) -> Vec<(&'static str, i64)> {
+        vec![
+            ("pre_jump", self.pre_jump as i64),
+            ("pre_throw", self.pre_throw as i64),
+            ("coyote", self.coyote as i64),
+            ("jump_count", self.jump_count as i64),
+            ("jump_timer", self.jump_timer as i64),
+            ("long_jump_count", self.long_jump_count as i64),
+            ("long_jump_timer", self.long_jump_timer as i64),
+            ("run_frames", self.run_frames as i64),
+            ("after_turn", self.after_turn as i64),
+            ("quick_turn", self.quick_turn as i64),
+            ("catch_window", self.catch_window as i64),
+            ("land_frames", self.land_frames as i64),
+            ("cap_jump_possible", self.cap_jump_possible as i64),
+            ("air_throw_used", self.air_throw_used as i64),
+            ("dive_possible", self.dive_possible as i64),
+        ]
+    }
+    /// Set one of the counters `counters` lists; false for any other name.
+    pub fn set_counter(&mut self, name: &str, value: i64) -> bool {
+        let frames = value.max(0) as u32;
+        match name {
+            "pre_jump" => self.pre_jump = frames,
+            "pre_throw" => self.pre_throw = frames,
+            "coyote" => self.coyote = frames,
+            "jump_count" => self.jump_count = frames,
+            "jump_timer" => self.jump_timer = frames,
+            "long_jump_count" => self.long_jump_count = frames,
+            "long_jump_timer" => self.long_jump_timer = frames,
+            "run_frames" => self.run_frames = frames,
+            "after_turn" => self.after_turn = frames,
+            "quick_turn" => self.quick_turn = frames,
+            "catch_window" => self.catch_window = frames,
+            "land_frames" => self.land_frames = frames,
+            "cap_jump_possible" => self.cap_jump_possible = value != 0,
+            "air_throw_used" => self.air_throw_used = value != 0,
+            "dive_possible" => self.dive_possible = value != 0,
+            _ => return false,
+        }
+        true
+    }
+    /// Put the player into the recorded state. State the trace does not show
+    /// (gravity of the jump in progress, how far a jump may still extend,
+    /// air-speed cap) is set to what entering that state would have given.
+    pub fn inject(&mut self, s: &Snapshot) {
+        self.pos = s.pos;
+        self.prev = s.pos;
+        self.v = s.v;
+        self.facing = s.facing.with_y(0.).normalize_or(self.facing);
+        self.grounded = s.grounded;
+        if let Some(mode) = s.mode {
+            self.mode = mode;
+            self.gravity = match mode {
+                Move::DoubleJump => t::JUMP_GRAVITY_2ND,
+                Move::TripleJump => t::JUMP_GRAVITY_3RD,
+                Move::Backflip | Move::Sideflip => t::TURN_JUMP_GRAVITY,
+                Move::LongJump => t::LONG_JUMP_GRAVITY,
+                Move::SpinJump => t::SPIN_JUMP_GRAVITY,
+                Move::PoundJump => t::JUMP_GRAVITY,
+                _ => t::GRAVITY_AIR,
+            };
+            self.max_air_speed = match mode {
+                Move::Sideflip => t::TURN_JUMP_VEL_H,
+                Move::Backflip => t::SQUAT_JUMP_MOVE_MAX,
+                Move::SpinJump => t::SPIN_JUMP_MOVE_MAX,
+                _ => self.speed_h().clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX),
+            };
+        }
+        if let Some(frames) = s.state_frames {
+            self.frame = frames;
+        }
+        self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
+            && self.frame < t::EXTEND_FRAMES
+            && self.v.y > 0.;
+        if let Some((name, frame)) = s.anim {
+            if self.anim.name != name {
+                self.play(name);
+            }
+            self.anim.frame = frame;
+            if name == "Move" {
+                self.step_phase = frame;
+            }
+        }
+        for (name, value) in &s.counters {
+            self.set_counter(name, *value);
+        }
+        self.peak = if self.grounded {
+            self.pos.y
+        } else {
+            self.peak.max(self.pos.y)
+        };
     }
     pub fn reset(&mut self) {
         let checkpoint = self.checkpoint;

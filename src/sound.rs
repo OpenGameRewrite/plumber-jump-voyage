@@ -6,63 +6,14 @@
 //! pitch and speed curves.
 use crate::{
     input::Settings,
-    movement::{Fx, Move, Player},
+    movement::{Fx, Player},
+    sound_table::{AnimCursor, CapWatch, Cue, FxContext, Layer, Table, fx_cues},
     ui::Menu,
 };
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
-use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Trigger {
-    play: String,
-    frame: f32,
-    once: bool,
-}
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Layer {
-    resource: String,
-    volume: Option<f32>,
-    pitch: f32,
-    random_pitch: f32,
-    random_volume: f32,
-    delay: u32,
-    volume_curve: Option<[f32; 4]>,
-    pitch_curve: Option<[f32; 4]>,
-}
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Play {
-    random: bool,
-    #[serde(rename = "loop")]
-    looping: bool,
-    layers: Vec<Layer>,
-}
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Group {
-    actions: BTreeMap<String, Vec<Trigger>>,
-    reactions: BTreeMap<String, Vec<String>>,
-    plays: BTreeMap<String, Play>,
-}
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Resource {
-    files: Vec<String>,
-    volume: f32,
-    random_semitones: Option<[f32; 2]>,
-}
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct Table {
-    mario: Group,
-    cap: Group,
-    footwear: BTreeMap<String, String>,
-    resources: BTreeMap<String, Resource>,
-}
 #[derive(Resource, Default)]
 struct Sounds {
     table: Table,
@@ -73,10 +24,8 @@ struct Sounds {
 struct Looping(&'static str);
 #[derive(Default)]
 struct Tracker {
-    anim: (&'static str, u32),
-    frame: f32,
-    cap_out: bool,
-    cap_returning: bool,
+    cursor: AnimCursor,
+    cap: CapWatch,
     boosts: u32,
     rng: u32,
     pending: Vec<(f32, String, bool, f32)>,
@@ -94,11 +43,7 @@ fn safe(path: &str) -> bool {
         && !path.contains(':')
 }
 fn load(mut sounds: ResMut<Sounds>, server: Res<AssetServer>) {
-    let Some(table) =
-        std::fs::read(crate::local_assets::asset_dir().join("local/sounds/player.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Table>(&b).ok())
-    else {
+    let Some(table) = Table::load() else {
         return;
     };
     for (name, resource) in &table.resources {
@@ -111,12 +56,6 @@ fn load(mut sounds: ResMut<Sounds>, server: Res<AssetServer>) {
         sounds.handles.insert(name.clone(), handles);
     }
     sounds.table = table;
-}
-fn curve(c: Option<[f32; 4]>, input: f32) -> f32 {
-    c.map_or(1., |[in_min, in_max, out_min, out_max]| {
-        let k = ((input - in_min) / (in_max - in_min).max(1e-6)).clamp(0., 1.);
-        out_min + (out_max - out_min) * k
-    })
 }
 impl Tracker {
     fn rand(&mut self) -> f32 {
@@ -135,11 +74,7 @@ struct Ctx<'a, 'w, 's> {
 impl Ctx<'_, '_, '_> {
     /// Start one named sound of a group. Loops are tagged so they can stop.
     fn start(&mut self, cap: bool, name: &str, tag: Option<&'static str>, t: &mut Tracker) {
-        let group = if cap {
-            &self.sounds.table.cap
-        } else {
-            &self.sounds.table.mario
-        };
+        let group = self.sounds.table.group(cap);
         // Outfits with their own footwear use its foot sounds when present.
         let worn = self.footwear.and_then(|f| {
             let name = if f == "Metal" {
@@ -170,16 +105,8 @@ impl Ctx<'_, '_, '_> {
             }
             let handle =
                 handles[(t.rand() * handles.len() as f32) as usize % handles.len()].clone();
-            let mut semitones = layer.pitch + (t.rand() * 2. - 1.) * layer.random_pitch;
-            if let Some([low, high]) = resource.random_semitones {
-                semitones += low + (high - low) * t.rand();
-            }
-            let pitch = 2f32.powf(semitones / 12.) * curve(layer.pitch_curve, self.speed);
-            let gain = self.volume
-                * resource.volume
-                * layer.volume.unwrap_or(1.)
-                * curve(layer.volume_curve, self.speed)
-                * (1. - layer.random_volume * t.rand());
+            let (level, pitch) = layer.levels(resource, self.speed, || t.rand());
+            let gain = self.volume * level;
             if layer.delay > 0 && tag.is_none() {
                 t.pending
                     .push((layer.delay as f32 / 60., layer.resource.clone(), cap, gain));
@@ -205,12 +132,8 @@ impl Ctx<'_, '_, '_> {
         }
     }
     fn reaction(&mut self, cap: bool, name: &str, t: &mut Tracker) {
-        let group = if cap {
-            &self.sounds.table.cap
-        } else {
-            &self.sounds.table.mario
-        };
-        for play in group.reactions.get(name).cloned().unwrap_or_default() {
+        let group = self.sounds.table.group(cap);
+        for play in group.reaction_plays(name) {
             self.start(cap, &play, None, t);
         }
     }
@@ -224,22 +147,9 @@ impl Ctx<'_, '_, '_> {
         tag: &'static str,
         t: &mut Tracker,
     ) {
-        let group = if cap {
-            &self.sounds.table.cap
-        } else {
-            &self.sounds.table.mario
-        };
-        for trigger in group.actions.get(name).cloned().unwrap_or_default() {
-            // Unset or negative start frames play as the clip begins.
-            let at = trigger.frame.max(0.);
-            let crossed = if from < 0. {
-                at <= to
-            } else {
-                from < at && at <= to
-            };
-            if crossed {
-                self.start(cap, &trigger.play, Some(tag), t);
-            }
+        let group = self.sounds.table.group(cap);
+        for play in group.triggered(name, from, to) {
+            self.start(cap, &play, Some(tag), t);
         }
     }
 }
@@ -277,84 +187,57 @@ fn play(
         footwear: sounds.table.footwear.get(outfit).map(String::as_str),
     };
     // Animation-driven sounds, with loops ending when their clip does.
-    let anim = (p.anim.name, p.anim.serial);
-    let looped = crate::local_assets::looping(p.anim.name);
-    if anim != t.anim {
+    let advance = t.cursor.advance(
+        p.anim.name,
+        p.anim.serial,
+        p.anim.frame,
+        crate::local_assets::looping(p.anim.name),
+    );
+    if advance.restarted {
         for (e, tag) in &loops {
             if tag.0 == "anim" {
                 ctx.commands.entity(e).despawn();
             }
         }
-        t.anim = anim;
-        t.frame = -1.;
     }
-    let frame = p.anim.frame;
-    if frame >= t.frame {
-        let from = t.frame;
-        ctx.action(false, p.anim.name, from, frame, "anim", &mut t);
-        ctx.action(true, p.anim.name, from, frame, "anim", &mut t);
-    } else if looped {
-        // A looping clip wrapped: replay its repeating sounds.
-        ctx.action(false, p.anim.name, -1., frame, "anim", &mut t);
+    if let Some((from, to, with_cap)) = advance.scan {
+        ctx.action(false, p.anim.name, from, to, "anim", &mut t);
+        if with_cap {
+            ctx.action(true, p.anim.name, from, to, "anim", &mut t);
+        }
     }
-    t.frame = frame;
     // Event sounds.
+    let context = FxContext {
+        mode: p.mode,
+        move_speed: p.move_speed,
+        grounded: p.grounded,
+    };
     for f in fx {
-        match f {
-            Fx::Step { left } => {
-                let name = match (p.mode, left) {
-                    (Move::Crawl, _) => continue,
-                    (Move::Swim | Move::SwimDash, true) => "SwimRunL",
-                    (Move::Swim | Move::SwimDash, false) => "SwimRunR",
-                    (_, true) => "RunL",
-                    (_, false) => "RunR",
-                };
-                ctx.start(false, name, None, &mut t);
+        let mut boosts = t.boosts;
+        let cues = fx_cues(f, context, &mut boosts);
+        t.boosts = boosts;
+        for cue in cues {
+            match cue {
+                Cue::Play(name) => ctx.start(false, name, None, &mut t),
+                Cue::Reaction { cap, name } => ctx.reaction(cap, name, &mut t),
+                Cue::Action {
+                    cap,
+                    name,
+                    from,
+                    to,
+                    tag,
+                } => ctx.action(cap, name, from, to, tag, &mut t),
             }
-            Fx::Land { .. } => {
-                let name = if p.mode == Move::Roll {
-                    "RollLand"
-                } else if p.move_speed > 3. {
-                    "LandRun"
-                } else {
-                    "Land"
-                };
-                ctx.reaction(false, name, &mut t);
-            }
-            Fx::RollStart => t.boosts = 0,
-            Fx::RollBoost { .. } => {
-                t.boosts += 1;
-                let name = if t.boosts == 1 {
-                    "RollBoost"
-                } else {
-                    "RollBoostAgain"
-                };
-                ctx.reaction(false, name, &mut t);
-            }
-            Fx::Throw(kind) => {
-                ctx.reaction(true, "Throw", &mut t);
-                let flight = match kind {
-                    crate::movement::Throw::Spin => "FlyingWaitSpiral",
-                    crate::movement::Throw::Down if p.grounded => "FlyingWaitRolling",
-                    _ => "FlyingWait",
-                };
-                ctx.action(true, flight, -1., 0., "cap", &mut t);
-            }
-            Fx::CapBounce => ctx.action(true, "Trample", -1., 60., "none", &mut t),
-            Fx::Quenched => ctx.reaction(false, "FireQuench", &mut t),
-            Fx::Burned(again) => {
-                ctx.reaction(false, if again { "BurnBounce" } else { "BurnJump" }, &mut t)
-            }
-            _ => {}
         }
     }
     // The cap: return swing, catch, and its flight loop stopping.
-    let out = p.cap.is_some();
-    let returning = p.cap.as_ref().is_some_and(|c| c.returning);
-    if returning && !t.cap_returning {
+    let change = t
+        .cap
+        .update(p.cap.is_some(), p.cap.as_ref().is_some_and(|c| c.returning));
+    if change.started_return {
         ctx.reaction(true, "Return", &mut t);
     }
-    if t.cap_out && !out {
+    if change.ended {
         for (e, tag) in &loops {
             if tag.0 == "cap" {
                 ctx.commands.entity(e).despawn();
@@ -364,8 +247,6 @@ fn play(
             ctx.reaction(true, "Catch", &mut t);
         }
     }
-    t.cap_out = out;
-    t.cap_returning = returning;
     // Delayed layers.
     let dt = time.delta_secs();
     let mut due = Vec::new();

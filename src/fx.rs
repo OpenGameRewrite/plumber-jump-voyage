@@ -633,6 +633,92 @@ fn shadow(
     let size = (0.95 - height * 0.04).clamp(0.45, 0.95);
     shadow.0.scale = Vec3::splat(size);
 }
+/// Names of the effect bursts a movement event starts. These are this
+/// project's own effect names (the particles are procedural, not the
+/// original's), listed in the order `react` spawns them and under the same
+/// conditions; the headless trace records them as `effect:` events.
+pub fn burst_names(fx: Fx, flat_speed: f32) -> Vec<&'static str> {
+    match fx {
+        Fx::Jump(Move::CapBounce | Move::CapVault | Move::RollJump) => vec![],
+        Fx::Jump(Move::WallJump) => vec!["WallJumpDust"],
+        Fx::Jump(Move::PoundJump | Move::TripleJump) => vec!["JumpDust", "JumpRing"],
+        Fx::Jump(_) => vec!["JumpDust"],
+        Fx::Land { hard: true } => vec!["LandDustHard"],
+        Fx::Land { hard: false } => vec!["LandDust"],
+        Fx::Step { .. } if flat_speed > 5. => vec!["RunDust"],
+        Fx::Skid => vec!["SkidDust"],
+        Fx::TurnDust => vec!["TurnDust"],
+        Fx::PoundStart => vec!["PoundSparks"],
+        Fx::PoundLand => vec!["PoundDust", "PoundRing", "PoundSparks"],
+        Fx::RollStart => vec!["RollDust"],
+        Fx::RollBoost { perfect: true } => {
+            vec!["RollBoostDust", "RollBoostRing", "RollBoostSparks"]
+        }
+        Fx::RollBoost { perfect: false } => vec!["RollBoostDust"],
+        Fx::Dive => vec!["DiveSparks"],
+        Fx::Throw(Throw::Spin) => vec!["ThrowSwoosh", "ThrowSwooshBack", "ThrowSparks"],
+        Fx::Throw(_) => vec!["ThrowSwoosh", "ThrowSparks"],
+        Fx::Catch => vec!["CatchSparks"],
+        Fx::CapBounce => vec!["CapBounceRing", "CapBounceSparks"],
+        Fx::Ledge => vec!["LedgeSparks"],
+        Fx::Burned(_) => vec!["BurnSparks", "BurnSmoke"],
+        Fx::Quenched => vec!["QuenchSteam"],
+        Fx::Splash => vec!["SplashDrops", "SplashRing"],
+        Fx::SwimStroke => vec!["SwimBubbles"],
+        _ => vec![],
+    }
+}
+/// How long a burst's particles live, in frames (the longest particle).
+pub fn burst_frames(name: &str) -> u32 {
+    match name {
+        n if n.ends_with("Ring") => 30,
+        "BurnSparks" | "PoundSparks" | "RollBoostSparks" => 36,
+        "BurnSmoke" => 42,
+        "QuenchSteam" | "SplashDrops" | "SwimBubbles" => 54,
+        _ => 27,
+    }
+}
+/// Names of the continuous effects `trails` emits in the player's current
+/// state (cap trail included). Randomised embers are left out.
+pub fn trail_names(p: &Player) -> Vec<&'static str> {
+    let mut names = vec![];
+    match p.mode {
+        Move::SlopeSlide if p.grounded => names.push("SlideDust"),
+        Move::Skid | Move::Slide if p.grounded => names.push("SkidTrail"),
+        Move::Roll => {
+            names.push("RollBlur");
+            if p.grounded && p.flat_speed() > 3. {
+                names.push("RollDust");
+            }
+        }
+        Move::BurnJump | Move::BurnBounce | Move::FireRun => names.push("BurnTrail"),
+        Move::SpinDrop | Move::GroundSpin => names.push("SpinSparkle"),
+        Move::WallSlide => names.push("WallSlideDust"),
+        Move::TripleJump
+        | Move::Backflip
+        | Move::Sideflip
+        | Move::SpinJump
+        | Move::PoundJump
+        | Move::CapVault
+        | Move::CapBounce
+            if !p.grounded && p.timer < 0.7 =>
+        {
+            names.push("FlipSparkle")
+        }
+        Move::LongJump | Move::Dive | Move::RollJump if p.flat_speed() > 11. => {
+            names.push("StreakSparkle")
+        }
+        _ => {}
+    }
+    let burning = matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun);
+    if p.soot.smoking && !burning {
+        names.push("SootSmoke");
+    }
+    if p.cap.is_some() {
+        names.push("CapTrail");
+    }
+    names
+}
 #[path = "tests/fx.rs"]
 mod checks;
 
