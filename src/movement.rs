@@ -870,9 +870,15 @@ impl Player {
             ..Self::default()
         }
     }
-    /// Velocity in original units per frame, after the last step.
+    /// Velocity in original units per frame, after the last step. On the
+    /// ground the controller cancels the downward push inside the step; the
+    /// original keeps reporting it, so it is shown as the gravity pull.
     pub fn units_per_frame(&self) -> Vec3 {
-        self.v
+        if self.grounded && self.v.y == 0. {
+            self.v.with_y(-t::GRAVITY)
+        } else {
+            self.v
+        }
     }
     /// Frames spent in the current state.
     pub fn state_frames(&self) -> u32 {

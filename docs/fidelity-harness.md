@@ -16,6 +16,7 @@ py tools/compare-traces.py game.csv rewrite.csv --out diff.md [--lockstep]
 
 ```text
 start x y z yaw_deg     # game units (cm); yaw 0 faces +Z, 90 faces +X
+start spawn yaw_deg     # the game's default spawn; only the facing matters here
 camera yaw_deg          # optional: camera yaw for the whole run
 shot 30 90              # optional: frames to capture in a rendered replay
 <frames> <lx> <ly> <buttons>
@@ -45,6 +46,11 @@ Empty cells mean the rewrite has no equivalent:
 
 - `state` uses the original nerve names (`trace.rs` lists every state and marks
   the sub-state names that are guesses).
+- Row conventions taken from the first real-game trace: values are the state
+  after the step, except `anim_frame`, which shows the frame the step started
+  from (a clip that began this step reads 0); `vy` on the ground is -3, the pull
+  the original keeps reporting (the controller cancels it inside the step);
+  standing is `Wait/Wait`.
 - `anim`, `anim_frame`, `anim_rate`: the controller's clip. The `Move` cycle
   is reported as its dominant clip with `blend` weights; its `anim_frame` is
   the 60-frame cycle phase shared by all four clips, not a frame of one clip.

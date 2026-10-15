@@ -44,7 +44,7 @@ NUMERIC = OrderedDict(
 )
 ANGLES = {"cam_yaw", "cam_pitch"}
 CATEGORICAL = [
-    "ground", "state", "anim", "anim_loop", "sub_anim", "cap_state", "cap_anim",
+    "ground", "state", "state_nerve", "anim", "anim_loop", "sub_anim", "cap_state", "cap_anim",
     "cam_mode", "face", "model",
 ]
 SETS = OrderedDict([("events", ";"), ("effects_live", "|"), ("triggers", "|"), ("in_buttons", "+")])
@@ -71,7 +71,14 @@ def read_trace(path):
             by_frame[int(row["frame"])] = {k: (v or "").strip() for k, v in row.items() if k}
         except ValueError:
             sys.exit(f"{path}: bad frame value {row['frame']!r}")
-    return list(rows[0].keys()), by_frame
+    columns = list(rows[0].keys())
+    if "state" in columns:
+        # The nerve without its sub-state, so a naming difference in the
+        # sub-state does not hide whether the main state agrees.
+        columns.append("state_nerve")
+        for row in by_frame.values():
+            row["state_nerve"] = row["state"].split("/")[0]
+    return columns, by_frame
 
 
 def as_float(text):

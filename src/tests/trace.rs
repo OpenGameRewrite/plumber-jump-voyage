@@ -46,8 +46,8 @@ fn game_rows() {
     assert!((s.pos.z - 0.2).abs() < 1e-6 && s.grounded);
     assert_eq!(
         s.anim,
-        Some(("Move", 30.)),
-        "a 24-frame clip at frame 12 is half a cycle"
+        Some(("Move", 32.5)),
+        "frame 12 of 24 is half a cycle, plus the frame the step advances"
     );
     assert_eq!(s.state_frames, Some(7));
     assert!(s.counters.contains(&("jump_timer".into(), 4)));

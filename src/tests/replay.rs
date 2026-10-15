@@ -46,6 +46,8 @@ fn scripts() {
     assert_eq!(script.frame_count(), 5);
     assert_eq!(script.spans[0].buttons, ["B", "ZL"]);
     assert!(Script::parse("1 0 0 -").unwrap_err().contains("start"));
+    let spawn = Script::parse("start spawn 90\n1 0 0 -").unwrap();
+    assert_eq!((spawn.start, spawn.start_yaw_deg), (Vec3::ZERO, 90.));
     assert!(
         Script::parse("start 0 0 0 0\n1 0 0 Q")
             .unwrap_err()
@@ -60,7 +62,7 @@ fn scenarios() {
     let idle = trace(IDLE);
     assert_eq!(idle.len(), 60);
     assert!(idle.iter().all(|r| r.len() == COLUMNS.len()));
-    assert_eq!(cell(&idle, 59, "state"), "Wait");
+    assert_eq!(cell(&idle, 59, "state"), "Wait/Wait");
     assert_eq!(number(&idle, 59, "py"), 0.);
     assert_eq!(
         cell(&idle, 0, "events"),
@@ -74,7 +76,7 @@ fn scenarios() {
     assert!((number(&run, 119, "speed_h") - 14.).abs() < 0.01);
     assert!(number(&run, 119, "pz") > 600. && number(&run, 119, "px").abs() < 1e-3);
     assert_eq!(cell(&run, 0, "anim"), "RunStart");
-    assert_eq!(cell(&run, 179, "state"), "Wait");
+    assert_eq!(cell(&run, 179, "state"), "Wait/Wait");
     let events = (0..run.len())
         .map(|f| cell(&run, f, "events"))
         .collect::<Vec<_>>()

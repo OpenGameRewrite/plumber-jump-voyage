@@ -93,7 +93,7 @@ pub struct Nerve {
 }
 pub fn nerve(mode: Move, anim: &str) -> Nerve {
     let (name, guess) = match mode {
-        Move::Idle => ("Wait", false),
+        Move::Idle => ("Wait/Wait", false),
         // Walking is the Run nerve at a low stick tilt.
         Move::Walk | Move::Run => ("Run", false),
         Move::Skid => ("Run/Brake", true),
@@ -194,6 +194,20 @@ impl Posed for Pose {
         self.layers.is_empty()
     }
 }
+/// The clip frame a trace row shows. The controller advances a clip at the end
+/// of its step, but the real game's rows show the frame the step started from
+/// (a clip that began this step reads 0), so one rate is taken back.
+fn shown_frame(frame: f32, rate: f32, is_cycle: bool) -> f32 {
+    if is_cycle {
+        (frame - rate).rem_euclid(60.)
+    } else {
+        (frame - rate).max(0.)
+    }
+}
+/// The frame the controller holds after a step, from a row's shown frame.
+fn held_frame(shown: f32, rate: f32) -> f32 {
+    shown + rate
+}
 impl Pose {
     /// The pose the controller asks for. The "Move" cycle blends Walk, Run,
     /// Dash and DashFast by speed, with the weights the renderer uses.
@@ -203,7 +217,7 @@ impl Pose {
             return Self {
                 layers: vec![Layer {
                     name: a.name,
-                    frame: a.frame,
+                    frame: shown_frame(a.frame, a.rate, false),
                     rate: a.rate,
                     weight: 1.,
                 }],
@@ -215,7 +229,7 @@ impl Pose {
             .filter(|(_, w)| *w > 0.001)
             .map(|(name, weight)| Layer {
                 name,
-                frame: a.frame,
+                frame: shown_frame(a.frame, a.rate, true),
                 rate: a.rate,
                 weight,
             })
@@ -478,7 +492,11 @@ impl Recorder {
         } else {
             p.anim.name
         });
-        cells.num(p.anim.frame);
+        cells.num(shown_frame(
+            p.anim.frame,
+            p.anim.rate,
+            p.anim.name == "Move",
+        ));
         cells.num(p.anim.rate);
         cells.text(&blend);
         cells.text(&interp);
@@ -682,9 +700,14 @@ impl TraceFile {
             // The cycle phase runs over 60 frames whatever the clip's length.
             self.number(row, "anim_len")
                 .filter(|len| *len > 0.)
-                .map(|len| ("Move", n("anim_frame") / len * 60.))
+                .map(|len| {
+                    let rate = self.number(row, "anim_rate").unwrap_or(1.);
+                    let held = held_frame(n("anim_frame"), rate);
+                    ("Move", (held / len * 60.).rem_euclid(60.))
+                })
         } else {
-            Some((intern(anim_name), n("anim_frame")))
+            let rate = self.number(row, "anim_rate").unwrap_or(1.);
+            Some((intern(anim_name), held_frame(n("anim_frame"), rate)))
         };
         let mut counters = Vec::new();
         for column in ["counters", "pre_input"] {

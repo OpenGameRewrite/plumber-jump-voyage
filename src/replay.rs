@@ -6,7 +6,8 @@
 //!     [--camera game.csv] [--lockstep game.csv] [--random game.csv]
 //! ```
 //!
-//! A script holds `start x y z yaw_deg` (game units, yaw 0 = +Z, 90 = +X),
+//! A script holds `start x y z yaw_deg` (game units, yaw 0 = +Z, 90 = +X;
+//! `start spawn yaw_deg` is the game's default spawn),
 //! an optional `camera yaw_deg`, optional `shot <frame>...` lines, and frame
 //! spans `<frames> <lx> <ly> <buttons>` (stick up is +ly; buttons use Switch
 //! names joined by `+`, or `-`). The player stands on a flat floor, idles for
@@ -80,6 +81,16 @@ impl Script {
                     .collect()
             };
             match words[0] {
+                "start" if words.get(1) == Some(&"spawn") => {
+                    // The game's default spawn: on a flat floor only the facing matters.
+                    let n = numbers(&words[2..])?;
+                    let [yaw] = n[..] else {
+                        return Err(at("start spawn needs yaw_deg"));
+                    };
+                    script.start = Vec3::ZERO;
+                    script.start_yaw_deg = yaw;
+                    has_start = true;
+                }
                 "start" => {
                     let n = numbers(&words[1..])?;
                     let [x, y, z, yaw] = n[..] else {
