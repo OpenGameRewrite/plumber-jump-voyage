@@ -10,6 +10,7 @@ mod local_assets;
 mod movement;
 mod replay;
 mod scripted_input;
+mod shots;
 #[cfg(feature = "local-assets")]
 mod sound;
 // Pure sound rules, shared by the audio and the headless trace.
@@ -23,13 +24,18 @@ use bevy::prelude::*;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // A headless replay (--trace) never opens a window; a rendered one
+    // (--shots) plays the script in the game and saves pictures.
+    let mut replay_shots = None;
     if args.iter().any(|a| a == "--replay") {
-        // Headless fidelity replay: no window, no rendering.
-        if let Err(error) = replay::run_cli(&args) {
-            eprintln!("{error}");
-            std::process::exit(2);
+        match replay::run_cli(&args) {
+            Ok(None) => return,
+            Ok(driver) => replay_shots = driver,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
         }
-        return;
     }
     if args.iter().any(|a| a == "--self-check") {
         movement::self_check();
@@ -58,7 +64,7 @@ fn main() {
                     title: "Plumber Jump Voyage".into(),
                     resolution: (1440, 900).into(),
                     // Take focus so input works at once (scripted captures stay in the background).
-                    focused: std::env::var_os("PJV_SHOT").is_none(),
+                    focused: std::env::var_os("PJV_SHOT").is_none() && replay_shots.is_none(),
                     ..default()
                 }),
                 ..default()
@@ -75,5 +81,8 @@ fn main() {
     ));
     #[cfg(feature = "local-assets")]
     app.add_plugins(sound::plugin);
+    if let Some(driver) = replay_shots {
+        shots::install(&mut app, driver);
+    }
     app.run();
 }

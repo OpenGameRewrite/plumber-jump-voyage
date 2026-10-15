@@ -7,6 +7,7 @@ by frame. Nothing here needs game data; the optional sound table
 ```sh
 plumber-jump-voyage --replay run.input --trace rewrite.csv [--camera game.csv]
 plumber-jump-voyage --replay run.input --trace lockstep.csv --lockstep game.csv
+plumber-jump-voyage --replay run.input --shots runs/name   # rendered captures
 plumber-jump-voyage --replay --states        # the original state names used
 py tools/compare-traces.py game.csv rewrite.csv --out diff.md [--lockstep]
 ```
@@ -70,3 +71,28 @@ roll, climb and fire controls, the cap, how long a jump may still extend) keep
 the rewrite's own values, and gravity and air-speed limits are set to what
 entering that state would have given. Compare with `--lockstep` to count the
 frames that disagree rather than look for drift.
+
+## Rendered captures
+
+```sh
+plumber-jump-voyage --replay run.input --shots runs/name [--camera game.csv]
+```
+
+Plays the script in the real game (the game-data build shows the original
+Mario) on the same flat floor, one simulation step per update, and saves
+`rewrite-<frame>.png` for every frame a `shot` line lists, showing the state
+after that frame. The course HUD is hidden and the camera looks along the
+scenario yaw with the game's default pitch and distance. Time stops during a
+capture so the picture is exact; the camera's smoothing settles meanwhile.
+Mario's outfit follows the saved settings (`PJV_SAVE` picks another file).
+`PJV_REPLAY_WARMUP` sets the seconds of loading before the script starts.
+Two runs give identical pictures. `--trace` can be given as well.
+
+## Determinism
+
+Nothing in the simulation reads a clock, a random number generator or a hash
+map's iteration order. Random numbers exist only in presentation: the particle
+spawner and the audio variants use fixed-seed generators, and blinking follows
+elapsed time; none of them feeds back into the player. `--random game.csv`
+therefore only reads the game's logged choices and reports how many frames
+carry some; there is nothing in the rewrite to replace.

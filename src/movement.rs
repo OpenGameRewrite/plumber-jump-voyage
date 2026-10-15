@@ -780,8 +780,20 @@ fn simulate(
     }
     orders.clear_edges();
 }
-fn present(mut players: Query<&mut Player>, fixed: Res<Time<Fixed>>) {
-    let a = fixed.overstep_fraction().clamp(0., 1.);
+/// Present in a rendered replay: show each step's result, not the blend
+/// toward it, so a captured frame is the state the trace records.
+#[derive(Resource)]
+pub struct ExactFrames;
+fn present(
+    mut players: Query<&mut Player>,
+    fixed: Res<Time<Fixed>>,
+    exact: Option<Res<ExactFrames>>,
+) {
+    let a = if exact.is_some() {
+        1.
+    } else {
+        fixed.overstep_fraction().clamp(0., 1.)
+    };
     for mut p in &mut players {
         // Teleports (respawn, ledge climbs) snap instead of sliding.
         p.shown = if p.prev.distance(p.pos) > 2. {

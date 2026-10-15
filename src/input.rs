@@ -285,7 +285,12 @@ pub fn plugin(app: &mut App) {
     app.insert_resource(Settings::load())
         .init_resource::<Orders>()
         .init_resource::<FrameInput>()
-        .add_systems(PreUpdate, read.after(bevy::input::InputSystems));
+        .add_systems(
+            PreUpdate,
+            // A rendered replay supplies the orders itself.
+            read.after(bevy::input::InputSystems)
+                .run_if(|replay: Option<Res<crate::shots::Driver>>| replay.is_none()),
+        );
 }
 pub fn read(
     keys: Res<ButtonInput<KeyCode>>,

@@ -398,6 +398,7 @@ fn handle(
     assets: Res<crate::local_assets::Wardrobe>,
     mut orders: ResMut<Orders>,
     mut exit: MessageWriter<AppExit>,
+    replay: Option<Res<crate::shots::Driver>>,
 ) {
     if m.cooldown > 0. {
         m.cooldown = (m.cooldown - time.delta_secs()).max(0.);
@@ -409,6 +410,7 @@ fn handle(
             KeyCode::PrintScreen,
         ]))
         && std::env::var_os("PJV_SHOT").is_none()
+        && replay.is_none()
     {
         m.open = true;
         *orders = Orders::default();
@@ -490,6 +492,8 @@ fn render(
     m: Res<Menu>,
     s: Res<Settings>,
     assets: Res<crate::local_assets::Wardrobe>,
+    // A rendered replay captures the scene without the course HUD.
+    replay: Option<Res<crate::shots::Driver>>,
     mut panel: Single<&mut Visibility, With<Panel>>,
     mut background: Single<&mut BackgroundColor, (With<Panel>, Without<Row>)>,
     mut gameplay: Query<&mut Visibility, (With<GameplayUi>, Without<Panel>)>,
@@ -531,7 +535,7 @@ fn render(
         Visibility::Hidden
     };
     for mut v in &mut gameplay {
-        *v = if m.open {
+        *v = if m.open || replay.is_some() {
             Visibility::Hidden
         } else {
             Visibility::Visible
@@ -737,8 +741,13 @@ fn guide(s: &Settings, pad: bool) -> String {
         k(act::HOMING)
     )
 }
-fn cursor(m: Res<Menu>, mut window: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>) {
-    let active = !m.open && window.0.focused && std::env::var_os("PJV_SHOT").is_none();
+fn cursor(
+    m: Res<Menu>,
+    replay: Option<Res<crate::shots::Driver>>,
+    mut window: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
+) {
+    let active =
+        !m.open && window.0.focused && std::env::var_os("PJV_SHOT").is_none() && replay.is_none();
     window.1.visible = !active;
     window.1.grab_mode = if active {
         CursorGrabMode::Confined

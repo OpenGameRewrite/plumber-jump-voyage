@@ -5,6 +5,7 @@ pub(super) fn run() {
     scenarios();
     camera_and_buttons();
     lockstep();
+    command_line();
 }
 
 const IDLE: &str = "start 0 0 0 0\n60 0 0 -\n";
@@ -153,4 +154,28 @@ fn lockstep() {
             }
         }
     }
+}
+
+#[cfg_attr(test, test)]
+fn command_line() {
+    let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    // A replay needs somewhere to write.
+    assert!(run_cli(&args(&["x", "--replay", "a.input"])).is_err());
+    assert!(run_cli(&args(&["x", "--replay"])).is_err());
+    assert!(
+        run_cli(&args(&[
+            "x",
+            "--replay",
+            "missing.input",
+            "--trace",
+            "o.csv"
+        ]))
+        .is_err()
+    );
+    // Rendered replays need frames to capture.
+    let camera = |script: &Script| CameraTrack::new(script, None).unwrap();
+    let plain = Script::parse("start 0 0 0 0\n5 0 0 -\n").unwrap();
+    assert!(crate::shots::Driver::new(&plain, camera(&plain), "out".into()).is_err());
+    let shots = Script::parse("start 0 0 0 0\nshot 3\n5 0 0 -\n").unwrap();
+    assert!(crate::shots::Driver::new(&shots, camera(&shots), "out".into()).is_ok());
 }

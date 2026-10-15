@@ -21,7 +21,7 @@ use crate::{
 use bevy::prelude::*;
 
 /// Frames the player idles after the teleport before frame 0.
-const SETTLE_FRAMES: usize = 10;
+pub const SETTLE_FRAMES: usize = 10;
 
 /// Switch button names and the gamepad buttons the game's bindings use.
 const BUTTONS: [(&str, &str); 16] = [
@@ -127,7 +127,7 @@ impl Script {
         self.spans.iter().map(|s| s.frames as usize).sum()
     }
     /// The span each frame belongs to.
-    fn frames(&self) -> impl Iterator<Item = &Span> {
+    pub fn frames(&self) -> impl Iterator<Item = &Span> {
         self.spans
             .iter()
             .flat_map(|s| std::iter::repeat_n(s, s.frames as usize))
@@ -208,7 +208,7 @@ pub fn flat_floor() -> Course {
     }
 }
 /// The player's orders for one frame, built as the windowed game builds them.
-fn orders_for(
+pub fn orders_for(
     span: &Span,
     previous: &[&str],
     camera_yaw_deg: f32,
@@ -316,7 +316,8 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
 }
 
 const USAGE: &str = "usage: plumber-jump-voyage --replay <file.input> --trace <out.csv> \
-[--camera <game.csv>] [--lockstep <game.csv>] [--random <game.csv>]\n\
+[--camera <game.csv>] [--lockstep <game.csv>] [--random <game.csv>]
+   or: plumber-jump-voyage --replay <file.input> --shots <dir> [--camera <game.csv>]
 (--replay --states lists the state names the trace uses)";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
@@ -328,14 +329,19 @@ fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
             .ok_or_else(|| format!("{name} needs a value\n{USAGE}")),
     }
 }
-/// Entry point for `--replay`; prints what it wrote or why it could not.
-pub fn run_cli(args: &[String]) -> Result<(), String> {
+/// Entry point for `--replay`: writes the trace when `--trace` is given, and
+/// returns the driver of a rendered replay when `--shots` asks for pictures.
+pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> {
     if args.iter().any(|a| a == "--states") {
         print!("{}", crate::trace::state_table());
-        return Ok(());
+        return Ok(None);
     }
     let script_path = flag(args, "--replay")?.ok_or(USAGE)?;
-    let trace_path = flag(args, "--trace")?.ok_or(format!("--trace is required\n{USAGE}"))?;
+    let trace_path = flag(args, "--trace")?;
+    let shots_dir = flag(args, "--shots")?;
+    if trace_path.is_none() && shots_dir.is_none() {
+        return Err(format!("--trace or --shots is required\n{USAGE}"));
+    }
     let script = Script::parse(
         &std::fs::read_to_string(script_path).map_err(|e| format!("{script_path}: {e}"))?,
     )
@@ -354,33 +360,40 @@ pub fn run_cli(args: &[String]) -> Result<(), String> {
              has no random choices to replace, so the replay is unchanged"
         );
     }
-    let table = Table::load();
-    if table.is_none() {
-        eprintln!(
-            "no local sound table (assets/local/sounds/player.json): animation-trigger \
-             sounds and reaction sounds are left out of events and sounds"
+    if let Some(trace_path) = trace_path {
+        let table = Table::load();
+        if table.is_none() {
+            eprintln!(
+                "no local sound table (assets/local/sounds/player.json): animation-trigger \
+                 sounds and reaction sounds are left out of events and sounds"
+            );
+        }
+        let trace = replay(
+            &script,
+            Options {
+                camera: camera.as_ref(),
+                lockstep: lockstep.as_ref(),
+                table,
+            },
+        )?;
+        if let Some(dir) = std::path::Path::new(trace_path).parent()
+            && !dir.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        std::fs::write(trace_path, trace.to_csv()).map_err(|e| format!("{trace_path}: {e}"))?;
+        println!(
+            "{} frames (start height {:.1} cm) -> {trace_path}",
+            trace.rows.len(),
+            script.start.y
         );
     }
-    let trace = replay(
-        &script,
-        Options {
-            camera: camera.as_ref(),
-            lockstep: lockstep.as_ref(),
-            table,
-        },
-    )?;
-    if let Some(dir) = std::path::Path::new(trace_path).parent()
-        && !dir.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    std::fs::write(trace_path, trace.to_csv()).map_err(|e| format!("{trace_path}: {e}"))?;
-    println!(
-        "{} frames (start height {:.1} cm) -> {trace_path}",
-        trace.rows.len(),
-        script.start.y
-    );
-    Ok(())
+    shots_dir
+        .map(|dir| {
+            let camera = CameraTrack::new(&script, camera.as_ref())?;
+            crate::shots::Driver::new(&script, camera, dir.into())
+        })
+        .transpose()
 }
 #[path = "tests/replay.rs"]
 mod checks;

@@ -13,6 +13,8 @@ pub struct Orbit {
     idle: f32,
     zoom: f32,
     fov: f32,
+    /// A rendered replay sets the yaw itself; input and follow leave it be.
+    pub locked: bool,
 }
 impl Default for Orbit {
     fn default() -> Self {
@@ -26,6 +28,7 @@ impl Default for Orbit {
             idle: 0.,
             zoom: 1.,
             fov: 55_f32.to_radians(),
+            locked: false,
         }
     }
 }
@@ -175,6 +178,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut course: ResMut<Course>,
+    replay: Option<Res<crate::shots::Driver>>,
 ) {
     let cream = material(&mut materials, [0.93, 0.86, 0.68]);
     let white = material(&mut materials, [0.97, 0.96, 0.89]);
@@ -279,6 +283,19 @@ fn setup(
         PreviewLight,
         Transform::default(),
     ));
+    if replay.is_some() {
+        // A rendered replay runs on the same flat floor as the headless one.
+        *course = crate::replay::flat_floor();
+        block(
+            &mut commands,
+            &mut meshes,
+            grass,
+            Vec3::new(0., -0.5, 0.),
+            Vec3::new(4000., 1., 4000.),
+        );
+        spawn_player(&mut commands, &mut meshes, teal, skin, dark, white, gold);
+        return;
+    }
     let mut add = |c: Vec3,
                    size: Vec3,
                    mat: Handle<StandardMaterial>,
@@ -997,7 +1014,7 @@ fn camera(
     let dt = time.delta_secs().clamp(1e-4, 0.05);
     let behind = (-p.facing.x).atan2(-p.facing.z);
     let speed = p.flat_speed();
-    if !menu.open {
+    if !menu.open && !orbit.locked {
         orbit.yaw -= orders.look.x;
         orbit.pitch = (orbit.pitch + orders.look.y).clamp(-0.35, 1.15);
         if orders.look.length_squared() > 1e-7 {
