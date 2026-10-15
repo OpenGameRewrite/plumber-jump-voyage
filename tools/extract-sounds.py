@@ -214,13 +214,9 @@ SpinCapAirStart SpinCapAirStartLeft SpinCapAirStartRight SpinCapAirStartDoubleUp
 SpinCapAirStartDoubleLeft SpinCapAirStartDoubleRight
 JumpCapLeapFrog JumpCapCatchCommon JumpCapCatch JumpCapCatchAir WallJump WallKeep WallSlideL WallCatchStart WallCatch
 WallCatchEnd WallCatchEndJump PoleCatch PoleClimb PoleFall PoleWait SwimFallIn SwimWait SwimWalk SwimDive'''.split()
-# Event tables keyed by the original's reaction names.
-MARIO_REACTIONS={'着地':'Land','着地[走り]':'LandRun','転がり再加速[1回目]':'RollBoost',
-    '転がり再加速[2回目以降]':'RollBoostAgain','転がり着地':'RollLand',
-    'あちちジャンプ':'BurnJump','あちちジャンプ(バウンド)':'BurnBounce',
-    'アチチ走り浅瀬キャンセル':'FireQuench'}
+# Event tables keyed by the original's reaction names (shared with the effect tool).
+from reaction_names import MARIO_REACTIONS,CAP_REACTIONS
 CAP_ACTIONS=['FlyingWait','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
-CAP_REACTIONS={'帽子投げ':'Throw','帽子戻し':'Return','帽子キャッチ':'Catch'}
 # Footstep playback the controller triggers directly on its foot-print frames.
 FOOT=['RunL','RunR','SquatRunL','SquatRunR','FootBrake','SwimRunL','SwimRunR']
 # Footwear sets (the original chooses these in code; this mapping is inferred).

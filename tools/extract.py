@@ -182,9 +182,12 @@ def sarc(data):
 # What the conversion and sound tools read from the RomFS; --clean keeps only these.
 OBJECT_WORDS = ('mario', 'player', 'cap', 'costume')
 SOUND_FILES = ('SeData.bfsar', 'SeDataBase.szs')
+EFFECT_FILES = ('EffectPtcl.szs', 'EffectDataBase.szs')
 
 def needed(path, romfs):
     rel = path.relative_to(romfs).parts
+    if rel[0] == 'EffectData':
+        return len(rel) == 2 and path.name in EFFECT_FILES
     if rel[0] == 'ObjectData':
         return len(rel) == 2 and path.suffix == '.szs' and any(w in path.stem.lower() for w in OBJECT_WORDS)
     if rel[0] == 'SoundData':
@@ -307,6 +310,8 @@ def self_check():
     assert needed(r/'SoundData'/'SeData.bfsar', r) and needed(r/'SoundData'/'SeResource0.aras', r)
     assert not needed(r/'ObjectData'/'Kuribo.szs', r) and not needed(r/'StageData'/'Stage.szs', r)
     assert not needed(r/'SoundData'/'Bgm.bfstm', r)
+    assert needed(r/'EffectData'/'EffectPtcl.szs', r) and needed(r/'EffectData'/'EffectDataBase.szs', r)
+    assert not needed(r/'EffectData'/'EffectObj.szs', r)
     assert yaz0(b'Yaz0' + struct.pack('>I',3) + bytes(8) + b'\xe0abc') == b'abc'
     for name in ('../bad','/absolute','C:/bad','x/../../bad'):
         try: safe_name(name)
