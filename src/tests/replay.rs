@@ -17,6 +17,7 @@ fn options(game: Option<&TraceFile>) -> Options<'_> {
         camera: game,
         lockstep: None,
         table: None,
+        library: None,
     }
 }
 fn trace(script: &str) -> Vec<Vec<String>> {
@@ -141,6 +142,7 @@ fn lockstep() {
                 camera: None,
                 lockstep: Some(&game),
                 table: None,
+                library: None,
             },
         )
         .unwrap();

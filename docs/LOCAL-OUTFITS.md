@@ -79,6 +79,28 @@ bank and writes `assets/local/sounds/player.json`. Adjust **Sound volume** in th
 pause menu. Surface materials, 3D positioning and the game's mixer are not
 reproduced.
 
+## Add the original particle effects
+
+```sh
+python tools/extract-effects.py
+```
+
+The script reads the game's particle archive and effect tables from the RomFS
+under `local/romfs` (pass `--romfs` for another folder) and installs what Mario
+and Cappy use into `assets/local/effects/`: the emitters, the tables that say
+when each effect starts, a few small meshes and the particle textures. It needs
+the Pillow package (`pip install pillow`). If you extracted your files before
+this step existed, run `tools/extract.py` again so the effect files stay in
+`local/romfs`.
+
+With these installed the game-data build draws the original dust, rings,
+sparks, wind lines and cap trails (smoke puffs with crisp edges, glowing
+sparks) instead of the built-in stand-ins, and the replay trace
+(`--replay ... --trace`) logs the original effect names. Without them the
+stand-in effects stay. Floor materials other than puddles, the smoke's lighting
+and a few effects that need the game's flow-noise fields (swim bubbles, the fire
+run's seat smoke, the cap's spiral stripes) are only approximated.
+
 ## Play
 
 ```sh

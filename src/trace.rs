@@ -7,6 +7,8 @@
 //! Columns the rewrite has no data for stay empty; comparison tools treat an
 //! empty cell as "missing", never as a value.
 use crate::{
+    effect_data::Library,
+    effect_triggers::Tracker,
     fx,
     local_assets::{Blend, Posed, looping},
     movement::{Cap, CapPhase, FPS, Fx, Move, Player, Snapshot, Throw, UNIT, move_weights},
@@ -270,11 +272,15 @@ pub struct Recorder {
     overlay: f32,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
+    /// The original's effects, when their library is installed; the
+    /// procedural stand-ins are logged otherwise.
+    effects: Option<Tracker>,
 }
 impl Recorder {
-    pub fn new(table: Option<Table>) -> Self {
+    pub fn new(table: Option<Table>, library: Option<Library>) -> Self {
         Self {
             table,
+            effects: library.map(Tracker::new),
             cursor: AnimCursor::default(),
             cap_watch: CapWatch::default(),
             boosts: 0,
@@ -393,7 +399,9 @@ impl Recorder {
                     } => self.action((cap, name, from, to), speed, &mut events, &mut mix),
                 }
             }
-            started.extend(fx::burst_names(*f, p.flat_speed()));
+            if self.effects.is_none() {
+                started.extend(fx::burst_names(*f, p.flat_speed()));
+            }
         }
         // The cap's return swing and catch.
         let change = self
@@ -405,22 +413,29 @@ impl Recorder {
         if change.ended {
             self.reaction(true, "Catch", speed, &mut events, &mut mix);
         }
-        for name in &started {
-            events.push(format!("effect:{name}"));
-        }
-        // Effects alive: bursts for their lifetime, plus the state's trails.
-        self.bursts.retain_mut(|(_, left)| {
-            *left = left.saturating_sub(1);
-            *left > 0
-        });
-        self.bursts
-            .extend(started.iter().map(|n| (*n, fx::burst_frames(n))));
-        let live: BTreeSet<&str> = self
-            .bursts
-            .iter()
-            .map(|b| b.0)
-            .chain(fx::trail_names(p))
-            .collect();
+        // Effects: the original's by their table names, or the stand-ins'.
+        let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
+            let (names, alive) = tracker.step(p, &fxs);
+            events.extend(names.into_iter().map(|n| format!("effect:{n}")));
+            alive.into_iter().collect()
+        } else {
+            for name in &started {
+                events.push(format!("effect:{name}"));
+            }
+            // Bursts live for their lifetime, plus the state's trails.
+            self.bursts.retain_mut(|(_, left)| {
+                *left = left.saturating_sub(1);
+                *left > 0
+            });
+            self.bursts
+                .extend(started.iter().map(|n| (*n, fx::burst_frames(n))));
+            self.bursts
+                .iter()
+                .map(|b| b.0)
+                .chain(fx::trail_names(p))
+                .map(String::from)
+                .collect()
+        };
 
         // Animation blend and crossfade, advanced by one frame.
         let dt = 1. / FPS;

@@ -14,6 +14,7 @@
 //! ten frames, then takes one `Player::step` per scripted frame with orders
 //! built exactly as the windowed game builds them from its default layout.
 use crate::{
+    effect_data::Library,
     input::{ACTIONS, Orders, Settings, bound, rotate},
     movement::{Course, Player, Solid},
     sound_table::Table,
@@ -270,6 +271,8 @@ pub struct Options<'a> {
     /// game's previous row.
     pub lockstep: Option<&'a TraceFile>,
     pub table: Option<Table>,
+    /// The original's particle effects, for their names in the trace.
+    pub library: Option<Library>,
 }
 /// Result of a replay: the CSV text and the sound table's presence.
 pub struct Trace {
@@ -293,7 +296,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let course = flat_floor();
     let start_yaw = script.start_yaw_deg.to_radians();
     let mut player = Player::spawn_at(Vec3::ZERO, Vec3::new(start_yaw.sin(), 0., start_yaw.cos()));
-    let mut recorder = Recorder::new(options.table);
+    let mut recorder = Recorder::new(options.table, options.library);
     let settle = Span {
         frames: 0,
         stick: Vec2::ZERO,
@@ -379,12 +382,19 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
                  sounds and reaction sounds are left out of events and sounds"
             );
         }
+        let library = Library::load(&crate::local_assets::asset_dir().join("local/effects"));
+        if library.is_none() {
+            eprintln!(
+                "no local effect library (assets/local/effects): effect events use the stand-in effects' names"
+            );
+        }
         let trace = replay(
             &script,
             Options {
                 camera: camera.as_ref(),
                 lockstep: lockstep.as_ref(),
                 table,
+                library,
             },
         )?;
         if let Some(dir) = std::path::Path::new(trace_path).parent()

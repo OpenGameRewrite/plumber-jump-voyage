@@ -59,7 +59,14 @@ leftovers afterwards, leaving about 2.5 GB.
    python tools/extract-sounds.py --vgmstream "C:/Tools/vgmstream/vgmstream-cli.exe"
    ```
 
-5. Play:
+5. Optional, install the original particle effects (needs `pip install pillow`;
+   run step 1 again first if you extracted before this step existed):
+
+   ```sh
+   python tools/extract-effects.py
+   ```
+
+6. Play:
 
    ```sh
    cargo run --release --features local-assets
@@ -108,12 +115,15 @@ The controller runs at the original 60 frames per second in its units
 (1 unit = 1 cm) with the original tuning constants. The game-data build plays
 the original clips by name, including the hand, face and eye animation sets,
 blends the run cycle at the original speeds, crossfades with the original
-blend table, and plays sounds from the original per-animation triggers.
+blend table, and plays sounds from the original per-animation triggers. With
+the particle effects installed it also draws the original effects, simulated
+from their decoded emitters and started by the original effect tables.
 
 Inferred rather than taken from the game: how states join (input windows,
 order of checks, collision response), since the public decompilation covers
-only some player states; the visual effects, which are original particles on
-the original trigger frames; the look of the soot a burn leaves, which keeps
+only some player states; how some particle fields combine (texture and colour
+blending, velocity, billboard kinds) and the smoke's lighting, which is not
+reproduced; the look of the soot a burn leaves, which keeps
 the original timing but darkens Mario evenly instead of in the game's soot
 pattern; and footwear sounds for a few outfits. Captures,
 enemies and kingdoms are out of scope.

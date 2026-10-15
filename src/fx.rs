@@ -29,6 +29,22 @@ struct Ring {
 }
 #[derive(Component)]
 struct Shadow;
+/// Present when the original's particle effects are installed and running:
+/// they replace the procedural dust, sparks and trails below (the shadow,
+/// camera shake and the course's own bursts stay).
+#[derive(Resource)]
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub struct OriginalEffects;
+/// Camera shake a movement event adds, whichever effects are drawn.
+fn shake_for(fx: Fx) -> f32 {
+    match fx {
+        Fx::Land { hard: true } => 0.45,
+        Fx::PoundLand => 0.65,
+        Fx::CapBounce => 0.25,
+        Fx::Burned(_) => 0.2,
+        _ => 0.,
+    }
+}
 #[derive(Resource)]
 struct Kit {
     ball: Handle<Mesh>,
@@ -230,6 +246,7 @@ fn react(
     mut bursts: MessageReader<Burst>,
     mut shake: ResMut<crate::world::Shake>,
     mut seed: Local<u32>,
+    originals: Option<Res<OriginalEffects>>,
 ) {
     if *seed == 0 {
         *seed = 0x9e37_79b9;
@@ -242,6 +259,10 @@ fn react(
     let feet = p.pos;
     let back = -p.facing;
     for f in fx.read() {
+        if originals.is_some() {
+            shake.0 = shake.0.max(shake_for(*f));
+            continue;
+        }
         match *f {
             Fx::Jump(kind) => {
                 // The original puffs smoke on every ground jump clip except the
@@ -436,8 +457,9 @@ fn trails(
     p: Single<&Player>,
     mut clock: Local<f32>,
     mut seed: Local<u32>,
+    originals: Option<Res<OriginalEffects>>,
 ) {
-    if menu.open {
+    if menu.open || originals.is_some() {
         return;
     }
     if *seed == 0 {

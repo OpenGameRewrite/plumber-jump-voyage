@@ -36,7 +36,7 @@ impl Default for Orbit {
 #[derive(Resource, Default)]
 pub struct Shake(pub f32);
 #[derive(Component)]
-struct MainCamera;
+pub struct MainCamera;
 #[derive(Component)]
 struct PreviewCamera;
 #[derive(Component)]

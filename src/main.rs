@@ -2,6 +2,17 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod asset_contract;
+// The original's effects: their data and trigger rules also serve the headless trace.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+mod effect_data;
+#[cfg(feature = "local-assets")]
+mod effect_render;
+#[cfg(feature = "local-assets")]
+mod effect_sim;
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+mod effect_triggers;
+#[cfg(feature = "local-assets")]
+mod effects;
 mod fx;
 mod input;
 #[cfg(feature = "local-assets")]
@@ -44,11 +55,17 @@ fn main() {
         local_assets::self_check();
         asset_contract::self_check();
         fx::self_check();
+        effect_data::self_check();
+        effect_triggers::self_check();
         sound_table::self_check();
         trace::self_check();
         replay::self_check();
         #[cfg(feature = "local-assets")]
-        sound::self_check();
+        {
+            sound::self_check();
+            effect_sim::self_check();
+            effects::self_check();
+        }
         println!("Movement, collision, input, effects and local asset checks passed.");
         return;
     }
@@ -80,7 +97,7 @@ fn main() {
         fx::plugin,
     ));
     #[cfg(feature = "local-assets")]
-    app.add_plugins(sound::plugin);
+    app.add_plugins((sound::plugin, effects::plugin));
     if let Some(driver) = replay_shots {
         shots::install(&mut app, driver);
     }

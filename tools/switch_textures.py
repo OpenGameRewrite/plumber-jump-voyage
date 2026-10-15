@@ -142,6 +142,11 @@ def apply_channel_select(image, select):
     for index in range(4):
         source = (select >> (8 * index)) & 0xff
         routed.append(constant[source] if source in constant else bands[min(source - 2, 3)])
+    if (select >> 24) & 0xff == 1:
+        # A constant-one alpha: the texture's shape is in its colour (soft
+        # ripples, flames), which particles use as alpha (inferred from how
+        # the emitters use these textures).
+        routed[3] = routed[0]
     return Image.merge('RGBA', routed)
 
 
@@ -170,6 +175,11 @@ def self_check():
     # Red byte first: red <- green, green <- red, blue <- one, alpha <- zero.
     routed = apply_channel_select(sample, 3 | 2 << 8 | 1 << 16 | 0 << 24)
     assert routed.getpixel((0, 0)) == (20, 10, 255, 0)
+    shaped = apply_channel_select(sample, 2 | 2 << 8 | 2 << 16 | 1 << 24)
+    assert shaped.getpixel((0, 0)) == (10, 10, 10, 10), 'a constant-one alpha takes the brightness'
+    # A constant-one alpha takes the brightness instead.
+    shaped = apply_channel_select(sample, 2 | 2 << 8 | 2 << 16 | 1 << 24)
+    assert shaped.getpixel((0, 0)) == (10, 10, 10, 10)
     try:
         read_archive(b'nope')
     except ValueError:
