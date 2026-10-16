@@ -84,6 +84,16 @@ pub struct Progress {
 #[derive(Resource)]
 pub struct Palette(pub Handle<StandardMaterial>);
 
+/// Where the sun stands in a rendered replay (direction from the origin). In
+/// the real game's reference pictures Mario's back, which faces the camera, is
+/// evenly lit and his shadow lies almost straight below him with only a short
+/// stretch toward the camera, so the sun is nearly overhead (about 80 degrees)
+/// and a little on the camera's side.
+const SHOT_SUN_FROM: Vec3 = Vec3::new(1., 20., -3.);
+/// Plain ground of a rendered replay: the colour of the reference plateau's
+/// soil as it shows in the game's pictures, before this scene's own lighting.
+const SHOT_SOIL: [f32; 3] = [0.70, 0.55, 0.22];
+
 pub fn plugin(app: &mut App) {
     app.init_resource::<Orbit>()
         .init_resource::<Progress>()
@@ -197,12 +207,12 @@ fn setup(
     commands.insert_resource(Palette(teal.clone()));
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.78, 0.88, 1.),
-        brightness: 250.,
+        brightness: if replay.is_some() { 150. } else { 250. },
         ..default()
     });
     commands.spawn((
         DirectionalLight {
-            illuminance: 14000.,
+            illuminance: if replay.is_some() { 20000. } else { 14000. },
             color: Color::srgb(1., 0.97, 0.9),
             shadow_maps_enabled: true,
             ..default()
@@ -214,7 +224,12 @@ fn setup(
         }
         .build(),
         bevy::camera::visibility::RenderLayers::from_layers(&[0, 1]),
-        Transform::from_xyz(10., 18., 8.).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(if replay.is_some() {
+            SHOT_SUN_FROM
+        } else {
+            Vec3::new(10., 18., 8.)
+        })
+        .looking_at(Vec3::ZERO, Vec3::Y),
     ));
     let sky = images.add(sky_cubemap(128));
     commands.spawn((
@@ -238,7 +253,7 @@ fn setup(
         },
         bevy::light::GeneratedEnvironmentMapLight {
             environment_map: sky.clone(),
-            intensity: 1400.,
+            intensity: if replay.is_some() { 600. } else { 1400. },
             ..default()
         },
         bevy::pbr::DistanceFog {
@@ -284,12 +299,15 @@ fn setup(
         Transform::default(),
     ));
     if replay.is_some() {
-        // A rendered replay runs on the same flat floor as the headless one.
+        // A rendered replay runs on the same flat floor as the headless one,
+        // bare and dirt-coloured like the plateau the real game's reference
+        // pictures were taken on, so only Mario and his effects draw the eye.
         *course = crate::replay::flat_floor();
+        let soil = material(&mut materials, SHOT_SOIL);
         block(
             &mut commands,
             &mut meshes,
-            grass,
+            soil,
             Vec3::new(0., -0.5, 0.),
             Vec3::new(4000., 1., 4000.),
         );

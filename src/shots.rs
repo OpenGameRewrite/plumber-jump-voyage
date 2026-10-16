@@ -16,7 +16,7 @@ use crate::{
     movement::{ExactFrames, Player},
     replay::{CameraTrack, SETTLE_FRAMES, Script, Span, orders_for},
     ui::Menu,
-    world::Orbit,
+    world::{MainCamera, Orbit},
 };
 use bevy::{
     prelude::*,
@@ -94,6 +94,12 @@ pub fn install(app: &mut App, driver: Driver) {
         )))
         .add_systems(PostStartup, begin)
         .add_systems(PreUpdate, aim_camera)
+        // After the orbit camera has placed itself and before the transform
+        // propagation of this frame: the game's camera wins when it is known.
+        .add_systems(
+            PostUpdate,
+            follow_game_camera.before(bevy::transform::TransformSystems::Propagate),
+        )
         .add_systems(FixedPreUpdate, feed)
         .add_systems(FixedPostUpdate, |mut d: ResMut<Driver>| d.finished += 1)
         .add_systems(Update, capture);
@@ -119,6 +125,22 @@ fn begin(
 fn aim_camera(driver: Res<Driver>, mut orbit: ResMut<Orbit>) {
     // The game's camera looks along its yaw; the orbit sits behind that.
     orbit.yaw = driver.camera.yaw_deg(driver.frame()).to_radians() + std::f32::consts::PI;
+}
+/// Put the camera exactly where the real game's was in the frame being
+/// shown: its position, view direction and field of view. Without a game
+/// trace the orbit camera stays as it is.
+fn follow_game_camera(
+    driver: Res<Driver>,
+    mut camera: Single<(&mut Transform, &mut Projection), With<MainCamera>>,
+) {
+    let Some(view) = driver.camera.view(driver.frame()) else {
+        return;
+    };
+    camera.0.translation = view.position;
+    camera.0.look_to(view.forward, Vec3::Y);
+    if let Projection::Perspective(perspective) = camera.1.as_mut() {
+        perspective.fov = view.fov_deg.to_radians();
+    }
 }
 /// The orders of the step about to run.
 fn feed(mut driver: ResMut<Driver>, mut orders: ResMut<Orders>) {
