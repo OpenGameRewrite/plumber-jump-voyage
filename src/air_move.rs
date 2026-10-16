@@ -54,7 +54,13 @@ fn limit_length(v: Vec3, limit: f32) -> Vec3 {
 }
 /// `PlayerActionFunction::calcJumpSpeed`: the jump power between its two
 /// bounds, from where the horizontal speed sits between its own bounds.
-pub fn jump_power(speed: f32, speed_min: f32, speed_max: f32, power_min: f32, power_max: f32) -> f32 {
+pub fn jump_power(
+    speed: f32,
+    speed_min: f32,
+    speed_max: f32,
+    power_min: f32,
+    power_max: f32,
+) -> f32 {
     if (power_max - power_min).abs() < 0.001 {
         return power_max;
     }
@@ -88,9 +94,6 @@ pub mod tune {
     pub const SLERP_QUAT_GRAV: f32 = 0.4;
     /// `HipDropHeight`: the pound needs this much room above the ground.
     pub const HIP_DROP_HEIGHT: f32 = 40.;
-    /// `HipDropGravity` and `HipDropSpeedMax`.
-    pub const HIP_DROP_GRAVITY: f32 = 45.;
-    pub const HIP_DROP_SPEED_MAX: f32 = 45.;
 }
 
 /// What the take-off of one jump asks of the air control
@@ -181,7 +184,7 @@ impl AirMove {
     /// Pick a jump up in the middle (a recorded state being replayed): the
     /// direction and cap are those the take-off would have left, `frames` of
     /// the extend window have passed.
-    pub fn resume(&mut self, v: Vec3, front: Vec3, t: &Takeoff, frames: u32) {
+    pub fn resume(&mut self, v: Vec3, front: Vec3, t: &Takeoff, frames: u32, held: bool) {
         let horizontal = flat(v);
         self.gravity = t.gravity;
         self.fall_max = t.fall_max;
@@ -194,27 +197,15 @@ impl AirMove {
         self.speed_cap = horizontal.length().min(t.speed_limit).max(t.base_speed);
         self.extend_frames = t.extend_frames;
         self.frames = frames.min(t.extend_frames + 1);
-        self.holding = t.extend_frames > 0 && frames < t.extend_frames;
+        self.holding = held && frames < t.extend_frames;
     }
     /// Stop extending the jump (a ceiling was hit).
     pub fn cancel_extend(&mut self) {
         self.extend_frames = 0;
     }
-    /// The gravity the air control applies.
-    pub fn gravity(&self) -> f32 {
-        self.gravity
-    }
     /// Change the gravity (a cap catch's pop is lighter).
     pub fn set_gravity(&mut self, gravity: f32) {
         self.gravity = gravity;
-    }
-    /// Horizontal speed the jump may not pass.
-    pub fn speed_cap(&self) -> f32 {
-        self.speed_cap
-    }
-    /// Frames left in which holding the button would still extend the jump.
-    pub fn extending(&self) -> bool {
-        self.holding && self.frames < self.extend_frames
     }
     /// One frame of air control. `input` is the stick as a world-space push
     /// (length up to 1); `held` whether the jump button is down.
@@ -341,12 +332,18 @@ pub struct LongJumpTakeoff {
 }
 pub fn long_jump_velocity(v: Vec3, t: &LongJumpTakeoff) -> Vec3 {
     let horizontal = flat(v);
-    let speed = (horizontal.length() + t.move_pow).clamp(t.speed_min, t.init_speed.max(t.speed_min));
+    let speed =
+        (horizontal.length() + t.move_pow).clamp(t.speed_min, t.init_speed.max(t.speed_min));
     // A player standing still has no direction to scale, as in the original.
-    let along = horizontal.try_normalize().map_or(Vec3::ZERO, |dir| dir * speed);
+    let along = horizontal
+        .try_normalize()
+        .map_or(Vec3::ZERO, |dir| dir * speed);
     // Falling speed is dropped, rising speed is kept.
     let rising = if v.y > 0. { Vec3::Y * v.y } else { Vec3::ZERO };
-    limit_length(along + rising + Vec3::Y * t.power, t.init_speed.hypot(t.power))
+    limit_length(
+        along + rising + Vec3::Y * t.power,
+        t.init_speed.hypot(t.power),
+    )
 }
 
 /// `PlayerContinuousJump`: the combo of consecutive jumps. A jump that ends
@@ -409,4 +406,11 @@ impl ContinuousLongJump {
             }
         }
     }
+}
+
+#[path = "tests/air_move.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

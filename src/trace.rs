@@ -277,7 +277,7 @@ impl Recorder {
         let advance = self.cursor.advance(
             p.anim.name,
             p.anim.serial,
-            p.anim.held(),
+            p.anim.trigger_frame(),
             looping(p.anim.name),
         );
         if let Some((from, to, with_cap)) = advance.scan {
@@ -328,7 +328,7 @@ impl Recorder {
         }
         // Effects: the original's by their table names, or the stand-ins'.
         let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
-            let (names, alive) = tracker.step(p, &fxs, p.anim.held());
+            let (names, alive) = tracker.step(p, &fxs, p.anim.trigger_frame());
             events.extend(names.into_iter().map(|n| format!("effect:{n}")));
             alive.into_iter().collect()
         } else {

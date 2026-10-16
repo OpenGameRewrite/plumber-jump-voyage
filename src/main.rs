@@ -53,6 +53,7 @@ fn main() {
         }
     }
     if args.iter().any(|a| a == "--self-check") {
+        air_move::self_check();
         movement::self_check();
         input::self_check();
         ui::self_check();

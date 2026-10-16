@@ -89,7 +89,7 @@ pub fn actor(mode: Move, anim: &str) -> &'static str {
 fn idle(anim: &str) -> Nerve {
     match anim {
         // The landing clip and its variants after a triple jump and a flip.
-        "Land" | "LandJump3" | "LandTurn" => known("Wait/Land"),
+        "Land" | "LandJump3" | "LandTurn" | "LandRolling" => known("Wait/Land"),
         "LandDownFall" => guessed("Wait/Land"),
         "LandStiffen" => known("Wait/LandStiffen"),
         "SquatEnd" => known("Squat/StandUp"),
