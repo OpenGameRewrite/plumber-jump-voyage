@@ -1818,7 +1818,9 @@ impl Player {
     }
     /// The run state dies and the actor chooses the standing state.
     fn end_run(&mut self) {
-        self.go(Move::Idle, "Wait");
+        // The standing state's first step leaves no speed over from the run (a
+        // braking run that is cut short stops dead).
+        self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
     }
     /// The original's run cycle: weights and pace by speed and tilt, and the
     /// footfalls the pose passes.

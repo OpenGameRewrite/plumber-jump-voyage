@@ -63,10 +63,18 @@ Empty cells mean the rewrite has no equivalent:
   of one nerve (walking, braking and turning; landing and standing).
 - `anim`, `anim_frame`, `anim_rate`: the controller's clip. The run cycle is the
   game's `Move` slot, a 60-frame phase (`anim_len` 60) whose clips are the
-  `anim_layers`, with `blend` weights; its `anim_frame` is that phase, not a
-  frame of one clip. Looping clips keep counting past their length.
-- `interp` and `anim_layers` come from the renderer's crossfade rules (outgoing
-  poses freeze and fade over the clip's interpolation frames).
+  `anim_layers`, with `blend` weights (Walk, Run, Dash, DashFast and RunStart, from the speed
+  and the stick's tilt as the original's run animation control chooses them).
+  Its `anim_frame` is the animator's counter, not a frame of one clip: the
+  pose's phase of the previous frame plus the previous rate, so it is not wrapped
+  at 60 and leads the layers' own frames. Each layer plays the shared phase at
+  its own clip length (`frame = phase * length / 60`); the run start plays
+  once and holds its last frame. A one-shot clip's counter runs one past the
+  last frame it holds (`Brake` reads 6 while the layer holds 5).
+- `interp` comes from the renderer's crossfade rules (the outgoing pose fades
+  over the clip's interpolation frames) and names the outgoing slot (`Move`,
+  `Brake`); `anim_layers` lists only the clips of the playing slot with their
+  own weights, as the game does.
 - `events` lists sounds, reactions and effects that started: sounds from the
   animation triggers and movement events, reactions by name, effects by the
   names of the original's effect tables. As in the game, a sound or effect of
