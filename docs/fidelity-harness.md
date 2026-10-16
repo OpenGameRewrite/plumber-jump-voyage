@@ -87,9 +87,9 @@ writes the keys it has an equivalent for under the game's names:
 
 | key | the game | the rewrite writes |
 |---|---|---|
-| `cjump=count/timer` | consecutive-jump count (counted when a jump lands) and the frames since | `(jump_count + 1) % 3` and `jump_timer + 1` while standing inside the 10-frame window, else `0/0`. Stale after a landing from a plain fall. |
-| `clong=count/timer` | the same for the long jump | `long_jump_count`, `long_jump_timer + 1` inside the 15-frame window, else `0/0`. Provisional: no long jump has been recorded in the game yet. |
-| `quickturn` | quick-turn jump frames left | `quick_turn` |
+| `cjump=count/timer` | consecutive-jump count (counted when a jump lands; a continuing jump flies with the count and timer of its take-off) and the frames since | `(jump_count + 1) % 3` and `jump_timer + 1` while standing inside the 10-frame window, `jump_count` and `jump_timer + 1` while a second or third jump flies, else `0/0`. The rewrite also opens the window after a landing from a long jump or a fall; the game does not. |
+| `clong=count/timer` | the long-jump count (counted at take-off) and its timer, which waits at zero in the air and runs a 15-frame window after landing | `long_jump_count/0` in the long jump, `long_jump_count/(long_jump_timer + 1)` standing inside the window, else `0/0`. |
+| `quickturn` | quick-turn jump frames left; zero through every reverse and side somersault recorded | not written (the rewrite's own `quick_turn` window starts at a skid and is not the same counter) |
 | `capjump` | a cap bounce is still possible | `cap_jump_possible` as 0 or 1 |
 | `prejump` | frames left on the buffered jump press | `pre_jump` |
 | `collision`: `ground`, `wall`, `gn`, `wn` | contact flags and the ground and wall normals | `grounded`, whether a wall was touched, the ramp's normal, the wall's normal |

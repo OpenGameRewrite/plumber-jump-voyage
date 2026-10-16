@@ -7,15 +7,22 @@
 //! comparison treats a key only one side has as not comparable.
 //!
 //! Mappings (the game's key, then what the rewrite writes):
-//! * `cjump=count/timer`: the game counts a landing from a jump (count after
-//!   the jump just landed, one to two) and times the window for the next jump
-//!   (timer reaches the window and clears). The rewrite writes
-//!   `(jump_count + 1) % 3` and `jump_timer + 1` while it stands on the ground
-//!   inside the window, else `0/0`. The count is stale after a landing from a
-//!   plain fall, which the rewrite does not tell apart.
-//! * `clong=count/timer`: the same shape for the long jump window; provisional,
-//!   no long jump has been recorded in the real game yet.
-//! * `quickturn=frames`: the quick-turn jump frames left (`quick_turn`).
+//! * `cjump=count/timer`: the game counts a jump when it lands (the count after
+//!   the jump just landed is one, then two, then wraps to zero) and times the
+//!   window for the next jump (the timer runs to the window and clears). A jump
+//!   that continues the combo flies with the count and the timer as they were
+//!   at take-off. The rewrite writes `(jump_count + 1) % 3` and
+//!   `jump_timer + 1` while it stands on the ground inside the window,
+//!   `jump_count` and `jump_timer + 1` while a second or third jump flies, else
+//!   `0/0`. The rewrite also opens the window after a landing from a long jump
+//!   or a fall, which the game does not (it stays cleared there).
+//! * `clong=count/timer`: the count goes up as a long jump starts and the timer
+//!   waits at zero until the landing, then runs a 15-frame window. The rewrite
+//!   writes `long_jump_count/0` while in the long jump, and
+//!   `long_jump_count/(long_jump_timer + 1)` on the ground inside the window.
+//! * `quickturn` is not written: the game kept it at zero through a full reverse
+//!   and a side somersault, so the rewrite's own `quick_turn` window (set when a
+//!   skid starts) is not the same counter.
 //! * `capjump=0|1`: whether a cap bounce is still possible (`cap_jump_possible`).
 //! * `prejump=frames`: the buffered jump press (`pre_jump`).
 //! * `collision`: `ground`, `wall`, the ground normal `gn` when standing and the
@@ -27,7 +34,7 @@
 //!
 //! The game keys without a rewrite counterpart (`upperpunch`, `forcerun`,
 //! `limitheight`, `wallhist`) are not written.
-use crate::movement::{CONTINUOUS_JUMP_FRAMES, CONTINUOUS_LONG_JUMP_FRAMES, Player};
+use crate::movement::{CONTINUOUS_JUMP_FRAMES, CONTINUOUS_LONG_JUMP_FRAMES, Move, Player};
 
 fn counter(counters: &[(&'static str, i64)], name: &str) -> i64 {
     counters
@@ -47,29 +54,44 @@ fn window(open: bool, count: i64, timer: i64) -> String {
 
 /// Internal counters the rewrite keeps under its own names (the ones already
 /// folded into a game key are left out).
-const FOLDED: [&str; 3] = ["pre_jump", "quick_turn", "cap_jump_possible"];
+const FOLDED: [&str; 2] = ["pre_jump", "cap_jump_possible"];
+
+/// The game's `cjump` pair. The count goes up when a jump lands, and a jump
+/// that continues the combo flies with that count and the timer frozen as it
+/// was when the jump started.
+fn combo_jump(p: &Player, get: impl Fn(&str) -> i64) -> String {
+    let timer = get("jump_timer") + 1;
+    if p.grounded {
+        window(
+            timer < CONTINUOUS_JUMP_FRAMES as i64,
+            (get("jump_count") + 1) % 3,
+            timer,
+        )
+    } else {
+        let in_combo = matches!(p.mode, Move::Jump | Move::DoubleJump | Move::TripleJump);
+        window(in_combo, get("jump_count"), timer)
+    }
+}
+/// The game's `clong` pair: the count goes up as the long jump starts and its
+/// timer waits at zero until the landing, then runs the window out.
+fn combo_long_jump(p: &Player, get: impl Fn(&str) -> i64) -> String {
+    let count = get("long_jump_count");
+    if p.grounded {
+        let timer = get("long_jump_timer") + 1;
+        window(timer < CONTINUOUS_LONG_JUMP_FRAMES as i64, count, timer)
+    } else if p.mode == Move::LongJump {
+        format!("{count}/0")
+    } else {
+        "0/0".into()
+    }
+}
 
 pub fn counters_cell(p: &Player) -> String {
     let counters = p.counters();
-    let get = |name| counter(&counters, name);
+    let get = |name: &str| counter(&counters, name);
     let mut items = vec![
-        format!(
-            "cjump={}",
-            window(
-                p.grounded && get("jump_timer") + 1 < CONTINUOUS_JUMP_FRAMES as i64,
-                (get("jump_count") + 1) % 3,
-                get("jump_timer") + 1
-            )
-        ),
-        format!(
-            "clong={}",
-            window(
-                p.grounded && get("long_jump_timer") + 1 < CONTINUOUS_LONG_JUMP_FRAMES as i64,
-                get("long_jump_count"),
-                get("long_jump_timer") + 1
-            )
-        ),
-        format!("quickturn={}", get("quick_turn")),
+        format!("cjump={}", combo_jump(p, get)),
+        format!("clong={}", combo_long_jump(p, get)),
         format!("capjump={}", get("cap_jump_possible")),
         format!("prejump={}", get("pre_jump")),
     ];
@@ -103,7 +125,6 @@ pub fn counters_from_game(cell: &str) -> Vec<(String, i64)> {
         };
         match key {
             "prejump" => out.push(("pre_jump".into(), first)),
-            "quickturn" => out.push(("quick_turn".into(), first)),
             "capjump" => out.push(("cap_jump_possible".into(), first)),
             "cjump" if first > 0 => {
                 out.push(("jump_count".into(), (first + 2) % 3));

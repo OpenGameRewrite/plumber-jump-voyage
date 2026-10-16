@@ -24,7 +24,6 @@ fn jump_combo_counters() {
     assert_eq!(item(&cell, "cjump"), "0/0");
     assert_eq!(item(&cell, "capjump"), "1");
     assert_eq!(item(&cell, "prejump"), "0");
-    assert_eq!(item(&cell, "quickturn"), "0");
     // Landed from a first jump (count 0 in the rewrite): the game counts one,
     // with a timer that starts at one on the landing frame.
     p.set_counter("jump_count", 0);
@@ -36,6 +35,24 @@ fn jump_combo_counters() {
     // The window closes when the timer reaches its length.
     p.set_counter("jump_timer", 9);
     assert_eq!(item(&counters_cell(&p), "cjump"), "0/0");
+    // A second jump in flight keeps the count and the timer of its take-off.
+    p.grounded = false;
+    p.mode = Move::DoubleJump;
+    p.set_counter("jump_count", 1);
+    p.set_counter("jump_timer", 2);
+    assert_eq!(item(&counters_cell(&p), "cjump"), "1/3");
+    p.set_counter("jump_count", 0);
+    assert_eq!(item(&counters_cell(&p), "cjump"), "0/0");
+    // The long jump counts at take-off and waits for the landing.
+    p.mode = Move::LongJump;
+    p.set_counter("long_jump_count", 1);
+    assert_eq!(item(&counters_cell(&p), "clong"), "1/0");
+    p.grounded = true;
+    p.set_counter("long_jump_timer", 0);
+    assert_eq!(item(&counters_cell(&p), "clong"), "1/1");
+    p.set_counter("long_jump_timer", 14);
+    assert_eq!(item(&counters_cell(&p), "clong"), "0/0");
+    p.mode = Move::Idle;
     // Internal counters keep their own names after the game's.
     p.set_counter("coyote", 2);
     assert_eq!(item(&counters_cell(&p), "coyote"), "2");
@@ -50,7 +67,7 @@ fn reading_back() {
     let has = |name: &str, value: i64| back.contains(&(name.to_string(), value));
     assert!(has("jump_count", 1) && has("jump_timer", 4));
     assert!(has("long_jump_timer", 15));
-    assert!(has("quick_turn", 7) && has("cap_jump_possible", 0) && has("pre_jump", 3));
+    assert!(has("cap_jump_possible", 0) && has("pre_jump", 3));
     // A closed window reads back as a timer past the window.
     assert!(counters_from_game("cjump=0/10").contains(&("jump_timer".to_string(), 10)));
     // Numbers that are not integers or pairs are skipped.

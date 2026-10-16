@@ -8,9 +8,12 @@
 //! game's, so a state's name can depend on the clip it is playing.
 //!
 //! Where a name comes from:
-//! * observed: the probe's runs log it (`Wait/Wait`, `Run/Run3D`, `Jump/Jump`,
-//!   `Wait/Land`, `SpinCap/SpinGround`). The braking and turning clips play
-//!   inside `Run/Run3D`, so the rewrite's skid and turn use that name too.
+//! * observed: the probe's runs log it (`Wait/Wait`, `Wait/Land`, `Run/Run3D`,
+//!   `Jump/Jump` for the first, second and third jump, `Jump/JumpBack`,
+//!   `Jump/JumpTurn`, `LongJump/Jump`, `HipDrop/*`, `HeadSliding/Dive`,
+//!   `Squat/*`, `Rolling/*`, `SpinCap/SpinGround`). The braking and turning
+//!   clips play inside `Run/Run3D`, so the rewrite's skid and turn use that
+//!   name too.
 //! * symbol: the nerve exists in the 1.0.0 symbol list of the public
 //!   decompilation project and its role is plain from its name.
 //! * guess (`?` in `--replay --states`): the rewrite's state is assigned to the
@@ -42,7 +45,8 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::Jump => known("Jump/Jump"),
         // Consecutive and special jumps share the jump nerve; only the clip
         // and the jump counters differ in the game.
-        Move::DoubleJump | Move::TripleJump | Move::PoundJump => guessed("Jump/Jump"),
+        Move::DoubleJump | Move::TripleJump => known("Jump/Jump"),
+        Move::PoundJump => guessed("Jump/Jump"),
         Move::CapBounce | Move::CapVault | Move::CatchJump => guessed("Jump/Jump"),
         Move::LongJump => known("LongJump/Jump"),
         Move::Backflip => known("Jump/JumpBack"),
@@ -55,7 +59,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::PoundLand => known("HipDrop/Land"),
         Move::Roll if anim == "RollingStart" => known("Rolling/Start"),
         Move::Roll => known("Rolling/Rolling"),
-        Move::RollEnd => guessed("Rolling/StandUp"),
+        Move::RollEnd => known("Rolling/StandUp"),
         Move::RollJump => known("Rolling/Jump"),
         Move::Dive => known("HeadSliding/Dive"),
         Move::Slide => guessed("HeadSliding/Dive"),
@@ -77,11 +81,14 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
 /// Standing: the landing and stand-up clips are sub-states of their own.
 fn idle(anim: &str) -> Nerve {
     match anim {
-        "Land" => known("Wait/Land"),
-        // Variants of the landing clip (triple jump, flips, spin drop).
-        "LandJump3" | "LandTurn" | "LandDownFall" => guessed("Wait/Land"),
+        // The landing clip and its variants after a triple jump and a flip.
+        "Land" | "LandJump3" | "LandTurn" => known("Wait/Land"),
+        "LandDownFall" => guessed("Wait/Land"),
         "LandStiffen" => known("Wait/LandStiffen"),
         "SquatEnd" => known("Squat/StandUp"),
+        // The game's idle variants; the rewrite has no such clips yet.
+        "WaitRelaxStart" => known("Wait/WaitRelaxStart"),
+        "WaitRelax" => known("Wait/WaitRelax"),
         _ => known("Wait/Wait"),
     }
 }
@@ -125,7 +132,8 @@ pub fn state_table() -> String {
 fn state_of_clip(anim: &str) -> Option<Move> {
     Some(match anim {
         "Brake" => Move::Skid,
-        "TurnPoint" => Move::Turn,
+        // The game plays `Turn` after a reverse brake and `TurnPoint` for a pivot.
+        "TurnPoint" | "Turn" => Move::Turn,
         "Jump2" => Move::DoubleJump,
         "Jump3" => Move::TripleJump,
         "JumpHipDrop" => Move::PoundJump,

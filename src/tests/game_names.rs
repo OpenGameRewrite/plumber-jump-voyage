@@ -45,6 +45,14 @@ fn observed_names() {
     // Landing is the Wait nerve's own sub-state while the landing clip plays.
     assert_eq!(nerve(Move::Idle, "Land").name, "Wait/Land");
     assert!(!nerve(Move::Idle, "Land").guess);
+    assert!(!nerve(Move::Idle, "LandJump3").guess && nerve(Move::Idle, "LandDownFall").guess);
+    // Second and third jumps, flips and rolls were logged by the real game too.
+    assert!(!nerve(Move::DoubleJump, "Jump2").guess && !nerve(Move::TripleJump, "Jump3").guess);
+    assert_eq!(nerve(Move::Backflip, "JumpBack").name, "Jump/JumpBack");
+    assert_eq!(nerve(Move::Sideflip, "JumpTurn").name, "Jump/JumpTurn");
+    assert_eq!(nerve(Move::RollEnd, "RollingEnd").name, "Rolling/StandUp");
+    assert_eq!(nerve(Move::Idle, "SquatEnd").name, "Squat/StandUp");
+    assert_eq!(nerve(Move::Idle, "WaitRelax").name, "Wait/WaitRelax");
     assert_eq!(nerve(Move::Idle, "LandStiffen").name, "Wait/LandStiffen");
     assert_eq!(nerve(Move::GroundPound, "HipDrop").name, "HipDrop/Fall");
     assert_eq!(
@@ -64,6 +72,7 @@ fn shared_names() {
         state_from_nerve("Run/Run3D", "TurnPoint", 2.),
         Some(Move::Turn)
     );
+    assert_eq!(state_from_nerve("Run/Run3D", "Turn", 2.), Some(Move::Turn));
     assert_eq!(state_from_nerve("Run/Run3D", "Move", 4.), Some(Move::Walk));
     assert_eq!(state_from_nerve("Run/Run3D", "Move", 14.), Some(Move::Run));
     assert_eq!(
