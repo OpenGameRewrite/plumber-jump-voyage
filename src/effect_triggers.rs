@@ -33,6 +33,9 @@ pub enum Source {
     Mario,
     /// Started by Cappy's clip.
     Cap,
+    /// Started by a hit reaction of the player actor itself (landings): the
+    /// game logs these without the model's owner mark.
+    Reaction,
     /// Kept running by the controller's own conditions.
     Code,
 }
@@ -216,7 +219,7 @@ impl Triggers {
             for key in self.reactions.get(*reaction).into_iter().flatten() {
                 changes.push(Change::Start {
                     key: key.clone(),
-                    source: Source::Mario,
+                    source: Source::Reaction,
                     once: true,
                 });
             }
@@ -376,6 +379,7 @@ fn owner(source: Source) -> &'static str {
     match source {
         Source::Cap => "cap",
         Source::Mario | Source::Code => "model",
+        Source::Reaction => "player",
     }
 }
 /// Follows the effects a run starts and how long each stays alive, without
@@ -454,7 +458,11 @@ impl Tracker {
                         None => None,
                     };
                     let owner = owner(source);
-                    started.push(format!("{}@{owner}", key.effect));
+                    if source == Source::Reaction {
+                        started.push(key.effect.clone());
+                    } else {
+                        started.push(format!("{}@{owner}", key.effect));
+                    }
                     self.live.retain(|l| l.key != key);
                     self.live.push(Live {
                         key,
@@ -570,7 +578,7 @@ pub fn self_check() {
         hit,
         [Change::Start {
             key: effect("Thud"),
-            source: Source::Mario,
+            source: Source::Reaction,
             once: true
         }]
     );
@@ -634,8 +642,9 @@ pub fn self_check() {
     let mut tracker = Tracker::new(library);
     let mut player = Player::default();
     let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
-    assert_eq!(started, ["Thud@model"]);
-    assert_eq!(alive, ["model:Thud"]);
+    // A landing reaction's effect is logged without the model's owner mark.
+    assert_eq!(started, ["Thud"]);
+    assert_eq!(alive, ["player:Thud"]);
     player.anim.serial = 1;
     let mut last = alive.len();
     for _ in 0..20 {

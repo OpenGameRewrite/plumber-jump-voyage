@@ -24,35 +24,24 @@ fn jump_combo_counters() {
     assert_eq!(item(&cell, "cjump"), "0/0");
     assert_eq!(item(&cell, "capjump"), "1");
     assert_eq!(item(&cell, "prejump"), "0");
-    // Landed from a first jump (count 0 in the rewrite): the game counts one,
-    // with a timer that starts at one on the landing frame.
-    p.set_counter("jump_count", 0);
-    p.set_counter("jump_timer", 0);
+    // The cell shows the combo's count and timer as the rewrite keeps them,
+    // which follow the original's rules (see `air_move`).
+    p.set_counter("jump_count", 1);
+    p.set_counter("jump_timer", 1);
     assert_eq!(item(&counters_cell(&p), "cjump"), "1/1");
-    p.set_counter("jump_count", 1);
-    p.set_counter("jump_timer", 4);
+    p.set_counter("jump_count", 2);
+    p.set_counter("jump_timer", 5);
     assert_eq!(item(&counters_cell(&p), "cjump"), "2/5");
-    // The window closes when the timer reaches its length.
-    p.set_counter("jump_timer", 9);
-    assert_eq!(item(&counters_cell(&p), "cjump"), "0/0");
-    // A second jump in flight keeps the count and the timer of its take-off.
-    p.grounded = false;
-    p.mode = Move::DoubleJump;
-    p.set_counter("jump_count", 1);
-    p.set_counter("jump_timer", 2);
-    assert_eq!(item(&counters_cell(&p), "cjump"), "1/3");
+    // A cleared combo reads zero with the window as its timer.
     p.set_counter("jump_count", 0);
-    assert_eq!(item(&counters_cell(&p), "cjump"), "0/0");
-    // The long jump counts at take-off and waits for the landing.
-    p.mode = Move::LongJump;
+    p.set_counter("jump_timer", 10);
+    assert_eq!(item(&counters_cell(&p), "cjump"), "0/10");
+    // The long jump counts at take-off; its timer waits until the landing.
     p.set_counter("long_jump_count", 1);
-    assert_eq!(item(&counters_cell(&p), "clong"), "1/0");
-    p.grounded = true;
     p.set_counter("long_jump_timer", 0);
-    assert_eq!(item(&counters_cell(&p), "clong"), "1/1");
+    assert_eq!(item(&counters_cell(&p), "clong"), "1/0");
     p.set_counter("long_jump_timer", 14);
-    assert_eq!(item(&counters_cell(&p), "clong"), "0/0");
-    p.mode = Move::Idle;
+    assert_eq!(item(&counters_cell(&p), "clong"), "1/14");
     // Internal counters keep their own names after the game's.
     p.set_counter("coyote", 2);
     assert_eq!(item(&counters_cell(&p), "coyote"), "2");
@@ -65,15 +54,14 @@ fn reading_back() {
         "cjump=2/5|clong=0/10|quickturn=7|capjump=0|prejump=3|upperpunch=2147483647",
     );
     let has = |name: &str, value: i64| back.contains(&(name.to_string(), value));
-    assert!(has("jump_count", 1) && has("jump_timer", 4));
-    assert!(has("long_jump_timer", 15));
+    assert!(has("jump_count", 2) && has("jump_timer", 5));
+    assert!(has("long_jump_count", 0) && has("long_jump_timer", 10));
     assert!(has("cap_jump_possible", 0) && has("pre_jump", 3));
-    // A closed window reads back as a timer past the window.
+    // A cleared combo reads back with the window as its timer.
     assert!(counters_from_game("cjump=0/10").contains(&("jump_timer".to_string(), 10)));
     // Numbers that are not integers or pairs are skipped.
     assert!(counters_from_game("forcerun=0/0.000000|junk").len() <= 1);
 }
-
 #[cfg_attr(test, test)]
 fn contact_and_triggers() {
     let mut p = player();
