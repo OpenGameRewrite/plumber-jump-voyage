@@ -207,13 +207,17 @@ of the game's.
 
 The scene of a rendered replay is deliberately plain: one bare ground plane
 the colour of the reference plateau's soil, the usual gradient sky and
-distance haze, and no course props. The sun is nearly overhead (about 80
-degrees) and a little on the camera's side: the reference pictures show
-Mario's back evenly lit and his shadow almost straight below him; a sun on
-the far side lit his face and left his back dark. The values were matched by
-eye and by sampling pictures of the idle run (ground colour, cap, overalls);
-the game's ground texture, grass hills, waterfalls and sky are not
-reproduced.
+distance haze, and no course props. The game-data build lights it the way the
+real game lights the Cascade Kingdom (`src/look.rs`, `src/tone.rs`): the sun
+stands where the stage's graphics preset puts it (70 degrees up, a little
+toward +Z, so it shines on Mario's back from beyond him), Mario's ambient light
+is the game's light rig for the player, and a per-channel S curve with a
+shoulder (the game's `alHdrCompose` tone map type 8) takes the place of Bevy's
+tonemapper. Shadows have hard edges, the procedural drop-shadow disc is not
+drawn under an original model, and smoke is lit by its normal map with its
+own shadows. The ROMless build keeps its earlier sun and sky. The ground's
+colour and glow are matched to the game's picture by eye and by sampling;
+its texture, grass hills, waterfalls and sky are not reproduced.
 
 ```sh
 py tools/visual-compare.py <run dir>
