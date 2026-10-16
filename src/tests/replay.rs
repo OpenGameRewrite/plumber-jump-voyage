@@ -114,6 +114,35 @@ fn camera_and_buttons() {
     let script = Script::parse("start 0 0 0 0\n60 0 1 -\n").unwrap();
     let rows = replay(&script, options(Some(&game))).unwrap().rows;
     assert!(number(&rows, 59, "px") > 100. && cell(&rows, 59, "cam_yaw") == "90.000000");
+    // The game's header lines are accepted and ignored; its camera columns
+    // give the view of each frame (cm to metres, pitch below zero looks down).
+    let headed = Script::parse(
+        "stage S 2
+outfit Mario Mario
+hud hidden
+start 0 0 0 0
+1 0 0 -",
+    );
+    assert!(headed.is_ok());
+    let view = TraceFile::parse(
+        "frame,cam_px,cam_py,cam_pz,cam_yaw,cam_real_yaw,cam_real_pitch,cam_fov
+         0,,,,0,,,
+1,100,340,-700,0,90,-30,40
+",
+    )
+    .unwrap();
+    let track = CameraTrack::new(&headed.unwrap(), Some(&view)).unwrap();
+    let first = track.view(0).unwrap();
+    assert_eq!(first, track.view(1).unwrap());
+    assert_eq!(first.position, Vec3::new(1., 3.4, -7.));
+    assert!((first.forward - Vec3::new(0.866_025_4, -0.5, 0.)).length() < 1e-5);
+    assert_eq!(first.fov_deg, 40.);
+    assert!(
+        CameraTrack::new(&headed_script(), None)
+            .unwrap()
+            .view(0)
+            .is_none()
+    );
     // Stick right with the camera along +Z walks toward minus X (right-handed world).
     let right = trace("start 0 0 0 0\n40 1 0 -\n");
     assert!(number(&right, 39, "px") < -50.);
@@ -127,6 +156,10 @@ fn camera_and_buttons() {
         let rows = trace(&format!("start 0 0 0 0\n2 0 0 {button}\n"));
         assert_eq!(cell(&rows, 0, "state"), "Jump/Jump", "{button}");
     }
+}
+
+fn headed_script() -> Script {
+    Script::parse(RUN).unwrap()
 }
 
 #[cfg_attr(test, test)]

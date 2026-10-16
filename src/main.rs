@@ -33,7 +33,7 @@ mod trace;
 mod ui;
 mod world;
 
-use bevy::prelude::*;
+use bevy::{prelude::*, window::WindowResolution};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -83,7 +83,12 @@ fn main() {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Plumber Jump Voyage".into(),
-                    resolution: (1440, 900).into(),
+                    // Rendered replays match the real game's 1600x900 framebuffer.
+                    resolution: if replay_shots.is_some() {
+                        WindowResolution::new(1600, 900).with_scale_factor_override(1.)
+                    } else {
+                        (1440, 900).into()
+                    },
                     // Take focus so input works at once (scripted captures stay in the background).
                     focused: std::env::var_os("PJV_SHOT").is_none() && replay_shots.is_none(),
                     ..default()

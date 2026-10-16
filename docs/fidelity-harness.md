@@ -175,12 +175,49 @@ plumber-jump-voyage --replay run.input --shots runs/name [--camera game.csv]
 Plays the script in the real game (the game-data build shows the original
 Mario) on the same flat floor, one simulation step per update, and saves
 `rewrite-<frame>.png` for every frame a `shot` line lists, showing the state
-after that frame. The course HUD is hidden and the camera looks along the
-scenario yaw with the game's default pitch and distance. Time stops during a
-capture so the picture is exact; the camera's smoothing settles meanwhile.
-Mario's outfit follows the saved settings (`PJV_SAVE` picks another file).
+after that frame. The window is 1600x900 (scale factor 1), the size of the
+real game's screenshots. The course HUD is hidden. Time stops during a
+capture so the picture is exact. Mario's outfit follows the saved settings
+(`PJV_SAVE` picks another file; the default is the classic one).
 `PJV_REPLAY_WARMUP` sets the seconds of loading before the script starts.
-Two runs give identical pictures. `--trace` can be given as well.
+Two runs give identical pictures. `--trace` can be given as well. The
+real-game scripts' `stage`, `outfit` and `hud` header lines are accepted and
+ignored.
+
+With `--camera game.csv` the camera of each picture is the real game's for
+that frame: `cam_px/py/pz` (cm, relative to the start, so metres from the
+rewrite's origin), the view direction from `cam_real_yaw/pitch` (the probe's
+own reading of the game's camera) and `cam_fov` (vertical, 40 degrees in the
+probe's chase camera). The probe builds image f's camera from Mario's position
+one frame earlier, so a moving Mario sits `speed_h` ahead of the camera
+target; the rewrite shows its own Mario in front of that camera, which makes
+any difference in position visible too. Both worlds are right-handed with +Y
+up, so only the unit changes. Without a trace camera the orbit camera is
+used. In an idle frame Mario's head, hands and feet land within a pixel or two
+of the game's.
+
+The scene of a rendered replay is deliberately plain: one bare ground plane
+the colour of the reference plateau's soil, the usual gradient sky and
+distance haze, and no course props. The sun is nearly overhead (about 80
+degrees) and a little on the camera's side: the reference pictures show
+Mario's back evenly lit and his shadow almost straight below him; a sun on
+the far side lit his face and left his back dark. The values were matched by
+eye and by sampling pictures of the idle run (ground colour, cap, overalls);
+the game's ground texture, grass hills, waterfalls and sky are not
+reproduced.
+
+```sh
+py tools/visual-compare.py <run dir>
+```
+
+For every `game-<f>.png` with a `rewrite-<f>.png` beside it (in a run
+directory next to `game.csv` and `rewrite.csv`) writes `side-<f>.png` (game
+left, rewrite right, each labelled with the frame, state, clip and clip frame
+of its own trace), `crop-<f>.png` (both cut around Mario and enlarged; Mario's
+position is projected from the game trace through the game's camera, so both
+crops show the same part of the screen) and `visual.md` (a table of the frames
+with both traces' states, clips and live effects). Standard library and
+Pillow only.
 
 ## Determinism
 
