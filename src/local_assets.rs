@@ -696,13 +696,13 @@ mod imported {
     fn target(loaded: &Loaded, p: &crate::movement::Player, ahead: f32) -> Pose {
         let anim = p.anim;
         if anim.name == "Move" {
-            let phase = ((anim.held() + anim.rate * ahead) / 60.).rem_euclid(1.);
-            let weights = crate::movement::move_weights(p.move_speed);
-            let clips = ["Walk", "Run", "Dash", "DashFast"]
-                .iter()
-                .zip(weights)
-                .filter(|(_, w)| *w > 0.001)
-                .filter_map(|(n, w)| clip(loaded, n).map(|(node, len)| (node, w, phase * len)))
+            let cycle = p.run_cycle();
+            let phase = ((cycle.phase + cycle.rate * ahead) / 60.).rem_euclid(1.);
+            let clips = cycle
+                .layers()
+                .filter_map(|l| {
+                    clip(loaded, l.name).map(|(node, len)| (node, l.weight, phase * len))
+                })
                 .collect();
             return Pose { clips };
         }

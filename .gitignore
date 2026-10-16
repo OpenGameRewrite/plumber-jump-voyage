@@ -10,6 +10,9 @@
 !/src/
 /src/*
 !/src/*.rs
+!/src/movement/
+/src/movement/*
+!/src/movement/*.rs
 !/src/tests/
 /src/tests/*
 !/src/tests/*.rs

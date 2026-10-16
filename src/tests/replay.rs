@@ -83,7 +83,7 @@ fn scenarios() {
     assert_eq!(cell(&run, 0, "state_step"), "0");
     assert_eq!(cell(&run, 0, "anim"), "Wait");
     assert_eq!(number(&run, 0, "pz"), 0.);
-    assert_eq!(cell(&run, 1, "anim"), "RunStart");
+    assert_eq!(cell(&run, 1, "anim"), "Move");
     assert_eq!(cell(&run, 1, "state_step"), "1");
     assert!(number(&run, 1, "pz") > 0.);
     assert_eq!(cell(&run, 179, "state"), "Wait/Wait");

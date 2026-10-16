@@ -233,6 +233,30 @@ mod t {
     pub const WALL_CATCH_MOVE_FRAMES: f32 = 20.;
 }
 
+#[path = "movement/ground.rs"]
+mod ground;
+#[path = "movement/run_cycle.rs"]
+mod run_cycle;
+pub use ground::turn_power;
+use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
+pub use run_cycle::RunCycle;
+
+/// The nerves of the original's run state. Running (also after turning) is
+/// the walk/run modes; braking is `Skid`; turning and the pivot are `Turn`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunNerve {
+    Run,
+    RunAfterTurn,
+    Brake,
+    Turn,
+    Pivot,
+}
+
+/// The speed under which a braking run just stops: the run border less its blend range.
+const RUN_BLEND_FLOOR: f32 = 6.;
+/// A stick pushed beyond this much counts as held deep.
+const DEEP_STICK: f32 = 0.8;
+
 /// Frame counts of clips whose end the controller waits for.
 pub mod clip {
     pub const HIP_DROP_START: u32 = 24;
@@ -263,6 +287,7 @@ pub mod clip {
     pub const WALL_CATCH_END: u32 = 46;
     pub const POLE_CATCH: u32 = 8;
     pub const RUN_START: u32 = 30;
+    pub const BRAKE: u32 = 5;
     pub const JUMP_CAP_LEAP_FROG: u32 = 36;
     /// The fire run loop; its footsteps repeat every cycle.
     pub const FIRE_RUN: f32 = 60.;
@@ -449,6 +474,30 @@ pub struct Snapshot {
     pub state_frames: Option<u32>,
     /// Counters by the names `Player::counters` lists.
     pub counters: Vec<(String, i64)>,
+    /// What a recorded run cycle shows of the run's hidden state.
+    pub run: Option<RunHint>,
+}
+/// The run's hidden state as far as a recorded row shows it: the pose's place
+/// in the cycle, its weights, and the turn in progress.
+#[derive(Clone, Debug, Default)]
+pub struct RunHint {
+    pub phase: f32,
+    pub rate: f32,
+    /// Weights of Walk, Run, Dash, DashFast and RunStart.
+    pub weights: [f32; 5],
+    /// Degrees the facing turned in the recorded frame.
+    pub turn_rate: f32,
+    /// The stick's direction in the recorded frame.
+    pub last_input: Vec3,
+    /// The turn power the facing's recent swings have built up.
+    pub turn_power: f32,
+    /// Steps the current nerve of the run state has taken.
+    pub steps: u32,
+    /// The run is the stretch after turning round.
+    pub after_turn: bool,
+    /// The clip a nerve of the run state chose in the recorded frame, which the
+    /// next row shows starting (`Brake`, `Turn`, `TurnPoint`, `Move`).
+    pub chosen: Option<&'static str>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Throw {
@@ -664,6 +713,21 @@ pub struct Player {
     /// Fall speed the ground stopped in the latest step (zero when it did not
     /// land), kept for the trace: the original still reports it that frame.
     landing_speed: f32,
+    /// The run cycle's animation control (the `Move` slot).
+    cycle: RunCycle,
+    /// Ground steering of the run and its pivot on the spot.
+    ground: GroundMove,
+    pivot: PivotTurn,
+    /// Which nerve of the run state is executing.
+    run_nerve: RunNerve,
+    /// Steps the current run nerve has executed.
+    run_steps: u32,
+    /// The way the brake and the turn slide on (the facing when braking began).
+    brake_dir: Vec3,
+    /// Speed the run resumes with after turning round (`_8c`).
+    after_turn_speed: f32,
+    /// Pull on the ground the latest ground step kept, units per frame.
+    pull: f32,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -737,6 +801,14 @@ impl Default for Player {
             swim_rise: 0,
             step_phase: 0.,
             landing_speed: 0.,
+            cycle: RunCycle::default(),
+            ground: GroundMove::default(),
+            pivot: PivotTurn::default(),
+            run_nerve: RunNerve::Run,
+            run_steps: 0,
+            brake_dir: Vec3::Z,
+            after_turn_speed: t::NORMAL_MAX,
+            pull: t::GRAVITY,
         }
     }
 }
@@ -863,35 +935,6 @@ fn turn(from: Vec3, to: Vec3, max: f32) -> Vec3 {
     let d = wrap(yaw(to) - a).clamp(-max, max);
     Vec3::new((a + d).sin(), 0., (a + d).cos())
 }
-/// Weights of Walk, Run, Dash and DashFast in the run cycle at a speed in
-/// units per frame, from the original's border speeds and blend ranges.
-pub fn move_weights(speed: f32) -> [f32; 4] {
-    let ramp = |border: f32, range: f32| ((speed - border + range) / (2. * range)).clamp(0., 1.);
-    let (run, dash, fast) = (ramp(8., 2.), ramp(15., 1.), ramp(20., 1.));
-    [1. - run, run * (1. - dash), dash * (1. - fast), fast]
-}
-/// Run cycle playback rate, in frames of its 60-frame phase per game frame.
-pub fn move_rate(speed: f32) -> f32 {
-    let speed = speed.min(25.);
-    let k = ((speed - 6.) / (26. - 6.)).clamp(0., 1.);
-    let w = move_weights(speed);
-    let rate = (w[0] + w[1]) * lerp_clamped(1., 3.5, k)
-        + w[2] * lerp_clamped(1., 4., k)
-        + w[3] * lerp_clamped(1., 5., k);
-    // Below the minimum speed the cycle slows with the feet.
-    if speed < 6. {
-        rate * (speed / 6.).max(0.25)
-    } else {
-        rate
-    }
-}
-fn approach(value: f32, target: f32, step: f32) -> f32 {
-    if value < target {
-        (value + step).min(target)
-    } else {
-        (value - step).max(target)
-    }
-}
 fn lerp_clamped(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0., 1.)
 }
@@ -919,11 +962,11 @@ impl Player {
     /// original keeps reporting it, so it is shown as the gravity pull. In the
     /// step that lands, it still reports the fall speed that moved the player.
     pub fn units_per_frame(&self) -> Vec3 {
-        if self.grounded && self.v.y == 0. {
+        if self.grounded && (self.v.y == 0. || self.v.y == -self.pull) {
             let down = if self.landing_speed < 0. {
                 self.landing_speed
             } else {
-                -t::GRAVITY
+                -self.pull
             };
             self.v.with_y(down)
         } else {
@@ -935,6 +978,19 @@ impl Player {
         // A ramp's height rises along +x by `slope` per metre.
         self.grounded
             .then(|| Vec3::new(-self.slope, 1., 0.).normalize())
+    }
+    /// The run cycle's animation control, for the trace and the renderer.
+    pub fn run_cycle(&self) -> &RunCycle {
+        &self.cycle
+    }
+    /// The clip frame a trace row shows: the animator's counter, which for the
+    /// run cycle is the previous pose moved on, not wrapped.
+    pub fn shown_frame(&self) -> f32 {
+        if self.anim.name == "Move" {
+            self.cycle.shown
+        } else {
+            self.anim.frame
+        }
     }
     /// Steps the actor nerve has executed, as the game's `state_step` counts
     /// them: 0 in the frame a nerve is chosen, 1 after its first step.
@@ -959,6 +1015,7 @@ impl Player {
             ("cap_jump_possible", self.cap_jump_possible as i64),
             ("air_throw_used", self.air_throw_used as i64),
             ("dive_possible", self.dive_possible as i64),
+            ("run_steps", self.run_steps as i64),
         ]
     }
     /// Set one of the counters `counters` lists; false for any other name.
@@ -980,6 +1037,7 @@ impl Player {
             "cap_jump_possible" => self.cap_jump_possible = value != 0,
             "air_throw_used" => self.air_throw_used = value != 0,
             "dive_possible" => self.dive_possible = value != 0,
+            "run_steps" => self.run_steps = frames,
             _ => return false,
         }
         true
@@ -1035,6 +1093,53 @@ impl Player {
             self.anim.frame = frame;
             if name == "Move" {
                 self.step_phase = frame;
+            }
+        }
+        self.pull = if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
+            GRAVITY_MOVE
+        } else {
+            t::GRAVITY
+        };
+        if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
+            self.run_nerve = match self.mode {
+                Move::Skid => RunNerve::Brake,
+                Move::Turn if self.anim.name == "TurnPoint" => RunNerve::Pivot,
+                Move::Turn => RunNerve::Turn,
+                _ => RunNerve::Run,
+            };
+            self.brake_dir = match self.mode {
+                Move::Turn if self.run_nerve == RunNerve::Turn => -self.facing,
+                _ => self.facing,
+            };
+            let steps = s.run.as_ref().map_or(self.frame, |hint| hint.steps);
+            self.run_steps = steps;
+            if let Some(hint) = &s.run {
+                if hint.after_turn {
+                    self.run_nerve = RunNerve::RunAfterTurn;
+                }
+                self.cycle = RunCycle::from_recorded(hint.phase, hint.rate, hint.weights, steps);
+                self.step_phase = hint.phase;
+                self.ground.resume(
+                    self.speed_h(),
+                    steps,
+                    hint.turn_rate,
+                    hint.last_input,
+                    hint.turn_power,
+                );
+                // A nerve chosen in this row starts in the next step.
+                if let Some(clip) = hint.chosen {
+                    let (mode, nerve) = match clip {
+                        "Brake" => (Move::Skid, RunNerve::Brake),
+                        "Turn" => (Move::Turn, RunNerve::Turn),
+                        "TurnPoint" => (Move::Turn, RunNerve::Pivot),
+                        _ if self.anim.name == "Turn" => (Move::Walk, RunNerve::RunAfterTurn),
+                        _ => (self.mode, RunNerve::Run),
+                    };
+                    self.mode = mode;
+                    self.run_steps = 0;
+                    self.brake_dir = self.facing;
+                    self.nerve.queue(clip, move |p| p.enter_nerve(nerve));
+                }
             }
         }
         for (name, value) in &s.counters {
@@ -1113,7 +1218,11 @@ impl Player {
             rate: 1.,
         };
         if name == "Move" {
+            // The run cycle starts over in the nerve that plays it.
+            self.cycle.start();
             self.step_phase = 0.;
+            self.run_nerve = RunNerve::Run;
+            self.run_steps = 0;
         }
     }
     /// A state asks for another clip (its sub-phase began): it starts on the
@@ -1157,8 +1266,9 @@ impl Player {
     /// (`PlayerAnimator::updateAnimFrame` inside its movement).
     fn advance_clips(&mut self) {
         if self.anim.name == "Move" {
-            self.step_phase = (self.step_phase + self.anim.rate) % 60.;
-            self.anim.frame = self.step_phase;
+            self.cycle.begin_frame();
+            self.step_phase = self.cycle.phase;
+            self.anim.frame = self.cycle.shown % 60.;
         } else {
             self.anim.frame += self.anim.rate;
             if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
@@ -1222,6 +1332,9 @@ impl Player {
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
         self.begin_step();
+        if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
+            self.pull = t::GRAVITY;
+        }
         self.change_from_surroundings(scene, &o);
         // A state chosen above leaves its own first step to the next frame.
         if !self.nerve.deferred {
@@ -1463,154 +1576,257 @@ impl Player {
         }
         false
     }
+    /// The stick as the ground move control reads it: the world direction
+    /// scaled by the tilt, nothing inside the deadzone.
+    fn ground_stick(&self) -> Vec3 {
+        if self.tilt >= STICK_DEADZONE {
+            self.stick * self.tilt.min(1.)
+        } else {
+            Vec3::ZERO
+        }
+    }
+    /// The standing or running state (the original's wait and run nerves).
     fn run(&mut self, o: &Orders) {
+        if self.mode == Move::Idle {
+            self.stand(o);
+        } else {
+            self.run_step(o);
+        }
+    }
+    /// Standing: the stick starts the run (the start-run judge), which is a
+    /// new nerve, chosen now and moving from its first step.
+    fn stand(&mut self, o: &Orders) {
         if self.ground_actions(o) {
             return;
         }
-        let speed = self.speed_h();
-        if self.tilt > 0.05 {
-            let wish = self.stick;
-            // Reversing at speed: brake, then turn around.
-            if speed > t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE
-                && self.run_frames >= t::BRAKE_ON_COUNTER
-                && wish.dot(self.facing) < -0.7
-            {
-                // The brake is part of the run's nerve: the speed drops from
-                // this frame, its clip and sounds start on the next.
-                self.switch(Move::Skid, "Brake", |p| p.events.push(Fx::Skid));
-                self.quick_turn = t::QUICK_TURN_JUMP_FRAMES;
-                self.brake(o);
-                return;
-            }
-            if self.mode == Move::Idle {
-                // Standing to running is a new nerve: it moves from its first
-                // step, so this frame only chooses it (the run start clip is
-                // for a standstill).
-                let clip = if speed < 0.5 && self.anim.name == "Wait" {
-                    "RunStart"
-                } else {
-                    "Move"
-                };
-                self.go(Move::Walk, clip);
-                return;
-            }
-            let limit = lerp_clamped(
-                t::ROUND_LIMIT_DEG,
-                t::ROUND_LIMIT_DEG_MIN,
-                speed / t::NORMAL_MAX,
-            );
-            let limit = if speed < t::NORMAL_MIN { 30. } else { limit };
-            self.facing = turn(self.facing, wish, limit.to_radians());
-            let max = if self.after_turn > 0 {
-                t::AFTER_TURN_MAX
-            } else if self.throwing.run > 0 {
-                t::RUN_SPEED_CONTINUOUS_THROW
-            } else {
-                t::NORMAL_MAX
-            } * self.tilt.max(0.2);
-            let accel = if self.throwing.run > 0 {
-                t::RUN_SPEED_CONTINUOUS_THROW / t::RUN_ACCEL_FRAMES_CONTINUOUS_THROW
-            } else {
-                t::NORMAL_MAX / t::ACCEL_FRAMES
-            };
-            let s = if speed < max {
-                (speed.max(t::NORMAL_MIN) + accel).min(max)
-            } else {
-                // Above the stick's speed (after boosts) ease back down.
-                approach(speed, max, accel)
-            };
-            self.set_h(self.facing * s);
-            self.run_frames += 1;
-            if !matches!(self.mode, Move::Run | Move::Walk) {
-                self.set(Move::Run);
-            }
-            // The run cycle takes over from any other clip, and from the run
-            // start once that has played.
-            let run_start_over = self.anim_done(clip::RUN_START) || self.anim.frame > 10.;
-            if self.clip() != "Move" && (self.clip() != "RunStart" || run_start_over) {
-                self.play("Move");
-            }
-            self.mode = if s < 8. { Move::Walk } else { Move::Run };
-        } else {
-            self.run_frames = 0;
-            let s = (speed - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
-            self.set_h(self.facing * s);
-            if s <= 0. {
-                // Standing again; the landing and stand-up clips play out first.
-                self.set(Move::Idle);
-                if !self.standing_clip_playing() && self.clip() != "Wait" {
-                    self.play("Wait");
-                }
+        if self.tilt >= STICK_DEADZONE {
+            // The run state's appearance already pulls the player to the floor.
+            self.pull = GRAVITY_MOVE;
+            self.go(Move::Walk, "Move");
+            return;
+        }
+        self.run_frames = 0;
+        let s = (self.speed_h() - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
+        self.set_h(self.facing * s);
+        if s <= 0. {
+            // Standing again; the landing and stand-up clips play out first.
+            self.set(Move::Idle);
+            if !self.standing_clip_playing() && self.clip() != "Wait" {
+                self.play("Wait");
             }
         }
         self.v.y = -t::GRAVITY;
-        self.update_move_anim();
     }
-    /// The original's run cycle: a 60-frame phase that speeds up with speed.
-    fn update_move_anim(&mut self) {
-        let speed = self.speed_h();
-        if self.anim.name == "Move" {
-            let rate = move_rate(speed);
-            self.anim.rate = rate;
-            // The next advance moves the phase by this rate; the footfalls it
-            // passes are the ones this step reports.
-            let (before, after) = (self.step_phase, (self.step_phase + rate) % 60.);
-            // Footfalls at the original's foot-print frames of the cycle.
-            for (at, left) in [(4., true), (35., false)] {
-                let crossed = if before <= after {
-                    before < at && after >= at
-                } else {
-                    before < at || after >= at
-                };
-                if crossed && speed > 0.5 {
-                    self.events.push(Fx::Step { left });
+    /// One step of the run nerve (`PlayerStateRunHakoniwa::exeRun`): the
+    /// ground move control steers, the run cycle animates, then the nerve
+    /// decides whether to brake, pivot or end.
+    fn run_step(&mut self, o: &Orders) {
+        let step = self.run_steps;
+        if step == 0 {
+            self.ground.reset(self.v, self.facing);
+        }
+        let after_turn = self.run_nerve == RunNerve::RunAfterTurn;
+        // Top speed and ramp length of this step: the stretch after a turn
+        // ramps to the speed the brake began at, a continued throw runs faster.
+        let (max_speed, accel_frames) = if after_turn && step <= t::AFTER_TURN_FRAMES {
+            (self.after_turn_speed, t::AFTER_TURN_FRAMES as i32)
+        } else if self.throwing.run > 0 {
+            (
+                t::RUN_SPEED_CONTINUOUS_THROW,
+                t::RUN_ACCEL_FRAMES_CONTINUOUS_THROW as i32,
+            )
+        } else {
+            (t::NORMAL_MAX, t::ACCEL_FRAMES as i32)
+        };
+        let steer = self.ground.update(&SteerInput {
+            velocity: self.v,
+            front: self.facing,
+            stick: self.ground_stick(),
+            max_speed,
+            accel_frames,
+        });
+        self.run_steps += 1;
+        if steer.front.length_squared() > 0.5 {
+            self.facing = steer.front;
+        }
+        self.set_h(steer.velocity);
+        self.v.y = -GRAVITY_MOVE;
+        self.pull = GRAVITY_MOVE;
+        self.mode = if steer.speed < 8. {
+            Move::Walk
+        } else {
+            Move::Run
+        };
+        self.run_frames = self.ground.brake_counter as u32;
+        if step == 0 {
+            self.cycle.reset(steer.speed, after_turn);
+        }
+        self.update_move_anim(steer.speed);
+        // A fast run asked to brake or reverse hands over to the brake nerve; a
+        // slow one just stops and ends. A pull against the facing at a crawl
+        // pivots. Speed spent with the stick released ends the run.
+        let ended = if steer.brake_run {
+            if steer.speed > RUN_BLEND_FLOOR {
+                if self.ground.turn.reverse {
+                    self.quick_turn = t::QUICK_TURN_JUMP_FRAMES;
                 }
+                self.switch(Move::Skid, "Brake", |p| p.enter_nerve(RunNerve::Brake));
+                false
+            } else {
+                self.set_h(Vec3::ZERO);
+                self.end_run();
+                true
             }
-        } else if self.anim.name == "RunStart" {
-            self.anim.rate = 2.;
+        } else if steer.pivot {
+            self.switch(Move::Turn, "TurnPoint", |p| p.enter_nerve(RunNerve::Pivot));
+            false
+        } else if steer.stopped {
+            self.end_run();
+            true
+        } else {
+            false
+        };
+        // The actor's judges (jump, crouch, throw) look at the state's result.
+        if !ended {
+            self.ground_actions(o);
         }
     }
+    /// The first step of one of the run state's nerves.
+    fn enter_nerve(&mut self, nerve: RunNerve) {
+        self.run_nerve = nerve;
+        self.run_steps = 0;
+        match nerve {
+            RunNerve::Brake => self.events.push(Fx::Skid),
+            RunNerve::Turn => {
+                // The turn faces the other way at once and slides on.
+                self.facing = -self.brake_dir;
+                self.events.push(Fx::TurnDust);
+            }
+            RunNerve::Pivot => {
+                let front = self.facing;
+                self.pivot.reset(front);
+            }
+            RunNerve::Run | RunNerve::RunAfterTurn => {}
+        }
+    }
+    /// The run state dies and the actor chooses the standing state.
+    fn end_run(&mut self) {
+        self.go(Move::Idle, "Wait");
+    }
+    /// The original's run cycle: weights and pace by speed and tilt, and the
+    /// footfalls the pose passes.
+    fn update_move_anim(&mut self, speed: f32) {
+        if self.anim.name != "Move" {
+            return;
+        }
+        let before = self.cycle.phase;
+        let tilt = self.ground_stick().length();
+        self.cycle.update(speed, tilt);
+        self.anim.rate = self.cycle.rate;
+        let after = self.cycle.phase;
+        self.step_phase = after;
+        // Footfalls at the original's foot-print frames of the cycle.
+        for (at, left) in [(4., true), (35., false)] {
+            let crossed = if before <= after {
+                before < at && after >= at
+            } else {
+                before < at || after >= at
+            };
+            if crossed && speed > 0.5 {
+                self.events.push(Fx::Step { left });
+            }
+        }
+    }
+    /// The brake, the turn after it and the pivot on the spot: the rest of
+    /// the run state's nerves.
     fn brake(&mut self, o: &Orders) {
         if self.pre_jump > 0 && self.quick_turn > 0 {
             self.side_somersault();
             return;
         }
-        let speed = self.speed_h();
-        if self.mode == Move::Skid {
-            let s = (speed - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
-            self.set_h(self.facing * s);
-            if self.frame >= t::BRAKE_TURN_START && s < t::NORMAL_MIN || self.tilt < 0.05 && s <= 0.
-            {
-                if self.tilt > 0.05 {
-                    self.switch(Move::Turn, "TurnPoint", |p| {
-                        p.facing = p.stick;
-                        p.events.push(Fx::TurnDust);
-                    });
-                } else {
-                    self.set(Move::Idle);
-                    self.play("Wait");
-                }
-            }
-        } else {
-            // Turned around: burst away with the after-turn speed allowance.
-            self.after_turn = t::AFTER_TURN_FRAMES;
-            if self.tilt > 0.05 {
-                self.facing = turn(self.facing, self.stick, 20_f32.to_radians());
-            }
-            self.set_h(
-                self.facing
-                    * (speed + t::NORMAL_MAX / t::ACCEL_FRAMES * 2.).min(t::AFTER_TURN_MAX * 0.5),
-            );
-            if self.frame >= clip::TURN || self.tilt < 0.05 {
-                self.run_frames = t::BRAKE_ON_COUNTER;
-                self.set(Move::Run);
-                self.play("Move");
-            }
+        let step = self.run_steps;
+        self.run_steps += 1;
+        match self.run_nerve {
+            RunNerve::Pivot => self.pivot_step(),
+            RunNerve::Turn => self.turn_step(step),
+            _ => self.brake_step(step),
         }
         if self.pre_jump > 0 {
             self.ground_jump(o);
         }
+    }
+    /// `rs::moveBrakeRun`: slide on the way the brake began, losing speed.
+    fn slide_on(&mut self) -> f32 {
+        let before = self.speed_h();
+        let speed = ground::slide_speed(before);
+        self.set_h(self.brake_dir * speed);
+        self.v.y = -GRAVITY_MOVE;
+        self.pull = GRAVITY_MOVE;
+        before
+    }
+    fn brake_step(&mut self, step: u32) {
+        if step == 0 {
+            self.brake_dir = self.facing;
+        }
+        let before = self.slide_on();
+        if step == 0 {
+            self.after_turn_speed = before.clamp(t::NORMAL_MAX, t::AFTER_TURN_MAX);
+        }
+        // The brake's clip holds its last frame.
+        if self.anim.name == "Brake" {
+            self.anim.frame = self.anim.frame.min(clip::BRAKE as f32 + 1.);
+        }
+        let want = self.ground_stick();
+        let deep = want.length() > DEEP_STICK;
+        let along = self.brake_dir.dot(want.normalize_or_zero());
+        // A stick held far the other way allows the turn-round jump.
+        if deep && along <= 0. {
+            self.quick_turn = t::QUICK_TURN_JUMP_FRAMES;
+        }
+        if deep && along > 0. {
+            // Pushed on in the way of travel: run again.
+            self.mode = if self.speed_h() < 8. {
+                Move::Walk
+            } else {
+                Move::Run
+            };
+            self.switch(self.mode, "Move", |p| p.enter_nerve(RunNerve::Run));
+        } else if deep && step >= t::BRAKE_TURN_START {
+            self.switch(Move::Turn, "Turn", |p| p.enter_nerve(RunNerve::Turn));
+        } else if step >= t::BRAKE_FRAMES as u32 {
+            self.end_run();
+        }
+    }
+    fn turn_step(&mut self, _step: u32) {
+        self.slide_on();
+        if self.anim_done(clip::TURN) {
+            // Turned round: run off the other way at half the speed the brake
+            // began at, ramping up again.
+            self.after_turn = t::AFTER_TURN_FRAMES;
+            self.set_h(self.facing * (self.after_turn_speed * ground::RUN_AFTER_TURN_SCALE));
+            self.mode = Move::Walk;
+            self.switch(Move::Walk, "Move", |p| {
+                p.enter_nerve(RunNerve::RunAfterTurn)
+            });
+        }
+    }
+    /// `PlayerStateRunHakoniwa::exePivot`: turn on the spot toward the stick.
+    fn pivot_step(&mut self) {
+        let flat_velocity = Vec3::new(self.v.x, 0., self.v.z);
+        let step = self
+            .pivot
+            .update(self.ground_stick(), self.facing, flat_velocity);
+        self.facing = step.front;
+        self.set_h(step.velocity);
         self.v.y = -t::GRAVITY;
+        self.pull = t::GRAVITY;
+        if self.pivot.done {
+            if self.pivot.has_input {
+                self.switch(Move::Walk, "Move", |p| p.enter_nerve(RunNerve::Run));
+            } else {
+                self.end_run();
+            }
+        }
     }
     fn ground_spin(&mut self, o: &Orders) {
         if self.pre_jump > 0 {

@@ -13,7 +13,7 @@ use crate::{
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::{cap_state, nerve, state_from_nerve},
     local_assets::{Blend, Posed, looping},
-    movement::{Anim, FPS, Fx, Move, Player, Snapshot, UNIT, move_weights},
+    movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip},
     sound_table::{AnimCursor, CapWatch, Cue, FxContext, Table, fx_cues, is_voice},
 };
 use bevy::prelude::*;
@@ -95,6 +95,8 @@ struct Layer {
 #[derive(Clone, Default)]
 struct Pose {
     layers: Vec<Layer>,
+    /// The slot the clips belong to: the clip itself, or Move for the cycle.
+    slot: &'static str,
 }
 impl Posed for Pose {
     fn is_empty(&self) -> bool {
@@ -117,35 +119,40 @@ impl Pose {
         let a = p.anim;
         if a.name != "Move" {
             return Self {
+                slot: a.name,
                 layers: vec![Layer {
                     name: a.name,
-                    frame: a.frame,
+                    // The braking and turning clips hold their last frame while
+                    // the animator's counter runs one past it.
+                    frame: match a.name {
+                        "Brake" => a.frame.min(clip::BRAKE as f32),
+                        "Turn" => a.frame.min(clip::TURN as f32),
+                        _ => a.frame,
+                    },
                     rate: a.rate,
                     weight: 1.,
                 }],
             };
         }
-        let layers = ["Walk", "Run", "Dash", "DashFast"]
-            .into_iter()
-            .zip(move_weights(p.move_speed))
-            .filter(|(_, w)| *w > 0.001)
-            .map(|(name, weight)| Layer {
-                name,
-                frame: a.frame,
-                rate: a.rate,
-                weight,
+        // Each clip of the slot plays the shared phase at its own length.
+        let layers = p
+            .run_cycle()
+            .layers()
+            .map(|l| Layer {
+                name: l.name,
+                frame: l.frame,
+                rate: l.rate,
+                weight: l.weight,
             })
             .collect();
-        Self { layers }
+        Self {
+            layers,
+            slot: "Move",
+        }
     }
+    /// The name the game gives this pose in the interp column.
     fn dominant(&self) -> &'static str {
-        self.layers
-            .iter()
-            .fold(None::<&Layer>, |best, l| match best {
-                Some(b) if b.weight >= l.weight => Some(b),
-                _ => Some(l),
-            })
-            .map_or("", |l| l.name)
+        self.slot
     }
 }
 
@@ -273,7 +280,11 @@ impl Recorder {
         // whose pose still shows t - 1 (SpinCapStart's frame 8 and 11 sounds
         // were logged at shown frames 7 and 10; frame-0 sounds in the first
         // row), which is the frame the controller holds after its step.
-        let shown = main_frame(&p.anim);
+        let shown = if p.anim.name == "Move" {
+            p.shown_frame()
+        } else {
+            main_frame(&p.anim)
+        };
         let advance = self.cursor.advance(
             p.anim.name,
             p.anim.serial,
@@ -367,13 +378,10 @@ impl Recorder {
             "ThrowCapJumpParts"
         };
         let mut layers: Vec<String> = Vec::new();
-        for (old, share, _) in &self.blend.old {
-            for l in &old.layers {
-                layers.push(layer_cell(l.name, l.frame, 0., l.weight * share));
-            }
-        }
+        // The game lists the clips of the playing slot with their own weights;
+        // the fade from the clip before it is the `interp` column.
         for l in &pose.layers {
-            layers.push(layer_cell(l.name, l.frame, l.rate, l.weight * (1. - kept)));
+            layers.push(layer_cell(l.name, l.frame, l.rate, l.weight));
         }
         if self.overlay > 0. {
             let frame = p.sub_anim.map_or(15., |s| sub_frame(&s)).min(15.9);
@@ -401,7 +409,8 @@ impl Recorder {
             .unwrap_or_default();
 
         let v = p.units_per_frame();
-        let yaw = p.facing.x.atan2(p.facing.z);
+        // A negative zero would put a half turn on the other side of the circle.
+        let yaw = (p.facing.x + 0.).atan2(p.facing.z);
         let q = Quat::from_rotation_y(yaw);
         let mut cells = Cells::default();
         cells.int(info.frame);
@@ -580,6 +589,76 @@ impl TraceFile {
     pub fn number(&self, row: usize, column: &str) -> Option<f32> {
         self.cell(row, column)?.parse().ok()
     }
+    /// What a row of the run state shows of its hidden state: the run cycle's
+    /// pose and weights, the turn that moved the facing, the stick, how long the
+    /// current nerve has been going and the nerve chosen in this row.
+    fn run_hint(&self, row: usize) -> Option<RunHint> {
+        let anim = self.cell(row, "anim")?;
+        if !matches!(anim, "Move" | "Brake" | "Turn" | "TurnPoint") {
+            return None;
+        }
+        let mut hint = RunHint {
+            rate: self.number(row, "anim_rate").unwrap_or(1.),
+            ..RunHint::default()
+        };
+        if anim == "Move" {
+            let mut phase = None;
+            for item in self.cell(row, "anim_layers")?.split('|') {
+                // `Name@frame*rate=weight`
+                let (name, rest) = item.split_once('@')?;
+                let (frame, rest) = rest.split_once('*')?;
+                let (_, weight) = rest.split_once('=')?;
+                let slot = ["Walk", "Run", "Dash", "DashFast", "RunStart"]
+                    .iter()
+                    .position(|n| *n == name)?;
+                hint.weights[slot] = weight.parse().ok()?;
+                let length = [60., 17., 17., 14., 30.][slot];
+                phase = phase.or(frame.parse::<f32>().ok().map(|f| f * 60. / length));
+            }
+            hint.phase = phase?;
+        }
+        // Rows of the same clip so far: the steps the nerve has taken. A run
+        // that follows the turn is the run after turning round.
+        let mut first = row;
+        while first > 0 && self.cell(first - 1, "anim") == Some(anim) {
+            first -= 1;
+        }
+        hint.steps = (row - first + 1) as u32;
+        hint.after_turn =
+            anim == "Move" && first > 0 && self.cell(first - 1, "anim") == Some("Turn");
+        // The next row shows the clip a nerve chose in this one starting.
+        let next = self.cell(row + 1, "anim");
+        if next != Some(anim) && self.number(row + 1, "anim_frame") == Some(0.) {
+            hint.chosen = match next {
+                Some("Brake") => Some("Brake"),
+                Some("Turn") => Some("Turn"),
+                Some("TurnPoint") => Some("TurnPoint"),
+                Some("Move") => Some("Move"),
+                _ => None,
+            };
+        }
+        let front = |r: usize| {
+            Vec3::new(
+                self.number(r, "fx").unwrap_or(0.),
+                0.,
+                self.number(r, "fz").unwrap_or(0.),
+            )
+        };
+        if row > 0 {
+            hint.turn_rate = front(row).angle_between(front(row - 1)).to_degrees();
+        }
+        // The turn power is a running average of how hard the facing swung.
+        let mut power = 0.;
+        for r in row.saturating_sub(40).max(1)..=row {
+            let swing = front(r).angle_between(front(r - 1)).to_degrees();
+            power += (crate::movement::turn_power(swing) - power) * 0.15;
+        }
+        hint.turn_power = power;
+        let input = self.cell(row, "move_input")?;
+        let mut parts = input.split('/').filter_map(|v| v.parse::<f32>().ok());
+        hint.last_input = Vec3::new(parts.next()?, 0., parts.next()?);
+        Some(hint)
+    }
     /// The injectable player state a row records, for lockstep stepping.
     pub fn snapshot(&self, row: usize) -> Snapshot {
         let n = |c| self.number(row, c).unwrap_or(0.);
@@ -622,6 +701,7 @@ impl TraceFile {
             anim,
             state_frames: self.number(row, "state_step").map(|s| s.max(0.) as u32),
             counters,
+            run: self.run_hint(row),
         }
     }
 }
