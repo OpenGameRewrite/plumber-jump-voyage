@@ -14,6 +14,8 @@ mod effect_triggers;
 #[cfg(feature = "local-assets")]
 mod effects;
 mod fx;
+mod game_columns;
+mod game_names;
 mod input;
 #[cfg(feature = "local-assets")]
 mod legacy_assets;
@@ -58,6 +60,8 @@ fn main() {
         effect_data::self_check();
         effect_triggers::self_check();
         sound_table::self_check();
+        game_names::self_check();
+        game_columns::self_check();
         trace::self_check();
         replay::self_check();
         #[cfg(feature = "local-assets")]

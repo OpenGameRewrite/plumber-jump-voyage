@@ -1,30 +1,9 @@
 use super::*;
 
 pub(super) fn run() {
-    nerve_names();
     number_text();
     game_rows();
-}
-
-#[cfg_attr(test, test)]
-fn nerve_names() {
-    // Every state's name maps back to the same state.
-    for mode in Move::ALL {
-        let anim = if mode == Move::GroundPound {
-            "HipDropStart"
-        } else {
-            "Wait"
-        };
-        let name = nerve(mode, anim).name;
-        let speed = if mode == Move::Walk { 4. } else { 14. };
-        assert_eq!(state_from_nerve(name, anim, speed), Some(mode), "{name}");
-    }
-    assert!(state_table().contains("Jump/Jump2nd ?") && state_table().contains("Wait\n"));
-    assert_eq!(nerve(Move::GroundPound, "HipDrop").name, "HipDrop/Fall");
-    assert_eq!(state_from_nerve("Run", "Run", 4.), Some(Move::Walk));
-    // A nerve without its sub-state still finds the family.
-    assert_eq!(state_from_nerve("Squat", "Wait", 0.), Some(Move::Crouch));
-    assert_eq!(state_from_nerve("Unknown", "Wait", 0.), None);
+    sample_point();
 }
 
 #[cfg_attr(test, test)]
@@ -38,7 +17,8 @@ fn number_text() {
 fn game_rows() {
     let file = TraceFile::parse(
         "frame,px,py,pz,vx,vy,vz,fx,fz,ground,state,anim,anim_frame,anim_len,state_step,counters,pre_input\n\
-         3,1.5,0,20,0,0,6,0,1,1,Run,Run,12,24,7,jump_timer=4|bogus=x,jump=3\n",
+         3,1.5,0,20,0,0,6,0,1,1,Run/Run3D,Run,12,24,7,jump_timer=4|bogus=x|prejump=2|cjump=1/5,jump=3\n\
+         4,1.5,0,20,0,0,6,0,1,1,Run/Run3D,Move,12,60,7,,\n",
     )
     .unwrap();
     let s = file.snapshot(0);
@@ -52,5 +32,27 @@ fn game_rows() {
     assert_eq!(s.state_frames, Some(7));
     assert!(s.counters.contains(&("jump_timer".into(), 4)));
     assert!(s.counters.contains(&("pre_jump".into(), 3)));
+    // The game's counters come back under the rewrite's names.
+    assert!(s.counters.contains(&("pre_jump".into(), 2)));
+    assert!(s.counters.contains(&("jump_count".into(), 0)));
     assert_eq!(file.cell(0, "interp"), None);
+    // The game's own `Move` slot is the cycle phase itself.
+    assert_eq!(file.snapshot(1).anim, Some(("Move", 13.0)));
+}
+
+/// The recorded animation frame follows the game's sample: a clip started in
+/// a step reads frame 0 there, and the frame after reads 1.
+#[cfg_attr(test, test)]
+fn sample_point() {
+    assert_eq!(shown_frame(1., 1., false), 0.);
+    assert_eq!(shown_frame(0., 1., false), 0.);
+    assert_eq!(shown_frame(2.5, 1.5, false), 1.);
+    assert_eq!(shown_frame(0.5, 1.5, true), 59.);
+    let sub = Anim {
+        name: "ThrowCapParts",
+        serial: 0,
+        frame: 1.,
+        rate: 1.,
+    };
+    assert_eq!(sub_frame(&sub), 0.);
 }

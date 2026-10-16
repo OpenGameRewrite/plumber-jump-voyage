@@ -72,8 +72,9 @@ fn scenarios() {
     );
     // Running straight: forward is +Z at yaw zero, up to the top speed.
     let run = trace(RUN);
-    assert_eq!(cell(&run, 119, "state"), "Run");
-    assert_eq!(cell(&run, 119, "anim"), "Run");
+    assert_eq!(cell(&run, 119, "state"), "Run/Run3D");
+    assert_eq!(cell(&run, 119, "anim"), "Move");
+    assert_eq!(cell(&run, 119, "anim_len"), "60.000000");
     assert!((number(&run, 119, "speed_h") - 14.).abs() < 0.01);
     assert!(number(&run, 119, "pz") > 600. && number(&run, 119, "px").abs() < 1e-3);
     assert_eq!(cell(&run, 0, "anim"), "RunStart");
@@ -91,7 +92,7 @@ fn scenarios() {
     let jump = trace(JUMP);
     assert_eq!(cell(&jump, 9, "ground"), "1");
     assert_eq!(cell(&jump, 10, "ground"), "0");
-    assert_eq!(cell(&jump, 10, "state"), "Jump");
+    assert_eq!(cell(&jump, 10, "state"), "Jump/Jump");
     assert_eq!(cell(&jump, 10, "in_buttons"), "!B");
     assert_eq!(cell(&jump, 11, "in_buttons"), "B");
     assert!(number(&jump, 10, "vy") > 10. && number(&jump, 20, "py") > 50.);
@@ -124,7 +125,7 @@ fn camera_and_buttons() {
     // A and B both jump.
     for button in ["A", "B"] {
         let rows = trace(&format!("start 0 0 0 0\n2 0 0 {button}\n"));
-        assert_eq!(cell(&rows, 0, "state"), "Jump", "{button}");
+        assert_eq!(cell(&rows, 0, "state"), "Jump/Jump", "{button}");
     }
 }
 

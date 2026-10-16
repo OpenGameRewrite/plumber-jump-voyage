@@ -44,28 +44,116 @@ One row per step, values after the step. The base columns are `frame`
 through `events`; the extended columns follow the real-game probe's layout.
 Empty cells mean the rewrite has no equivalent:
 
-- `state` uses the original nerve names (`trace.rs` lists every state and marks
-  the sub-state names that are guesses).
-- Row conventions taken from the first real-game trace: values are the state
+- `state` is the name the real game's probe logs, `<actor nerve>/<sub-state
+  nerve>` (`Wait/Wait`, `Run/Run3D`, `Jump/Jump`, `Wait/Land`). `--replay
+  --states` lists every state with its name; a `?` marks a name that is this
+  project's reading rather than one the probe logged or a symbol states
+  (`src/game_names.rs` says where each comes from). Several states share a
+  name where the game has one nerve for them: walking, running, skidding and
+  turning are all `Run/Run3D`, and the jump family is `Jump/Jump`; the clip
+  tells them apart. Landing is `Wait/Land` while the landing clip plays.
+- Row conventions taken from the real-game traces: values are the state
   after the step, except `anim_frame`, which shows the frame the step started
   from (a clip that began this step reads 0); `vy` on the ground is -3, the pull
-  the original keeps reporting (the controller cancels it inside the step);
+  the original keeps reporting (the controller cancels it inside the step), and
+  in the step that lands it is the fall speed that moved the player;
   standing is `Wait/Wait`.
-- `anim`, `anim_frame`, `anim_rate`: the controller's clip. The `Move` cycle
-  is reported as its dominant clip with `blend` weights; its `anim_frame` is
-  the 60-frame cycle phase shared by all four clips, not a frame of one clip.
-  Looping clips keep counting past their length.
+- `anim`, `anim_frame`, `anim_rate`: the controller's clip. The run cycle is the
+  game's `Move` slot, a 60-frame phase (`anim_len` 60) whose clips are the
+  `anim_layers`, with `blend` weights; its `anim_frame` is that phase, not a
+  frame of one clip. Looping clips keep counting past their length.
 - `interp` and `anim_layers` come from the renderer's crossfade rules (outgoing
   poses freeze and fade over the clip's interpolation frames).
 - `events` lists sounds, reactions and effects that started: sounds from the
-  animation triggers and movement events, reactions by name, effects by this
-  project's own effect names (its particles are procedural).
-- Not available headless: `bones`, camera position and pitch, clip lengths,
-  hand/face/eye part clips, model offsets and the face.
+  animation triggers and movement events, reactions by name, effects by the
+  names of the original's effect tables. As in the game, a sound or effect of
+  Cappy's own keeper carries `@cap` and an effect of Mario's carries `@model`;
+  `effects_live` is `owner:name` items.
+- `counters`, `collision` and `triggers` use the game's keys where the rewrite
+  has an equivalent (see below), then its own internal counters.
+- `cap_state` and `cap_anim` use the game's cap nerve and clip names
+  (`Throw`, `ThrowStay`, `Return`; `FlyingWaitR`, `StayR`).
+- Not available headless: `bones`, camera position and pitch, clip lengths
+  other than the run cycle's, hand/face/eye part clips, model offsets and the face.
 - `effects_live` is approximate: bursts for their nominal lifetime plus the
   state's trail effects.
 - `qx..qw` is the facing yaw only; the renderer's smoothed lean is not part of
   the simulation.
+
+### Counters, collision and triggers
+
+Each is `key=value` items (`|` between counters, `;` otherwise). The rewrite
+writes the keys it has an equivalent for under the game's names:
+
+| key | the game | the rewrite writes |
+|---|---|---|
+| `cjump=count/timer` | consecutive-jump count (counted when a jump lands) and the frames since | `(jump_count + 1) % 3` and `jump_timer + 1` while standing inside the 10-frame window, else `0/0`. Stale after a landing from a plain fall. |
+| `clong=count/timer` | the same for the long jump | `long_jump_count`, `long_jump_timer + 1` inside the 15-frame window, else `0/0`. Provisional: no long jump has been recorded in the game yet. |
+| `quickturn` | quick-turn jump frames left | `quick_turn` |
+| `capjump` | a cap bounce is still possible | `cap_jump_possible` as 0 or 1 |
+| `prejump` | frames left on the buffered jump press | `pre_jump` |
+| `collision`: `ground`, `wall`, `gn`, `wn` | contact flags and the ground and wall normals | `grounded`, whether a wall was touched, the ramp's normal, the wall's normal |
+| `triggers` | raw flag words of the player trigger object | none; the rewrite writes `fx=` (its movement event names), which has no counterpart |
+
+Game keys with no equivalent are not written: `upperpunch`, `forcerun`,
+`limitheight`, `wallhist`, `ceiling`, `gmat` (the rewrite has no ceiling flag
+and no floor materials). The rewrite's own counters (`coyote`, `jump_count`,
+`jump_timer`, `run_frames`, ...) follow the game's keys. The timer of
+`cjump` and `clong` means nothing while their count is zero, and the
+comparison ignores it then.
+
+## Sample point
+
+The game's probe takes one sample per logic frame after the player's movement
+and the model's animation update. Inside that frame the game updates the
+animation first (`PlayerAnimator::updateAnimFrame`) and then runs the state's
+nerve. The controller runs the state first and advances the clip at the end of
+its step. The two orders show the same clip frames to the state logic, and the
+trace follows the game's sample: `anim_frame` is the frame the step started
+from. Animation-frame triggers (sounds, effects) are scanned up to the frame
+the controller holds after its step, which is where the game logs them: a
+sound on clip frame t is in the row whose pose still shows frame t - 1.
+
+What differs is when a state change takes effect. In the game, the nerve that
+decides a change (a jump press in `Wait`, a landing seen in `Jump`) switches
+the state in frame N: the row shows the new `state` with `state_step` 0, and
+the old clip, position and velocity. The new state's first execution, with its
+clip at frame 0, its impulse and its sounds and effects, is frame N + 1
+(`anim_frame == state_step - 1` from then on). A landing has one more frame:
+the ground contact is flagged in row N, the `Wait/Land` state appears in row
+N + 1 and its clip starts in row N + 2. The controller decides and acts in the
+same step, so every transition in a rewrite trace is one frame early (two for
+a landing, since the contact is the earlier of them) and its `state_step`
+never reads 0. The trace records this as it is; it is not hidden.
+
+## Comparing
+
+```sh
+py tools/compare-traces.py game.csv rewrite.csv --out diff.md [--lockstep] [--json diff.json]
+py tools/fidelity-report.py <runs dir> [--only idle jump ...]   # SUMMARY.md for every run
+```
+
+`compare-traces.py` compares column by column. `counters`, `collision` and
+`triggers` are compared key by key and shown as `counters.cjump`; a column or
+key that only one side ever writes is listed under "Not comparable" and does
+not fail. The probe-only columns (`game_frame`, `tick`, `cam_real_*`,
+`late_sample`, `other_events`, `anim_slots`, `floor_y`, `cap_step`,
+`cap_hidden`) and the probe's own event kinds (`anim:`, `parts:`, `subanim:`,
+`upper:`, `endsub:`, `effect_stop:`, `contact:`) are ignored. Sound mixes
+(`sounds`) compare names only: the game logs the request's parameter where the
+rewrite logs the mixed gain. The cap columns are compared on the frames where
+both sides have the cap out; `cap_out` shows who has it out when.
+
+Next to `game.csv` the probe writes `game.env.json` and `game.meta.json`. A run
+whose environment was not clean is refused (exit status 3, a banner) unless
+`--allow-contaminated` is given; then the frames it lists are left out of
+every column, and the position columns are left out after the first of them.
+
+`fidelity-report.py` replays every scenario that has a `game.csv` (with
+`--camera game.csv`), writes `rewrite.csv`, `diff.md` and `diff.json` beside
+it, and writes `SUMMARY.md` in the runs folder: per scenario the environment,
+the first frame each group of columns diverges and the three worst columns
+with their values.
 
 ## Lockstep
 

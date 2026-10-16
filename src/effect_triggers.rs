@@ -361,6 +361,23 @@ impl Library {
     }
 }
 
+/// An effect the tracker keeps alive: its table entry, the actor whose effect
+/// keeper owns it, frames of life left (none: until stopped) and how long its
+/// particles outlive the emission.
+struct Live {
+    key: Key,
+    owner: &'static str,
+    left: Option<u32>,
+    linger: u32,
+}
+/// The real game's name for the actor whose effect keeper runs an effect: its
+/// model for Mario's own and the controller's, its cap for Cappy's.
+fn owner(source: Source) -> &'static str {
+    match source {
+        Source::Cap => "cap",
+        Source::Mario | Source::Code => "model",
+    }
+}
 /// Follows the effects a run starts and how long each stays alive, without
 /// drawing anything: what the headless trace records as `effect:` events and
 /// `effects_live`.
@@ -371,7 +388,7 @@ pub struct Tracker {
     cap_serial: u32,
     right_hand: bool,
     /// Effect name, entry, and frames of life left (none: until stopped).
-    live: Vec<(Key, Option<u32>, u32)>,
+    live: Vec<Live>,
 }
 
 impl Tracker {
@@ -388,7 +405,11 @@ impl Tracker {
 
     /// One frame after the player stepped; `events` are the frame's movement
     /// events. Returns names of effects started and of effects alive.
-    pub fn step(&mut self, p: &Player, events: &[Fx]) -> (Vec<String>, Vec<String>) {
+    ///
+    /// `frame` is the main clip's frame to trigger on. The caller says which one
+    /// (the frame the clip displays in that frame's sample, or the one the
+    /// controller holds after its step) so the trace can follow the game.
+    pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
         let context = FxContext {
             mode: p.mode,
             move_speed: p.move_speed,
@@ -407,7 +428,7 @@ impl Tracker {
         let changes = self.triggers.evaluate(&Frame {
             anim: p.anim.name,
             serial: p.anim.serial,
-            frame: p.anim.frame,
+            frame,
             cap_anim,
             cap_serial: self.cap_serial,
             reactions: &reactions,
@@ -416,7 +437,7 @@ impl Tracker {
         let mut started = vec![];
         for change in changes {
             match change {
-                Change::Start { key, once, .. } => {
+                Change::Start { key, source, once } => {
                     let timing = self
                         .library
                         .effects
@@ -432,21 +453,27 @@ impl Tracker {
                         None if once => Some(ONE_SHOT_LIMIT),
                         None => None,
                     };
-                    started.push(key.effect.clone());
-                    self.live.retain(|(k, _, _)| *k != key);
-                    self.live
-                        .push((key, emitting.map(|e| e + timing.linger), timing.linger));
+                    let owner = owner(source);
+                    started.push(format!("{}@{owner}", key.effect));
+                    self.live.retain(|l| l.key != key);
+                    self.live.push(Live {
+                        key,
+                        owner,
+                        left: emitting.map(|e| e + timing.linger),
+                        linger: timing.linger,
+                    });
                 }
                 Change::Stop { key } => {
-                    for (k, left, linger) in &mut self.live {
-                        if *k == key {
-                            *left = Some(left.map_or(*linger, |l| l.min(*linger)));
+                    for live in &mut self.live {
+                        if live.key == key {
+                            let linger = live.linger;
+                            live.left = Some(live.left.map_or(linger, |l| l.min(linger)));
                         }
                     }
                 }
             }
         }
-        self.live.retain_mut(|(_, left, _)| match left {
+        self.live.retain_mut(|live| match &mut live.left {
             Some(0) => false,
             Some(frames) => {
                 *frames -= 1;
@@ -454,7 +481,11 @@ impl Tracker {
             }
             None => true,
         });
-        let mut alive: Vec<String> = self.live.iter().map(|(k, _, _)| k.effect.clone()).collect();
+        let mut alive: Vec<String> = self
+            .live
+            .iter()
+            .map(|l| format!("{}:{}", l.owner, l.key.effect))
+            .collect();
         alive.sort();
         alive.dedup();
         (started, alive)
@@ -602,13 +633,13 @@ pub fn self_check() {
     // The tracker keeps one-shot effects alive for their emission plus their particles' life.
     let mut tracker = Tracker::new(library);
     let mut player = Player::default();
-    let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }]);
-    assert_eq!(started, ["Thud"]);
-    assert_eq!(alive, ["Thud"]);
+    let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
+    assert_eq!(started, ["Thud@model"]);
+    assert_eq!(alive, ["model:Thud"]);
     player.anim.serial = 1;
     let mut last = alive.len();
     for _ in 0..20 {
-        last = tracker.step(&player, &[]).1.len();
+        last = tracker.step(&player, &[], 0.).1.len();
     }
     assert_eq!(last, 0, "3 frames of emission and 10 of life are over");
 }

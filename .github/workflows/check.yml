@@ -17,6 +17,7 @@ jobs:
       - run: python tools/extract.py --self-check
       - run: python tools/pack-glb.py --self-check
       - run: python tools/extract-sounds.py --self-check
+      - run: python tools/compare-traces.py --self-check
       - run: cargo fmt --check
       - run: cargo check --locked -j 2
       - run: cargo clippy --all-features --locked -j 2 -- -D warnings

@@ -8,10 +8,12 @@
 //! empty cell as "missing", never as a value.
 use crate::{
     effect_data::Library,
-    effect_triggers::Tracker,
+    effect_triggers::{Tracker, cap_clip},
     fx,
+    game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
+    game_names::{cap_state, nerve, state_from_nerve},
     local_assets::{Blend, Posed, looping},
-    movement::{Cap, CapPhase, FPS, Fx, Move, Player, Snapshot, Throw, UNIT, move_weights},
+    movement::{Anim, FPS, Fx, Move, Player, Snapshot, UNIT, move_weights},
     sound_table::{AnimCursor, CapWatch, Cue, FxContext, Table, fx_cues, is_voice},
 };
 use bevy::prelude::*;
@@ -81,103 +83,6 @@ pub const COLUMNS: [&str; 60] = [
     "cam_fov",
 ];
 
-/// How a state is named in the original, and whether that name is a guess.
-///
-/// The names are the nerves of the original player actor where they are known
-/// (`Wait`, `Run`, `Squat`, `Slope`, `Rolling`, `Jump`, `Fall`, `HipDrop`,
-/// `HeadSliding`, `LongJump`, `WallAir`, `WallCatch`, `PoleClimb`, `Swim`,
-/// `SpinCap`, `DamageFire`), with the sub-state after a slash. Sub-state names
-/// the public decompilation does not show are this project's guesses; the
-/// `guess` flag marks every entry that is not read from it.
-pub struct Nerve {
-    pub name: &'static str,
-    pub guess: bool,
-}
-pub fn nerve(mode: Move, anim: &str) -> Nerve {
-    let (name, guess) = match mode {
-        Move::Idle => ("Wait/Wait", false),
-        // Walking is the Run nerve at a low stick tilt.
-        Move::Walk | Move::Run => ("Run", false),
-        Move::Skid => ("Run/Brake", true),
-        Move::Turn => ("Run/Turn", true),
-        Move::Crouch => ("Squat/Wait", false),
-        Move::Crawl => ("Squat/Walk", false),
-        Move::Fall => ("Fall", false),
-        Move::Jump => ("Jump", false),
-        Move::DoubleJump => ("Jump/Jump2nd", true),
-        Move::TripleJump => ("Jump/Jump3rd", true),
-        Move::LongJump => ("LongJump/Jump", false),
-        Move::Backflip => ("Jump/Backflip", true),
-        Move::Sideflip => ("Jump/TurnJump", true),
-        Move::SpinJump => ("Jump/SpinJump", true),
-        Move::SpinDrop => ("Jump/SpinDrop", true),
-        Move::GroundSpin => ("SpinCap/GroundSpin", true),
-        Move::GroundPound if anim == "HipDropStart" => ("HipDrop/Start", false),
-        Move::GroundPound => ("HipDrop/Fall", false),
-        Move::PoundLand => ("HipDrop/Land", false),
-        Move::PoundJump => ("Jump/HipDropJump", true),
-        Move::Roll => ("Rolling", false),
-        Move::RollEnd => ("Rolling/End", true),
-        Move::RollJump => ("Jump/RollJump", true),
-        Move::Dive => ("HeadSliding/Dive", false),
-        Move::Slide => ("HeadSliding/Land", true),
-        Move::SlopeSlide => ("Slope/Slide", false),
-        Move::BurnJump => ("DamageFire/Jump", true),
-        Move::BurnBounce => ("DamageFire/Bounce", true),
-        Move::FireRun => ("DamageFire/Run", true),
-        Move::WallSlide => ("WallAir/Slide", false),
-        Move::WallJump => ("WallAir/Jump", false),
-        Move::Ledge => ("WallCatch", false),
-        Move::Pole => ("PoleClimb", false),
-        Move::Swim => ("Swim", false),
-        Move::SwimDash => ("Swim/Dash", true),
-        Move::CapBounce => ("Jump/CapBounce", true),
-        Move::CapVault => ("Jump/CapLeapFrog", true),
-        Move::CatchJump => ("Jump/CapCatch", true),
-        Move::Throw => ("SpinCap", false),
-    };
-    Nerve { name, guess }
-}
-/// Every state with the original name the trace gives it; names that are
-/// guesses are marked with a question mark.
-pub fn state_table() -> String {
-    Move::ALL
-        .into_iter()
-        .map(|mode| {
-            let n = nerve(mode, "HipDropStart");
-            format!(
-                "{:<16} {}{}\n",
-                format!("{mode:?}"),
-                n.name,
-                if n.guess { " ?" } else { "" }
-            )
-        })
-        .collect()
-}
-/// The state a recorded nerve name stands for (the reverse of `nerve`).
-/// Walking and running share a nerve, so the speed picks between them; a name
-/// without a known sub-state matches the first state of that nerve.
-pub fn state_from_nerve(name: &str, anim: &str, speed_h: f32) -> Option<Move> {
-    let exact: Vec<Move> = Move::ALL
-        .into_iter()
-        .filter(|m| nerve(*m, anim).name == name)
-        .collect();
-    let candidates = if exact.is_empty() {
-        let family = name.split('/').next().unwrap_or(name);
-        Move::ALL
-            .into_iter()
-            .filter(|m| nerve(*m, anim).name.split('/').next() == Some(family))
-            .collect()
-    } else {
-        exact
-    };
-    match candidates.as_slice() {
-        [] => None,
-        [Move::Walk, Move::Run] => Some(if speed_h < 8. { Move::Walk } else { Move::Run }),
-        [first, ..] => Some(*first),
-    }
-}
-
 /// One clip contributing to the pose.
 #[derive(Clone)]
 struct Layer {
@@ -196,15 +101,26 @@ impl Posed for Pose {
         self.layers.is_empty()
     }
 }
-/// The clip frame a trace row shows. The controller advances a clip at the end
-/// of its step, but the real game's rows show the frame the step started from
-/// (a clip that began this step reads 0), so one rate is taken back.
+/// The clip frame a trace row shows: the frame the pose displays in the
+/// game's sample (after its animation update of the logic frame).
+///
+/// The game advances a clip at the start of its logic frame, then runs the
+/// state, so a clip a state starts reads frame 0 in that frame and the next
+/// frame advances it. The controller runs the state first and advances the
+/// clip at the end of its step; the frame the state saw is the one the step
+/// started from, one rate back from what the controller holds afterwards.
+/// The frame cells, the blend layers and the partial clips use this frame;
+/// animation-frame triggers fire on the held frame instead (see `record`).
 fn shown_frame(frame: f32, rate: f32, is_cycle: bool) -> f32 {
     if is_cycle {
         (frame - rate).rem_euclid(60.)
     } else {
         (frame - rate).max(0.)
     }
+}
+/// The frame of the player's main clip as the sample shows it.
+fn main_frame(a: &Anim) -> f32 {
+    shown_frame(a.frame, a.rate, a.name == "Move")
 }
 /// The frame the controller holds after a step, from a row's shown frame.
 fn held_frame(shown: f32, rate: f32) -> f32 {
@@ -275,11 +191,14 @@ pub struct Recorder {
     /// The original's effects, when their library is installed; the
     /// procedural stand-ins are logged otherwise.
     effects: Option<Tracker>,
+    /// The cap was thrown from the right hand (its clip names carry the side).
+    right_hand: bool,
 }
 impl Recorder {
     pub fn new(table: Option<Table>, library: Option<Library>) -> Self {
         Self {
             table,
+            right_hand: true,
             effects: library.map(Tracker::new),
             cursor: AnimCursor::default(),
             cap_watch: CapWatch::default(),
@@ -299,9 +218,11 @@ impl Recorder {
         events: &mut Vec<String>,
         mix: &mut Vec<String>,
     ) {
+        // The game marks a sound of Cappy's own audio keeper with `@cap`.
         events.push(format!(
-            "{}:{name}",
-            if is_voice(name) { "voice" } else { "se" }
+            "{}:{name}{}",
+            if is_voice(name) { "voice" } else { "se" },
+            if cap { "@cap" } else { "" }
         ));
         let Some(table) = &self.table else {
             return;
@@ -363,7 +284,12 @@ impl Recorder {
         let mut events = Vec::new();
         let mut mix = Vec::new();
 
-        // Sounds attached to animation frames.
+        // The pose this row shows, and the frame animation events fire on. The
+        // game logs a sound or effect that belongs to clip frame t in the row
+        // whose pose still shows t - 1 (SpinCapStart's frame 8 and 11 sounds
+        // were logged at shown frames 7 and 10; frame-0 sounds in the first
+        // row), which is the frame the controller holds after its step.
+        let shown = main_frame(&p.anim);
         let advance = self.cursor.advance(
             p.anim.name,
             p.anim.serial,
@@ -384,6 +310,9 @@ impl Recorder {
         };
         let mut started = Vec::new();
         for f in &fxs {
+            if matches!(f, Fx::Throw(_)) {
+                self.right_hand = !p.anim.name.contains("Left");
+            }
             for cue in fx_cues(*f, context, &mut self.boosts) {
                 match cue {
                     Cue::Play(name) => self.play(false, name, speed, &mut events, &mut mix),
@@ -415,7 +344,7 @@ impl Recorder {
         }
         // Effects: the original's by their table names, or the stand-ins'.
         let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
-            let (names, alive) = tracker.step(p, &fxs);
+            let (names, alive) = tracker.step(p, &fxs, p.anim.frame);
             events.extend(names.into_iter().map(|n| format!("effect:{n}")));
             alive.into_iter().collect()
         } else {
@@ -463,7 +392,7 @@ impl Recorder {
             layers.push(layer_cell(l.name, l.frame, l.rate, l.weight * (1. - kept)));
         }
         if self.overlay > 0. {
-            let frame = p.sub_anim.map_or(15., |s| s.frame).min(15.9);
+            let frame = p.sub_anim.map_or(15., |s| sub_frame(&s)).min(15.9);
             layers.push(layer_cell(upper, frame, 1., self.overlay));
         }
         let blend = if pose.layers.len() > 1 {
@@ -484,7 +413,7 @@ impl Recorder {
         // Clips that need the model's data (eye and hand parts) are not known here.
         let parts = p
             .sub_anim
-            .map(|s| format!("upper:{upper}@{}", num(s.frame)))
+            .map(|s| format!("upper:{upper}@{}", num(sub_frame(&s))))
             .unwrap_or_default();
 
         let v = p.units_per_frame();
@@ -502,21 +431,14 @@ impl Recorder {
         cells.num(p.facing.z);
         cells.int(p.grounded as i64);
         cells.text(nerve(p.mode, p.anim.name).name);
-        cells.text(if p.anim.name == "Move" {
-            pose.dominant()
-        } else {
-            p.anim.name
-        });
-        cells.num(shown_frame(
-            p.anim.frame,
-            p.anim.rate,
-            p.anim.name == "Move",
-        ));
+        // The run cycle is one slot, `Move`, whose clips are the blend layers.
+        cells.text(p.anim.name);
+        cells.num(shown);
         cells.num(p.anim.rate);
         cells.text(&blend);
         cells.text(&interp);
         cells.text(p.sub_anim.map_or("", |s| s.name));
-        cells.text(&p.sub_anim.map_or(String::new(), |s| num(s.frame)));
+        cells.text(&p.sub_anim.map_or(String::new(), |s| num(sub_frame(&s))));
         cells.num(info.camera_yaw_deg);
         cells.text(&events.join(";"));
         // Extended columns.
@@ -528,26 +450,29 @@ impl Recorder {
         }
         cells.num(speed);
         cells.text(&layers.join("|"));
-        cells.empty(); // anim_len needs the clip data
+        // Only the run cycle's length is known (its 60-frame phase).
+        if p.anim.name == "Move" {
+            cells.num(60.);
+        } else {
+            cells.empty();
+        }
         cells.int(looping(p.anim.name) as i64 | (p.anim.name == "Move") as i64);
         cells.text(&parts);
         cells.empty(); // bones need the skeleton
         let cap = p.cap.as_ref();
-        cells.text(cap.map_or("", cap_state));
+        cells.text(cap.map_or("", |c| cap_state(c.phase, c.kind)));
         for axis in 0..3 {
             cells.text(&cap.map_or(String::new(), |c| num(c.pos[axis] / UNIT)));
         }
-        cells.text(cap.map_or("", cap_anim));
+        cells.text(cap.map_or("", |c| cap_clip(c, self.right_hand)));
         for _ in 0..4 {
             cells.empty(); // camera position and pitch are the renderer's
         }
         cells.text(&live.into_iter().collect::<Vec<_>>().join("|"));
         cells.text(&mix.join("|"));
-        cells.text(&if p.grounded {
-            "0.000000/1.000000/0.000000".to_string()
-        } else {
-            String::new()
-        });
+        cells.text(&p.floor_normal().map_or(String::new(), |n| {
+            format!("{}/{}/{}", num(n.x), num(n.y), num(n.z))
+        }));
         cells.int(p.state_frames() as i64);
         cells.empty(); // sub_step: the rewrite keeps one counter per state
         cells.text(&format!(
@@ -563,28 +488,10 @@ impl Recorder {
             .map(|(name, value)| format!("{}={value}", name.trim_start_matches("pre_")))
             .collect();
         cells.text(&pending.join("|"));
-        let gating: Vec<String> = counters
-            .iter()
-            .filter(|(name, _)| !name.starts_with("pre_"))
-            .map(|(name, value)| format!("{name}={value}"))
-            .collect();
-        cells.text(&gating.join("|"));
-        cells.text(
-            &fxs.iter()
-                .map(|f| fx_name(*f))
-                .collect::<Vec<_>>()
-                .join("|"),
-        );
-        let mut contact = vec![format!("ground={}", p.grounded as i32)];
-        if p.wall != Vec3::ZERO {
-            contact.push(format!(
-                "wall={}/{}/{}",
-                num(p.wall.x),
-                num(p.wall.y),
-                num(p.wall.z)
-            ));
-        }
-        cells.text(&contact.join("|"));
+        cells.text(&counters_cell(p));
+        let names: Vec<String> = fxs.iter().map(|f| fx_name(*f)).collect();
+        cells.text(&triggers_cell(&names));
+        cells.text(&collision_cell(p));
         for _ in 0..5 {
             cells.empty(); // random, model, face, cam_mode, cam_fov
         }
@@ -592,6 +499,11 @@ impl Recorder {
     }
 }
 
+/// The frame a partial (upper-body) clip shows; it advances one frame per step
+/// like the main clip, so the same step back applies.
+fn sub_frame(sub: &Anim) -> f32 {
+    (sub.frame - sub.rate).max(0.)
+}
 fn layer_cell(name: &str, frame: f32, rate: f32, weight: f32) -> String {
     format!("{name}@{}*{}={}", num(frame), num(rate), num(weight))
 }
@@ -606,21 +518,6 @@ fn buttons_cell(held: &[&str], pressed: &[&str]) -> String {
         })
         .collect::<Vec<_>>()
         .join("+")
-}
-/// A thrown cap's state, in the original cap actor's terms (guesses).
-fn cap_state(cap: &Cap) -> &'static str {
-    match cap.phase {
-        CapPhase::Out => "Fly",
-        CapPhase::Stay => "Stay",
-        CapPhase::Return => "Return",
-    }
-}
-fn cap_anim(cap: &Cap) -> &'static str {
-    match cap.kind {
-        Throw::Spin => "FlyingWaitSpiral",
-        Throw::Down => "FlyingWaitRolling",
-        _ => "FlyingWait",
-    }
 }
 fn fx_name(f: Fx) -> String {
     format!("{f:?}")
@@ -709,34 +606,28 @@ impl TraceFile {
         let mode = self
             .cell(row, "state")
             .and_then(|s| state_from_nerve(s, anim_name, speed));
-        let moving_cycle = ["Walk", "Run", "Dash", "DashFast"].contains(&anim_name)
+        let rate = self.number(row, "anim_rate").unwrap_or(1.);
+        let held = held_frame(n("anim_frame"), rate);
+        let moving_cycle = ["Move", "Walk", "Run", "Dash", "DashFast"].contains(&anim_name)
             && matches!(mode, Some(Move::Walk | Move::Run));
-        let anim = if moving_cycle {
-            // The cycle phase runs over 60 frames whatever the clip's length.
+        let anim = if anim_name == "Move" && moving_cycle {
+            // The game's `Move` slot is the 60-frame cycle phase itself.
+            Some(("Move", held.rem_euclid(60.)))
+        } else if moving_cycle {
+            // A clip of the cycle: the phase runs over 60 frames whatever the length.
             self.number(row, "anim_len")
                 .filter(|len| *len > 0.)
-                .map(|len| {
-                    let rate = self.number(row, "anim_rate").unwrap_or(1.);
-                    let held = held_frame(n("anim_frame"), rate);
-                    ("Move", (held / len * 60.).rem_euclid(60.))
-                })
+                .map(|len| ("Move", (held / len * 60.).rem_euclid(60.)))
         } else {
-            let rate = self.number(row, "anim_rate").unwrap_or(1.);
-            Some((intern(anim_name), held_frame(n("anim_frame"), rate)))
+            Some((intern(anim_name), held))
         };
-        let mut counters = Vec::new();
-        for column in ["counters", "pre_input"] {
-            for item in self.cell(row, column).unwrap_or("").split('|') {
-                if let Some((name, value)) = item.split_once('=')
-                    && let Ok(value) = value.parse::<f64>()
-                {
-                    let name = if column == "pre_input" {
-                        format!("pre_{name}")
-                    } else {
-                        name.to_string()
-                    };
-                    counters.push((name, value as i64));
-                }
+        // The game's counters under their names, or the rewrite's own.
+        let mut counters = counters_from_game(self.cell(row, "counters").unwrap_or(""));
+        for item in self.cell(row, "pre_input").unwrap_or("").split('|') {
+            if let Some((name, value)) = item.split_once('=')
+                && let Ok(value) = value.parse::<f64>()
+            {
+                counters.push((format!("pre_{name}"), value as i64));
             }
         }
         Snapshot {

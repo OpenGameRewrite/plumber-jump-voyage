@@ -347,7 +347,7 @@ fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
 /// returns the driver of a rendered replay when `--shots` asks for pictures.
 pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> {
     if args.iter().any(|a| a == "--states") {
-        print!("{}", crate::trace::state_table());
+        print!("{}", crate::game_names::state_table());
         return Ok(None);
     }
     let script_path = flag(args, "--replay")?.ok_or(USAGE)?;

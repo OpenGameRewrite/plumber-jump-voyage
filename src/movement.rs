@@ -20,6 +20,10 @@ const SQUAT_HEIGHT: f32 = 0.9;
 pub const SPAWN: Vec3 = Vec3::new(0.0, 0.0, 5.0);
 /// Full-tilt running speed in metres per second.
 pub const RUN: f32 = t::NORMAL_MAX * UNIT * FPS;
+/// Frames after a landing in which the next jump continues the combo, and the
+/// same window for the long jump (the trace's `cjump` and `clong` counters).
+pub const CONTINUOUS_JUMP_FRAMES: u32 = t::CONTINUOUS_JUMP_TIMER;
+pub const CONTINUOUS_LONG_JUMP_FRAMES: u32 = t::CONTINUOUS_LONG_JUMP_TIMER;
 
 /// Tuning in original units per frame, following the original player constants.
 mod t {
@@ -626,6 +630,9 @@ pub struct Player {
     /// Fire run frames since the stick was released, capped at the brake time.
     swim_rise: u32,
     step_phase: f32,
+    /// Fall speed the ground stopped in the latest step (zero when it did not
+    /// land), kept for the trace: the original still reports it that frame.
+    landing_speed: f32,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -693,6 +700,7 @@ impl Default for Player {
             ledge: Vec3::ZERO,
             swim_rise: 0,
             step_phase: 0.,
+            landing_speed: 0.,
         }
     }
 }
@@ -872,13 +880,25 @@ impl Player {
     }
     /// Velocity in original units per frame, after the last step. On the
     /// ground the controller cancels the downward push inside the step; the
-    /// original keeps reporting it, so it is shown as the gravity pull.
+    /// original keeps reporting it, so it is shown as the gravity pull. In the
+    /// step that lands, it still reports the fall speed that moved the player.
     pub fn units_per_frame(&self) -> Vec3 {
         if self.grounded && self.v.y == 0. {
-            self.v.with_y(-t::GRAVITY)
+            let down = if self.landing_speed < 0. {
+                self.landing_speed
+            } else {
+                -t::GRAVITY
+            };
+            self.v.with_y(down)
         } else {
             self.v
         }
+    }
+    /// The normal of the ground under the feet, when standing on it.
+    pub fn floor_normal(&self) -> Option<Vec3> {
+        // A ramp's height rises along +x by `slope` per metre.
+        self.grounded
+            .then(|| Vec3::new(-self.slope, 1., 0.).normalize())
     }
     /// Frames spent in the current state.
     pub fn state_frames(&self) -> u32 {
@@ -1039,6 +1059,7 @@ impl Player {
             o.jump = false;
         }
         self.read_input(&o);
+        self.landing_speed = 0.;
         let was_grounded = self.grounded;
         let wet = scene.wet(self.pos + Vec3::Y * 0.8);
         if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
@@ -2904,6 +2925,7 @@ impl Player {
         let old = self.pos;
         let was_grounded = self.grounded;
         self.grounded = false;
+        self.landing_speed = 0.;
         self.wall = Vec3::ZERO;
         let motion = self.v * UNIT;
         // Sub-steps keep each move shorter than the collider radius.
@@ -2931,6 +2953,7 @@ impl Player {
                             && self.pos.y + height > lo.y
                         {
                             self.pos.y = top;
+                            self.landing_speed = self.landing_speed.min(self.v.y);
                             self.v.y = 0.;
                             self.grounded = true;
                             self.slope = if (self.pos.x - b.center.x).abs() < b.half.x {
