@@ -101,6 +101,10 @@ impl Script {
                     script.start_yaw_deg = yaw;
                     has_start = true;
                 }
+                // Header lines for the real game's probe: the stage it loads, the
+                // outfit it dresses Mario in and whether its HUD shows. The
+                // rewrite replays on its own flat floor in its own outfit.
+                "stage" | "outfit" | "hud" => {}
                 "camera" => {
                     let n = numbers(&words[1..])?;
                     let [yaw] = n[..] else {
@@ -166,6 +170,48 @@ fn parse_buttons(text: &str) -> Result<Vec<&'static str>, String> {
 pub struct CameraTrack {
     fixed: f32,
     per_frame: Vec<f32>,
+    views: Vec<View>,
+}
+/// The real game's camera for one frame, in the rewrite's world (metres,
+/// start at the origin; the game's axes and Bevy's are both right-handed
+/// with +Y up, so only the unit changes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub position: Vec3,
+    pub forward: Vec3,
+    /// Vertical field of view, degrees.
+    pub fov_deg: f32,
+}
+impl View {
+    /// Frame `row` of a game trace: `cam_px/py/pz` (cm, relative to the start)
+    /// and the view direction the probe derived from the game's own camera
+    /// (`cam_real_yaw/pitch`, degrees; pitch below zero looks down), falling
+    /// back to the locked `cam_yaw` and a level view. `None` when the row has
+    /// no camera position.
+    fn read(game: &TraceFile, row: usize) -> Option<Self> {
+        let position = Vec3::new(
+            game.number(row, "cam_px")?,
+            game.number(row, "cam_py")?,
+            game.number(row, "cam_pz")?,
+        ) / 100.;
+        let yaw = game
+            .number(row, "cam_real_yaw")
+            .or_else(|| game.number(row, "cam_yaw"))?
+            .to_radians();
+        let pitch = game
+            .number(row, "cam_real_pitch")
+            .unwrap_or(0.)
+            .to_radians();
+        Some(Self {
+            position,
+            forward: Vec3::new(
+                yaw.sin() * pitch.cos(),
+                pitch.sin(),
+                yaw.cos() * pitch.cos(),
+            ),
+            fov_deg: game.number(row, "cam_fov").unwrap_or(40.),
+        })
+    }
 }
 impl CameraTrack {
     pub fn new(script: &Script, game: Option<&TraceFile>) -> Result<Self, String> {
@@ -174,7 +220,26 @@ impl CameraTrack {
             return Ok(Self {
                 fixed,
                 per_frame: Vec::new(),
+                views: Vec::new(),
             });
+        };
+        // Like the yaw: rows without a camera keep the last one, earlier rows
+        // take the first. A trace without camera columns gives no views.
+        let recorded: Vec<Option<View>> = (0..game.rows.len())
+            .map(|row| View::read(game, row))
+            .collect();
+        let views = match recorded.iter().flatten().next().copied() {
+            None => Vec::new(),
+            Some(first) => {
+                let mut last = first;
+                recorded
+                    .into_iter()
+                    .map(|view| {
+                        last = view.unwrap_or(last);
+                        last
+                    })
+                    .collect()
+            }
         };
         // Rows without a value keep the last one; rows before the first take it.
         let recorded: Vec<Option<f32>> = (0..game.rows.len())
@@ -194,7 +259,16 @@ impl CameraTrack {
                 last
             })
             .collect();
-        Ok(Self { fixed, per_frame })
+        Ok(Self {
+            fixed,
+            per_frame,
+            views,
+        })
+    }
+    /// The game's camera at `frame` (the last one past the end of the trace),
+    /// when `--camera` supplied a trace that records it.
+    pub fn view(&self, frame: usize) -> Option<View> {
+        self.views.get(frame).or(self.views.last()).copied()
     }
     pub fn yaw_deg(&self, frame: usize) -> f32 {
         self.per_frame
