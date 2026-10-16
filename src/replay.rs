@@ -312,12 +312,34 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     }
     let mut rows = Vec::with_capacity(script.frame_count());
     let mut previous: Vec<&str> = Vec::new();
-    for (frame, span) in script.frames().enumerate() {
+    let spans: Vec<&Span> = script.frames().collect();
+    for (frame, span) in spans.iter().copied().enumerate() {
         if let Some(game) = options.lockstep
             && frame > 0
             && frame - 1 < game.rows.len()
         {
-            player.inject(&game.snapshot(frame - 1));
+            let last = frame - 1;
+            let just_chosen = game
+                .number(last, "sub_step")
+                .or(game.number(last, "state_step"))
+                == Some(0.);
+            if !just_chosen {
+                player.inject(&game.snapshot(last));
+            } else if last > 0 {
+                // A row at step 0 shows a state that was only chosen: its first
+                // step, with the clip, the impulse and the sounds, is still to
+                // come, and a snapshot cannot hold that. Choose it again from
+                // the row before, with that frame's input.
+                player.inject(&game.snapshot(last - 1));
+                let before: &[&str] = if last > 1 {
+                    &spans[last - 1].buttons
+                } else {
+                    &[]
+                };
+                let (orders, _) = orders_for(spans[last], before, camera.yaw_deg(last), &bindings);
+                player.step(&orders, &course);
+                player.events.clear();
+            }
         }
         let (orders, mut info) = orders_for(span, &previous, camera.yaw_deg(frame), &bindings);
         player.step(&orders, &course);

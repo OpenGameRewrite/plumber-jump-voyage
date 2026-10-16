@@ -25,7 +25,10 @@ fn names_round_trip() {
     assert!(state_table().contains("Wait/Wait\n"));
     assert!(state_table().contains("DamageFire/Jump2nd ?"));
     // A name without a known sub-state still finds the family.
-    assert_eq!(state_from_nerve("Squat", "Wait", 0.), Some(Move::Crouch));
+    assert_eq!(
+        state_from_nerve("Squat", "Wait", 0.),
+        Some(Move::SquatBrake)
+    );
     assert_eq!(state_from_nerve("Unknown/Nerve", "Wait", 0.), None);
 }
 

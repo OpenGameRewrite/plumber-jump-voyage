@@ -233,9 +233,9 @@ def main():
            f"Generated {date.today().isoformat()} by `tools/fidelity-report.py` from `{os.path.basename(runs)}/*/game.csv`; "
            "each scenario's `rewrite.csv`, `diff.md` and `diff.json` sit beside its game trace. "
            "Columns a side never writes are not comparable and are neither failures nor passes "
-           "(see the scenario's `diff.md`). Known order difference: the game switches a state one "
-           "frame before the state acts (a landing: two), the rewrite does both in one step, so "
-           "every transition starts one frame early here (docs/fidelity-harness.md, Sample point).\n",
+           "(see the scenario's `diff.md`). Both sides change state the way the game's nerves do: "
+           "a state is chosen in one frame and runs its first step in the next "
+           "(docs/fidelity-harness.md, Sample point).\n",
            "| scenario | environment | verdict | failing columns | first divergence |",
            "|---|---|---|---|---|"]
     for name, env_text, verdict, failing, earliest in table:

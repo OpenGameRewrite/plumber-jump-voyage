@@ -21,6 +21,7 @@ mod input;
 mod legacy_assets;
 mod local_assets;
 mod movement;
+mod nerve;
 mod replay;
 mod scripted_input;
 mod shots;

@@ -190,7 +190,7 @@ fn play(
     let advance = t.cursor.advance(
         p.anim.name,
         p.anim.serial,
-        p.anim.frame,
+        p.anim.held(),
         crate::local_assets::looping(p.anim.name),
     );
     if advance.restarted {

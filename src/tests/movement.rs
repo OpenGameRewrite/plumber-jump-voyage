@@ -23,6 +23,18 @@ fn frames(p: &mut Player, o: Orders, scene: &Course, n: usize) {
         p.step(&o, scene);
     }
 }
+/// The state a step chose and the clip it starts with. A state change is decided
+/// in one step and starts in the next, so the clip still playing is the old one.
+fn chosen(p: &Player) -> (Move, &'static str) {
+    (p.mode, p.phase_clip())
+}
+/// Step until the ground is reached, then once more: the step after the contact
+/// is the one that decides what the landing is.
+fn until_landed(p: &mut Player, o: Orders, scene: &Course) -> f32 {
+    let high = until_ground(p, o.clone(), scene);
+    p.step(&o, scene);
+    high
+}
 fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
     let mut high = p.pos.y;
     for _ in 0..600 {
@@ -37,6 +49,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 
 pub(super) fn run() {
     original_simulation_trace();
+    state_changes_follow_the_nerve_machine();
     run_speed();
     variable_jump_height();
     chained_jumps();
@@ -57,6 +70,75 @@ pub(super) fn run() {
     burn_and_soot();
     low_ceiling();
     wall_collision_and_stress();
+}
+
+#[cfg_attr(test, test)]
+fn state_changes_follow_the_nerve_machine() {
+    let floor = floor();
+    let idle = Orders::default();
+    // A jump pressed while standing only chooses the jump: the row reads the
+    // new state at step 0 with the old clip and the old motion.
+    let mut p = Player::default();
+    frames(&mut p, idle.clone(), &floor, 5);
+    let before = (p.state_frames(), p.anim.name);
+    assert_eq!(before.0, 5);
+    p.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!(
+        (p.mode, p.state_frames(), p.anim.name),
+        (Move::Jump, 0, "Wait")
+    );
+    assert!(p.grounded && p.pos.y == 0. && p.vel.y <= 0.);
+    // The first step starts the clip at frame 0 and takes off.
+    p.step(&idle, &floor);
+    assert_eq!(
+        (p.anim.name, p.anim.frame, p.state_frames()),
+        ("Jump", 0., 1)
+    );
+    assert!(!p.grounded && p.vel.y > 0. && p.pos.y > 0.);
+    // Landing: the contact is flagged, then the landing state is chosen, then
+    // its clip starts.
+    until_ground(&mut p, idle.clone(), &floor);
+    assert!(p.grounded && p.mode == Move::Jump, "contact only");
+    p.step(&idle, &floor);
+    assert_eq!(
+        (p.mode, p.state_frames(), p.phase_clip(), p.anim.name),
+        (Move::Idle, 0, "Land", "Jump"),
+        "the landing state is chosen a step after the contact"
+    );
+    p.step(&idle, &floor);
+    assert_eq!((p.anim.name, p.anim.frame), ("Land", 0.));
+    // Running from a standstill: chosen first, moving from its first step.
+    let mut p = Player::default();
+    p.step(&fwd(default()), &floor);
+    assert_eq!(
+        (p.mode, p.state_frames(), p.flat_speed()),
+        (Move::Walk, 0, 0.)
+    );
+    p.step(&fwd(default()), &floor);
+    assert!(p.flat_speed() > 0. && p.state_frames() == 1);
+    // Crouching passes through the squat nerve's braking sub-state, which
+    // keeps the nerve's step count when it settles into the crouch.
+    let mut p = Player::default();
+    let crouch = Orders {
+        crouch: true,
+        ..default()
+    };
+    p.step(&crouch, &floor);
+    assert_eq!((p.mode, p.state_frames()), (Move::SquatBrake, 0));
+    p.step(&crouch, &floor);
+    assert_eq!(
+        (p.mode, p.state_frames(), p.anim.name),
+        (Move::Crouch, 1, "SquatStart")
+    );
+    p.step(&crouch, &floor);
+    assert_eq!((p.state_frames(), p.anim.name), (2, "SquatWait"));
 }
 
 #[cfg_attr(test, test)]
@@ -83,7 +165,7 @@ fn variable_jump_height() {
         },
         &floor,
     );
-    assert_eq!((held.mode, held.anim.name), (Move::Jump, "Jump"));
+    assert_eq!(chosen(&held), (Move::Jump, "Jump"));
     let high = until_ground(
         &mut held,
         Orders {
@@ -123,10 +205,10 @@ fn chained_jumps() {
             }),
             &floor,
         );
-        let name = if p.anim.name == "JumpReverse" {
+        let name = if p.phase_clip() == "JumpReverse" {
             "Jump"
         } else {
-            p.anim.name
+            p.phase_clip()
         };
         assert_eq!((p.mode, name), (mode, anim));
         until_ground(
@@ -153,7 +235,7 @@ fn brake_and_sideflip() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::Skid, "Brake"));
+    assert_eq!(chosen(&p), (Move::Skid, "Brake"));
     p.step(
         &Orders {
             direction: Vec2::Y,
@@ -162,7 +244,15 @@ fn brake_and_sideflip() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::Sideflip, "JumpTurn"));
+    assert_eq!(chosen(&p), (Move::Sideflip, "JumpTurn"));
+    // The flip itself is the state's first step.
+    p.step(
+        &Orders {
+            direction: Vec2::Y,
+            ..default()
+        },
+        &floor,
+    );
     assert!(p.vel.z > 0.);
 }
 
@@ -188,7 +278,7 @@ fn crouch_jumps() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::Backflip, "JumpBack"));
+    assert_eq!(chosen(&p), (Move::Backflip, "JumpBack"));
     p = Player::default();
     frames(&mut p, fwd(default()), &floor, 45);
     p.step(
@@ -206,7 +296,7 @@ fn crouch_jumps() {
         }),
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::LongJump, "JumpBroad"));
+    assert_eq!(chosen(&p), (Move::LongJump, "JumpBroad"));
     assert!(p.move_speed >= 14.);
 }
 
@@ -226,11 +316,14 @@ fn ground_pound() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::GroundPound, "HipDropStart"));
+    assert_eq!(chosen(&p), (Move::GroundPound, "HipDropStart"));
     frames(&mut p, Orders::default(), &floor, 10);
     assert!((p.pos.y - 6.).abs() < 0.001, "pound hangs first");
-    until_ground(&mut p, Orders::default(), &floor);
-    assert_eq!((p.mode, p.anim.name), (Move::PoundLand, "HipDropLand"));
+    until_landed(&mut p, Orders::default(), &floor);
+    assert_eq!(chosen(&p), (Move::PoundLand, "HipDropLand"));
+    // The impact freezes the game for a moment on the state's first step.
+    p.step(&Orders::default(), &floor);
+    assert!(p.hitstop > 0.);
     p.hitstop = 0.;
     frames(&mut p, Orders::default(), &floor, 6);
     p.step(
@@ -240,7 +333,7 @@ fn ground_pound() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::PoundJump, "JumpHipDrop"));
+    assert_eq!(chosen(&p), (Move::PoundJump, "JumpHipDrop"));
 }
 
 #[cfg_attr(test, test)]
@@ -267,15 +360,18 @@ fn dive_from_pound() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::Dive, "HeadSlidingStart"));
+    assert_eq!(chosen(&p), (Move::Dive, "HeadSlidingStart"));
+    // The dive's push is the state's first step.
+    p.step(&Orders::default(), &floor);
     assert!(p.vel.x > 10. && p.vel.y > 0.);
-    until_ground(&mut p, Orders::default(), &floor);
-    assert_eq!((p.mode, p.anim.name), (Move::Slide, "LandRolling"));
+    until_landed(&mut p, Orders::default(), &floor);
+    assert_eq!(chosen(&p), (Move::Slide, "LandRolling"));
+    // The state's first step starts the clip; it stands up once the clip is over.
     frames(
         &mut p,
         Orders::default(),
         &floor,
-        clip::LAND_ROLLING as usize,
+        clip::LAND_ROLLING as usize + 1,
     );
     assert_eq!(p.mode, Move::Idle, "the landing roll stands up");
 }
@@ -309,7 +405,7 @@ fn dive_roll_landing() {
         },
         &floor,
     );
-    until_ground(&mut p, held.clone(), &floor);
+    until_landed(&mut p, held.clone(), &floor);
     assert_eq!(p.mode, Move::Roll);
     let mut names = std::collections::BTreeSet::new();
     let mut rolled = 0;
@@ -350,7 +446,7 @@ fn roll_timing_and_boost() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::Roll, "RollingStart"));
+    assert_eq!(chosen(&p), (Move::Roll, "RollingStart"));
     assert!(p.cap.is_none(), "rolling does not throw the cap");
     let mut ended = None;
     for i in 0..900 {
@@ -426,7 +522,7 @@ fn cap_flight() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::Throw, "SpinCapStart"));
+    assert_eq!(chosen(&p), (Move::Throw, "SpinCapStart"));
     frames(
         &mut p,
         Orders {
@@ -478,11 +574,11 @@ fn spin_throw() {
     );
     assert_eq!(p.mode, Move::Throw);
     assert!(
-        p.anim.name.starts_with("SpinCapStartDouble"),
+        p.phase_clip().starts_with("SpinCapStartDouble"),
         "{}",
-        p.anim.name
+        p.phase_clip()
     );
-    let length = clip::throw(p.anim.name) as usize;
+    let length = clip::throw(p.phase_clip()) as usize;
     frames(
         &mut p,
         Orders {
@@ -544,7 +640,7 @@ fn cap_bounce() {
         },
         &floor,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::CapBounce, "JumpCapLeapFrog"));
+    assert_eq!(chosen(&p), (Move::CapBounce, "JumpCapLeapFrog"));
 }
 
 #[cfg_attr(test, test)]
@@ -577,7 +673,9 @@ fn wall_slide_and_ledge() {
         },
         &wall,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::WallJump, "WallJump"));
+    assert_eq!(chosen(&p), (Move::WallJump, "WallJump"));
+    // The kick off the wall is the state's first step.
+    p.step(&Orders::default(), &wall);
     assert!(p.vel.z > 0.);
     // Ledge grab and climb.
     p = Player::default();
@@ -586,7 +684,7 @@ fn wall_slide_and_ledge() {
     p.mode = Move::Fall;
     p.v = Vec3::new(0., -2., -8.);
     p.step(&fwd(default()), &wall);
-    assert_eq!((p.mode, p.anim.name), (Move::Ledge, "WallCatchStart"));
+    assert_eq!(chosen(&p), (Move::Ledge, "WallCatchStart"));
     assert!(
         (p.pos.y - 6.).abs() < 1e-4 && (p.pos.z + 1.78).abs() < 0.01,
         "the hang sits on the edge: {:?}",
@@ -702,7 +800,7 @@ fn slope_slide() {
         },
         &ramp,
     );
-    assert_eq!((p.mode, p.anim.name), (Move::SlopeSlide, "Slide"));
+    assert_eq!(chosen(&p), (Move::SlopeSlide, "Slide"));
     let start_x = p.pos.x;
     frames(
         &mut p,
@@ -732,9 +830,19 @@ fn slope_slide() {
     }
     assert_eq!(
         p.mode,
-        Move::Crouch,
-        "the slide ends once the ground is flat"
+        Move::SquatBrake,
+        "the slide ends once the ground is flat, in a crouch's braking state"
     );
+    frames(
+        &mut p,
+        Orders {
+            crouch: true,
+            ..default()
+        },
+        &ramp,
+        3,
+    );
+    assert_eq!(p.mode, Move::Crouch, "which settles into the crouch");
 }
 
 #[cfg_attr(test, test)]
@@ -750,7 +858,7 @@ fn burn_and_soot() {
         ..default()
     };
     p.step(&Orders::default(), &lava);
-    assert_eq!((p.mode, p.anim.name), (Move::BurnJump, "FireRunStart"));
+    assert_eq!(chosen(&p), (Move::BurnJump, "FireRunStart"));
     assert_eq!(p.move_speed, 0., "no stick: the leap goes straight up");
     frames(&mut p, Orders::default(), &lava, 20);
     assert!(
@@ -802,10 +910,10 @@ fn burn_and_soot() {
         high
     };
     until_change(&mut p, &push, &cool);
-    assert_eq!((p.mode, p.anim.name), (Move::BurnBounce, "FireRunStart"));
+    assert_eq!(chosen(&p), (Move::BurnBounce, "FireRunStart"));
     let peak = until_change(&mut p, &push, &cool);
     assert!(peak > 2. && peak < 2.5, "the bounce: {peak}");
-    assert_eq!((p.mode, p.anim.name), (Move::FireRun, "FireRun"));
+    assert_eq!(chosen(&p), (Move::FireRun, "FireRun"));
     p.step(&push, &cool);
     assert!((p.move_speed - t::DAMAGE_FIRE_RUN_SPEED).abs() < 0.01);
     frames(&mut p, Orders::default(), &cool, 20);
@@ -1042,8 +1150,8 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xe23d7d3600724549,
-        "simulation differs from revision 6314da8"
+        hash, 0x39a36266cec11779,
+        "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]
     assert_ne!(hash, 0);

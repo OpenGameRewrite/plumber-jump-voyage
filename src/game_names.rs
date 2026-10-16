@@ -39,6 +39,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         // Walking, running, braking and turning all run inside the same
         // sub-state; the clip tells them apart (`Brake`, `TurnPoint`).
         Move::Walk | Move::Run | Move::Skid | Move::Turn => known("Run/Run3D"),
+        Move::SquatBrake => known("Squat/Brake"),
         Move::Crouch => known("Squat/Wait"),
         Move::Crawl => known("Squat/Walk"),
         Move::Fall => guessed("Fall/Fall"),
@@ -77,6 +78,12 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::Throw if anim.contains("Air") => known("SpinCap/SpinAir"),
         Move::Throw => known("SpinCap/SpinGround"),
     }
+}
+/// The actor nerve a state belongs to (`Wait`, `Run`, `Squat`): the part of
+/// its name before the sub-state. The step counter restarts when it changes.
+pub fn actor(mode: Move, anim: &str) -> &'static str {
+    let name = nerve(mode, anim).name;
+    name.split('/').next().unwrap_or(name)
 }
 /// Standing: the landing and stand-up clips are sub-states of their own.
 fn idle(anim: &str) -> Nerve {

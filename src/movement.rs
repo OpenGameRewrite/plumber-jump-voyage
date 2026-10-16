@@ -6,6 +6,7 @@
 //! decompilation documents follow it; the rest are inferred from their tuning
 //! names and observed behaviour. No original code is reproduced here.
 use crate::input::Orders;
+use crate::nerve::Nerve;
 use bevy::prelude::*;
 
 /// Metres per original distance unit.
@@ -255,6 +256,8 @@ pub mod clip {
         }
     }
     pub const LAND: u32 = 26;
+    pub const LAND_JUMP3: u32 = 70;
+    pub const SQUAT_END: u32 = 13;
     pub const TURN: u32 = 12;
     pub const WALL_CATCH_START: u32 = 55;
     pub const WALL_CATCH_END: u32 = 46;
@@ -273,6 +276,9 @@ pub enum Move {
     Run,
     Skid,
     Turn,
+    /// The squat nerve's braking sub-state: the crouch that slides on its
+    /// momentum. Only here can a long jump start.
+    SquatBrake,
     Crouch,
     Crawl,
     Fall,
@@ -310,12 +316,13 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 39] = [
+    pub const ALL: [Move; 40] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
         Self::Skid,
         Self::Turn,
+        Self::SquatBrake,
         Self::Crouch,
         Self::Crawl,
         Self::Fall,
@@ -358,7 +365,7 @@ impl Move {
             Self::Run => "Run",
             Self::Skid => "Skid",
             Self::Turn => "Turn",
-            Self::Crouch => "Crouch",
+            Self::SquatBrake | Self::Crouch => "Crouch",
             Self::Crawl => "Crawl",
             Self::Fall => "Fall",
             Self::Jump => "Jump",
@@ -391,6 +398,20 @@ impl Move {
             Self::CatchJump => "Catch jump",
             Self::Throw => "Cap throw",
         }
+    }
+    /// A state that ends by reaching the ground: the contact is flagged in one
+    /// step and the state decides what it means in the next.
+    fn in_flight(self) -> bool {
+        self.airborne_jump()
+            || matches!(
+                self,
+                Self::LongJump
+                    | Self::SpinDrop
+                    | Self::GroundPound
+                    | Self::Dive
+                    | Self::BurnJump
+                    | Self::BurnBounce
+            )
     }
     fn airborne_jump(self) -> bool {
         matches!(
@@ -479,6 +500,14 @@ pub struct Anim {
     /// Playback rate in original frames per frame.
     pub rate: f32,
 }
+impl Anim {
+    /// Where the clip will be after the next advance. Animation-frame triggers
+    /// (sounds, effects) fire on this frame: the game logs a trigger on clip
+    /// frame t in the row whose pose still shows t - 1.
+    pub fn held(&self) -> f32 {
+        self.frame + self.rate
+    }
+}
 /// Soot left by a burn, as the original's stain control: it builds up while
 /// burning, stays for five seconds, then fades over five more. Water washes
 /// it off quickly, and keeps doing so while Mario drips afterwards.
@@ -559,6 +588,8 @@ impl Default for FireControl {
 
 #[derive(Component, Debug)]
 pub struct Player {
+    /// State changes decided last step, waiting for their first step.
+    nerve: Nerve,
     fire: FireControl,
     climbing: ClimbControl,
     rolling: RollControl,
@@ -636,7 +667,12 @@ pub struct Player {
 }
 impl Default for Player {
     fn default() -> Self {
+        // A new player starts the standing state like any other: its clip
+        // begins on the first step.
+        let mut nerve = Nerve::default();
+        nerve.queue("Wait", |_| {});
         Self {
+            nerve,
             fire: FireControl::default(),
             climbing: ClimbControl::default(),
             rolling: RollControl::default(),
@@ -900,9 +936,10 @@ impl Player {
         self.grounded
             .then(|| Vec3::new(-self.slope, 1., 0.).normalize())
     }
-    /// Frames spent in the current state.
+    /// Steps the actor nerve has executed, as the game's `state_step` counts
+    /// them: 0 in the frame a nerve is chosen, 1 after its first step.
     pub fn state_frames(&self) -> u32 {
-        self.frame
+        self.nerve.step
     }
     /// The counters that gate moves, by name (frames left or elapsed, uses).
     pub fn counters(&self) -> Vec<(&'static str, i64)> {
@@ -951,6 +988,7 @@ impl Player {
     /// (gravity of the jump in progress, how far a jump may still extend,
     /// air-speed cap) is set to what entering that state would have given.
     pub fn inject(&mut self, s: &Snapshot) {
+        self.nerve.clear();
         self.pos = s.pos;
         self.prev = s.pos;
         self.v = s.v;
@@ -976,13 +1014,23 @@ impl Player {
         }
         if let Some(frames) = s.state_frames {
             self.frame = frames;
+            self.nerve.step = frames;
         }
+        // On the ground in a state that flies: the contact row, whose landing
+        // the next step decides.
+        self.nerve.touchdown = self.grounded && self.mode.in_flight();
+        if self.nerve.touchdown {
+            // The row reports the fall speed that reached the ground; the
+            // ground has already stopped it.
+            self.v.y = 0.;
+        }
+        self.nerve.actor = crate::game_names::actor(self.mode, self.anim.name);
         self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
         if let Some((name, frame)) = s.anim {
             if self.anim.name != name {
-                self.play(name);
+                self.start_clip(name);
             }
             self.anim.frame = frame;
             if name == "Move" {
@@ -1005,28 +1053,136 @@ impl Player {
         self.peak = checkpoint.y;
         self.checkpoint = checkpoint;
     }
+    /// Move to another state of the same actor nerve and act in it right
+    /// away: the run's walk, skid and turn are one nerve in the game, so the
+    /// step counter keeps going and the new state's physics start this frame.
     fn set(&mut self, mode: Move) {
         if self.mode != mode {
             self.mode = mode;
             self.frame = 0;
         }
     }
-    fn play(&mut self, name: &'static str) {
+    /// Choose the next state, as a nerve does with `setNerve`: this frame's row
+    /// already reads the new state at step 0, while the clip and everything the
+    /// state does (`work`) wait for its first step, the next frame.
+    fn change(
+        &mut self,
+        mode: Move,
+        clip: &'static str,
+        work: impl FnOnce(&mut Player) + Send + Sync + 'static,
+    ) {
+        self.mode = mode;
+        self.frame = 0;
+        self.nerve.choose(true, clip, work);
+    }
+    /// The next sub-state of the running nerve, started on the next step like a
+    /// new nerve but without restarting the nerve's own step counter.
+    fn defer(
+        &mut self,
+        mode: Move,
+        clip: &'static str,
+        work: impl FnOnce(&mut Player) + Send + Sync + 'static,
+    ) {
+        self.mode = mode;
+        self.frame = 0;
+        self.nerve.choose(false, clip, work);
+    }
+    /// A new sub-state of the running nerve (the run's skid and turn): the
+    /// nerve keeps its step count and keeps acting this frame, but the
+    /// sub-state's clip and first-step work come next frame.
+    fn switch(
+        &mut self,
+        mode: Move,
+        clip: &'static str,
+        work: impl FnOnce(&mut Player) + Send + Sync + 'static,
+    ) {
+        self.mode = mode;
+        self.frame = 0;
+        self.nerve.queue(clip, work);
+    }
+    /// A state with nothing to do on its first step but start its clip.
+    fn go(&mut self, mode: Move, clip: &'static str) {
+        self.change(mode, clip, |_| {});
+    }
+    /// Start a clip now: the first step of a state, or an injected snapshot.
+    fn start_clip(&mut self, name: &'static str) {
         self.anim = Anim {
             name,
             serial: self.anim.serial.wrapping_add(1),
             frame: 0.,
             rate: 1.,
         };
+        if name == "Move" {
+            self.step_phase = 0.;
+        }
     }
-    /// Start a clip unless it is already the current one.
+    /// A state asks for another clip (its sub-phase began): it starts on the
+    /// next step, like the clip a nerve's first step starts.
+    fn play(&mut self, name: &'static str) {
+        self.nerve.queue_clip(name);
+    }
+    /// The clip the state plays or is about to play.
+    fn clip(&self) -> &'static str {
+        self.nerve.pending_clip().unwrap_or(self.anim.name)
+    }
+    /// The clip the trace names the state by: the state's own phase, which
+    /// leads the visible clip by the frame the clip waits.
+    pub fn phase_clip(&self) -> &'static str {
+        self.clip()
+    }
+    /// Ask for a clip unless the state is already playing or about to play it.
     fn keep(&mut self, name: &'static str) {
-        if self.anim.name != name {
+        if self.clip() != name {
             self.play(name);
         }
     }
+    /// The clip has played to its last frame (`isAnimEnd`): its frame count is
+    /// reached, which the row shows one frame before the state reacts.
     fn anim_done(&self, frames: u32) -> bool {
-        self.anim.frame >= frames as f32 - 1.
+        self.anim.frame >= frames as f32
+    }
+    /// A standing state is still playing a clip the idle loop waits for: a
+    /// landing or the stand-up. Standing up is the end of the squat nerve and
+    /// the landings are the first sub-state of the wait nerve.
+    fn standing_clip_playing(&self) -> bool {
+        let frames = match self.clip() {
+            "Land" | "LandTurn" | "LandStiffen" | "LandDownFall" => clip::LAND,
+            "LandJump3" => clip::LAND_JUMP3,
+            "SquatEnd" => clip::SQUAT_END,
+            _ => return false,
+        };
+        self.nerve.pending_clip().is_some() || !self.anim_done(frames)
+    }
+    /// Advance the clips one frame, before the state runs, as the game does
+    /// (`PlayerAnimator::updateAnimFrame` inside its movement).
+    fn advance_clips(&mut self) {
+        if self.anim.name == "Move" {
+            self.step_phase = (self.step_phase + self.anim.rate) % 60.;
+            self.anim.frame = self.step_phase;
+        } else {
+            self.anim.frame += self.anim.rate;
+            if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
+                self.anim.frame -= clip::FIRE_RUN;
+            }
+        }
+        if let Some(sub) = &mut self.sub_anim {
+            sub.frame += 1.;
+            if sub.held() >= 16. {
+                self.sub_anim = None;
+            }
+        }
+    }
+    /// First step of a state chosen last step: start its clip, then do the
+    /// work only its first step does.
+    fn begin_step(&mut self) {
+        self.advance_clips();
+        let (clip, work) = self.nerve.start();
+        if let Some(clip) = clip {
+            self.start_clip(clip);
+        }
+        if let Some(work) = work {
+            work(self);
+        }
     }
     fn set_h(&mut self, h: Vec3) {
         self.v.x = h.x;
@@ -1060,40 +1216,16 @@ impl Player {
         }
         self.read_input(&o);
         self.landing_speed = 0.;
+        self.nerve.deferred = false;
+        self.nerve.renewed = false;
         let was_grounded = self.grounded;
-        let wet = scene.wet(self.pos + Vec3::Y * 0.8);
-        if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
-            if self.burning() {
-                self.events.push(Fx::Quenched);
-            }
-            self.events.push(Fx::Splash);
-            self.v *= 0.3;
-            self.enter(Move::Swim, "SwimFallIn");
-        } else if !wet && matches!(self.mode, Move::Swim | Move::SwimDash) {
-            self.enter(Move::Fall, "Fall");
-        }
-        match self.mode {
-            Move::Idle | Move::Walk | Move::Run => self.run(&o),
-            Move::Skid | Move::Turn => self.brake(&o),
-            Move::Crouch | Move::Crawl => self.squat(&o),
-            Move::GroundSpin => self.ground_spin(&o),
-            Move::Throw => self.throw_state(&o),
-            Move::GroundPound => self.hip_drop(&o),
-            Move::PoundLand => self.hip_drop_land(&o),
-            Move::Roll => self.roll(&o),
-            Move::RollEnd => self.roll_end(&o),
-            Move::Dive => self.head_sliding(&o),
-            Move::Slide => self.belly_slide(&o),
-            Move::SlopeSlide => self.slope_slide(&o),
-            Move::BurnJump | Move::BurnBounce => self.burn_air(&o),
-            Move::FireRun => self.fire_run(&o),
-            Move::LongJump => self.long_jump_air(&o),
-            Move::WallSlide => self.wall_slide(&o),
-            Move::Ledge => self.wall_catch(&o, scene),
-            Move::Pole => self.pole_climb(&o, scene),
-            Move::Swim | Move::SwimDash => self.swim(&o),
-            Move::SpinDrop => self.spin_drop(&o),
-            _ => self.air(&o),
+        // The game animates first, then the state runs; a state chosen last
+        // frame starts now.
+        self.begin_step();
+        self.change_from_surroundings(scene, &o);
+        // A state chosen above leaves its own first step to the next frame.
+        if !self.nerve.deferred {
+            self.run_state(&o, scene);
         }
         self.update_cap(&o, scene);
         if matches!(self.mode, Move::Ledge | Move::Pole) {
@@ -1114,7 +1246,8 @@ impl Player {
             self.events.push(Fx::Quenched);
             self.end_burn();
         } else if self.grounded && !was_grounded && !hot {
-            self.land(&o);
+            // The contact is flagged now; the next step decides what it means.
+            self.nerve.touchdown = true;
         }
         if hot {
             self.burn();
@@ -1128,6 +1261,7 @@ impl Player {
                     | Move::Run
                     | Move::Skid
                     | Move::Turn
+                    | Move::SquatBrake
                     | Move::Crouch
                     | Move::Crawl
                     | Move::GroundSpin
@@ -1135,10 +1269,57 @@ impl Player {
                     | Move::Slide
             )
         {
-            self.coyote = 3;
-            self.enter(Move::Fall, "Fall");
+            // Walked off an edge: likewise, the fall is chosen next step.
+            self.nerve.liftoff = true;
         }
         self.finish_frame(scene);
+    }
+    /// Changes of state the surroundings force, decided before the state runs:
+    /// water, the ground reached or lost last step.
+    fn change_from_surroundings(&mut self, scene: &Course, o: &Orders) {
+        let wet = scene.wet(self.pos + Vec3::Y * 0.8);
+        if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
+            if self.burning() {
+                self.events.push(Fx::Quenched);
+            }
+            self.events.push(Fx::Splash);
+            self.v *= 0.3;
+            self.nerve.touchdown = false;
+            self.go(Move::Swim, "SwimFallIn");
+        } else if !wet && matches!(self.mode, Move::Swim | Move::SwimDash) {
+            self.go(Move::Fall, "Fall");
+        } else if std::mem::take(&mut self.nerve.touchdown) {
+            self.land(o);
+        } else if std::mem::take(&mut self.nerve.liftoff) {
+            self.coyote = 3;
+            self.go(Move::Fall, "Fall");
+        }
+    }
+    /// Run the nerve of the current state for this frame.
+    fn run_state(&mut self, o: &Orders, scene: &Course) {
+        match self.mode {
+            Move::Idle | Move::Walk | Move::Run => self.run(o),
+            Move::Skid | Move::Turn => self.brake(o),
+            Move::SquatBrake | Move::Crouch | Move::Crawl => self.squat(o),
+            Move::GroundSpin => self.ground_spin(o),
+            Move::Throw => self.throw_state(o),
+            Move::GroundPound => self.hip_drop(o),
+            Move::PoundLand => self.hip_drop_land(o),
+            Move::Roll => self.roll(o),
+            Move::RollEnd => self.roll_end(o),
+            Move::Dive => self.head_sliding(o),
+            Move::Slide => self.belly_slide(o),
+            Move::SlopeSlide => self.slope_slide(o),
+            Move::BurnJump | Move::BurnBounce => self.burn_air(o),
+            Move::FireRun => self.fire_run(o),
+            Move::LongJump => self.long_jump_air(o),
+            Move::WallSlide => self.wall_slide(o),
+            Move::Ledge => self.wall_catch(o, scene),
+            Move::Pole => self.pole_climb(o, scene),
+            Move::Swim | Move::SwimDash => self.swim(o),
+            Move::SpinDrop => self.spin_drop(o),
+            _ => self.air(o),
+        }
     }
     fn read_input(&mut self, o: &Orders) {
         let stick = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
@@ -1196,20 +1377,18 @@ impl Player {
     }
     fn finish_frame(&mut self, scene: &Course) {
         self.update_soot(scene);
-        self.frame += 1;
-        if self.anim.name == "Move" {
-            self.anim.frame = self.step_phase;
+        // A state chosen this step has run no step yet: its first one is next.
+        // The nerve's own steps restart with a new actor nerve, chosen or
+        // reached by a sub-state that belongs to another one.
+        let actor = crate::game_names::actor(self.mode, self.clip());
+        if self.nerve.renewed || actor != self.nerve.actor {
+            self.nerve.actor = actor;
+            self.nerve.step = 0;
         } else {
-            self.anim.frame += self.anim.rate;
-            if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
-                self.anim.frame -= clip::FIRE_RUN;
-            }
+            self.nerve.step += 1;
         }
-        if let Some(sub) = &mut self.sub_anim {
-            sub.frame += 1.;
-            if sub.frame >= 16. {
-                self.sub_anim = None;
-            }
+        if !self.nerve.deferred {
+            self.frame += 1;
         }
         self.vel = self.v * UNIT * FPS;
         self.move_speed = self.speed_h();
@@ -1223,11 +1402,6 @@ impl Player {
         if self.pos.y < -18. || !self.pos.is_finite() || !self.v.is_finite() {
             self.reset();
         }
-    }
-    fn enter(&mut self, mode: Move, anim: &'static str) {
-        self.set(mode);
-        self.frame = 0;
-        self.play(anim);
     }
 
     // ---- Ground movement ------------------------------------------------
@@ -1247,7 +1421,7 @@ impl Player {
             self.start_roll(speed.max(t::ROLL_START), false);
             return true;
         }
-        if o.crouch && !matches!(self.mode, Move::Crouch | Move::Crawl) {
+        if o.crouch && !matches!(self.mode, Move::SquatBrake | Move::Crouch | Move::Crawl) {
             self.start_squat();
             return true;
         }
@@ -1277,7 +1451,7 @@ impl Player {
         }
         if self.spin > 0 && self.tilt > 0.5 && self.mode != Move::GroundSpin {
             self.spin = 0;
-            self.enter(
+            self.go(
                 Move::GroundSpin,
                 if self.spin_turn >= 0. {
                     "SpinGroundL"
@@ -1301,9 +1475,23 @@ impl Player {
                 && self.run_frames >= t::BRAKE_ON_COUNTER
                 && wish.dot(self.facing) < -0.7
             {
-                self.enter(Move::Skid, "Brake");
+                // The brake is part of the run's nerve: the speed drops from
+                // this frame, its clip and sounds start on the next.
+                self.switch(Move::Skid, "Brake", |p| p.events.push(Fx::Skid));
                 self.quick_turn = t::QUICK_TURN_JUMP_FRAMES;
-                self.events.push(Fx::Skid);
+                self.brake(o);
+                return;
+            }
+            if self.mode == Move::Idle {
+                // Standing to running is a new nerve: it moves from its first
+                // step, so this frame only chooses it (the run start clip is
+                // for a standstill).
+                let clip = if speed < 0.5 && self.anim.name == "Wait" {
+                    "RunStart"
+                } else {
+                    "Move"
+                };
+                self.go(Move::Walk, clip);
                 return;
             }
             let limit = lerp_clamped(
@@ -1336,16 +1524,10 @@ impl Player {
             if !matches!(self.mode, Move::Run | Move::Walk) {
                 self.set(Move::Run);
             }
-            if self.anim.name != "Move" && self.anim.name != "RunStart" {
-                // Starting from a standstill plays the run start.
-                if speed < 0.5 && self.anim.name == "Wait" {
-                    self.play("RunStart");
-                } else {
-                    self.play("Move");
-                }
-            } else if self.anim.name == "RunStart"
-                && (self.anim_done(clip::RUN_START) || self.anim.frame > 10.)
-            {
+            // The run cycle takes over from any other clip, and from the run
+            // start once that has played.
+            let run_start_over = self.anim_done(clip::RUN_START) || self.anim.frame > 10.;
+            if self.clip() != "Move" && (self.clip() != "RunStart" || run_start_over) {
                 self.play("Move");
             }
             self.mode = if s < 8. { Move::Walk } else { Move::Run };
@@ -1354,13 +1536,9 @@ impl Player {
             let s = (speed - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
             self.set_h(self.facing * s);
             if s <= 0. {
+                // Standing again; the landing and stand-up clips play out first.
                 self.set(Move::Idle);
-                let landing = self.land_frames < clip::LAND
-                    && matches!(
-                        self.anim.name,
-                        "Land" | "LandJump3" | "LandStiffen" | "LandDownFall" | "LandTurn"
-                    );
-                if !landing && self.anim.name != "Wait" {
+                if !self.standing_clip_playing() && self.clip() != "Wait" {
                     self.play("Wait");
                 }
             }
@@ -1374,14 +1552,15 @@ impl Player {
         if self.anim.name == "Move" {
             let rate = move_rate(speed);
             self.anim.rate = rate;
-            let before = self.step_phase;
-            self.step_phase = (self.step_phase + rate) % 60.;
+            // The next advance moves the phase by this rate; the footfalls it
+            // passes are the ones this step reports.
+            let (before, after) = (self.step_phase, (self.step_phase + rate) % 60.);
             // Footfalls at the original's foot-print frames of the cycle.
             for (at, left) in [(4., true), (35., false)] {
-                let crossed = if before <= self.step_phase {
-                    before < at && self.step_phase >= at
+                let crossed = if before <= after {
+                    before < at && after >= at
                 } else {
-                    before < at || self.step_phase >= at
+                    before < at || after >= at
                 };
                 if crossed && speed > 0.5 {
                     self.events.push(Fx::Step { left });
@@ -1403,11 +1582,13 @@ impl Player {
             if self.frame >= t::BRAKE_TURN_START && s < t::NORMAL_MIN || self.tilt < 0.05 && s <= 0.
             {
                 if self.tilt > 0.05 {
-                    self.facing = self.stick;
-                    self.enter(Move::Turn, "TurnPoint");
-                    self.events.push(Fx::TurnDust);
+                    self.switch(Move::Turn, "TurnPoint", |p| {
+                        p.facing = p.stick;
+                        p.events.push(Fx::TurnDust);
+                    });
                 } else {
-                    self.enter(Move::Idle, "Wait");
+                    self.set(Move::Idle);
+                    self.play("Wait");
                 }
             }
         } else {
@@ -1452,40 +1633,45 @@ impl Player {
         self.set_h(self.facing * s);
         self.v.y = -t::GRAVITY;
         if self.frame >= 20 && self.tilt < 0.05 || self.frame >= t::GROUND_SPIN_FRAMES {
-            self.enter(Move::Idle, "Wait");
+            self.go(Move::Idle, "Wait");
         }
     }
 
     // ---- Squat, roll, slides --------------------------------------------
     fn start_squat(&mut self) {
-        let from_roll = self.anim.name == "RollingEnd";
-        self.set(Move::Crouch);
-        self.play(if from_roll { "SquatWait" } else { "SquatStart" });
-        let speed = self.speed_h();
-        let forward = self.v.with_y(0.).dot(self.facing);
-        // Crouching keeps forward momentum as a short crouch slide.
-        let s = if speed <= t::NORMAL_MAX && forward > 0. {
-            let s = speed * t::SQUAT_ACCEL_RATE;
-            if s <= t::SQUAT_BRAKE_END { 0. } else { s }
-        } else {
-            forward.max(0.)
-        };
-        self.set_h(self.facing * s);
+        let from_roll = self.clip() == "RollingEnd";
+        self.change(
+            Move::SquatBrake,
+            if from_roll { "SquatWait" } else { "SquatStart" },
+            |p| {
+                let speed = p.speed_h();
+                let forward = p.v.with_y(0.).dot(p.facing);
+                // Crouching keeps forward momentum as a short crouch slide.
+                let s = if speed <= t::NORMAL_MAX && forward > 0. {
+                    let s = speed * t::SQUAT_ACCEL_RATE;
+                    if s <= t::SQUAT_BRAKE_END { 0. } else { s }
+                } else {
+                    forward.max(0.)
+                };
+                p.set_h(p.facing * s);
+            },
+        );
     }
     /// Ground at least this many degrees steep.
     fn steep(&self, degrees: f32) -> bool {
         self.grounded && self.slope.abs().atan().to_degrees() >= degrees
     }
     fn start_slope_slide(&mut self) {
-        let down = Vec3::new(-self.slope.signum(), 0., 0.);
-        let mut h = self.v.with_y(0.);
-        // Start at least gently downhill, never faster than the slide's limit.
-        let along = h.dot(down);
-        if along < t::SLOPE_SLIDE_START_SPEED {
-            h += down * (t::SLOPE_SLIDE_START_SPEED - along);
-        }
-        self.set_h(h.clamp_length_max(t::SLOPE_SLIDE_MAX));
-        self.enter(Move::SlopeSlide, "Slide");
+        self.change(Move::SlopeSlide, "Slide", |p| {
+            let down = Vec3::new(-p.slope.signum(), 0., 0.);
+            let mut h = p.v.with_y(0.);
+            // Start at least gently downhill, never faster than the slide's limit.
+            let along = h.dot(down);
+            if along < t::SLOPE_SLIDE_START_SPEED {
+                h += down * (t::SLOPE_SLIDE_START_SPEED - along);
+            }
+            p.set_h(h.clamp_length_max(t::SLOPE_SLIDE_MAX));
+        });
     }
     /// Sliding down a slope on the seat: speeds up downhill, steers a little,
     /// and brakes to a stop once the ground flattens out.
@@ -1526,7 +1712,7 @@ impl Player {
                 if o.crouch {
                     self.start_squat();
                 } else {
-                    self.enter(Move::Idle, "Wait");
+                    self.go(Move::Idle, "Wait");
                 }
                 return;
             }
@@ -1546,20 +1732,21 @@ impl Player {
     /// seat, bounces once where he lands, then runs flat out for a second
     /// before the normal run takes over. Touching hot ground again restarts it.
     fn burn(&mut self) {
-        self.enter(Move::BurnJump, "FireRunStart");
-        // The leap keeps the current speed, turned along the stick; with the
-        // stick at rest it goes straight up.
-        let h = if self.tilt > 0.05 {
-            self.stick * self.speed_h()
-        } else {
-            Vec3::ZERO
-        };
-        self.fire_leap(
-            h,
-            t::DAMAGE_FIRE_JUMP_POWER_1ST,
-            t::DAMAGE_FIRE_NO_GRAVITY_FRAMES,
-        );
-        self.events.push(Fx::Burned(false));
+        self.change(Move::BurnJump, "FireRunStart", |p| {
+            // The leap keeps the current speed, turned along the stick; with the
+            // stick at rest it goes straight up.
+            let h = if p.tilt > 0.05 {
+                p.stick * p.speed_h()
+            } else {
+                Vec3::ZERO
+            };
+            p.fire_leap(
+                h,
+                t::DAMAGE_FIRE_JUMP_POWER_1ST,
+                t::DAMAGE_FIRE_NO_GRAVITY_FRAMES,
+            );
+            p.events.push(Fx::Burned(false));
+        });
     }
     fn burning(&self) -> bool {
         matches!(self.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun)
@@ -1626,14 +1813,15 @@ impl Player {
     }
     /// The bounce after the leap: a second, lower hop without the float.
     fn fire_bounce(&mut self) {
-        self.enter(Move::BurnBounce, "FireRunStart");
-        let h = if self.tilt > 0.05 {
-            self.stick * self.speed_h()
-        } else {
-            Vec3::ZERO
-        };
-        self.fire_leap(h, t::DAMAGE_FIRE_JUMP_POWER_2ND, 0);
-        self.events.push(Fx::Burned(true));
+        self.change(Move::BurnBounce, "FireRunStart", |p| {
+            let h = if p.tilt > 0.05 {
+                p.stick * p.speed_h()
+            } else {
+                Vec3::ZERO
+            };
+            p.fire_leap(h, t::DAMAGE_FIRE_JUMP_POWER_2ND, 0);
+            p.events.push(Fx::Burned(true));
+        });
     }
     /// Throws while burning: the cap flies without interrupting the burn, except
     /// a spin throw once Mario has landed, which ends it.
@@ -1701,13 +1889,17 @@ impl Player {
     }
     /// The run phase restarts on every landing; the burn's clock does not.
     fn fire_run_landed(&mut self) {
-        self.set(Move::FireRun);
-        self.frame = 0;
-        if self.anim.name != "FireRun" {
-            self.play("FireRun");
-            self.anim.rate = t::DAMAGE_FIRE_RUN_SPEED * t::DAMAGE_FIRE_RUN_ANIM_RATE;
+        let brake = t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32;
+        if self.mode == Move::FireRun {
+            // Landing again during the run: the clip loops on.
+            self.frame = 0;
+            self.fire.brake = brake;
+            return;
         }
-        self.fire.brake = t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32;
+        self.change(Move::FireRun, "FireRun", move |p| {
+            p.anim.rate = t::DAMAGE_FIRE_RUN_SPEED * t::DAMAGE_FIRE_RUN_ANIM_RATE;
+            p.fire.brake = brake;
+        });
     }
     /// Running on the burn: full fire speed while the stick is held, easing to
     /// a stop when released. Only now can Mario jump out of it.
@@ -1752,10 +1944,12 @@ impl Player {
     fn end_burn(&mut self) {
         if self.grounded {
             self.run_frames = t::BRAKE_ON_COUNTER;
-            self.set(Move::Run);
-            self.play(if self.speed_h() > 0.5 { "Move" } else { "Wait" });
+            self.go(
+                Move::Run,
+                if self.speed_h() > 0.5 { "Move" } else { "Wait" },
+            );
         } else {
-            self.enter(Move::Fall, "Fall");
+            self.go(Move::Fall, "Fall");
         }
     }
     fn squat(&mut self, o: &Orders) {
@@ -1767,7 +1961,9 @@ impl Player {
         let sliding = speed > t::SQUAT_BRAKE_END;
         if self.pre_jump > 0 {
             self.pre_jump = 0;
-            if sliding && self.v.dot(self.facing) > 0. {
+            // Only the braking sub-state can start the long jump, and only
+            // while moving forward.
+            if self.mode == Move::SquatBrake && self.v.dot(self.facing) > 0. {
                 self.long_jump();
             } else {
                 self.backflip();
@@ -1780,12 +1976,20 @@ impl Player {
             return;
         }
         if !o.crouch {
-            self.enter(Move::Idle, "SquatEnd");
+            // Standing up is the squat nerve's last sub-state.
+            self.set(Move::Idle);
+            self.play("SquatEnd");
             return;
         }
-        if sliding {
-            let s = speed * t::SQUAT_BRAKE_RATE;
-            self.set_h(self.v.with_y(0.).normalize_or(self.facing) * s);
+        if self.mode == Move::SquatBrake {
+            if sliding {
+                let s = speed * t::SQUAT_BRAKE_RATE;
+                self.set_h(self.v.with_y(0.).normalize_or(self.facing) * s);
+            } else {
+                // The slide is over: crouching in place is the next sub-state.
+                self.set_h(Vec3::ZERO);
+                self.defer(Move::Crouch, "SquatWait", |_| {});
+            }
         } else if self.tilt > 0.05 {
             self.facing = turn(self.facing, self.stick, 30_f32.to_radians() / 10.);
             self.set_h(self.facing * t::SQUAT_WALK);
@@ -1806,16 +2010,17 @@ impl Player {
         self.v.y = -t::GRAVITY;
     }
     fn start_roll(&mut self, speed: f32, boosted: bool) {
-        if let Some(w) = (self.tilt > 0.1).then_some(self.stick) {
-            self.facing = w;
-        }
-        self.enter(Move::Roll, "RollingStart");
-        self.set_h(self.facing * speed.min(t::ROLL_MAX));
-        self.v.y = t::ROLL_START_JUMP * 0.25;
-        self.rolling.boost_frames = if boosted { t::ROLL_FRAMES_MIN_BOOST } else { 0 };
-        self.rolling.last_boost = 0;
-        self.rolling.unroll = 0;
-        self.events.push(Fx::RollStart);
+        self.change(Move::Roll, "RollingStart", move |p| {
+            if let Some(w) = (p.tilt > 0.1).then_some(p.stick) {
+                p.facing = w;
+            }
+            p.set_h(p.facing * speed.min(t::ROLL_MAX));
+            p.v.y = t::ROLL_START_JUMP * 0.25;
+            p.rolling.boost_frames = if boosted { t::ROLL_FRAMES_MIN_BOOST } else { 0 };
+            p.rolling.last_boost = 0;
+            p.rolling.unroll = 0;
+            p.events.push(Fx::RollStart);
+        });
     }
     fn roll(&mut self, o: &Orders) {
         if self.pre_jump > 0 && self.grounded {
@@ -1823,12 +2028,13 @@ impl Player {
             if o.throw_pressed {
                 // Roll cancel: stand up at speed with a cap throw.
                 let s = self.speed_h().min(t::RUN_SPEED_CONTINUOUS_THROW);
-                self.enter(Move::Run, "Move");
-                self.set_h(self.facing * s);
-                self.throwing.run = t::RUN_TIME_CONTINUOUS_THROW;
-                if self.cap.is_none() {
-                    self.launch_cap(Throw::Forward);
-                }
+                self.change(Move::Run, "Move", move |p| {
+                    p.set_h(p.facing * s);
+                    p.throwing.run = t::RUN_TIME_CONTINUOUS_THROW;
+                    if p.cap.is_none() {
+                        p.launch_cap(Throw::Forward);
+                    }
+                });
                 return;
             }
             let s = self.speed_h();
@@ -1837,11 +2043,11 @@ impl Player {
                 "RollingJump",
                 t::JUMP_POWER_MAX,
                 t::JUMP_GRAVITY,
+                move |p| p.max_air_speed = s.min(t::JUMP_MOVE_MAX),
             );
-            self.max_air_speed = s.min(t::JUMP_MOVE_MAX);
             return;
         }
-        if self.anim.name == "RollingStart" && self.anim_done(clip::ROLLING_START) {
+        if self.clip() == "RollingStart" && self.anim_done(clip::ROLLING_START) {
             self.play("Rolling");
         }
         self.rolling.last_boost += 1;
@@ -1893,7 +2099,8 @@ impl Player {
                     && s < t::ROLL_END_SPEED
                     && -self.slope * self.facing.x <= 0.05)
         {
-            self.enter(Move::RollEnd, "RollingEnd");
+            self.set(Move::RollEnd);
+            self.play("RollingEnd");
         }
         self.anim.rate = lerp_clamped(0.2, 1., (s - 5.) / (35. - 5.));
     }
@@ -1908,10 +2115,9 @@ impl Player {
         self.v.y = -t::GRAVITY;
         if self.anim_done(clip::ROLLING_END) && s <= t::ROLL_END_BRAKE_END {
             if o.crouch {
-                self.set(Move::Crouch);
-                self.play("SquatWait");
+                self.start_squat();
             } else {
-                self.enter(Move::Idle, "Wait");
+                self.go(Move::Idle, "Wait");
             }
         }
     }
@@ -1919,7 +2125,13 @@ impl Player {
     fn belly_slide(&mut self, o: &Orders) {
         if self.pre_jump > 0 {
             self.pre_jump = 0;
-            self.jump_with(Move::Jump, "Jump", t::JUMP_POWER_MIN, t::JUMP_GRAVITY);
+            self.jump_with(
+                Move::Jump,
+                "Jump",
+                t::JUMP_POWER_MIN,
+                t::JUMP_GRAVITY,
+                |_| {},
+            );
             return;
         }
         let s = (self.speed_h() - t::HEAD_SLIDING_BRAKE).max(0.);
@@ -1935,14 +2147,30 @@ impl Player {
                 self.set(Move::Run);
                 self.play("Move");
             } else {
-                self.enter(Move::Idle, "Wait");
+                self.go(Move::Idle, "Wait");
             }
         }
     }
 
     // ---- Jumps ------------------------------------------------------------
-    fn jump_with(&mut self, mode: Move, anim: &'static str, power: f32, gravity: f32) {
-        self.enter(mode, anim);
+    /// Take off into a jump state. The take-off itself (the impulse, the
+    /// sounds, the dust) is the state's first step, so it happens next frame;
+    /// `then` adds what the particular jump does besides.
+    fn jump_with(
+        &mut self,
+        mode: Move,
+        anim: &'static str,
+        power: f32,
+        gravity: f32,
+        then: impl FnOnce(&mut Player) + Send + Sync + 'static,
+    ) {
+        self.pre_jump = 0;
+        self.change(mode, anim, move |p| {
+            p.leave_ground(mode, power, gravity);
+            then(p);
+        });
+    }
+    fn leave_ground(&mut self, mode: Move, power: f32, gravity: f32) {
         self.v.y = power;
         self.gravity = gravity;
         self.jump_extend = true;
@@ -1962,9 +2190,11 @@ impl Player {
                 "JumpHipDrop",
                 t::HIP_DROP_JUMP_POWER,
                 t::JUMP_GRAVITY,
+                |p| {
+                    p.set_h(Vec3::ZERO);
+                    p.jump_extend = false;
+                },
             );
-            self.set_h(Vec3::ZERO);
-            self.jump_extend = false;
             return;
         }
         if self.catch_window > 0 {
@@ -1973,8 +2203,8 @@ impl Player {
                 "JumpCapCatchCommon",
                 t::CAP_CATCH_JUMP_POWER,
                 t::CAP_CATCH_JUMP_GRAVITY,
+                |p| p.jump_extend = false,
             );
-            self.jump_extend = false;
             return;
         }
         if self.spin > 0 {
@@ -1984,9 +2214,11 @@ impl Player {
                 "SpinJumpStart",
                 t::SPIN_JUMP_POWER,
                 t::SPIN_JUMP_GRAVITY,
+                |p| {
+                    p.jump_extend = false;
+                    p.max_air_speed = t::SPIN_JUMP_MOVE_MAX;
+                },
             );
-            self.jump_extend = false;
-            self.max_air_speed = t::SPIN_JUMP_MOVE_MAX;
             return;
         }
         if matches!(self.mode, Move::Skid | Move::Turn)
@@ -2010,16 +2242,15 @@ impl Player {
                 "Jump2",
                 lerp_clamped(t::CONTINUOUS_JUMP_POWER_MIN, t::JUMP_POWER_MAX_2ND, rate),
                 t::JUMP_GRAVITY_2ND,
+                |_| {},
             ),
-            2 => {
-                self.jump_with(
-                    Move::TripleJump,
-                    "Jump3",
-                    t::JUMP_POWER_3RD,
-                    t::JUMP_GRAVITY_3RD,
-                );
-                self.jump_extend = false;
-            }
+            2 => self.jump_with(
+                Move::TripleJump,
+                "Jump3",
+                t::JUMP_POWER_3RD,
+                t::JUMP_GRAVITY_3RD,
+                |p| p.jump_extend = false,
+            ),
             _ => {
                 // The first jump mirrors with whichever foot is planted in the run cycle.
                 let anim = if speed > t::NORMAL_MIN && (4. ..35.).contains(&self.step_phase) {
@@ -2032,24 +2263,27 @@ impl Player {
                     anim,
                     lerp_clamped(t::JUMP_POWER_MIN, t::JUMP_POWER_MAX, rate),
                     t::JUMP_GRAVITY,
+                    |_| {},
                 )
             }
         }
     }
     fn side_somersault(&mut self) {
-        if self.tilt > 0.05 {
-            self.facing = self.stick;
-        }
         self.jump_with(
             Move::Sideflip,
             "JumpTurn",
             t::TURN_JUMP_POWER,
             t::TURN_JUMP_GRAVITY,
+            |p| {
+                if p.tilt > 0.05 {
+                    p.facing = p.stick;
+                }
+                p.set_h(p.facing * t::TURN_JUMP_VEL_H);
+                p.max_air_speed = t::TURN_JUMP_VEL_H;
+                p.jump_extend = false;
+                p.quick_turn = 0;
+            },
         );
-        self.set_h(self.facing * t::TURN_JUMP_VEL_H);
-        self.max_air_speed = t::TURN_JUMP_VEL_H;
-        self.jump_extend = false;
-        self.quick_turn = 0;
     }
     fn backflip(&mut self) {
         self.jump_with(
@@ -2057,10 +2291,12 @@ impl Player {
             "JumpBack",
             t::SQUAT_JUMP_POWER,
             t::SQUAT_JUMP_GRAVITY,
+            |p| {
+                p.set_h(-p.facing * t::SQUAT_JUMP_BACK);
+                p.max_air_speed = t::SQUAT_JUMP_MOVE_MAX;
+                p.jump_extend = false;
+            },
         );
-        self.set_h(-self.facing * t::SQUAT_JUMP_BACK);
-        self.max_air_speed = t::SQUAT_JUMP_MOVE_MAX;
-        self.jump_extend = false;
     }
     fn long_jump(&mut self) {
         const NAMES: [&str; 3] = ["JumpBroad", "JumpBroad2", "JumpBroad3"];
@@ -2075,12 +2311,14 @@ impl Player {
             name,
             t::LONG_JUMP_POWER,
             t::LONG_JUMP_GRAVITY,
+            move |p| {
+                let s = (speed + t::LONG_JUMP_MOVE_POW)
+                    .max(t::LONG_JUMP_INIT_SPEED)
+                    .max(t::LONG_JUMP_SPEED_MIN);
+                p.set_h(p.facing * s);
+                p.jump_extend = false;
+            },
         );
-        let s = (speed + t::LONG_JUMP_MOVE_POW)
-            .max(t::LONG_JUMP_INIT_SPEED)
-            .max(t::LONG_JUMP_SPEED_MIN);
-        self.set_h(self.facing * s);
-        self.jump_extend = false;
     }
     /// Long jump flight: slow forward accel, stronger brake, light steering.
     fn long_jump_air(&mut self, o: &Orders) {
@@ -2149,7 +2387,12 @@ impl Player {
         if !o.jump_held || self.frame >= t::EXTEND_FRAMES {
             self.jump_extend = false;
         }
-        if !extending {
+        // The first step of the three ground jumps applies the push and no
+        // gravity, whether or not jump is held (the game's first rows after a
+        // tap show the full jump power); the flips and the long jump do apply it.
+        let takeoff = self.frame == 0
+            && matches!(self.mode, Move::Jump | Move::DoubleJump | Move::TripleJump);
+        if !extending && !takeoff {
             self.v.y -= self.gravity;
         }
         let max = if self.mode == Move::SpinJump && self.v.y < 0. {
@@ -2196,8 +2439,9 @@ impl Player {
         }
         if o.crouch_pressed && !matches!(self.mode, Move::Throw) {
             if self.mode == Move::SpinJump {
-                self.enter(Move::SpinDrop, "SpinJumpDownFall");
-                self.v = Vec3::NEG_Y * t::SPIN_DOWN_FALL_INIT;
+                self.change(Move::SpinDrop, "SpinJumpDownFall", |p| {
+                    p.v = Vec3::NEG_Y * t::SPIN_DOWN_FALL_INIT;
+                });
             } else {
                 self.start_hip_drop();
             }
@@ -2216,9 +2460,10 @@ impl Player {
 
     // ---- Ground pound and dive ----------------------------------------------
     fn start_hip_drop(&mut self) {
-        self.enter(Move::GroundPound, "HipDropStart");
-        self.v = Vec3::ZERO;
-        self.events.push(Fx::PoundStart);
+        self.change(Move::GroundPound, "HipDropStart", |p| {
+            p.v = Vec3::ZERO;
+            p.events.push(Fx::PoundStart);
+        });
     }
     fn hip_drop(&mut self, o: &Orders) {
         // A throw during the pound turns it into a dive.
@@ -2233,8 +2478,8 @@ impl Player {
         if self.anim.name == "HipDropStart" {
             self.v = Vec3::ZERO;
             if self.anim_done(clip::HIP_DROP_START) {
+                // The fall starts with its sub-state's first step.
                 self.play("HipDrop");
-                self.v = Vec3::NEG_Y * t::HIP_DROP_SPEED;
             }
         } else {
             self.v = Vec3::NEG_Y * t::HIP_DROP_SPEED;
@@ -2264,21 +2509,22 @@ impl Player {
             if o.crouch {
                 self.start_squat();
             } else {
-                self.enter(Move::Idle, "Wait");
+                self.go(Move::Idle, "Wait");
             }
         }
     }
     fn dive(&mut self) {
-        self.enter(Move::Dive, "HeadSlidingStart");
-        let mut h = self.v.with_y(0.).normalize_or(self.facing);
-        if self.tilt > 0.1 {
-            h = self.stick;
-        }
-        self.facing = h;
-        let up = self.v.y.max(0.) + t::HEAD_SLIDING_JUMP;
-        self.v = h * t::HEAD_SLIDING_SPEED + Vec3::Y * up;
-        self.dive_possible = false;
-        self.events.push(Fx::Dive);
+        self.change(Move::Dive, "HeadSlidingStart", |p| {
+            let mut h = p.v.with_y(0.).normalize_or(p.facing);
+            if p.tilt > 0.1 {
+                h = p.stick;
+            }
+            p.facing = h;
+            let up = p.v.y.max(0.) + t::HEAD_SLIDING_JUMP;
+            p.v = h * t::HEAD_SLIDING_SPEED + Vec3::Y * up;
+            p.dive_possible = false;
+            p.events.push(Fx::Dive);
+        });
     }
     fn head_sliding(&mut self, _o: &Orders) {
         // Diving flight: no forward accel, a light side push, braking when pulled back.
@@ -2306,21 +2552,24 @@ impl Player {
     fn wall_slide(&mut self, o: &Orders) {
         if self.pre_jump > 0 {
             self.facing = self.wall;
+            let away = self.wall;
             self.jump_with(
                 Move::WallJump,
                 "WallJump",
                 t::WALL_JUMP_POWER,
                 t::WALL_JUMP_GRAVITY,
+                move |p| {
+                    p.set_h(away * t::WALL_JUMP_H);
+                    p.max_air_speed = t::WALL_JUMP_H;
+                    p.jump_extend = false;
+                    p.dive_possible = true;
+                },
             );
-            self.set_h(self.wall * t::WALL_JUMP_H);
-            self.max_air_speed = t::WALL_JUMP_H;
-            self.jump_extend = false;
-            self.dive_possible = true;
             return;
         }
         if o.crouch_pressed || self.wall == Vec3::ZERO {
             self.pos += self.wall * 0.1;
-            self.enter(Move::Fall, "Fall");
+            self.go(Move::Fall, "Fall");
             return;
         }
         if self.frame >= t::WALL_KEEP_FRAMES {
@@ -2337,29 +2586,32 @@ impl Player {
         let toward = self.stick.dot(-self.wall) * self.tilt;
         let right = self.facing.cross(Vec3::Y);
         let along = self.stick.dot(right) * self.tilt;
-        if self.anim.name == "WallCatchStart" && self.anim_done(clip::WALL_CATCH_START) {
+        if self.clip() == "WallCatchStart" && self.anim_done(clip::WALL_CATCH_START) {
             self.play("WallCatch");
         }
-        if self.anim.name == "WallCatchEnd" {
+        if self.clip() == "WallCatchEnd" {
             if self.anim_done(clip::WALL_CATCH_END) {
                 self.grounded = true;
-                self.enter(Move::Idle, "Wait");
+                self.go(Move::Idle, "Wait");
             }
             return;
         }
         let hang_out = self.wall * (RADIUS + 0.05 + t::WALL_CATCH_INSET * UNIT);
         if o.crouch_pressed || toward < -0.4 {
             self.pos = self.ledge + hang_out - Vec3::Y * t::WALL_CATCH_HANG * UNIT;
-            self.enter(Move::Fall, "Fall");
+            self.go(Move::Fall, "Fall");
         } else if self.frame > 8 && self.pre_jump > 0 {
+            let back = -self.wall;
             self.jump_with(
                 Move::Jump,
                 "WallCatchEndJump",
                 t::WALL_CLIMB_JUMP_V,
                 t::WALL_CLIMB_JUMP_GRAVITY,
+                move |p| {
+                    p.set_h(back * t::WALL_CLIMB_JUMP_H);
+                    p.jump_extend = false;
+                },
             );
-            self.set_h(-self.wall * t::WALL_CLIMB_JUMP_H);
-            self.jump_extend = false;
         } else if self.frame > 8 && toward > 0.5 {
             self.play("WallCatchEnd");
         } else if self.frame > 8 && along.abs() > 0.5 {
@@ -2399,7 +2651,9 @@ impl Player {
             if d.length() < POLE_RADIUS + t::POLE_CATCH_RANGE * UNIT
                 && (pole.center.y..top).contains(&self.pos.y)
             {
-                self.enter(Move::Pole, "PoleCatch");
+                // Holding on is physical and immediate; the catch clip and its
+                // sound are the state's first step.
+                self.change(Move::Pole, "PoleCatch", |p| p.events.push(Fx::Pole));
                 self.climbing.base = pole.center;
                 self.climbing.height = pole.height;
                 self.climbing.frame = 0;
@@ -2407,7 +2661,6 @@ impl Player {
                 // The actor sits on the pole's axis; the clips hang the body behind it.
                 self.pos = Vec3::new(pole.center.x, self.pos.y, pole.center.z);
                 self.v = Vec3::ZERO;
-                self.events.push(Fx::Pole);
                 return;
             }
         }
@@ -2438,18 +2691,25 @@ impl Player {
             self.facing = away;
             self.pos = axis + away * clear;
             self.climbing.cooldown = 20;
-            self.jump_with(Move::Jump, "Jump", t::WALL_JUMP_POWER, t::WALL_JUMP_GRAVITY);
-            self.set_h(away * t::WALL_JUMP_H);
-            self.jump_extend = false;
+            self.jump_with(
+                Move::Jump,
+                "Jump",
+                t::WALL_JUMP_POWER,
+                t::WALL_JUMP_GRAVITY,
+                move |p| {
+                    p.set_h(away * t::WALL_JUMP_H);
+                    p.jump_extend = false;
+                },
+            );
             return;
         }
         if o.crouch_pressed {
             self.pos = axis - self.facing * clear;
             self.climbing.cooldown = 20;
-            self.enter(Move::Fall, "Fall");
+            self.go(Move::Fall, "Fall");
             return;
         }
-        if self.anim.name == "PoleCatch" && !self.anim_done(clip::POLE_CATCH) {
+        if self.clip() == "PoleCatch" && !self.anim_done(clip::POLE_CATCH) {
             return;
         }
         // Screen up climbs, down slides, left and right swing round the pole.
@@ -2477,7 +2737,7 @@ impl Player {
                 self.pos = axis - self.facing * clear;
                 self.climbing.cooldown = 20;
                 self.grounded = true;
-                self.enter(Move::Idle, "Wait");
+                self.go(Move::Idle, "Wait");
                 return;
             }
             let speed = if o.crouch {
@@ -2502,9 +2762,11 @@ impl Player {
     fn swim(&mut self, o: &Orders) {
         if self.pre_throw > 0 || o.throw_pressed {
             self.pre_throw = 0;
-            self.enter(Move::SwimDash, "SwimDive");
-            self.set_h(self.facing * t::SWIM_DIVE_SPEED);
-            self.events.push(Fx::SwimStroke);
+            self.change(Move::SwimDash, "SwimDive", |p| {
+                p.set_h(p.facing * t::SWIM_DIVE_SPEED);
+                p.events.push(Fx::SwimStroke);
+            });
+            return;
         }
         if self.pre_jump > 0 {
             self.pre_jump = 0;
@@ -2606,13 +2868,17 @@ impl Player {
                 (_, false) => "SpinCapStartLeft",
             },
         };
-        self.enter(Move::Throw, name);
-        if air && !self.air_throw_used {
-            // One small hang per airtime.
-            self.v.y = self.v.y.max(t::SPIN_AIR_JUMP);
+        let hang = air && !self.air_throw_used;
+        if hang {
             self.air_throw_used = true;
         }
-        self.throwing.pending = Some(kind);
+        self.change(Move::Throw, name, move |p| {
+            if hang {
+                // One small hang per airtime.
+                p.v.y = p.v.y.max(t::SPIN_AIR_JUMP);
+            }
+            p.throwing.pending = Some(kind);
+        });
     }
     fn throw_state(&mut self, o: &Orders) {
         let air = !self.grounded;
@@ -2662,7 +2928,7 @@ impl Player {
                 || self.anim_done(length)
             {
                 self.throwing.timer = 30;
-                self.enter(Move::Idle, "Wait");
+                self.go(Move::Idle, "Wait");
                 if self.pre_jump > 0 {
                     self.ground_jump(o);
                 }
@@ -2810,30 +3076,28 @@ impl Player {
             return;
         }
         let keep = self.speed_h();
-        if ground {
-            self.jump_with(
-                Move::CapVault,
-                "JumpCapLeapFrog",
-                t::CAP_LEAPFROG_POWER,
-                t::CAP_LEAPFROG_GRAVITY,
-            );
+        let (mode, power) = if ground {
+            (Move::CapVault, t::CAP_LEAPFROG_POWER)
         } else {
-            self.jump_with(
-                Move::CapBounce,
-                "JumpCapLeapFrog",
-                t::CAP_LEAPFROG_POWER_AIR,
-                t::CAP_LEAPFROG_GRAVITY,
-            );
-        }
-        self.set_h(self.facing * keep.min(t::JUMP_MOVE_MAX));
-        self.max_air_speed = keep.clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
-        self.jump_extend = false;
+            (Move::CapBounce, t::CAP_LEAPFROG_POWER_AIR)
+        };
+        self.jump_with(
+            mode,
+            "JumpCapLeapFrog",
+            power,
+            t::CAP_LEAPFROG_GRAVITY,
+            move |p| {
+                p.set_h(p.facing * keep.min(t::JUMP_MOVE_MAX));
+                p.max_air_speed = keep.clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
+                p.jump_extend = false;
+                p.dive_possible = true;
+                p.air_throw_used = false;
+                p.events.push(Fx::CapBounce);
+            },
+        );
         self.cap_jump_possible = false;
-        self.dive_possible = true;
-        self.air_throw_used = false;
         self.hitstop = 0.035;
         self.cap = None;
-        self.events.push(Fx::CapBounce);
     }
 
     // ---- Landing and collision ------------------------------------------------
@@ -2854,14 +3118,17 @@ impl Player {
             );
         let mode = self.mode;
         match mode {
+            // The pound's landing is a sub-state of its nerve: the impact, the
+            // freeze and the landing clip are its first step.
             Move::GroundPound => {
-                self.enter(Move::PoundLand, "HipDropLand");
-                self.hitstop = 0.05;
-                self.events.push(Fx::PoundLand);
+                self.defer(Move::PoundLand, "HipDropLand", |p| {
+                    p.hitstop = 0.05;
+                    p.events.push(Fx::PoundLand);
+                });
                 return;
             }
             Move::SpinDrop => {
-                self.enter(Move::Idle, "LandDownFall");
+                self.go(Move::Idle, "LandDownFall");
                 self.events.push(Fx::PoundLand);
                 return;
             }
@@ -2870,7 +3137,7 @@ impl Player {
             Move::Dive | Move::LongJump | Move::RollJump if o.crouch && speed > t::NORMAL_MIN => {
                 self.start_roll(speed.max(t::ROLL_START), false);
             }
-            Move::Dive => self.enter(Move::Slide, "LandRolling"),
+            Move::Dive => self.defer(Move::Slide, "LandRolling", |_| {}),
             Move::Roll | Move::SlopeSlide => {}
             // The leap lands in a bounce, keeping speed only along the stick.
             Move::BurnJump => {
@@ -2894,21 +3161,22 @@ impl Player {
             _ => {
                 if self.hard_land {
                     self.set_h(Vec3::ZERO);
-                    self.enter(Move::Idle, "LandStiffen");
+                    self.go(Move::Idle, "LandStiffen");
                 } else if o.crouch {
                     self.start_squat();
+                } else if self.pre_jump > 0 {
+                    // A jump pressed just before landing goes straight on.
+                    self.ground_jump(o);
                 } else if self.tilt > 0.05 && speed > 0.5 {
-                    self.set(Move::Run);
                     self.run_frames = t::BRAKE_ON_COUNTER;
-                    self.play("Move");
+                    self.go(Move::Run, "Move");
                 } else {
-                    self.set_h(self.v.with_y(0.) * 0.3);
                     let anim = match mode {
                         Move::TripleJump => "LandJump3",
                         Move::Sideflip | Move::Backflip => "LandTurn",
                         _ => "Land",
                     };
-                    self.enter(Move::Idle, anim);
+                    self.change(Move::Idle, anim, |p| p.set_h(p.v.with_y(0.) * 0.3));
                 }
             }
         }
@@ -2919,7 +3187,13 @@ impl Player {
     fn collide(&mut self, o: &Orders, scene: &Course) {
         let crouched = matches!(
             self.mode,
-            Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd | Move::Slide | Move::Dive
+            Move::SquatBrake
+                | Move::Crouch
+                | Move::Crawl
+                | Move::Roll
+                | Move::RollEnd
+                | Move::Slide
+                | Move::Dive
         ) || self.grounded && o.crouch;
         let height = if crouched { SQUAT_HEIGHT } else { HEIGHT };
         let old = self.pos;
@@ -2996,7 +3270,8 @@ impl Player {
                                 - self.wall * 2. * self.facing.dot(self.wall))
                             .normalize_or(self.wall);
                             self.set_h(self.facing * 6.);
-                            self.enter(Move::RollEnd, "RollingEnd");
+                            self.set(Move::RollEnd);
+                            self.play("RollingEnd");
                         }
                         if !was_grounded && self.v.y < 0. && into > 0.1 {
                             self.touch_wall(top, o);
@@ -3028,7 +3303,7 @@ impl Player {
             && !self.grounded
         {
             // Lost the wall: keep falling.
-            self.enter(Move::Fall, "Fall");
+            self.go(Move::Fall, "Fall");
         }
         // Stay glued to ramps and steps down.
         if !self.grounded
@@ -3061,18 +3336,20 @@ impl Player {
             && reach * 100. > t::WALL_CATCH_EDGE_TOP * 0.6
             && o.direction.length() > 0.1
         {
-            self.enter(Move::Ledge, "WallCatchStart");
+            // Holding the edge is physical and immediate; the catch clip and its
+            // sound are the state's first step.
+            self.change(Move::Ledge, "WallCatchStart", |p| p.events.push(Fx::Ledge));
             // The edge point, just inside the top, straight ahead of the body.
             let corner = self.pos - self.wall * (RADIUS + t::WALL_CATCH_INSET * UNIT);
             self.ledge = Vec3::new(corner.x, top, corner.z);
             self.facing = -self.wall;
             self.v = Vec3::ZERO;
-            self.events.push(Fx::Ledge);
         } else if self.mode != Move::WallSlide {
-            self.enter(Move::WallSlide, "WallKeep");
+            self.change(Move::WallSlide, "WallKeep", |p| {
+                p.events.push(Fx::WallSlide)
+            });
             self.facing = self.wall;
             self.v.y = self.v.y.max(-t::WALL_SLIDE_MAX * 0.5);
-            self.events.push(Fx::WallSlide);
         }
     }
 }

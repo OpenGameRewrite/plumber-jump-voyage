@@ -101,30 +101,14 @@ impl Posed for Pose {
         self.layers.is_empty()
     }
 }
-/// The clip frame a trace row shows: the frame the pose displays in the
-/// game's sample (after its animation update of the logic frame).
-///
-/// The game advances a clip at the start of its logic frame, then runs the
-/// state, so a clip a state starts reads frame 0 in that frame and the next
-/// frame advances it. The controller runs the state first and advances the
-/// clip at the end of its step; the frame the state saw is the one the step
-/// started from, one rate back from what the controller holds afterwards.
-/// The frame cells, the blend layers and the partial clips use this frame;
-/// animation-frame triggers fire on the held frame instead (see `record`).
-fn shown_frame(frame: f32, rate: f32, is_cycle: bool) -> f32 {
-    if is_cycle {
-        (frame - rate).rem_euclid(60.)
-    } else {
-        (frame - rate).max(0.)
-    }
-}
-/// The frame of the player's main clip as the sample shows it.
+/// The clip frame a trace row shows is the frame the pose displays in the
+/// game's sample (after its animation update of the logic frame). The game
+/// advances a clip at the start of its logic frame, then runs the state, so a
+/// clip a state starts reads frame 0 in that frame and the next frame advances
+/// it; the controller does the same, so its clip frame is the shown frame.
+/// Animation-frame triggers fire one advance later (see `record`).
 fn main_frame(a: &Anim) -> f32 {
-    shown_frame(a.frame, a.rate, a.name == "Move")
-}
-/// The frame the controller holds after a step, from a row's shown frame.
-fn held_frame(shown: f32, rate: f32) -> f32 {
-    shown + rate
+    a.frame
 }
 impl Pose {
     /// The pose the controller asks for. The "Move" cycle blends Walk, Run,
@@ -135,7 +119,7 @@ impl Pose {
             return Self {
                 layers: vec![Layer {
                     name: a.name,
-                    frame: shown_frame(a.frame, a.rate, false),
+                    frame: a.frame,
                     rate: a.rate,
                     weight: 1.,
                 }],
@@ -147,7 +131,7 @@ impl Pose {
             .filter(|(_, w)| *w > 0.001)
             .map(|(name, weight)| Layer {
                 name,
-                frame: shown_frame(a.frame, a.rate, true),
+                frame: a.frame,
                 rate: a.rate,
                 weight,
             })
@@ -293,7 +277,7 @@ impl Recorder {
         let advance = self.cursor.advance(
             p.anim.name,
             p.anim.serial,
-            p.anim.frame,
+            p.anim.held(),
             looping(p.anim.name),
         );
         if let Some((from, to, with_cap)) = advance.scan {
@@ -344,7 +328,7 @@ impl Recorder {
         }
         // Effects: the original's by their table names, or the stand-ins'.
         let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
-            let (names, alive) = tracker.step(p, &fxs, p.anim.frame);
+            let (names, alive) = tracker.step(p, &fxs, p.anim.held());
             events.extend(names.into_iter().map(|n| format!("effect:{n}")));
             alive.into_iter().collect()
         } else {
@@ -430,7 +414,7 @@ impl Recorder {
         cells.num(p.facing.x);
         cells.num(p.facing.z);
         cells.int(p.grounded as i64);
-        cells.text(nerve(p.mode, p.anim.name).name);
+        cells.text(nerve(p.mode, p.phase_clip()).name);
         // The run cycle is one slot, `Move`, whose clips are the blend layers.
         cells.text(p.anim.name);
         cells.num(shown);
@@ -500,9 +484,9 @@ impl Recorder {
 }
 
 /// The frame a partial (upper-body) clip shows; it advances one frame per step
-/// like the main clip, so the same step back applies.
+/// like the main clip.
 fn sub_frame(sub: &Anim) -> f32 {
-    (sub.frame - sub.rate).max(0.)
+    sub.frame
 }
 fn layer_cell(name: &str, frame: f32, rate: f32, weight: f32) -> String {
     format!("{name}@{}*{}={}", num(frame), num(rate), num(weight))
@@ -606,20 +590,19 @@ impl TraceFile {
         let mode = self
             .cell(row, "state")
             .and_then(|s| state_from_nerve(s, anim_name, speed));
-        let rate = self.number(row, "anim_rate").unwrap_or(1.);
-        let held = held_frame(n("anim_frame"), rate);
+        let shown = n("anim_frame");
         let moving_cycle = ["Move", "Walk", "Run", "Dash", "DashFast"].contains(&anim_name)
             && matches!(mode, Some(Move::Walk | Move::Run));
         let anim = if anim_name == "Move" && moving_cycle {
             // The game's `Move` slot is the 60-frame cycle phase itself.
-            Some(("Move", held.rem_euclid(60.)))
+            Some(("Move", shown.rem_euclid(60.)))
         } else if moving_cycle {
             // A clip of the cycle: the phase runs over 60 frames whatever the length.
             self.number(row, "anim_len")
                 .filter(|len| *len > 0.)
-                .map(|len| ("Move", (held / len * 60.).rem_euclid(60.)))
+                .map(|len| ("Move", (shown / len * 60.).rem_euclid(60.)))
         } else {
-            Some((intern(anim_name), held))
+            Some((intern(anim_name), shown))
         };
         // The game's counters under their names, or the rewrite's own.
         let mut counters = counters_from_game(self.cell(row, "counters").unwrap_or(""));

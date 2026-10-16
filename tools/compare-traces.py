@@ -42,6 +42,9 @@ import re
 import sys
 from collections import Counter, OrderedDict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from reaction_names import english as reaction_name  # noqa: E402
+
 # Default numeric tolerances, in the trace's units (cm, cm/frame, degrees, ...).
 NUMERIC = OrderedDict(
     [
@@ -341,8 +344,17 @@ def compare_vector(g, r, tol):
     return err, ([f"{g} vs {r}"] if err > tol else [])
 
 
+def event_item(item):
+    """An event as both sides compare it: the game logs a hit reaction by its
+    Japanese name (`reaction:着地`), the rewrite by its English one."""
+    kind, _, name = item.partition(":")
+    return f"{kind}:{reaction_name(name)}" if kind == "reaction" else item
+
+
 def compare_set(g, r, sep, ignore):
-    keep = lambda text: Counter(i for i in split_items(text, sep) if i.split(":", 1)[0] not in ignore)
+    keep = lambda text: Counter(
+        event_item(i) for i in split_items(text, sep) if i.split(":", 1)[0] not in ignore
+    )
     gc, rc = keep(g), keep(r)
     problems = []
     only_g = sorted((gc - rc).elements())
@@ -771,6 +783,10 @@ def self_check():
         report = compare(game, rewrite, allow_contaminated=True)
         assert report.excluded == [2] and report.result("counters.prejump").status == "PASS"
         assert any(n.startswith("CONTAMINATED") for n in report.notes)
+    # The game's Japanese reaction names compare with the rewrite's English ones.
+    jp, en = "reaction:着地[走り];se:Land", "se:Land;reaction:LandRun"
+    assert compare_set(jp, en, ";", set())[1] == [], compare_set(jp, en, ";", set())
+    assert compare_set("reaction:着地", "reaction:LandRun", ";", set())[1] != []
     print("compare-traces checks passed.")
 
 

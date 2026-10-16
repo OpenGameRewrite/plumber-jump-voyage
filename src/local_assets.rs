@@ -696,7 +696,7 @@ mod imported {
     fn target(loaded: &Loaded, p: &crate::movement::Player, ahead: f32) -> Pose {
         let anim = p.anim;
         if anim.name == "Move" {
-            let phase = ((anim.frame + anim.rate * ahead) / 60.).rem_euclid(1.);
+            let phase = ((anim.held() + anim.rate * ahead) / 60.).rem_euclid(1.);
             let weights = crate::movement::move_weights(p.move_speed);
             let clips = ["Walk", "Run", "Dash", "DashFast"]
                 .iter()
@@ -709,7 +709,7 @@ mod imported {
         let Some((node, len)) = clip(loaded, anim.name) else {
             return Pose::default();
         };
-        let seconds = (anim.frame + anim.rate * ahead).max(0.) / 60.;
+        let seconds = (anim.held() + anim.rate * ahead).max(0.) / 60.;
         let time = if looping(anim.name) {
             seconds.rem_euclid(len.max(1e-3))
         } else {

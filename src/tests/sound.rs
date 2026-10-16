@@ -69,6 +69,9 @@ fn animation_sound_triggers() {
     p.anim.name = "Jump";
     p.anim.serial = 1;
     p.anim.frame = 0.;
+    // Triggers fire on the frame the clip reaches next; a still clip keeps the
+    // test about the cursor, not the playback rate.
+    p.anim.rate = 0.;
     let e = world.spawn(p).id();
     let system = world.register_system(play);
     let count = |w: &mut World| w.query::<&AudioPlayer>().iter(w).count();

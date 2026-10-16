@@ -77,7 +77,15 @@ fn scenarios() {
     assert_eq!(cell(&run, 119, "anim_len"), "60.000000");
     assert!((number(&run, 119, "speed_h") - 14.).abs() < 0.01);
     assert!(number(&run, 119, "pz") > 600. && number(&run, 119, "px").abs() < 1e-3);
-    assert_eq!(cell(&run, 0, "anim"), "RunStart");
+    // The run is chosen on frame 0 (step 0, still the standing clip, no
+    // movement) and starts on frame 1, as in the game.
+    assert_eq!(cell(&run, 0, "state"), "Run/Run3D");
+    assert_eq!(cell(&run, 0, "state_step"), "0");
+    assert_eq!(cell(&run, 0, "anim"), "Wait");
+    assert_eq!(number(&run, 0, "pz"), 0.);
+    assert_eq!(cell(&run, 1, "anim"), "RunStart");
+    assert_eq!(cell(&run, 1, "state_step"), "1");
+    assert!(number(&run, 1, "pz") > 0.);
     assert_eq!(cell(&run, 179, "state"), "Wait/Wait");
     let events = (0..run.len())
         .map(|f| cell(&run, f, "events"))
@@ -88,15 +96,23 @@ fn scenarios() {
         (0..run.len()).any(|f| cell(&run, f, "interp").contains(':')),
         "a crossfade starts into the run"
     );
-    // Jumping: pressed on frame 10, airborne at once, home again at the end.
+    // Jumping: pressed on frame 10, which chooses the jump; the take-off, with
+    // its clip, impulse and dust, is the first step on frame 11. Home again
+    // at the end.
     let jump = trace(JUMP);
     assert_eq!(cell(&jump, 9, "ground"), "1");
-    assert_eq!(cell(&jump, 10, "ground"), "0");
+    assert_eq!(cell(&jump, 10, "ground"), "1");
     assert_eq!(cell(&jump, 10, "state"), "Jump/Jump");
+    assert_eq!(cell(&jump, 10, "state_step"), "0");
+    assert_eq!(cell(&jump, 10, "anim"), "Wait");
+    assert_eq!(cell(&jump, 11, "ground"), "0");
+    assert_eq!(cell(&jump, 11, "anim"), "Jump");
+    assert_eq!(cell(&jump, 11, "anim_frame"), "0.000000");
     assert_eq!(cell(&jump, 10, "in_buttons"), "!B");
     assert_eq!(cell(&jump, 11, "in_buttons"), "B");
-    assert!(number(&jump, 10, "vy") > 10. && number(&jump, 20, "py") > 50.);
-    assert!(cell(&jump, 10, "events").contains("effect:JumpDust"));
+    assert!(number(&jump, 11, "vy") > 10. && number(&jump, 20, "py") > 50.);
+    assert!(!cell(&jump, 10, "events").contains("effect:"));
+    assert!(cell(&jump, 11, "events").contains("effect:JumpDust"));
     assert_eq!(cell(&jump, 90, "ground"), "1");
     assert_eq!(cell(&jump, 90, "py"), "0.000000");
     // The same run twice gives the same bytes.

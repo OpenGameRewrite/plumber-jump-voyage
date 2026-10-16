@@ -895,12 +895,17 @@ pub fn animate(
     };
     // The actor sits on a held edge or pole; the explorer hangs below/behind it.
     body.translation = match p.mode {
-        Move::Crouch | Move::Crawl | Move::Roll | Move::PoundLand => Vec3::Y * -0.45,
+        Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::PoundLand => {
+            Vec3::Y * -0.45
+        }
         Move::Ledge if p.anim.name != "WallCatchEnd" => Vec3::new(0., -1.45, 0.25),
         Move::Pole => Vec3::new(0., 0., 0.3),
         _ => Vec3::ZERO,
     };
-    body.scale = if matches!(p.mode, Move::Crouch | Move::Crawl | Move::PoundLand) {
+    body.scale = if matches!(
+        p.mode,
+        Move::SquatBrake | Move::Crouch | Move::Crawl | Move::PoundLand
+    ) {
         Vec3::new(1., 0.7, 1.)
     } else if p.mode == Move::Roll {
         Vec3::splat(0.75)

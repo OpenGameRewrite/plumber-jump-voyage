@@ -53,11 +53,14 @@ Empty cells mean the rewrite has no equivalent:
   turning are all `Run/Run3D`, and the jump family is `Jump/Jump`; the clip
   tells them apart. Landing is `Wait/Land` while the landing clip plays.
 - Row conventions taken from the real-game traces: values are the state
-  after the step, except `anim_frame`, which shows the frame the step started
-  from (a clip that began this step reads 0); `vy` on the ground is -3, the pull
+  after the step; the clip frame is the frame the step's own animation advance
+  left (a clip that began this step reads 0); `vy` on the ground is -3, the pull
   the original keeps reporting (the controller cancels it inside the step), and
-  in the step that lands it is the fall speed that moved the player;
-  standing is `Wait/Wait`.
+  in the step that reaches the ground it is the fall speed that moved the
+  player; standing is `Wait/Wait`. `state_step` counts the steps of the actor
+  nerve (the part of `state` before the slash): 0 in the row where a state is
+  chosen, 1 after its first step, and it keeps counting through the sub-states
+  of one nerve (walking, braking and turning; landing and standing).
 - `anim`, `anim_frame`, `anim_rate`: the controller's clip. The run cycle is the
   game's `Move` slot, a 60-frame phase (`anim_len` 60) whose clips are the
   `anim_layers`, with `blend` weights; its `anim_frame` is that phase, not a
@@ -107,24 +110,26 @@ comparison ignores it then.
 The game's probe takes one sample per logic frame after the player's movement
 and the model's animation update. Inside that frame the game updates the
 animation first (`PlayerAnimator::updateAnimFrame`) and then runs the state's
-nerve. The controller runs the state first and advances the clip at the end of
-its step. The two orders show the same clip frames to the state logic, and the
-trace follows the game's sample: `anim_frame` is the frame the step started
-from. Animation-frame triggers (sounds, effects) are scanned up to the frame
-the controller holds after its step, which is where the game logs them: a
-sound on clip frame t is in the row whose pose still shows frame t - 1.
+nerve, and the controller does the same: `Player::step` advances the clips,
+then runs the state chosen last frame (`src/nerve.rs`). Animation-frame
+triggers (sounds, effects) are scanned up to the frame the clip will hold after
+the next advance, which is where the game logs them: a sound on clip frame t is
+in the row whose pose still shows frame t - 1.
 
-What differs is when a state change takes effect. In the game, the nerve that
-decides a change (a jump press in `Wait`, a landing seen in `Jump`) switches
-the state in frame N: the row shows the new `state` with `state_step` 0, and
-the old clip, position and velocity. The new state's first execution, with its
-clip at frame 0, its impulse and its sounds and effects, is frame N + 1
-(`anim_frame == state_step - 1` from then on). A landing has one more frame:
-the ground contact is flagged in row N, the `Wait/Land` state appears in row
-N + 1 and its clip starts in row N + 2. The controller decides and acts in the
-same step, so every transition in a rewrite trace is one frame early (two for
-a landing, since the contact is the earlier of them) and its `state_step`
-never reads 0. The trace records this as it is; it is not hidden.
+State changes follow the game's nerve machine (`al::NerveKeeper`). A nerve that
+decides a change (a jump press in `Wait`, a landing seen in `Jump`) only names
+the next one: that frame's row shows the new `state` with `state_step` 0, and
+the old clip, position and velocity. The new state's first step, with its clip
+at frame 0, its impulse and its sounds and effects, is frame N + 1
+(`anim_frame == state_step - 1` from then on). The controller does the same:
+`Player::change` records the state and what its first step does, and the next
+`step` runs that first. A landing has one more frame: the ground contact is
+flagged in row N, the state that handles it (`Wait/Land`, a run, the next jump)
+is chosen in row N + 1, and its clip starts in row N + 2. Sub-states of one
+nerve (`Squat/Brake` to `Squat/Wait`, `HipDrop/Fall` to `HipDrop/Land`) are
+chosen and started the same way without restarting `state_step`; the run's
+walk, skid and turn are one nerve whose physics continue through the change and
+whose clip starts a frame later.
 
 ## Comparing
 
@@ -163,7 +168,11 @@ velocity, front, ground, clip and frame, state frame count and any counters
 whose names match `Player::counters`. Internals the trace cannot show (throw,
 roll, climb and fire controls, the cap, how long a jump may still extend) keep
 the rewrite's own values, and gravity and air-speed limits are set to what
-entering that state would have given. Compare with `--lockstep` to count the
+entering that state would have given. A row at the contact with the ground
+(`ground` 1 in a state that flies) is injected with the landing still to be
+decided. A row whose `sub_step` is 0 shows a state that was only chosen, and a
+snapshot cannot hold the first step it has pending, so the replay injects the
+row before it and chooses the state again with that frame's input. Compare with `--lockstep` to count the
 frames that disagree rather than look for drift.
 
 ## Rendered captures

@@ -26,8 +26,8 @@ fn game_rows() {
     assert!((s.pos.z - 0.2).abs() < 1e-6 && s.grounded);
     assert_eq!(
         s.anim,
-        Some(("Move", 32.5)),
-        "frame 12 of 24 is half a cycle, plus the frame the step advances"
+        Some(("Move", 30.0)),
+        "frame 12 of 24 is half a cycle; the next step advances it"
     );
     assert_eq!(s.state_frames, Some(7));
     assert!(s.counters.contains(&("jump_timer".into(), 4)));
@@ -37,22 +37,27 @@ fn game_rows() {
     assert!(s.counters.contains(&("jump_count".into(), 0)));
     assert_eq!(file.cell(0, "interp"), None);
     // The game's own `Move` slot is the cycle phase itself.
-    assert_eq!(file.snapshot(1).anim, Some(("Move", 13.0)));
+    assert_eq!(file.snapshot(1).anim, Some(("Move", 12.0)));
 }
 
 /// The recorded animation frame follows the game's sample: a clip started in
-/// a step reads frame 0 there, and the frame after reads 1.
+/// a step reads frame 0 there, and the frame after reads 1. Triggers fire one
+/// advance ahead of what the row shows.
 #[cfg_attr(test, test)]
 fn sample_point() {
-    assert_eq!(shown_frame(1., 1., false), 0.);
-    assert_eq!(shown_frame(0., 1., false), 0.);
-    assert_eq!(shown_frame(2.5, 1.5, false), 1.);
-    assert_eq!(shown_frame(0.5, 1.5, true), 59.);
+    let clip = Anim {
+        name: "Jump",
+        serial: 0,
+        frame: 0.,
+        rate: 1.5,
+    };
+    assert_eq!(main_frame(&clip), 0.);
+    assert_eq!(clip.held(), 1.5);
     let sub = Anim {
         name: "ThrowCapParts",
         serial: 0,
         frame: 1.,
         rate: 1.,
     };
-    assert_eq!(sub_frame(&sub), 0.);
+    assert_eq!(sub_frame(&sub), 1.);
 }
