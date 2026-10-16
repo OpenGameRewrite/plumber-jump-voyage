@@ -78,6 +78,10 @@ impl Outfit {
 fn one() -> f32 {
     1.
 }
+/// True while an original model is shown: its shadow then comes from the sun
+/// alone, as in the game, and the procedural drop-shadow disc stays hidden.
+#[derive(Resource, Default)]
+pub struct CastsOwnShadow(pub bool);
 pub const EXPLORERS: [&str; 3] = ["Terrace explorer", "Sunset explorer", "Midnight explorer"];
 #[derive(Resource)]
 pub struct Wardrobe {
@@ -200,7 +204,9 @@ pub fn plugin(app: &mut App) {
                 .unwrap_or(3);
         }
     }
-    app.insert_resource(wardrobe).add_systems(Update, colors);
+    app.insert_resource(wardrobe)
+        .init_resource::<CastsOwnShadow>()
+        .add_systems(Update, colors);
     #[cfg(feature = "local-assets")]
     imported::plugin(app);
 }
@@ -809,6 +815,7 @@ mod imported {
         settings: Res<crate::input::Settings>,
         loaded: Res<Loaded>,
         wardrobe: Res<Wardrobe>,
+        mut own_shadow: ResMut<CastsOwnShadow>,
         mut hats: Query<&mut Visibility, With<crate::world::Hat>>,
         mut meshes: Query<
             (&AssetPart, &mut Visibility),
@@ -826,6 +833,9 @@ mod imported {
         >,
     ) {
         let imported = settings.outfit >= 3 && loaded.model_visible;
+        if own_shadow.0 != imported {
+            own_shadow.0 = imported;
+        }
         for mut hat in &mut hats {
             *hat = if imported && (p.cap.is_none() || loaded.cap_loaded) {
                 Visibility::Hidden
@@ -926,25 +936,37 @@ mod imported {
     /// Materials the export cannot express: the metal suit is shaded entirely
     /// by reflections in the original, and untextured glass is see-through.
     fn finish(
+        mut commands: Commands,
         mut loaded: ResMut<Loaded>,
-        meshes: Query<(&AssetPart, &MeshMaterial3d<StandardMaterial>)>,
+        meshes: Query<(Entity, &Name, &AssetPart, &MeshMaterial3d<StandardMaterial>)>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
         if !loaded.model_visible || loaded.finished {
             return;
         }
         let mut seen = false;
-        for (part, handle) in &meshes {
+        for (entity, name, part, handle) in &meshes {
             if !part.exported {
                 continue;
             }
             seen = true;
+            if !casts_ground_shadow(name) {
+                commands.entity(entity).insert(bevy::light::NotShadowCaster);
+            }
             let Some(mut m) = materials.get_mut(&handle.0) else {
                 continue;
             };
             finish_material(part, &mut m);
         }
         loaded.finished = seen;
+    }
+    /// The game keeps Mario's shadow on the ground to an ellipsoid around his
+    /// body (`ShadowMaskArray` in his actor data: 110 cm wide, 100 cm tall,
+    /// centred 50 cm up), so what his head and cap would throw far across the
+    /// ground never shows. Only body and hands cast the sun's shadow here.
+    fn casts_ground_shadow(name: &Name) -> bool {
+        const HEAD: [&str; 6] = ["Cap", "Hair", "Eye", "face", "mario_", "Face"];
+        !HEAD.iter().any(|prefix| name.starts_with(prefix))
     }
     fn finish_material(part: &AssetPart, m: &mut StandardMaterial) {
         // Capes, coats and skirts are single sheets the original draws from
@@ -960,6 +982,10 @@ mod imported {
             m.perceptual_roughness = 0.05;
             m.reflectance = 0.9;
             return;
+        }
+        if part.surface == Surface::Hair && !part.metal {
+            // Matte hair: the grey sheen of the sky on it would wash the brown out.
+            m.reflectance = 0.3;
         }
         // The metal head reuses the 64 cap's hair texture, but the game's
         // reflection shader overrides that colour along with the rest.

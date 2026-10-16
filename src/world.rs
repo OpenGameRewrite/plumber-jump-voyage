@@ -1,3 +1,4 @@
+use crate::look;
 use crate::movement::{Course, Fx, Move, Player, Pole, SPAWN, Solid};
 use bevy::prelude::*;
 
@@ -84,16 +85,6 @@ pub struct Progress {
 #[derive(Resource)]
 pub struct Palette(pub Handle<StandardMaterial>);
 
-/// Where the sun stands in a rendered replay (direction from the origin). In
-/// the real game's reference pictures Mario's back, which faces the camera, is
-/// evenly lit and his shadow lies almost straight below him with only a short
-/// stretch toward the camera, so the sun is nearly overhead (about 80 degrees)
-/// and a little on the camera's side.
-const SHOT_SUN_FROM: Vec3 = Vec3::new(1., 20., -3.);
-/// Plain ground of a rendered replay: the colour of the reference plateau's
-/// soil as it shows in the game's pictures, before this scene's own lighting.
-const SHOT_SOIL: [f32; 3] = [0.70, 0.55, 0.22];
-
 pub fn plugin(app: &mut App) {
     app.init_resource::<Orbit>()
         .init_resource::<Progress>()
@@ -106,8 +97,11 @@ pub fn plugin(app: &mut App) {
     }
 }
 fn material(m: &mut Assets<StandardMaterial>, rgb: [f32; 3]) -> Handle<StandardMaterial> {
+    // The game-data build lights the course with the game's strong daylight;
+    // the course's own colours were chosen for the dimmer ROMless light.
+    let k = look::course_albedo();
     m.add(StandardMaterial {
-        base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+        base_color: Color::srgb(rgb[0] * k, rgb[1] * k, rgb[2] * k),
         perceptual_roughness: 0.62,
         ..default()
     })
@@ -205,15 +199,24 @@ fn setup(
     let skin = material(&mut materials, [0.67, 0.87, 0.85]);
     let grass = material(&mut materials, [0.47, 0.76, 0.33]);
     commands.insert_resource(Palette(teal.clone()));
+    let sky = images.add(sky_cubemap(128));
+    let rig = if cfg!(feature = "local-assets") {
+        look::game()
+    } else {
+        look::romless(replay.is_some())
+    };
+    let environment = rig
+        .environment
+        .map_or_else(|| sky.clone(), |image| images.add(image));
     commands.insert_resource(GlobalAmbientLight {
-        color: Color::srgb(0.78, 0.88, 1.),
-        brightness: if replay.is_some() { 150. } else { 250. },
+        color: rig.ambient,
+        brightness: rig.ambient_brightness,
         ..default()
     });
     commands.spawn((
         DirectionalLight {
-            illuminance: if replay.is_some() { 20000. } else { 14000. },
-            color: Color::srgb(1., 0.97, 0.9),
+            illuminance: rig.sun_lux,
+            color: rig.sun_color,
             shadow_maps_enabled: true,
             ..default()
         },
@@ -223,49 +226,53 @@ fn setup(
             ..default()
         }
         .build(),
-        bevy::camera::visibility::RenderLayers::from_layers(&[0, 1]),
-        Transform::from_translation(if replay.is_some() {
-            SHOT_SUN_FROM
-        } else {
-            Vec3::new(10., 18., 8.)
-        })
-        .looking_at(Vec3::ZERO, Vec3::Y),
+        bevy::camera::visibility::RenderLayers::from_layers(&[0, 1, look::SPRITE_SHADOW_LAYER]),
+        Transform::from_translation(rig.sun_from).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    let sky = images.add(sky_cubemap(128));
-    commands.spawn((
-        Camera3d::default(),
-        MainCamera,
-        IsDefaultUiCamera,
-        bevy::camera::Hdr,
-        Projection::Perspective(PerspectiveProjection {
-            fov: 55_f32.to_radians(),
-            ..default()
-        }),
-        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        bevy::post_process::bloom::Bloom {
-            intensity: 0.12,
-            ..bevy::post_process::bloom::Bloom::NATURAL
-        },
-        bevy::light::Skybox {
-            image: Some(sky.clone()),
-            brightness: 1800.,
-            ..default()
-        },
-        bevy::light::GeneratedEnvironmentMapLight {
-            environment_map: sky.clone(),
-            intensity: if replay.is_some() { 600. } else { 1400. },
-            ..default()
-        },
-        bevy::pbr::DistanceFog {
-            color: Color::srgba(0.80, 0.90, 0.98, 0.9),
-            falloff: bevy::pbr::FogFalloff::Linear {
-                start: 45.,
-                end: 160.,
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            MainCamera,
+            IsDefaultUiCamera,
+            bevy::camera::Hdr,
+            Projection::Perspective(PerspectiveProjection {
+                fov: 55_f32.to_radians(),
+                ..default()
+            }),
+            rig.tonemapping,
+            bevy::post_process::bloom::Bloom {
+                intensity: rig.bloom,
+                ..bevy::post_process::bloom::Bloom::NATURAL
             },
-            ..default()
-        },
-        Transform::from_xyz(0., 5., 14.).looking_at(Vec3::Y, Vec3::Y),
-    ));
+            bevy::light::Skybox {
+                image: Some(sky.clone()),
+                brightness: rig.skybox_brightness,
+                ..default()
+            },
+            bevy::light::GeneratedEnvironmentMapLight {
+                environment_map: environment,
+                intensity: rig.environment_intensity,
+                ..default()
+            },
+            bevy::pbr::DistanceFog {
+                color: Color::srgba(0.80, 0.90, 0.98, 0.9),
+                falloff: bevy::pbr::FogFalloff::Linear {
+                    start: 45.,
+                    end: 160.,
+                },
+                ..default()
+            },
+            Transform::from_xyz(0., 5., 14.).looking_at(Vec3::Y, Vec3::Y),
+        ))
+        .id();
+    if let Some(curve) = rig.tone {
+        commands.entity(camera).insert(curve);
+    }
+    if rig.hard_shadows {
+        commands
+            .entity(camera)
+            .insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+    }
     commands.spawn((
         Camera3d::default(),
         Camera {
@@ -303,7 +310,15 @@ fn setup(
         // bare and dirt-coloured like the plateau the real game's reference
         // pictures were taken on, so only Mario and his effects draw the eye.
         *course = crate::replay::flat_floor();
-        let soil = material(&mut materials, SHOT_SOIL);
+        let [r, g, b] = look::replay_soil();
+        // Dry earth: matte, with no sheen of the sky on it.
+        let soil = materials.add(StandardMaterial {
+            base_color: Color::srgb(r, g, b),
+            perceptual_roughness: 1.,
+            reflectance: 0.,
+            emissive: look::replay_soil_glow(),
+            ..default()
+        });
         block(
             &mut commands,
             &mut meshes,

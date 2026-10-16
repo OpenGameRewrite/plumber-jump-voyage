@@ -20,6 +20,7 @@ mod input;
 #[cfg(feature = "local-assets")]
 mod legacy_assets;
 mod local_assets;
+mod look;
 mod movement;
 mod nerve;
 mod replay;
@@ -30,6 +31,7 @@ mod sound;
 // Pure sound rules, shared by the audio and the headless trace.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 mod sound_table;
+mod tone;
 mod trace;
 mod ui;
 mod world;
@@ -63,6 +65,7 @@ fn main() {
         sound_table::self_check();
         game_names::self_check();
         game_columns::self_check();
+        tone::self_check();
         trace::self_check();
         replay::self_check();
         #[cfg(feature = "local-assets")]
@@ -107,7 +110,7 @@ fn main() {
         fx::plugin,
     ));
     #[cfg(feature = "local-assets")]
-    app.add_plugins((sound::plugin, effects::plugin));
+    app.add_plugins((sound::plugin, effects::plugin, tone::plugin));
     if let Some(driver) = replay_shots {
         shots::install(&mut app, driver);
     }

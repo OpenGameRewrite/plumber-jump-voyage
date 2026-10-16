@@ -637,11 +637,13 @@ fn simulate(
     }
 }
 fn shadow(
+    own: Res<crate::local_assets::CastsOwnShadow>,
     p: Single<&Player>,
     course: Res<Course>,
     mut shadow: Single<(&mut Transform, &mut Visibility), With<Shadow>>,
 ) {
-    let Some(ground) = course.ground(p.pos + Vec3::Y * 0.05) else {
+    // The original model casts the sun's own shadow; a disc would be a second one.
+    let Some(ground) = course.ground(p.pos + Vec3::Y * 0.05).filter(|_| !own.0) else {
         *shadow.1 = Visibility::Hidden;
         return;
     };
