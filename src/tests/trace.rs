@@ -34,7 +34,7 @@ fn game_rows() {
     assert!(s.counters.contains(&("pre_jump".into(), 3)));
     // The game's counters come back under the rewrite's names.
     assert!(s.counters.contains(&("pre_jump".into(), 2)));
-    assert!(s.counters.contains(&("jump_count".into(), 0)));
+    assert!(s.counters.contains(&("jump_count".into(), 1)));
     assert_eq!(file.cell(0, "interp"), None);
     // The game's own `Move` slot is the cycle phase itself.
     assert_eq!(file.snapshot(1).anim, Some(("Move", 12.0)));

@@ -106,7 +106,7 @@ fn scenarios() {
     assert_eq!(cell(&jump, 10, "state_step"), "0");
     assert_eq!(cell(&jump, 10, "anim"), "Wait");
     assert_eq!(cell(&jump, 11, "ground"), "0");
-    assert_eq!(cell(&jump, 11, "anim"), "Jump");
+    assert_eq!(cell(&jump, 11, "anim"), "JumpReverse");
     assert_eq!(cell(&jump, 11, "anim_frame"), "0.000000");
     assert_eq!(cell(&jump, 10, "in_buttons"), "!B");
     assert_eq!(cell(&jump, 11, "in_buttons"), "B");

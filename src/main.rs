@@ -1,6 +1,7 @@
 // Bevy system parameters declare ECS access directly; keep their query filters explicit.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod air_move;
 mod asset_contract;
 // The original's effects: their data and trigger rules also serve the headless trace.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
@@ -52,6 +53,7 @@ fn main() {
         }
     }
     if args.iter().any(|a| a == "--self-check") {
+        air_move::self_check();
         movement::self_check();
         input::self_check();
         ui::self_check();

@@ -33,6 +33,9 @@ pub enum Source {
     Mario,
     /// Started by Cappy's clip.
     Cap,
+    /// Started by a hit reaction of the player actor itself (landings): the
+    /// game logs these without the model's owner mark.
+    Reaction,
     /// Kept running by the controller's own conditions.
     Code,
 }
@@ -216,7 +219,7 @@ impl Triggers {
             for key in self.reactions.get(*reaction).into_iter().flatten() {
                 changes.push(Change::Start {
                     key: key.clone(),
-                    source: Source::Mario,
+                    source: Source::Reaction,
                     once: true,
                 });
             }
@@ -257,13 +260,9 @@ impl Triggers {
 /// no clip for them). Speeds are in original units per frame.
 pub fn code_driven(p: &Player) -> Vec<&'static str> {
     let mut wanted = vec![];
-    let running = p.grounded && p.anim.name == "Move";
-    if running && p.move_speed >= 20. {
-        wanted.push("DashFast");
-    } else if running && p.move_speed >= 15. {
-        wanted.push("Dash");
-    } else if running && p.move_speed >= 8. {
-        wanted.push("Run");
+    // The run cycle's control picks the dust for the pose it plays.
+    if p.grounded && p.anim.name == "Move" {
+        wanted.extend(p.run_cycle().effect);
     }
     if p.mode == Move::Roll && p.grounded {
         wanted.push("Rolling");
@@ -376,6 +375,7 @@ fn owner(source: Source) -> &'static str {
     match source {
         Source::Cap => "cap",
         Source::Mario | Source::Code => "model",
+        Source::Reaction => "player",
     }
 }
 /// Follows the effects a run starts and how long each stays alive, without
@@ -454,7 +454,11 @@ impl Tracker {
                         None => None,
                     };
                     let owner = owner(source);
-                    started.push(format!("{}@{owner}", key.effect));
+                    if source == Source::Reaction {
+                        started.push(key.effect.clone());
+                    } else {
+                        started.push(format!("{}@{owner}", key.effect));
+                    }
                     self.live.retain(|l| l.key != key);
                     self.live.push(Live {
                         key,
@@ -570,7 +574,7 @@ pub fn self_check() {
         hit,
         [Change::Start {
             key: effect("Thud"),
-            source: Source::Mario,
+            source: Source::Reaction,
             once: true
         }]
     );
@@ -607,11 +611,20 @@ pub fn self_check() {
         triggers.evaluate(&frame("Move", 6, 2.)),
         [Change::Stop { key: effect("Run") }]
     );
+    // A full-stick run: the run start's dust, then the run's.
+    let floor = crate::replay::flat_floor();
+    let forward = crate::input::Orders {
+        direction: bevy::math::Vec2::NEG_Y,
+        ..Default::default()
+    };
     let mut p = Player::default();
-    p.anim.name = "Move";
-    p.move_speed = 16.;
-    assert_eq!(code_driven(&p), ["Dash"]);
-    p.move_speed = 9.;
+    for _ in 0..4 {
+        p.step(&forward, &floor);
+    }
+    assert_eq!(code_driven(&p), ["RunStart"]);
+    for _ in 0..45 {
+        p.step(&forward, &floor);
+    }
     assert_eq!(code_driven(&p), ["Run"]);
     p.grounded = false;
     assert!(code_driven(&p).is_empty());
@@ -634,8 +647,9 @@ pub fn self_check() {
     let mut tracker = Tracker::new(library);
     let mut player = Player::default();
     let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
-    assert_eq!(started, ["Thud@model"]);
-    assert_eq!(alive, ["model:Thud"]);
+    // A landing reaction's effect is logged without the model's owner mark.
+    assert_eq!(started, ["Thud"]);
+    assert_eq!(alive, ["player:Thud"]);
     player.anim.serial = 1;
     let mut last = alive.len();
     for _ in 0..20 {

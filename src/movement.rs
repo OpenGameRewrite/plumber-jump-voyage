@@ -5,6 +5,7 @@
 //! are stored in metres for the rest of the game. States that the public
 //! decompilation documents follow it; the rest are inferred from their tuning
 //! names and observed behaviour. No original code is reproduced here.
+use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use bevy::prelude::*;
@@ -14,6 +15,9 @@ pub const UNIT: f32 = 0.01;
 /// Simulation rate, matching the original.
 pub const FPS: f32 = 60.;
 pub const RADIUS: f32 = 0.45;
+/// Metres a fall must go below a surface to touch it: arriving exactly on the
+/// surface is no contact yet, as in the original's collision.
+const CONTACT_MARGIN: f32 = 1e-5;
 /// Radius of the course's climbable poles.
 pub const POLE_RADIUS: f32 = 0.18;
 pub const HEIGHT: f32 = 1.6;
@@ -21,10 +25,6 @@ const SQUAT_HEIGHT: f32 = 0.9;
 pub const SPAWN: Vec3 = Vec3::new(0.0, 0.0, 5.0);
 /// Full-tilt running speed in metres per second.
 pub const RUN: f32 = t::NORMAL_MAX * UNIT * FPS;
-/// Frames after a landing in which the next jump continues the combo, and the
-/// same window for the long jump (the trace's `cjump` and `clong` counters).
-pub const CONTINUOUS_JUMP_FRAMES: u32 = t::CONTINUOUS_JUMP_TIMER;
-pub const CONTINUOUS_LONG_JUMP_FRAMES: u32 = t::CONTINUOUS_LONG_JUMP_TIMER;
 
 /// Tuning in original units per frame, following the original player constants.
 mod t {
@@ -279,6 +279,18 @@ pub mod clip {
             _ => 22,
         }
     }
+    /// Length of the jump clips that stay on their last frame while the
+    /// state goes on (the jump state never switches them to the fall clip).
+    pub fn held_length(name: &str) -> Option<u32> {
+        match name {
+            "Jump" | "JumpReverse" => Some(84),
+            "Jump2" => Some(42),
+            "Jump3" | "JumpBack" => Some(68),
+            "JumpTurn" => Some(60),
+            "JumpBroad" => Some(38),
+            _ => None,
+        }
+    }
     pub const LAND: u32 = 26;
     pub const LAND_JUMP3: u32 = 70;
     pub const SQUAT_END: u32 = 13;
@@ -438,6 +450,22 @@ impl Move {
                     | Self::BurnBounce
             )
     }
+    /// A state flown by the jump family's shared air control
+    /// (`PlayerActionAirMoveControl`): the three jumps, the jumps off the pound,
+    /// the cap and a fall. The flips, the long jump and the dive have their own.
+    fn uses_air_control(self) -> bool {
+        matches!(
+            self,
+            Self::Jump
+                | Self::DoubleJump
+                | Self::TripleJump
+                | Self::PoundJump
+                | Self::CapBounce
+                | Self::CapVault
+                | Self::CatchJump
+                | Self::Fall
+        )
+    }
     fn airborne_jump(self) -> bool {
         matches!(
             self,
@@ -555,6 +583,18 @@ impl Anim {
     /// frame t in the row whose pose still shows t - 1.
     pub fn held(&self) -> f32 {
         self.frame + self.rate
+    }
+    /// The frame animation triggers are scanned up to in the trace. The jump,
+    /// pound, dive and landing clips fire a trigger in the row whose pose shows
+    /// its frame; the other clips (the throw's, whose pose reads one row
+    /// behind its time, and the run cycle) keep the `held` rule.
+    pub fn trigger_frame(&self) -> f32 {
+        const ON_POSE: [&str; 4] = ["Jump", "HipDrop", "HeadSliding", "Land"];
+        if ON_POSE.iter().any(|prefix| self.name.starts_with(prefix)) {
+            self.frame
+        } else {
+            self.held()
+        }
     }
 }
 /// Soot left by a burn, as the original's stain control: it builds up while
@@ -679,11 +719,23 @@ pub struct Player {
     pre_jump: u32,
     pre_throw: u32,
     coyote: u32,
-    jump_count: u32,
-    jump_timer: u32,
+    /// The combo of consecutive jumps and the long-jump count, as the
+    /// original's `PlayerContinuousJump` and `PlayerContinuousLongJump`.
+    combo: ContinuousJump,
+    long_combo: ContinuousLongJump,
+    /// Air control of the jump family, the state it was set up for, and the
+    /// facts of the jump in progress that its landing needs.
+    air: AirMove,
+    air_for: Option<Move>,
+    jump_power: f32,
+    combo_kept: bool,
+    /// Velocity when the jump's first step began, before its own impulse.
+    prior_v: Vec3,
+    /// Distance to the floor below, for the ground pound's height rule.
+    ground_height: f32,
+    /// The camera's orbit yaw this frame (the first jump's clip mirrors by it).
+    camera_yaw: f32,
     jump_held_frames: u32,
-    long_jump_count: u32,
-    long_jump_timer: u32,
     run_frames: u32,
     after_turn: u32,
     quick_turn: u32,
@@ -774,11 +826,16 @@ impl Default for Player {
             pre_jump: 0,
             pre_throw: 0,
             coyote: 0,
-            jump_count: 0,
-            jump_timer: t::CONTINUOUS_JUMP_TIMER,
+            combo: ContinuousJump::default(),
+            long_combo: ContinuousLongJump::default(),
+            air: AirMove::default(),
+            air_for: None,
+            jump_power: 0.,
+            combo_kept: false,
+            prior_v: Vec3::ZERO,
+            ground_height: f32::MAX,
+            camera_yaw: 0.,
             jump_held_frames: 0,
-            long_jump_count: 0,
-            long_jump_timer: 0,
             run_frames: 0,
             after_turn: 0,
             quick_turn: 0,
@@ -935,6 +992,35 @@ fn turn(from: Vec3, to: Vec3, max: f32) -> Vec3 {
     let d = wrap(yaw(to) - a).clamp(-max, max);
     Vec3::new((a + d).sin(), 0., (a + d).cos())
 }
+/// What a ground jump asks of the air control: the base speed of a jump, the
+/// jump state's limits on the take-off speed, and the extend window.
+fn jump_takeoff(extend_frames: u32, power: f32, gravity: f32) -> air_move::Takeoff {
+    air_move::Takeoff {
+        speed_limit: t::JUMP_MOVE_MAX,
+        base_speed: t::NORMAL_MAX,
+        extend_frames,
+        power,
+        gravity,
+        input_lock: 0,
+        speed_window: Some((0., air_move::tune::JUMP_BASE_SPEED_MAX)),
+        fall_max: t::FALL_MAX,
+    }
+}
+/// A fall (`PlayerStateFallHakoniwa`'s first step): the vertical speed stays,
+/// the speed range and gravity are those of a jump, and the speed the player
+/// had is kept up to the jump speed limit.
+fn fall_takeoff(vertical_speed: f32) -> air_move::Takeoff {
+    air_move::Takeoff {
+        speed_limit: t::JUMP_MOVE_MAX,
+        base_speed: t::JUMP_MOVE_MIN,
+        extend_frames: 0,
+        power: vertical_speed,
+        gravity: t::JUMP_GRAVITY,
+        input_lock: 0,
+        speed_window: None,
+        fall_max: t::FALL_MAX,
+    }
+}
 fn lerp_clamped(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0., 1.)
 }
@@ -1003,10 +1089,10 @@ impl Player {
             ("pre_jump", self.pre_jump as i64),
             ("pre_throw", self.pre_throw as i64),
             ("coyote", self.coyote as i64),
-            ("jump_count", self.jump_count as i64),
-            ("jump_timer", self.jump_timer as i64),
-            ("long_jump_count", self.long_jump_count as i64),
-            ("long_jump_timer", self.long_jump_timer as i64),
+            ("jump_count", self.combo.count as i64),
+            ("jump_timer", self.combo.timer as i64),
+            ("long_jump_count", self.long_combo.count as i64),
+            ("long_jump_timer", self.long_combo.timer as i64),
             ("run_frames", self.run_frames as i64),
             ("after_turn", self.after_turn as i64),
             ("quick_turn", self.quick_turn as i64),
@@ -1025,10 +1111,10 @@ impl Player {
             "pre_jump" => self.pre_jump = frames,
             "pre_throw" => self.pre_throw = frames,
             "coyote" => self.coyote = frames,
-            "jump_count" => self.jump_count = frames,
-            "jump_timer" => self.jump_timer = frames,
-            "long_jump_count" => self.long_jump_count = frames,
-            "long_jump_timer" => self.long_jump_timer = frames,
+            "jump_count" => self.combo.count = frames,
+            "jump_timer" => self.combo.timer = frames,
+            "long_jump_count" => self.long_combo.count = frames,
+            "long_jump_timer" => self.long_combo.timer = frames,
             "run_frames" => self.run_frames = frames,
             "after_turn" => self.after_turn = frames,
             "quick_turn" => self.quick_turn = frames,
@@ -1086,6 +1172,10 @@ impl Player {
         self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
+        self.air_for = None;
+        if self.mode.uses_air_control() && !self.grounded {
+            self.resume_air_control(s);
+        }
         if let Some((name, frame)) = s.anim {
             if self.anim.name != name {
                 self.start_clip(name);
@@ -1256,6 +1346,7 @@ impl Player {
     fn standing_clip_playing(&self) -> bool {
         let frames = match self.clip() {
             "Land" | "LandTurn" | "LandStiffen" | "LandDownFall" => clip::LAND,
+            "LandRolling" => clip::LAND_ROLLING,
             "LandJump3" => clip::LAND_JUMP3,
             "SquatEnd" => clip::SQUAT_END,
             _ => return false,
@@ -1271,13 +1362,23 @@ impl Player {
             self.anim.frame = self.cycle.shown % 60.;
         } else {
             self.anim.frame += self.anim.rate;
+            // A jump clip that has played out holds a frame past its end.
+            if let Some(length) = clip::held_length(self.anim.name) {
+                self.anim.frame = self.anim.frame.min(length as f32 + 1.);
+            }
             if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
                 self.anim.frame -= clip::FIRE_RUN;
             }
         }
         if let Some(sub) = &mut self.sub_anim {
-            sub.frame += 1.;
-            if sub.held() >= 16. {
+            sub.frame += sub.rate;
+            // The cap-throw overlay lasts 16 frames, the roll's stand-up 8.
+            let length = if sub.name == "RollingStandUp" {
+                8.
+            } else {
+                16.
+            };
+            if sub.held() >= length {
                 self.sub_anim = None;
             }
         }
@@ -1410,6 +1511,9 @@ impl Player {
     }
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
+        self.ground_height = scene
+            .ground(self.pos)
+            .map_or(f32::MAX, |floor| (self.pos.y - floor) / UNIT);
         match self.mode {
             Move::Idle | Move::Walk | Move::Run => self.run(o),
             Move::Skid | Move::Turn => self.brake(o),
@@ -1426,6 +1530,9 @@ impl Player {
             Move::BurnJump | Move::BurnBounce => self.burn_air(o),
             Move::FireRun => self.fire_run(o),
             Move::LongJump => self.long_jump_air(o),
+            Move::Backflip => self.back_jump_air(o),
+            Move::Sideflip => self.turn_jump_air(o),
+            mode if mode.uses_air_control() => self.jump_air(o),
             Move::WallSlide => self.wall_slide(o),
             Move::Ledge => self.wall_catch(o, scene),
             Move::Pole => self.pole_climb(o, scene),
@@ -1435,6 +1542,7 @@ impl Player {
         }
     }
     fn read_input(&mut self, o: &Orders) {
+        self.camera_yaw = o.camera_yaw;
         let stick = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
         self.tilt = stick.length();
         self.stick = stick.normalize_or_zero();
@@ -1482,13 +1590,12 @@ impl Player {
         self.throwing.run = self.throwing.run.saturating_sub(1);
         self.throwing.timer = self.throwing.timer.saturating_sub(1);
         self.coyote = self.coyote.saturating_sub(1);
-        self.long_jump_timer = self.long_jump_timer.saturating_add(1);
         if self.grounded {
-            self.jump_timer = self.jump_timer.saturating_add(1);
             self.land_frames = self.land_frames.saturating_add(1);
         }
     }
     fn finish_frame(&mut self, scene: &Course) {
+        self.update_combo_counters();
         self.update_soot(scene);
         // A state chosen this step has run no step yet: its first one is next.
         // The nerve's own steps restart with a new actor nerve, chosen or
@@ -1740,10 +1847,6 @@ impl Player {
     /// The brake, the turn after it and the pivot on the spot: the rest of
     /// the run state's nerves.
     fn brake(&mut self, o: &Orders) {
-        if self.pre_jump > 0 && self.quick_turn > 0 {
-            self.side_somersault();
-            return;
-        }
         let step = self.run_steps;
         self.run_steps += 1;
         match self.run_nerve {
@@ -1751,7 +1854,11 @@ impl Player {
             RunNerve::Turn => self.turn_step(step),
             _ => self.brake_step(step),
         }
-        if self.pre_jump > 0 {
+        // The actor's judges look at the state's result: the brake of this
+        // frame has already slowed the player when a turning jump is chosen.
+        if self.pre_jump > 0 && self.quick_turn > 0 {
+            self.side_somersault();
+        } else if self.pre_jump > 0 {
             self.ground_jump(o);
         }
     }
@@ -2180,6 +2287,13 @@ impl Player {
             // Only the braking sub-state can start the long jump, and only
             // while moving forward.
             if self.mode == Move::SquatBrake && self.v.dot(self.facing) > 0. {
+                // The brake of this frame has already slowed the slide when
+                // the jump is taken (the squat state runs before the actor
+                // looks for the jump).
+                if sliding {
+                    let slowed = self.v.with_y(0.) * t::SQUAT_BRAKE_RATE;
+                    self.set_h(slowed);
+                }
                 self.long_jump();
             } else {
                 self.backflip();
@@ -2382,8 +2496,10 @@ impl Player {
     ) {
         self.pre_jump = 0;
         self.change(mode, anim, move |p| {
+            p.prior_v = p.v;
             p.leave_ground(mode, power, gravity);
             then(p);
+            p.arm_air_control(mode, power, gravity);
         });
     }
     fn leave_ground(&mut self, mode: Move, power: f32, gravity: f32) {
@@ -2396,8 +2512,153 @@ impl Player {
         self.pre_jump = 0;
         self.events.push(Fx::Jump(mode));
     }
+    /// Hand a jump of the shared family to its air control, as the jump
+    /// state's first step does (`PlayerActionAirMoveControl::setup`): the
+    /// horizontal velocity keeps its direction and the vertical one becomes
+    /// the jump power.
+    fn arm_air_control(&mut self, mode: Move, power: f32, gravity: f32) {
+        if !mode.uses_air_control() {
+            return;
+        }
+        let extend = if self.jump_extend {
+            t::EXTEND_FRAMES
+        } else {
+            0
+        };
+        let takeoff = jump_takeoff(extend, power, gravity);
+        self.air.setup(&mut self.v, self.facing, &takeoff);
+        self.air_for = Some(mode);
+        self.jump_power = power;
+    }
+    /// A state flown by the air control that no take-off armed (a fall, or a
+    /// recorded state being replayed): set it up from the velocity it has.
+    fn arm_fall_control(&mut self) {
+        let takeoff = fall_takeoff(self.v.y);
+        self.air.setup(&mut self.v, self.facing, &takeoff);
+        self.air_for = Some(self.mode);
+    }
+    /// Put the air control into the middle of a recorded jump (lockstep).
+    fn resume_air_control(&mut self, s: &Snapshot) {
+        let frames = s.state_frames.unwrap_or(0);
+        let (extend, gravity) = match self.mode {
+            Move::DoubleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_2ND),
+            Move::TripleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_3RD),
+            Move::Jump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY),
+            Move::CapBounce | Move::CapVault => (0, t::CAP_LEAPFROG_GRAVITY),
+            Move::CatchJump => (0, t::CAP_CATCH_JUMP_GRAVITY),
+            _ => (0, t::JUMP_GRAVITY),
+        };
+        let takeoff = if self.mode == Move::Fall {
+            fall_takeoff(self.v.y)
+        } else {
+            jump_takeoff(extend, self.v.y, gravity)
+        };
+        // The window is still open when the button was held since take-off.
+        let held = self.jump_held_frames > frames;
+        self.air
+            .resume(self.v, self.facing, &takeoff, frames, held && self.v.y > 0.);
+        self.air_for = Some(self.mode);
+    }
+    /// Which jump of the combo the next one is, as the jump state decides when
+    /// it appears: the combo's count, except that the third needs a fast run
+    /// along the direction of the last jump, or the combo starts over.
+    fn pick_jump_kind(&mut self) -> u32 {
+        if self.combo.count < 2 {
+            self.combo_kept = true;
+            return self.combo.count;
+        }
+        let along = self.v.dot(self.facing);
+        let direction = self.facing * along.signum();
+        let fast = along.abs() >= t::NORMAL_MAX * air_move::tune::THIRD_JUMP_SPEED_RATE;
+        let aligned =
+            direction.dot(self.combo.last_dir()) >= air_move::tune::THIRD_JUMP_DIRECTION_DOT;
+        if fast && aligned {
+            self.combo_kept = true;
+            2
+        } else {
+            self.combo.clear(t::CONTINUOUS_JUMP_TIMER);
+            self.combo_kept = false;
+            0
+        }
+    }
+    /// A jump that ends on the ground counts toward the combo, or ends it
+    /// (`PlayerStateJump::tryCountUpContinuousJump`).
+    fn count_jump_combo(&mut self) {
+        if !self.combo_kept {
+            self.combo.clear(t::CONTINUOUS_JUMP_TIMER);
+            return;
+        }
+        let direction = self.v.with_y(0.).normalize_or_zero();
+        let strong = self.jump_power >= t::JUMP_POWER_MAX * air_move::tune::THIRD_JUMP_SPEED_RATE;
+        let aligned =
+            direction.dot(self.combo.last_dir()) >= air_move::tune::THIRD_JUMP_DIRECTION_DOT;
+        if self.combo.count == 0 || strong && aligned {
+            self.combo.count_up(direction);
+        } else {
+            self.combo.clear(t::CONTINUOUS_JUMP_TIMER);
+        }
+    }
+    /// What the original updates once the frame's nerve has run: the combo
+    /// counts down only while standing or running (any other state ends it),
+    /// and the long jump's count runs down outside the long jump.
+    fn update_combo_counters(&mut self) {
+        let nerve = crate::game_names::actor(self.mode, self.clip());
+        if nerve != "Jump" {
+            self.combo
+                .update(matches!(nerve, "Wait" | "Run"), t::CONTINUOUS_JUMP_TIMER);
+        }
+        if self.mode != Move::LongJump {
+            self.long_combo.update(t::CONTINUOUS_LONG_JUMP_TIMER);
+        }
+    }
+    /// The player's side turned toward the camera's view direction
+    /// (`rs::isPlayerSideFaceToCameraZ`): the first jump then plays the clip
+    /// that is not mirrored.
+    fn side_faces_camera(&self) -> bool {
+        let look = Vec3::new(-self.camera_yaw.sin(), 0., -self.camera_yaw.cos());
+        let side = Vec3::new(self.facing.z, 0., -self.facing.x);
+        side.dot(look) < -1e-4
+    }
+    /// The first, second or third jump of the combo. Which one it is, and
+    /// what that does to the combo, is decided as the jump state appears (when
+    /// the jump is chosen); the take-off follows with its first step.
+    fn start_standard_jump(&mut self) {
+        self.pre_jump = 0;
+        let kind = self.pick_jump_kind();
+        let (mode, clip, power_min, power_max, gravity) = match kind {
+            2 => (
+                Move::TripleJump,
+                "Jump3",
+                t::CONTINUOUS_JUMP_POWER_MIN,
+                t::JUMP_POWER_3RD,
+                t::JUMP_GRAVITY_3RD,
+            ),
+            1 => (
+                Move::DoubleJump,
+                "Jump2",
+                t::CONTINUOUS_JUMP_POWER_MIN,
+                t::JUMP_POWER_MAX_2ND,
+                t::JUMP_GRAVITY_2ND,
+            ),
+            _ => (
+                Move::Jump,
+                if self.side_faces_camera() {
+                    "Jump"
+                } else {
+                    "JumpReverse"
+                },
+                t::JUMP_POWER_MIN,
+                t::JUMP_POWER_MAX,
+                t::JUMP_GRAVITY,
+            ),
+        };
+        // The power follows the speed along the facing.
+        let forward = self.v.dot(self.facing).abs();
+        let power =
+            air_move::jump_power(forward, t::NORMAL_MIN, t::NORMAL_MAX, power_min, power_max);
+        self.jump_with(mode, clip, power, gravity, |_| {});
+    }
     fn ground_jump(&mut self, _o: &Orders) {
-        let speed = self.speed_h();
         if self.mode == Move::PoundLand
             && (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&self.frame)
         {
@@ -2443,65 +2704,33 @@ impl Player {
             self.side_somersault();
             return;
         }
-        // Consecutive jumps: land and jump again within the window.
-        let next = if self.jump_timer < t::CONTINUOUS_JUMP_TIMER && speed > t::NORMAL_MIN {
-            (self.jump_count + 1) % 3
-        } else {
-            0
-        };
-        let next = if next == 2 && speed < 8. { 1 } else { next };
-        self.jump_count = next;
-        let rate = speed / t::NORMAL_MAX;
-        match next {
-            1 => self.jump_with(
-                Move::DoubleJump,
-                "Jump2",
-                lerp_clamped(t::CONTINUOUS_JUMP_POWER_MIN, t::JUMP_POWER_MAX_2ND, rate),
-                t::JUMP_GRAVITY_2ND,
-                |_| {},
-            ),
-            2 => self.jump_with(
-                Move::TripleJump,
-                "Jump3",
-                t::JUMP_POWER_3RD,
-                t::JUMP_GRAVITY_3RD,
-                |p| p.jump_extend = false,
-            ),
-            _ => {
-                // The first jump mirrors with whichever foot is planted in the run cycle.
-                let anim = if speed > t::NORMAL_MIN && (4. ..35.).contains(&self.step_phase) {
-                    "JumpReverse"
-                } else {
-                    "Jump"
-                };
-                self.jump_with(
-                    Move::Jump,
-                    anim,
-                    lerp_clamped(t::JUMP_POWER_MIN, t::JUMP_POWER_MAX, rate),
-                    t::JUMP_GRAVITY,
-                    |_| {},
-                )
-            }
-        }
+        self.start_standard_jump();
     }
     fn side_somersault(&mut self) {
+        // The direction is the request's, taken from the stick as the jump is
+        // chosen; a turning jump does not continue the combo.
+        let direction = if self.tilt > 0.05 {
+            self.stick
+        } else {
+            self.facing
+        };
+        self.combo.clear(t::CONTINUOUS_JUMP_TIMER);
+        self.combo_kept = false;
         self.jump_with(
             Move::Sideflip,
             "JumpTurn",
             t::TURN_JUMP_POWER,
             t::TURN_JUMP_GRAVITY,
-            |p| {
-                if p.tilt > 0.05 {
-                    p.facing = p.stick;
-                }
-                p.set_h(p.facing * t::TURN_JUMP_VEL_H);
-                p.max_air_speed = t::TURN_JUMP_VEL_H;
+            move |p| {
+                p.facing = direction;
+                p.set_h(direction * t::TURN_JUMP_VEL_H);
                 p.jump_extend = false;
                 p.quick_turn = 0;
             },
         );
     }
     fn backflip(&mut self) {
+        self.combo_kept = true;
         self.jump_with(
             Move::Backflip,
             "JumpBack",
@@ -2509,61 +2738,123 @@ impl Player {
             t::SQUAT_JUMP_GRAVITY,
             |p| {
                 p.set_h(-p.facing * t::SQUAT_JUMP_BACK);
-                p.max_air_speed = t::SQUAT_JUMP_MOVE_MAX;
                 p.jump_extend = false;
+                p.jump_power = t::SQUAT_JUMP_POWER;
             },
         );
     }
     fn long_jump(&mut self) {
         const NAMES: [&str; 3] = ["JumpBroad", "JumpBroad2", "JumpBroad3"];
-        if self.long_jump_timer >= t::CONTINUOUS_LONG_JUMP_TIMER {
-            self.long_jump_count = 0;
-        }
-        let name = NAMES[self.long_jump_count as usize % 3];
-        self.long_jump_count = (self.long_jump_count + 1) % 3;
-        let speed = self.speed_h();
+        let name = NAMES[self.long_combo.count as usize % 3];
         self.jump_with(
             Move::LongJump,
             name,
             t::LONG_JUMP_POWER,
             t::LONG_JUMP_GRAVITY,
-            move |p| {
-                let s = (speed + t::LONG_JUMP_MOVE_POW)
-                    .max(t::LONG_JUMP_INIT_SPEED)
-                    .max(t::LONG_JUMP_SPEED_MIN);
-                p.set_h(p.facing * s);
+            |p| {
+                p.long_combo.count_up();
+                p.v = air_move::long_jump_velocity(
+                    p.prior_v,
+                    &air_move::LongJumpTakeoff {
+                        move_pow: t::LONG_JUMP_MOVE_POW,
+                        speed_min: t::LONG_JUMP_SPEED_MIN,
+                        init_speed: t::LONG_JUMP_INIT_SPEED,
+                        power: t::LONG_JUMP_POWER,
+                    },
+                );
                 p.jump_extend = false;
             },
         );
     }
-    /// Long jump flight: slow forward accel, stronger brake, light steering.
-    fn long_jump_air(&mut self, o: &Orders) {
-        if self.air_actions(o) {
-            return;
-        }
-        let h = self.v.with_y(0.);
-        let dir = h.normalize_or(self.facing);
-        let mut s = h.length();
-        let mut new_dir = dir;
-        if self.tilt > 0.05 {
-            let along = self.stick.dot(dir);
-            if along < -0.3 {
-                s = (s - t::LONG_JUMP_BRAKE * self.tilt).max(t::LONG_JUMP_SPEED_MIN);
-            } else if along > 0.3 {
-                s = (s + t::LONG_JUMP_ACCEL * self.tilt)
-                    .min(t::LONG_JUMP_SPEED.max(s.min(t::LONG_JUMP_SPEED)));
-            }
-            let side = (t::LONG_JUMP_SIDE_ACCEL * self.tilt / s.max(1.)).atan();
-            new_dir = turn(dir, self.stick, side);
-        }
-        self.facing = new_dir;
-        self.set_h(new_dir * s.min(t::LONG_JUMP_SPEED.max(s)));
-        self.v.y = (self.v.y - t::LONG_JUMP_GRAVITY).max(-t::FALL_MAX);
-        if self.anim.frame >= 37. && self.v.y < 0. && self.anim.name.starts_with("JumpBroad") {
-            self.play("Fall");
-        }
+    /// The stick as a push in the world (length up to one).
+    fn push(&self) -> Vec3 {
+        self.stick * self.tilt
     }
-    /// Generic airborne control for jumps and falls.
+    /// Long jump flight (`rs::moveDivingJump` with the long jump's values):
+    /// slow forward acceleration, a stronger brake, light steering, and the
+    /// facing follows the travel.
+    fn long_jump_air(&mut self, o: &Orders) {
+        let mut facing = self.facing;
+        let push = self.push();
+        air_move::move_diving_jump(
+            &mut self.v,
+            &mut facing,
+            push,
+            &air_move::DivingJump {
+                accel: t::LONG_JUMP_ACCEL,
+                brake: t::LONG_JUMP_BRAKE,
+                speed_max: t::LONG_JUMP_SPEED,
+                speed_min: t::LONG_JUMP_SPEED_MIN,
+                side_accel: t::LONG_JUMP_SIDE_ACCEL,
+                gravity: t::LONG_JUMP_GRAVITY,
+                fall_max: t::FALL_MAX,
+                turn_rate: air_move::tune::SLERP_QUAT_GRAV,
+            },
+        );
+        self.facing = facing;
+        self.air_actions(o);
+    }
+    /// Backflip flight (`rs::moveParallelJump`): a light push along and across
+    /// the travel, a low speed cap and the squat jump's gravity.
+    fn back_jump_air(&mut self, o: &Orders) {
+        let push = self.push();
+        air_move::move_parallel_jump(
+            &mut self.v,
+            push,
+            &air_move::ParallelJump {
+                front: air_move::tune::SQUAT_JUMP_MOVE_POWER,
+                back: air_move::tune::SQUAT_JUMP_MOVE_POWER,
+                side: air_move::tune::SQUAT_JUMP_MOVE_POWER,
+                speed_max: t::SQUAT_JUMP_MOVE_MAX,
+                gravity: t::SQUAT_JUMP_GRAVITY,
+                fall_max: t::FALL_MAX,
+            },
+        );
+        self.air_actions(o);
+    }
+    /// Side somersault flight (`rs::moveDivingJump` with the turn jump's
+    /// values); the body keeps the facing the jump started with.
+    fn turn_jump_air(&mut self, o: &Orders) {
+        let mut facing = self.facing;
+        let push = self.push();
+        air_move::move_diving_jump(
+            &mut self.v,
+            &mut facing,
+            push,
+            &air_move::DivingJump {
+                accel: air_move::tune::TURN_JUMP_ACCEL,
+                brake: air_move::tune::TURN_JUMP_BRAKE,
+                speed_max: t::TURN_JUMP_VEL_H,
+                speed_min: 0.,
+                side_accel: air_move::tune::TURN_JUMP_SIDE_ACCEL,
+                gravity: t::TURN_JUMP_GRAVITY,
+                fall_max: t::FALL_MAX,
+                turn_rate: 0.,
+            },
+        );
+        self.air_actions(o);
+    }
+    /// Flight of the jump family and of a fall: the shared air control moves
+    /// the velocity, then the actor looks for what the air allows next (the
+    /// ground pound, a throw), which is why the frame's gravity is already in.
+    fn jump_air(&mut self, o: &Orders) {
+        if self.air_for != Some(self.mode) {
+            self.arm_fall_control();
+        }
+        let steer = air_move::Steering {
+            front: t::JUMP_ACCEL_FRONT,
+            back: t::JUMP_ACCEL_BACK,
+            turn: t::JUMP_ACCEL_TURN,
+        };
+        let push = self.push();
+        self.air.update(&mut self.v, push, o.jump_held, &steer);
+        if self.tilt > 0.05 {
+            self.facing = turn(self.facing, self.stick, 0.1);
+        }
+        self.air_actions(o);
+    }
+    /// Free flight of the states that keep the older approximation of the
+    /// air control: the spin jump, the roll jump and the wall jump.
     fn air(&mut self, o: &Orders) {
         if self.air_actions(o) {
             return;
@@ -2658,10 +2949,13 @@ impl Player {
                 self.change(Move::SpinDrop, "SpinJumpDownFall", |p| {
                     p.v = Vec3::NEG_Y * t::SPIN_DOWN_FALL_INIT;
                 });
-            } else {
-                self.start_hip_drop();
+                return true;
             }
-            return true;
+            // The pound needs room above the ground (`PlayerJudgeStartHipDrop`).
+            if self.ground_height >= air_move::tune::HIP_DROP_HEIGHT {
+                self.start_hip_drop();
+                return true;
+            }
         }
         if (self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw)
             && self.cap.is_none()
@@ -2702,8 +2996,10 @@ impl Player {
         }
     }
     fn hip_drop_land(&mut self, o: &Orders) {
+        // The landing keeps the ground pull of the walking states
+        // (`rs::waitGround` with `GravityMove`).
         self.set_h(Vec3::ZERO);
-        self.v.y = -t::GRAVITY;
+        self.v.y = -air_move::tune::GRAVITY_MOVE;
         if self.pre_jump > 0
             && (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&self.frame)
         {
@@ -2743,22 +3039,26 @@ impl Player {
         });
     }
     fn head_sliding(&mut self, _o: &Orders) {
-        // Diving flight: no forward accel, a light side push, braking when pulled back.
-        let mut h = self.v.with_y(0.);
-        let dir = h.normalize_or(self.facing);
-        let mut s = h.length();
-        if self.tilt > 0.1 {
-            if self.stick.dot(dir) < -0.3 {
-                s = (s - t::HEAD_SLIDING_BRAKE).max(t::HEAD_SLIDING_SPEED_MIN);
-            }
-            let side = (t::HEAD_SLIDING_SIDE_ACCEL / s.max(1.)).atan();
-            h = turn(dir, self.stick, side) * s;
-        } else {
-            h = dir * s;
-        }
-        self.facing = h.normalize_or(self.facing);
-        self.set_h(h);
-        self.v.y = (self.v.y - t::HEAD_SLIDING_GRAVITY).max(-t::FALL_MAX);
+        // Diving flight (`rs::moveDivingJump` with the dive's values): no
+        // forward acceleration, braking when pulled back, a light side push.
+        let mut facing = self.facing;
+        let push = self.push();
+        air_move::move_diving_jump(
+            &mut self.v,
+            &mut facing,
+            push,
+            &air_move::DivingJump {
+                accel: 0.,
+                brake: t::HEAD_SLIDING_BRAKE,
+                speed_max: t::HEAD_SLIDING_SPEED,
+                speed_min: t::HEAD_SLIDING_SPEED_MIN,
+                side_accel: t::HEAD_SLIDING_SIDE_ACCEL,
+                gravity: t::HEAD_SLIDING_GRAVITY,
+                fall_max: t::FALL_MAX,
+                turn_rate: air_move::tune::SLERP_QUAT_GRAV,
+            },
+        );
+        self.facing = facing;
         if self.anim.name == "HeadSlidingStart" && self.anim_done(clip::HEAD_SLIDING_START) {
             self.play("HeadSliding");
         }
@@ -3255,6 +3555,7 @@ impl Player {
                     // Catching in midair gives a small pop.
                     self.v.y = t::CAP_CATCH_POP_POWER;
                     self.gravity = t::CAP_CATCH_POP_GRAVITY;
+                    self.air.set_gravity(t::CAP_CATCH_POP_GRAVITY);
                     self.play("JumpCapCatchCommon");
                 }
             }
@@ -3319,10 +3620,25 @@ impl Player {
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders) {
         let fall = (self.peak - self.pos.y) / UNIT;
+        // The jump state's last frame: its air control still steers, and a jump
+        // that ends on the ground counts toward the combo (a fall does not).
+        if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
+            let mut v = self.v;
+            let steer = air_move::Steering {
+                front: t::JUMP_ACCEL_FRONT,
+                back: t::JUMP_ACCEL_BACK,
+                turn: t::JUMP_ACCEL_TURN,
+            };
+            let push = self.push();
+            self.air.update(&mut v, push, o.jump_held, &steer);
+            self.set_h(v);
+        }
+        if crate::game_names::actor(self.mode, self.clip()) == "Jump" {
+            self.count_jump_combo();
+        }
+        self.air_for = None;
         let speed = self.speed_h();
         self.land_frames = 0;
-        self.jump_timer = 0;
-        self.long_jump_timer = 0;
         self.cap_jump_possible = true;
         self.dive_possible = true;
         self.air_throw_used = false;
@@ -3334,11 +3650,13 @@ impl Player {
             );
         let mode = self.mode;
         match mode {
-            // The pound's landing is a sub-state of its nerve: the impact, the
-            // freeze and the landing clip are its first step.
+            // The pound's landing is a sub-state of its nerve: the impact and
+            // the landing clip are its first step (the game's logic does not
+            // freeze there).
             Move::GroundPound => {
+                // Nothing has slowed the fall: the row still reports it.
+                self.v.y = -t::HIP_DROP_SPEED;
                 self.defer(Move::PoundLand, "HipDropLand", |p| {
-                    p.hitstop = 0.05;
                     p.events.push(Fx::PoundLand);
                 });
                 return;
@@ -3352,6 +3670,18 @@ impl Player {
             // dive lands in its forward roll and stands up.
             Move::Dive | Move::LongJump | Move::RollJump if o.crouch && speed > t::NORMAL_MIN => {
                 self.start_roll(speed.max(t::ROLL_START), false);
+            }
+            // With the stick held the dive lands straight into the run, which
+            // plays the roll's stand-up as an overlay on its legs.
+            Move::Dive if self.tilt > 0.05 => {
+                self.run_frames = t::BRAKE_ON_COUNTER;
+                self.go(Move::Run, "Move");
+                self.sub_anim = Some(Anim {
+                    name: "RollingStandUp",
+                    serial: self.anim.serial.wrapping_add(7),
+                    frame: 2.,
+                    rate: 0.6,
+                });
             }
             Move::Dive => self.defer(Move::Slide, "LandRolling", |_| {}),
             Move::Roll | Move::SlopeSlide => {}
@@ -3387,12 +3717,15 @@ impl Player {
                     self.run_frames = t::BRAKE_ON_COUNTER;
                     self.go(Move::Run, "Move");
                 } else {
-                    let anim = match mode {
-                        Move::TripleJump => "LandJump3",
-                        Move::Sideflip | Move::Backflip => "LandTurn",
+                    // The landing clip depends on the clip the jump was playing
+                    // (`PlayerStateWait::exeLand`); landing stops the player.
+                    let anim = match self.clip() {
+                        "JumpTurn" => "LandTurn",
+                        "JumpBroad" => "LandRolling",
+                        "Jump3" => "LandJump3",
                         _ => "Land",
                     };
-                    self.change(Move::Idle, anim, |p| p.set_h(p.v.with_y(0.) * 0.3));
+                    self.change(Move::Idle, anim, |p| p.set_h(Vec3::ZERO));
                 }
             }
         }
@@ -3439,7 +3772,7 @@ impl Player {
                     if axis == 1 {
                         if self.v.y <= 0.
                             && before.y >= b.top(before.x.clamp(lo.x, hi.x)) - 0.15
-                            && self.pos.y <= top
+                            && self.pos.y < top - CONTACT_MARGIN
                             && self.pos.y + height > lo.y
                         {
                             self.pos.y = top;
@@ -3458,6 +3791,8 @@ impl Player {
                         {
                             self.pos.y = lo.y - height;
                             self.v.y = 0.;
+                            // A hit head ends the jump's extend window.
+                            self.air.cancel_extend();
                         }
                     } else if self.pos.y + 0.12 < top && self.pos.y + height > lo.y + 0.05 {
                         // Short steps are walkable.

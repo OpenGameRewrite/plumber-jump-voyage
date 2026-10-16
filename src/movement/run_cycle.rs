@@ -26,9 +26,7 @@ const DASH_BORDER: f32 = 15.;
 const DASH_RANGE: f32 = 1.;
 const DASH_FAST_BORDER: f32 = 20.;
 const DASH_FAST_RANGE: f32 = 1.;
-/// Playback rates of the cycle: the walk's pace goes with the slowest speed
-/// and the dash-fast's with the speed where the animation stops speeding up.
-const RATE_SPEED_MIN: f32 = 6.;
+/// Playback rates of the cycle, and the speed where the animation stops speeding up.
 const RATE_SPEED_MAX: f32 = 26.;
 const RATE_RUN_START: f32 = 2.;
 const RATE_MIN_RUN: f32 = 1.;
@@ -84,6 +82,8 @@ pub struct RunCycle {
     pub shown: f32,
     /// Frame of the run-start clip, which plays once and holds its last frame.
     start_clip: f32,
+    /// The run dust this frame's pose asks for.
+    pub effect: Option<&'static str>,
     /// This frame's advance of the phase is done.
     advanced: bool,
 }
@@ -96,6 +96,7 @@ impl RunCycle {
         self.advanced = true;
         self.start_clip = 0.;
         self.weights = [0.; 5];
+        self.effect = None;
     }
     /// The pose moves on by the current rate.
     fn move_on(&mut self) {
@@ -138,10 +139,11 @@ impl RunCycle {
         self.start_frames = (self.start_frames + 1).min(start_length);
         let start = rate01(self.blend_frames as f32, 0., START_BLEND_FRAMES as f32);
         let keep = 1. - start;
-        let (weights, rate);
+        let (weights, rate, effect);
         if speed > DASH_FAST_BORDER - DASH_FAST_RANGE {
             let fast = ramp(speed, DASH_FAST_BORDER, DASH_FAST_RANGE);
             weights = [0., 0., keep * (1. - fast), keep * fast, start];
+            effect = Some("DashFast");
             rate = lerp(
                 RATE_MAX_DASH,
                 RATE_MAX_DASH_FAST,
@@ -150,6 +152,7 @@ impl RunCycle {
         } else if tilt >= FULL_TILT || speed > DASH_BORDER - DASH_RANGE {
             let dash = ramp(speed, DASH_BORDER, DASH_RANGE);
             weights = [0., keep * (1. - dash), keep * dash, 0., start];
+            effect = Some(if dash > 0.5 { "Dash" } else { "Run" });
             rate = lerp(
                 RATE_MAX_RUN,
                 RATE_MAX_DASH,
@@ -161,12 +164,14 @@ impl RunCycle {
             );
         } else if speed <= RUN_BORDER - RUN_RANGE {
             weights = [keep, 0., 0., 0., start];
+            effect = None;
             // The original ranges this over a span of no width, so the walk
             // plays at the slowest run rate.
             rate = RATE_MIN_RUN;
         } else {
             let run = ramp(speed, RUN_BORDER, RUN_RANGE);
             weights = [keep * (1. - run), keep * run, 0., 0., start];
+            effect = (run > 0.5).then_some("Run");
             rate = lerp(
                 RATE_MIN_RUN,
                 RATE_MAX_RUN,
@@ -174,6 +179,13 @@ impl RunCycle {
             );
         }
         self.weights = weights;
+        // The run dust follows the clip that leads; the run start's own dust
+        // takes over while that clip is most of the pose.
+        self.effect = if start > 0.5 {
+            Some("RunStart")
+        } else {
+            effect
+        };
         self.rate = lerp(rate, RATE_RUN_START, start);
         // The clip's first frame stays put; after that the pose moves on by
         // this frame's rate.
@@ -181,7 +193,6 @@ impl RunCycle {
             self.move_on();
         }
         self.advanced = true;
-        debug_assert!(RATE_SPEED_MIN < RATE_SPEED_MAX);
     }
     /// The clips that make up the pose, with their frames in their own length.
     pub fn layers(&self) -> impl Iterator<Item = Layer> + '_ {
@@ -190,7 +201,7 @@ impl RunCycle {
             .zip(self.weights)
             .filter(|(_, weight)| *weight > 0.001)
             .map(|((name, length), weight)| Layer {
-                name: *name,
+                name,
                 weight,
                 frame: if *name == "RunStart" {
                     self.start_clip
@@ -212,6 +223,7 @@ impl RunCycle {
             phase,
             shown: phase + rate,
             start_clip: (steps.saturating_sub(1) as f32).min(LAYERS[4].1),
+            effect: None,
             advanced: true,
         }
     }
