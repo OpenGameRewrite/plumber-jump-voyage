@@ -5,6 +5,7 @@
 //! are stored in metres for the rest of the game. States that the public
 //! decompilation documents follow it; the rest are inferred from their tuning
 //! names and observed behaviour. No original code is reproduced here.
+use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use bevy::prelude::*;
@@ -413,6 +414,22 @@ impl Move {
                     | Self::BurnBounce
             )
     }
+    /// A state flown by the jump family's shared air control
+    /// (`PlayerActionAirMoveControl`): the three jumps, the jumps off the pound,
+    /// the cap and a fall. The flips, the long jump and the dive have their own.
+    fn uses_air_control(self) -> bool {
+        matches!(
+            self,
+            Self::Jump
+                | Self::DoubleJump
+                | Self::TripleJump
+                | Self::PoundJump
+                | Self::CapBounce
+                | Self::CapVault
+                | Self::CatchJump
+                | Self::Fall
+        )
+    }
     fn airborne_jump(self) -> bool {
         matches!(
             self,
@@ -630,11 +647,21 @@ pub struct Player {
     pre_jump: u32,
     pre_throw: u32,
     coyote: u32,
-    jump_count: u32,
-    jump_timer: u32,
+    /// The combo of consecutive jumps and the long-jump count, as the
+    /// original's `PlayerContinuousJump` and `PlayerContinuousLongJump`.
+    combo: ContinuousJump,
+    long_combo: ContinuousLongJump,
+    /// Air control of the jump family, the state it was set up for, and the
+    /// facts of the jump in progress that its landing needs.
+    air: AirMove,
+    air_for: Option<Move>,
+    jump_power: f32,
+    combo_kept: bool,
+    /// Velocity when the jump's first step began, before its own impulse.
+    prior_v: Vec3,
+    /// Distance to the floor below, for the ground pound's height rule.
+    ground_height: f32,
     jump_held_frames: u32,
-    long_jump_count: u32,
-    long_jump_timer: u32,
     run_frames: u32,
     after_turn: u32,
     quick_turn: u32,
@@ -710,11 +737,15 @@ impl Default for Player {
             pre_jump: 0,
             pre_throw: 0,
             coyote: 0,
-            jump_count: 0,
-            jump_timer: t::CONTINUOUS_JUMP_TIMER,
+            combo: ContinuousJump::default(),
+            long_combo: ContinuousLongJump::default(),
+            air: AirMove::default(),
+            air_for: None,
+            jump_power: 0.,
+            combo_kept: false,
+            prior_v: Vec3::ZERO,
+            ground_height: f32::MAX,
             jump_held_frames: 0,
-            long_jump_count: 0,
-            long_jump_timer: 0,
             run_frames: 0,
             after_turn: 0,
             quick_turn: 0,
@@ -947,10 +978,10 @@ impl Player {
             ("pre_jump", self.pre_jump as i64),
             ("pre_throw", self.pre_throw as i64),
             ("coyote", self.coyote as i64),
-            ("jump_count", self.jump_count as i64),
-            ("jump_timer", self.jump_timer as i64),
-            ("long_jump_count", self.long_jump_count as i64),
-            ("long_jump_timer", self.long_jump_timer as i64),
+            ("jump_count", self.combo.count as i64),
+            ("jump_timer", self.combo.timer as i64),
+            ("long_jump_count", self.long_combo.count as i64),
+            ("long_jump_timer", self.long_combo.timer as i64),
             ("run_frames", self.run_frames as i64),
             ("after_turn", self.after_turn as i64),
             ("quick_turn", self.quick_turn as i64),
@@ -968,10 +999,10 @@ impl Player {
             "pre_jump" => self.pre_jump = frames,
             "pre_throw" => self.pre_throw = frames,
             "coyote" => self.coyote = frames,
-            "jump_count" => self.jump_count = frames,
-            "jump_timer" => self.jump_timer = frames,
-            "long_jump_count" => self.long_jump_count = frames,
-            "long_jump_timer" => self.long_jump_timer = frames,
+            "jump_count" => self.combo.count = frames,
+            "jump_timer" => self.combo.timer = frames,
+            "long_jump_count" => self.long_combo.count = frames,
+            "long_jump_timer" => self.long_combo.timer = frames,
             "run_frames" => self.run_frames = frames,
             "after_turn" => self.after_turn = frames,
             "quick_turn" => self.quick_turn = frames,
@@ -1028,6 +1059,10 @@ impl Player {
         self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
+        self.air_for = None;
+        if self.mode.uses_air_control() && !self.grounded {
+            self.resume_air_control(s);
+        }
         if let Some((name, frame)) = s.anim {
             if self.anim.name != name {
                 self.start_clip(name);
@@ -1369,13 +1404,12 @@ impl Player {
         self.throwing.run = self.throwing.run.saturating_sub(1);
         self.throwing.timer = self.throwing.timer.saturating_sub(1);
         self.coyote = self.coyote.saturating_sub(1);
-        self.long_jump_timer = self.long_jump_timer.saturating_add(1);
         if self.grounded {
-            self.jump_timer = self.jump_timer.saturating_add(1);
             self.land_frames = self.land_frames.saturating_add(1);
         }
     }
     fn finish_frame(&mut self, scene: &Course) {
+        self.update_combo_counters();
         self.update_soot(scene);
         // A state chosen this step has run no step yet: its first one is next.
         // The nerve's own steps restart with a new actor nerve, chosen or
