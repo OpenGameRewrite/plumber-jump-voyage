@@ -1427,7 +1427,13 @@ impl Player {
     fn advance_clips(&mut self) {
         self.clip_wrapped = false;
         if self.anim.name == "Move" {
-            self.cycle.begin_frame();
+            // The dive's landing clip covers the legs for a while; the run's
+            // pose does not move under it.
+            if self.sub_anim.is_some_and(|s| s.name == "RollingStandUp") {
+                self.cycle.begin_frame_covered();
+            } else {
+                self.cycle.begin_frame();
+            }
             self.step_phase = self.cycle.phase;
             self.anim.frame = self.cycle.shown % 60.;
         } else {
@@ -3554,7 +3560,7 @@ impl Player {
             Move::RollJump if o.crouch => self.start_roll(RollStart::JumpLanding),
             // With the stick held the dive lands straight into the run, which
             // plays the roll's stand-up as an overlay on its legs.
-            Move::Dive if self.tilt > 0.05 => {
+            Move::Dive if self.is_move() => {
                 self.run_frames = t::BRAKE_ON_COUNTER;
                 // The run state pulls to the floor from the step it is chosen.
                 self.pull = GRAVITY_MOVE;
