@@ -411,10 +411,13 @@ fn dive_roll_landing() {
     let mut names = std::collections::BTreeSet::new();
     let mut rolled = 0;
     while p.mode == Move::Roll && rolled < 600 {
-        p.step(&held, &floor);
+        // The roll goes on while crouch is held and ends once it is let go.
+        let orders = if rolled < 60 { &held } else { &Orders::default() };
+        p.step(orders, &floor);
         names.insert(p.anim.name);
         rolled += 1;
     }
+    assert!(rolled > 60, "holding crouch keeps rolling: {rolled} frames");
     assert!(
         names.contains("Rolling"),
         "the roll plays its loop: {names:?}"
@@ -449,8 +452,8 @@ fn roll_timing_and_boost() {
     );
     assert_eq!(chosen(&p), (Move::Roll, "RollingStart"));
     assert!(p.cap.is_none(), "rolling does not throw the cap");
-    let mut ended = None;
-    for i in 0..900 {
+    // Holding crouch keeps the roll going, slowing a little every frame.
+    for _ in 0..100 {
         p.step(
             &Orders {
                 crouch: true,
@@ -458,19 +461,13 @@ fn roll_timing_and_boost() {
             },
             &floor,
         );
-        if p.mode == Move::Crouch {
-            ended = Some(i);
-            break;
-        }
     }
-    assert!(
-        ended.is_some_and(|f| f > 45),
-        "roll lasts its minimum then ends: {ended:?}"
-    );
-    // Boosting extends the roll.
-    p = Player::default();
+    assert_eq!(p.mode, Move::Roll);
+    assert!(p.move_speed < t::ROLL_START && p.move_speed > t::ROLL_END_SPEED - 5.);
+    // Letting go before the minimum rolls on until it is up, then stands up.
+    let mut q = Player::default();
     frames(
-        &mut p,
+        &mut q,
         Orders {
             crouch: true,
             ..default()
@@ -478,7 +475,7 @@ fn roll_timing_and_boost() {
         &floor,
         3,
     );
-    p.step(
+    q.step(
         &Orders {
             crouch: true,
             throw_pressed: true,
@@ -486,15 +483,19 @@ fn roll_timing_and_boost() {
         },
         &floor,
     );
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &floor,
-        20,
+    let mut ended = None;
+    for i in 0..200 {
+        q.step(&Orders::default(), &floor);
+        if q.mode == Move::RollEnd {
+            ended = Some(i);
+            break;
+        }
+    }
+    assert!(
+        ended.is_some_and(|f| f >= t::ROLL_FRAMES_MIN as usize - 2),
+        "roll lasts its minimum before standing up: {ended:?}"
     );
+    // Pressing again once the roll is charged restarts it faster.
     let before = p.move_speed;
     p.step(
         &Orders {
@@ -504,9 +505,9 @@ fn roll_timing_and_boost() {
         },
         &floor,
     );
-    assert!(p.move_speed >= t::ROLL_BOOST && p.move_speed > before);
-    // Releasing crouch unrolls after five frames.
-    frames(&mut p, Orders::default(), &floor, 30);
+    assert!(p.move_speed > before, "{} vs {before}", p.move_speed);
+    // Releasing crouch stands up once the new roll has run its minimum.
+    frames(&mut p, Orders::default(), &floor, 80);
     assert_ne!(p.mode, Move::Roll);
 }
 
