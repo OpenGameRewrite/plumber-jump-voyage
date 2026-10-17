@@ -57,6 +57,11 @@ pub enum Change {
     Stop {
         key: Key,
     },
+    /// An emit call for an effect that already runs: the original logs it,
+    /// and nothing restarts.
+    Again {
+        key: Key,
+    },
 }
 
 /// Inputs of one frame.
@@ -70,6 +75,9 @@ pub struct Frame<'a> {
     pub reactions: &'a [&'a str],
     /// Effects the controller wants running this frame.
     pub code: &'a [&'a str],
+    /// Effects whose emit call the controller makes in this very frame (the
+    /// roll calls its effect every frame it is on the ground).
+    pub calls: &'a [&'a str],
 }
 
 #[derive(Clone, Debug)]
@@ -247,7 +255,11 @@ impl Triggers {
             .collect();
         for name in &wanted {
             let key = Self::code_key(name);
-            if !self.running.contains_key(&key) {
+            if self.running.contains_key(&key) {
+                if input.calls.contains(name) {
+                    changes.push(Change::Again { key });
+                }
+            } else {
                 self.running.insert(key.clone(), (Source::Code, false));
                 changes.push(Change::Start {
                     key,
@@ -275,16 +287,28 @@ impl Triggers {
 pub fn code_driven(p: &Player) -> Vec<&'static str> {
     let mut wanted = vec![];
     // The run cycle's control picks the dust for the pose it plays.
-    if p.grounded && p.anim.name == "Move" {
+    if p.grounded
+        && p.anim.name == "Move"
+        && matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+    {
         wanted.extend(p.run_cycle().effect);
     }
-    if p.mode == Move::Roll && p.grounded {
+    if p.roll_effect_on() {
         wanted.push("Rolling");
     }
     if matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun) || p.soot.smoking {
         wanted.push("StateFire");
     }
     wanted
+}
+
+/// The effects whose emit call the controller makes in this frame.
+pub fn code_calls(p: &Player) -> Vec<&'static str> {
+    let mut calls = vec![];
+    if p.roll_effect_called() {
+        calls.push("Rolling");
+    }
+    calls
 }
 
 /// Reaction names the effect tables listen to for one movement event: the
@@ -450,6 +474,7 @@ impl Tracker {
             cap_serial: self.cap_serial,
             reactions: &reactions,
             code: &code,
+            calls: &code_calls(p),
         });
         let mut started = vec![];
         for change in changes {
@@ -488,6 +513,7 @@ impl Tracker {
                 // A stopped effect no longer emits at once; the particles it
                 // left only fade.
                 Change::Stop { key } => self.live.retain(|l| l.key != key),
+                Change::Again { key } => started.push(format!("{}@model", key.effect)),
             }
         }
         self.live.retain_mut(|live| match &mut live.left {
@@ -535,6 +561,7 @@ pub fn self_check() {
         cap_serial: 0,
         reactions: &[],
         code: &[],
+        calls: &[],
     };
     assert!(triggers.evaluate(&frame("Wait", 1, 0.)).is_empty());
     let started = triggers.evaluate(&frame("Jump", 2, 0.));

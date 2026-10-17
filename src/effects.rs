@@ -11,7 +11,8 @@ use crate::{
     effect_render::{Painter, ParticleMaterial, View},
     effect_sim::{Attach, Draw, Flat, Instance, Pose},
     effect_triggers::{
-        Change, Frame, Key, ONE_SHOT_LIMIT, Triggers, cap_clip, code_driven, reactions_of,
+        Change, Frame, Key, ONE_SHOT_LIMIT, Triggers, cap_clip, code_calls, code_driven,
+        reactions_of,
     },
     fx::OriginalEffects,
     movement::{Course, Fx, Player},
@@ -336,6 +337,7 @@ fn tick(
         cap_serial: effects.cap_serial,
         reactions: &reactions,
         code: &code,
+        calls: &code_calls(&p),
     });
     // Joint positions of the model, when it has them.
     let mut joints = HashMap::new();
@@ -367,6 +369,7 @@ fn tick(
         match change {
             Change::Start { key, once, .. } => effects.start(key, once, &p, &joints, material),
             Change::Stop { key } => effects.stop(&key),
+            Change::Again { .. } => {}
         }
     }
     let cap = effects.last_cap;

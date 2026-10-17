@@ -143,6 +143,8 @@ mod t {
     pub const STAND_ANGLE_MIN: f32 = 60.;
     pub const ROLL_RESTART_ACCEL: f32 = 6.;
     pub const ROLL_RESTART_INTERVAL: i32 = 15;
+    /// Frames in the air after which a roll's touchdown raises its reaction.
+    pub const ROLL_LAND_AIR_FRAMES: i32 = 20;
 
     pub const DAMAGE_FIRE_JUMP_POWER_1ST: f32 = 20.;
     pub const DAMAGE_FIRE_JUMP_POWER_2ND: f32 = 20.;
@@ -3540,7 +3542,10 @@ impl Player {
                 });
             }
             Move::Dive => self.defer(Move::Slide, "LandRolling", |_| {}),
-            Move::Roll | Move::SlopeSlide => {}
+            // The roll raises its own landing reaction when it has flown long
+            // enough (`PlayerStateRolling::control`).
+            Move::Roll => return,
+            Move::SlopeSlide => {}
             // The leap lands in a bounce, keeping speed only along the stick.
             Move::BurnJump => {
                 if self.tilt <= 0.05 {

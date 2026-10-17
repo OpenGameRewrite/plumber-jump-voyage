@@ -65,6 +65,11 @@ pub(super) struct RollControl {
     ground_normal: Vec3,
     dir_slide: Vec3,
     horizontal_speed: f32,
+    /// The roll's own effect (dust under the roll) is emitting, and was
+    /// called this step: `exeRolling` emits it each step on the ground and
+    /// deletes it in the air; `exeStart` and the stand-up delete it once.
+    effect_on: bool,
+    effect_called: bool,
 }
 impl Default for RollControl {
     fn default() -> Self {
@@ -79,6 +84,8 @@ impl Default for RollControl {
             ground_normal: Vec3::Y,
             dir_slide: Vec3::ZERO,
             horizontal_speed: 0.,
+            effect_on: false,
+            effect_called: false,
         }
     }
 }
@@ -102,6 +109,14 @@ fn nerve_clip(nerve: RollNerve) -> &'static str {
 }
 
 impl Player {
+    /// The roll's dust effect is wanted (for the effect tables).
+    pub fn roll_effect_on(&self) -> bool {
+        matches!(self.mode, Move::Roll | Move::RollEnd) && self.rolling.effect_on
+    }
+    /// The roll called its effect's emit this step.
+    pub fn roll_effect_called(&self) -> bool {
+        self.roll_effect_on() && self.rolling.effect_called
+    }
     /// The ground's unit normal (up on level ground and in the air).
     fn floor_up(&self) -> Vec3 {
         self.floor_normal().unwrap_or(Vec3::Y)
@@ -188,6 +203,7 @@ impl Player {
                 self.v += self.floor_up() * t::ROLL_START_JUMP;
                 self.grounded = false;
                 self.hop_contact = true;
+                self.rolling.effect_on = false;
                 self.events.push(Fx::RollStart);
             }
             RollNerve::BoostStart => self.events.push(Fx::RollBoost { perfect: true }),
@@ -198,6 +214,7 @@ impl Player {
     /// One step of the roll nerves, then `PlayerStateRolling::control`.
     pub(super) fn roll(&mut self, o: &Orders) {
         self.rolling.steps += 1;
+        self.rolling.effect_called = false;
         let pressed = o.crouch && o.throw_pressed && self.grounded;
         match self.rolling.nerve {
             RollNerve::Start => self.roll_start_step(),
@@ -230,6 +247,8 @@ impl Player {
     /// `exeRolling`.
     fn roll_rolling_step(&mut self, o: &Orders, pressed: bool) {
         self.roll_move();
+        self.rolling.effect_on = self.is_on_ground();
+        self.rolling.effect_called = self.rolling.effect_on;
         if !o.crouch && self.rolling.frames >= t::ROLL_FRAMES_MIN {
             self.roll_stand_up();
             return;
@@ -316,7 +335,9 @@ impl Player {
     }
     /// Release into the stand-up (`StandUp` nerve, the mode `RollEnd`).
     fn roll_stand_up(&mut self) {
-        self.defer(Move::RollEnd, "RollingStandUp", |_| {});
+        self.defer(Move::RollEnd, "RollingStandUp", |p| {
+            p.rolling.effect_on = false;
+        });
     }
     /// `exeStandUp`: slide on the roll's momentum while standing, then hand
     /// the actor back (`setNerveOnGround`).
@@ -342,7 +363,7 @@ impl Player {
 
     /// `PlayerStateRolling::control`, after the nerve has run.
     fn roll_control(&mut self, pressed: bool) {
-        let grounded = self.grounded;
+        let grounded = self.is_on_ground();
         let r = &mut self.rolling;
         if r.frames <= t::ROLL_FRAMES_MIN.max(t::ROLL_RESTART_INTERVAL) {
             r.frames += 1;
@@ -354,17 +375,21 @@ impl Player {
             r.charge = 0;
         }
         r.force = converge_int(r.force, t::ROLL_RESTART_FORCE, 1);
-        // The airtime of the rolling nerves (the landing reaction is the
-        // effects' business).
         if matches!(
             r.nerve,
             RollNerve::Start | RollNerve::Rolling | RollNerve::BoostStart
         ) {
-            r.air_frames = if grounded {
-                0
+            if grounded {
+                // Touching down after a long enough flight raises the landing
+                // reaction (the original's roll-landing hit reaction).
+                let landed = r.air_frames >= t::ROLL_LAND_AIR_FRAMES;
+                r.air_frames = 0;
+                if landed {
+                    self.events.push(Fx::Land { hard: false });
+                }
             } else {
-                converge_int(r.air_frames, 20, 1)
-            };
+                r.air_frames = converge_int(r.air_frames, t::ROLL_LAND_AIR_FRAMES, 1);
+            }
         }
     }
 
