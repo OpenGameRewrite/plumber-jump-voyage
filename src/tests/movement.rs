@@ -633,9 +633,11 @@ fn cap_bounce() {
             front: Vec3::NEG_Z,
             kind: Throw::Forward,
             left: false,
+            air: false,
             continuous: false,
         },
         Vec3::ZERO,
+        1,
     );
     // Hovering where the player falls onto it.
     cap.resume(

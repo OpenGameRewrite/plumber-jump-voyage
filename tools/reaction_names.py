@@ -15,7 +15,17 @@ MARIO_REACTIONS = {
     'あちちジャンプ(バウンド)': 'BurnBounce',
     'アチチ走り浅瀬キャンセル': 'FireQuench',
 }
-CAP_REACTIONS = {'帽子投げ': 'Throw', '帽子戻し': 'Return', '帽子キャッチ': 'Catch'}
+CAP_REACTIONS = {
+    '帽子投げ': 'Throw',
+    '帽子戻し': 'Return',
+    '帽子キャッチ': 'Catch',
+    # Raised by the throw nerve after the throw's own, by the throws in a row.
+    '帽子投げボイス[1段目]': 'ThrowVoice1',
+    '帽子投げボイス[2段目]': 'ThrowVoice2',
+    '帽子投げボイス[3段目]': 'ThrowVoice3',
+    # Raised when the cap's stay ends in the return.
+    'Stay状態からのリターン': 'ReturnFromStay',
+}
 # Reactions only the effect tables listen to.
 EFFECT_REACTIONS = {
     'ヒップドロップ着地': 'HipDropLand',
@@ -44,5 +54,6 @@ def english(reaction):
 def self_check():
     assert english('着地') == 'Land' and english('帽子キャッチ') == 'Catch'
     assert english('高所着地') == 'LandFall'
+    assert english('帽子投げボイス[2段目]') == 'ThrowVoice2'
     assert english('unlisted') == 'unlisted'
     print('Reaction name checks passed')

@@ -137,6 +137,8 @@ pub enum Cue {
     Rated(&'static str),
     /// Hold a play for as long as the cue keeps coming (the fall's wind).
     Hold(&'static str),
+    /// Start a sound of Cappy's own audio keeper.
+    CapPlay(&'static str),
     Reaction {
         cap: bool,
         name: &'static str,
@@ -154,7 +156,6 @@ pub enum Cue {
 #[derive(Clone, Copy, Debug)]
 pub struct FxContext {
     pub mode: Move,
-    pub grounded: bool,
 }
 /// The reaction a landing raises, by the state that takes over: the original
 /// starts it from that state's first step. The crouch has none.
@@ -213,26 +214,30 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
                 "RollBoostAgain"
             })
         }
-        Fx::Throw(kind) => {
-            let flight = match kind {
-                Throw::Spin => "FlyingWaitSpiral",
-                Throw::Down if context.grounded => "FlyingWaitRolling",
-                _ => "FlyingWait",
-            };
-            vec![
-                Cue::Reaction {
-                    cap: true,
-                    name: "Throw",
-                },
-                Cue::Action {
-                    cap: true,
-                    name: flight,
-                    from: -1.,
-                    to: 0.,
-                    tag: "cap",
-                },
-            ]
-        }
+        Fx::Throw(_) => vec![Cue::Reaction {
+            cap: true,
+            name: "Throw",
+        }],
+        // `HackCap::exeThrow` raises one voice reaction per throw in a row.
+        Fx::ThrowVoice(count) => vec![Cue::Reaction {
+            cap: true,
+            name: match count {
+                1 => "ThrowVoice1",
+                2 => "ThrowVoice2",
+                _ => "ThrowVoice3",
+            },
+        }],
+        // `HackCap::exeThrowStay` starts a level sound on every step, and the
+        // stay's end raises the reaction for the return from it.
+        Fx::CapStay => vec![Cue::CapPlay("PgStayLv")],
+        Fx::CapReturn => vec![Cue::Reaction {
+            cap: true,
+            name: "ReturnFromStay",
+        }],
+        Fx::Catch => vec![Cue::Reaction {
+            cap: true,
+            name: "Catch",
+        }],
         Fx::CapBounce => vec![Cue::Action {
             cap: true,
             name: "Trample",
@@ -285,25 +290,12 @@ impl AnimCursor {
         AnimAdvance { restarted, scan }
     }
 }
-/// Tracks the thrown cap's flight to find its return swing and its catch.
-#[derive(Default)]
-pub struct CapWatch {
-    out: bool,
-    returning: bool,
-}
-pub struct CapChange {
-    pub started_return: bool,
-    pub ended: bool,
-}
-impl CapWatch {
-    pub fn update(&mut self, out: bool, returning: bool) -> CapChange {
-        let change = CapChange {
-            started_return: returning && !self.returning,
-            ended: self.out && !out,
-        };
-        self.out = out;
-        self.returning = returning;
-        change
+/// The name the cap's sound table knows a clip of the cap by: the table does
+/// not tell the hands apart (`FlyingWaitR` plays as `FlyingWait`).
+pub fn cap_action_name(clip: &str) -> &str {
+    match clip.strip_suffix(['L', 'R']) {
+        Some(base) if base.starts_with("FlyingWait") => base,
+        _ => clip,
     }
 }
 #[path = "tests/sound_table.rs"]

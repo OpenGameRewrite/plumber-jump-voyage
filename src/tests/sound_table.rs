@@ -50,7 +50,6 @@ fn voice_names_and_triggers() {
 fn event_cues() {
     let on = |mode| FxContext {
         mode,
-        grounded: true,
     };
     let mut boosts = 0;
     let land = |mode, boosts: &mut u32| fx_cues(Fx::Land { hard: false }, on(mode), boosts);
@@ -103,16 +102,26 @@ fn event_cues() {
     assert_eq!(name(fx_cues(boost, roll, &mut boosts)), "RollBoostAgain");
     fx_cues(Fx::RollStart, roll, &mut boosts);
     assert_eq!(name(fx_cues(boost, roll, &mut boosts)), "RollBoost");
-    // A grounded down-throw flies as the rolling cap.
-    let throw = fx_cues(Fx::Throw(Throw::Down), on(Move::Throw), &mut boosts);
-    assert_eq!(throw.len(), 2);
-    assert!(matches!(
-        throw[1],
-        Cue::Action {
-            name: "FlyingWaitRolling",
-            ..
-        }
-    ));
+    // The cap's throw raises its reaction, a voice reaction by the throw's count,
+    // and the stay's steps a level sound of the cap's own.
+    assert_eq!(
+        fx_cues(Fx::Throw(Throw::Down), on(Move::Throw), &mut boosts),
+        [Cue::Reaction {
+            cap: true,
+            name: "Throw"
+        }]
+    );
+    assert_eq!(
+        fx_cues(Fx::ThrowVoice(3), on(Move::Throw), &mut boosts),
+        [Cue::Reaction {
+            cap: true,
+            name: "ThrowVoice3"
+        }]
+    );
+    assert_eq!(
+        fx_cues(Fx::CapStay, on(Move::Idle), &mut boosts),
+        [Cue::CapPlay("PgStayLv")]
+    );
     assert!(fx_cues(Fx::Skid, on(Move::Skid), &mut boosts).is_empty());
 }
 
@@ -138,11 +147,9 @@ fn cursors() {
         Some((-1., 4., false))
     );
     assert_eq!(cursor.advance("Wait", 3, 1., false).scan, None);
-    let mut watch = CapWatch::default();
-    assert!(!watch.update(true, false).ended);
-    assert!(watch.update(true, true).started_return);
-    assert!(!watch.update(true, true).started_return);
-    assert!(watch.update(false, false).ended);
+    assert_eq!(cap_action_name("FlyingWaitR"), "FlyingWait");
+    assert_eq!(cap_action_name("FlyingWaitSpiral"), "FlyingWaitSpiral");
+    assert_eq!(cap_action_name("StayL"), "StayL");
 }
 
 #[cfg_attr(test, test)]

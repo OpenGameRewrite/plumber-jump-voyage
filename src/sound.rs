@@ -7,7 +7,7 @@
 use crate::{
     input::Settings,
     movement::{Fx, Player},
-    sound_table::{AnimCursor, CapWatch, Cue, FxContext, Layer, Table, fx_cues},
+    sound_table::{AnimCursor, Cue, FxContext, Layer, Table, cap_action_name, fx_cues},
     ui::Menu,
 };
 use bevy::audio::{PlaybackMode, Volume};
@@ -27,7 +27,9 @@ const HOLD: &str = "hold";
 #[derive(Default)]
 struct Tracker {
     cursor: AnimCursor,
-    cap: CapWatch,
+    /// Where the cap's clip stands, and whether the cap was out last frame.
+    cap_cursor: AnimCursor,
+    had_cap: bool,
     boosts: u32,
     rng: u32,
     pending: Vec<(f32, String, bool, f32)>,
@@ -223,7 +225,6 @@ fn play(
     // Event sounds.
     let context = FxContext {
         mode: p.mode,
-        grounded: p.grounded,
     };
     let mut held = false;
     for f in fx {
@@ -245,6 +246,7 @@ fn play(
                         ctx.start_with(false, name, Some(HOLD), true, &mut t);
                     }
                 }
+                Cue::CapPlay(name) => ctx.start(true, name, None, &mut t),
                 Cue::Reaction { cap, name } => ctx.reaction(cap, name, &mut t),
                 Cue::Action {
                     cap,
@@ -264,23 +266,40 @@ fn play(
             }
         }
     }
-    // The cap: return swing, catch, and its flight loop stopping.
-    let change = t
-        .cap
-        .update(p.cap.is_some(), p.cap.as_ref().is_some_and(|c| c.returning));
-    if change.started_return {
-        ctx.reaction(true, "Return", &mut t);
-    }
-    if change.ended {
-        for (e, tag) in &loops {
-            if tag.0 == "cap" {
-                ctx.commands.entity(e).despawn();
+    // The cap's own clip starts its sounds; its loops end with the clip or
+    // with the cap.
+    match &p.cap {
+        Some(cap) => {
+            let name = cap_action_name(cap.clip());
+            let advance = t.cap_cursor.advance(
+                name,
+                cap.clip_serial(),
+                cap.clip_frame(),
+                false,
+            );
+            if advance.restarted {
+                for (e, tag) in &loops {
+                    if tag.0 == "cap" {
+                        ctx.commands.entity(e).despawn();
+                    }
+                }
+            }
+            if let Some((from, to, _)) = advance.scan {
+                ctx.action(true, name, from, to, "cap", &mut t);
             }
         }
-        if p.events.is_empty() {
-            ctx.reaction(true, "Catch", &mut t);
+        None => {
+            if t.had_cap {
+                for (e, tag) in &loops {
+                    if tag.0 == "cap" {
+                        ctx.commands.entity(e).despawn();
+                    }
+                }
+            }
+            t.cap_cursor = AnimCursor::default();
         }
     }
+    t.had_cap = p.cap.is_some();
     // Delayed layers.
     let dt = time.delta_secs();
     let mut due = Vec::new();

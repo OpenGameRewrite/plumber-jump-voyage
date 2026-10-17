@@ -42,6 +42,8 @@ pub enum Source {
     /// Started by a hit reaction of the player actor itself (landings): the
     /// game logs these without the model's owner mark.
     Reaction,
+    /// Started by a hit reaction raised on Cappy (the catch): its effect keeper's.
+    CapReaction,
     /// Kept running by the controller's own conditions.
     Code,
 }
@@ -64,6 +66,14 @@ pub enum Change {
     },
 }
 
+/// A hit reaction an actor raised: the effect tables listen to these by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Raised {
+    /// Raised on Cappy rather than on the player.
+    pub cap: bool,
+    pub name: &'static str,
+}
+
 /// Inputs of one frame.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame<'a> {
@@ -72,7 +82,10 @@ pub struct Frame<'a> {
     pub frame: f32,
     pub cap_anim: Option<&'a str>,
     pub cap_serial: u32,
-    pub reactions: &'a [&'a str],
+    /// The cap's clip frame, and whether its loop came back to the start.
+    pub cap_frame: f32,
+    pub cap_wrapped: bool,
+    pub reactions: &'a [Raised],
     /// Effects the controller wants running this frame.
     pub code: &'a [&'a str],
     /// Effects whose emit call the controller makes in this very frame (the
@@ -258,12 +271,23 @@ impl Triggers {
             input.wrapped,
         );
         let cap_clip = input.cap_anim.map(|name| (name, input.cap_serial));
-        self.follow_clip(&mut changes, Source::Cap, cap_clip, 0., false);
+        self.follow_clip(
+            &mut changes,
+            Source::Cap,
+            cap_clip,
+            input.cap_frame,
+            input.cap_wrapped,
+        );
         for reaction in input.reactions {
-            for key in self.reactions.get(*reaction).into_iter().flatten() {
+            let source = if reaction.cap {
+                Source::CapReaction
+            } else {
+                Source::Reaction
+            };
+            for key in self.reactions.get(reaction.name).into_iter().flatten() {
                 changes.push(Change::Start {
                     key: key.clone(),
-                    source: Source::Reaction,
+                    source,
                     once: true,
                 });
             }
@@ -337,22 +361,22 @@ pub fn code_calls(p: &Player) -> Vec<&'static str> {
 
 /// Reaction names the effect tables listen to for one movement event: the
 /// ones the sound tables use (shared through `fx_cues`) and a few more.
-pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = fx_cues(fx, context, boosts)
+pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Raised> {
+    let mut raised: Vec<Raised> = fx_cues(fx, context, boosts)
         .into_iter()
         .filter_map(|cue| match cue {
-            Cue::Reaction { name, .. } => Some(name),
+            Cue::Reaction { cap, name } => Some(Raised { cap, name }),
             _ => None,
         })
         .collect();
+    let on_player = |name| Raised { cap: false, name };
     match fx {
-        Fx::Land { hard: true } => names.push("LandFall"),
-        Fx::Quenched => names.push("SootWash"),
-        Fx::Splash => names.push("WaterDive"),
-        Fx::Catch => names.push("Catch"),
+        Fx::Land { hard: true } => raised.push(on_player("LandFall")),
+        Fx::Quenched => raised.push(on_player("SootWash")),
+        Fx::Splash => raised.push(on_player("WaterDive")),
         _ => {}
     }
-    names
+    raised
 }
 
 /// The clip name Cappy's effect table knows for the thrown cap: the clip the
@@ -415,7 +439,7 @@ struct Live {
 /// model for Mario's own and the controller's, its cap for Cappy's.
 fn owner(source: Source) -> &'static str {
     match source {
-        Source::Cap => "cap",
+        Source::Cap | Source::CapReaction => "cap",
         Source::Mario | Source::Code => "model",
         Source::Reaction => "player",
     }
@@ -427,10 +451,7 @@ pub struct Tracker {
     triggers: Triggers,
     library: Library,
     boosts: u32,
-    cap_serial: u32,
     right_hand: bool,
-    /// The cap was out on the previous frame.
-    had_cap: bool,
     /// Effect name, entry, and frames of life left (none: until stopped).
     live: Vec<Live>,
     /// The material of the floor the effects start on (their resource variant).
@@ -443,9 +464,7 @@ impl Tracker {
             triggers: Triggers::new(&library),
             library,
             boosts: 0,
-            cap_serial: 0,
             right_hand: true,
-            had_cap: false,
             live: Vec::new(),
             floor: None,
         }
@@ -465,7 +484,6 @@ impl Tracker {
     pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
         let context = FxContext {
             mode: p.mode,
-            grounded: p.grounded,
         };
         let mut reactions = vec![];
         for fx in events {
@@ -474,11 +492,6 @@ impl Tracker {
                 self.right_hand = !p.anim.name.contains("Left");
             }
         }
-        // A new cap (a throw) restarts the cap's clips.
-        if p.cap.is_some() && !self.had_cap {
-            self.cap_serial += 1;
-        }
-        self.had_cap = p.cap.is_some();
         let cap_anim = p.cap.as_ref().map(|c| cap_clip(c, self.right_hand));
         let code = code_driven(p);
         let changes = self.triggers.evaluate(&Frame {
@@ -486,7 +499,9 @@ impl Tracker {
             serial: p.anim.serial,
             frame,
             cap_anim,
-            cap_serial: self.cap_serial,
+            cap_serial: p.cap.as_ref().map_or(0, Cap::clip_serial),
+            cap_frame: p.cap.as_ref().map_or(0., Cap::clip_frame),
+            cap_wrapped: p.cap.as_ref().is_some_and(Cap::clip_wrapped),
             reactions: &reactions,
             code: &code,
             calls: &code_calls(p),
@@ -575,6 +590,8 @@ pub fn self_check() {
         frame: at,
         cap_anim: None,
         cap_serial: 0,
+        cap_frame: 0.,
+        cap_wrapped: false,
         reactions: &[],
         code: &[],
         calls: &[],
@@ -628,7 +645,10 @@ pub fn self_check() {
     );
     // Reactions start one-shot effects.
     let hit = triggers.evaluate(&Frame {
-        reactions: &["Land"],
+        reactions: &[Raised {
+            cap: false,
+            name: "Land",
+        }],
         ..frame("Jump", 5, 1.)
     });
     assert_eq!(
@@ -692,16 +712,24 @@ pub fn self_check() {
     // Reaction names share the sound rules and add the effect-only ones.
     let context = FxContext {
         mode: Move::Run,
-        grounded: true,
     };
     let mut boosts = 0;
+    let names = |raised: Vec<Raised>| raised.iter().map(|r| r.name).collect::<Vec<_>>();
     assert_eq!(
-        reactions_of(Fx::Land { hard: true }, context, &mut boosts),
+        names(reactions_of(Fx::Land { hard: true }, context, &mut boosts)),
         ["LandRun", "LandFall"]
     );
     assert_eq!(
-        reactions_of(Fx::PoundLand, context, &mut boosts),
+        names(reactions_of(Fx::PoundLand, context, &mut boosts)),
         ["HipDropLand"]
+    );
+    // The catch is a reaction of the cap.
+    assert_eq!(
+        reactions_of(Fx::Catch, context, &mut boosts),
+        [Raised {
+            cap: true,
+            name: "Catch"
+        }]
     );
     // The tracker keeps one-shot effects alive for their emission plus their particles' life.
     let mut tracker = Tracker::new(library);

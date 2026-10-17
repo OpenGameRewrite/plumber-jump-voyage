@@ -14,7 +14,7 @@ use crate::{
     game_names::{nerve, state_from_nerve},
     local_assets::{Blend, Posed, looping},
     movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip},
-    sound_table::{AnimCursor, CapWatch, Cue, FxContext, Table, fx_cues, is_voice},
+    sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
 };
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -177,16 +177,20 @@ pub struct FrameInfo {
 pub struct Recorder {
     table: Option<Table>,
     cursor: AnimCursor,
-    cap_watch: CapWatch,
+    /// Where the cap's clip stands, for the sounds its frames start.
+    cap_cursor: AnimCursor,
     boosts: u32,
     blend: Blend<Pose>,
     overlay: f32,
     /// Name of the latest sub clip (the probe keeps it after the clip ends).
     last_sub: &'static str,
-    /// The standing state began from the cap throw: the game's sub-nerve
-    /// counter (`sub_step`) runs with the state's there and restarts elsewhere
-    /// (the landing's `Wait/Land` into `Wait`), which the rewrite does not track.
-    after_throw: bool,
+    /// The state label and the state's step on the previous row, and the
+    /// sub-nerve's steps there. The game's sub-nerve restarts whenever the
+    /// state label changes (a sub-state of the running actor nerve) or the
+    /// actor nerve starts over; at the start of a replay it counts with the
+    /// state's own step.
+    last_state: Option<(&'static str, u32)>,
+    sub_steps: u32,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
     /// The original's effects, when their library is installed; the
@@ -204,11 +208,12 @@ impl Recorder {
             right_hand: true,
             effects: library.map(|library| Tracker::new(library).on_floor(floor)),
             cursor: AnimCursor::default(),
-            cap_watch: CapWatch::default(),
+            cap_cursor: AnimCursor::default(),
             boosts: 0,
             blend: Blend::default(),
             last_sub: "",
-            after_throw: false,
+            last_state: None,
+            sub_steps: 0,
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -256,7 +261,11 @@ impl Recorder {
         events: &mut Vec<String>,
         mix: &mut Vec<String>,
     ) {
-        events.push(format!("reaction:{name}"));
+        // The game marks a reaction raised on Cappy with `@cap` as well.
+        events.push(format!(
+            "reaction:{name}{}",
+            if cap { "@cap" } else { "" }
+        ));
         if let Some(table) = &self.table {
             for play in table.group(cap).reaction_plays(name) {
                 self.play(cap, &play, speed, events, mix);
@@ -307,10 +316,25 @@ impl Recorder {
                 self.action((true, p.anim.name, from, to), speed, &mut events, &mut mix);
             }
         }
+        // The cap's own clip: what it starts when it begins (its flying loop).
+        match &p.cap {
+            Some(cap) => {
+                let advance = self.cap_cursor.advance(
+                    cap_action_name(cap.clip()),
+                    cap.clip_serial(),
+                    cap.clip_frame(),
+                    false,
+                );
+                if let Some((from, to, _)) = advance.scan {
+                    let name = cap_action_name(cap.clip());
+                    self.action((true, name, from, to), speed, &mut events, &mut mix);
+                }
+            }
+            None => self.cap_cursor = AnimCursor::default(),
+        }
         // Movement events: sounds, then effects.
         let context = FxContext {
             mode: p.mode,
-            grounded: p.grounded,
         };
         let mut started = Vec::new();
         for f in &fxs {
@@ -322,6 +346,7 @@ impl Recorder {
                     Cue::Play(name) | Cue::Hold(name) => {
                         self.play(false, name, speed, &mut events, &mut mix)
                     }
+                    Cue::CapPlay(name) => self.play(true, name, speed, &mut events, &mut mix),
                     Cue::Rated(name) => self.play(false, name, p.anim.rate, &mut events, &mut mix),
                     Cue::Reaction { cap, name } => {
                         self.reaction(cap, name, speed, &mut events, &mut mix)
@@ -338,16 +363,6 @@ impl Recorder {
             if self.effects.is_none() {
                 started.extend(fx::burst_names(*f, p.flat_speed()));
             }
-        }
-        // The cap's return swing and catch.
-        let change = self
-            .cap_watch
-            .update(p.cap.is_some(), p.cap.as_ref().is_some_and(|c| c.returning));
-        if change.started_return {
-            self.reaction(true, "Return", speed, &mut events, &mut mix);
-        }
-        if change.ended {
-            self.reaction(true, "Catch", speed, &mut events, &mut mix);
         }
         // Effects: the original's by their table names, or the stand-ins'.
         let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
@@ -508,18 +523,17 @@ impl Recorder {
             format!("{}/{}/{}", num(n.x), num(n.y), num(n.z))
         }));
         cells.int(p.state_frames() as i64);
-        // The state's sub-nerve counts with the state in the standing and
-        // spinning states; the others keep one counter.
-        self.after_throw = match p.mode {
-            Move::Throw => true,
-            Move::Idle => self.after_throw,
-            _ => false,
+        // The sub-nerve's own step counter (see `last_state`).
+        let label = nerve(p.mode, p.phase_clip()).name;
+        self.sub_steps = match self.last_state {
+            None => p.state_frames(),
+            Some((last, steps)) if last == label && steps < p.state_frames() => {
+                self.sub_steps + 1
+            }
+            Some(_) => 0,
         };
-        if self.after_throw {
-            cells.int(p.state_frames() as i64);
-        } else {
-            cells.empty();
-        }
+        self.last_state = Some((label, p.state_frames()));
+        cells.int(self.sub_steps as i64);
         cells.text(&format!(
             "{}/{}/{}",
             num(info.direction.x),

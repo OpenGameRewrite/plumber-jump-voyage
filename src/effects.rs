@@ -71,7 +71,6 @@ pub struct Effects {
     triggers: Triggers,
     live: Vec<Live>,
     boosts: u32,
-    cap_serial: u32,
     right_hand: bool,
     last_cap: Vec3,
     seed: u64,
@@ -118,7 +117,6 @@ impl Effects {
             library,
             live: Vec::new(),
             boosts: 0,
-            cap_serial: 0,
             right_hand: true,
             last_cap: Vec3::ZERO,
             seed: 1,
@@ -314,13 +312,11 @@ fn tick(
     let effects = &mut *effects;
     let context = FxContext {
         mode: p.mode,
-        grounded: p.grounded,
     };
     let mut reactions = vec![];
     for f in &fx {
         reactions.extend(reactions_of(*f, context, &mut effects.boosts));
         if matches!(f, Fx::Throw(_)) {
-            effects.cap_serial += 1;
             effects.right_hand = !p.anim.name.contains("Left");
         }
     }
@@ -334,7 +330,9 @@ fn tick(
         serial: p.anim.serial,
         frame: p.trigger_frame(),
         cap_anim,
-        cap_serial: effects.cap_serial,
+        cap_serial: p.cap.as_ref().map_or(0, crate::movement::Cap::clip_serial),
+        cap_frame: p.cap.as_ref().map_or(0., crate::movement::Cap::clip_frame),
+        cap_wrapped: p.cap.as_ref().is_some_and(crate::movement::Cap::clip_wrapped),
         reactions: &reactions,
         code: &code,
         calls: &code_calls(&p),

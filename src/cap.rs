@@ -93,6 +93,8 @@ pub struct Launch {
     pub kind: Throw,
     /// Thrown from the left hand (the clip names carry the side).
     pub left: bool,
+    /// Thrown in the air (the down throw only rolls along the ground).
+    pub air: bool,
     /// The third throw in a row, which flies faster.
     pub continuous: bool,
 }
@@ -100,8 +102,12 @@ pub struct Launch {
 /// Moments of the flight the player and the presentation react to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapEvent {
-    /// The first step of the throw nerve: the throw's sounds and voice.
+    /// The first step of the throw nerve: the throw's hit reaction and voice.
     Thrown,
+    /// A step of the stay nerve: it starts a level sound on every step.
+    Staying,
+    /// The stay nerve chose the return (the reaction named after it).
+    LeftStay,
     /// The cap reached the head.
     Caught,
 }
@@ -123,14 +129,19 @@ pub struct Cap {
     pub age: f32,
     pub returning: bool,
     pub kind: Throw,
+    air: bool,
     pub phase: CapPhase,
     /// The nerve the next frame runs and the frames it has run so far.
     pub nerve: CapNerve,
     step: u32,
     /// Frames since the cap appeared.
     pub frames: u32,
-    /// The clip the cap plays (`FlyingWaitR`, `StayR`, ...), as the trace names it.
+    /// The clip the cap plays (`FlyingWaitR`, `StayR`, ...), as the trace names it,
+    /// how many frames it has played and which start of a clip it is (a later
+    /// start of the same name restarts its sounds and effects).
     action: &'static str,
+    action_frame: u32,
+    action_serial: u32,
     left: bool,
     /// Centimetres, and centimetres per frame.
     spot: Vec3,
@@ -149,7 +160,8 @@ impl Cap {
     /// Place a cap as `exeThrowStart` does on its one step: in front of the
     /// thrown-from point, flying at `speed`. The cap moves by that speed in
     /// the same frame.
-    pub fn start(launch: Launch, player: Vec3) -> Self {
+    /// `serial` numbers the cap's first clip; later clips count on from it.
+    pub fn start(launch: Launch, player: Vec3, serial: u32) -> Self {
         let front = launch.front.with_y(0.).normalize_or_zero();
         let base = player / UNIT + Vec3::Y * param::THROW_HEIGHT;
         let spot = base + front * START_DISTANCE;
@@ -167,11 +179,14 @@ impl Cap {
             age: 0.,
             returning: false,
             kind: launch.kind,
+            air: launch.air,
             phase: CapPhase::Out,
             nerve: CapNerve::Throw,
             step: 0,
             frames: 0,
-            action: flying(launch.left),
+            action: flying(launch.kind, launch.air, launch.left),
+            action_frame: 0,
+            action_serial: serial,
             left: launch.left,
             spot,
             velocity: front * speed,
@@ -197,7 +212,13 @@ impl Cap {
         self.cruise_frames = 6;
         self.phase = CapPhase::Out;
         self.returning = false;
-        self.action = flying(self.left);
+        self.play(flying(self.kind, self.air, self.left));
+    }
+    /// Start a clip over.
+    fn play(&mut self, action: &'static str) {
+        self.action = action;
+        self.action_frame = 0;
+        self.action_serial += 1;
     }
     /// The nerve the trace names.
     pub fn state_name(&self) -> &'static str {
@@ -206,6 +227,25 @@ impl Cap {
     /// The clip the cap plays.
     pub fn clip(&self) -> &'static str {
         self.action
+    }
+    /// The frame the clip shows (0 on the frame it starts): a clip that is not
+    /// a loop holds its last frame.
+    pub fn clip_frame(&self) -> f32 {
+        let (length, looping) = clip_shape(self.action);
+        if looping {
+            (self.action_frame % length) as f32
+        } else {
+            self.action_frame.min(length) as f32
+        }
+    }
+    /// A looping clip came back to its first frame this frame.
+    pub fn clip_wrapped(&self) -> bool {
+        let (length, looping) = clip_shape(self.action);
+        looping && self.action_frame > 0 && self.action_frame % length == 0
+    }
+    /// Which start of a clip the cap's clip is.
+    pub fn clip_serial(&self) -> u32 {
+        self.action_serial
     }
     /// Centimetres per frame, for the trace and the lockstep.
     pub fn units(&self) -> Vec3 {
@@ -239,23 +279,25 @@ impl Cap {
         self.returning = nerve == CapNerve::Return;
         self.action = match nerve {
             CapNerve::ThrowStay => stay(self.left),
-            _ => flying(self.left),
+            _ => flying(self.kind, self.air, self.left),
         };
+        self.action_frame = step;
         if velocity.length() > NEAR_ZERO {
             self.front = velocity.normalize();
         }
     }
     /// Run one frame: the current nerve, then the collider's move. Returns
     /// what happened.
-    pub fn update(&mut self, world: &CapWorld) -> Option<CapEvent> {
+    pub fn update(&mut self, world: &CapWorld) -> Vec<CapEvent> {
         self.frames += 1;
         self.age = self.frames as f32 / crate::movement::FPS;
+        self.action_frame += 1;
         let head = world.player / UNIT + Vec3::Y * HEAD_HEIGHT;
-        let mut event = None;
+        let mut events = Vec::new();
         let next = match self.nerve {
-            CapNerve::Throw => self.throw(&mut event),
+            CapNerve::Throw => self.throw(&mut events),
             CapNerve::ThrowBrake => self.throw_brake(),
-            CapNerve::ThrowStay => self.throw_stay(world.hold),
+            CapNerve::ThrowStay => self.throw_stay(world.hold, &mut events),
             CapNerve::Return => self.go_back(head),
         };
         self.step += 1;
@@ -267,9 +309,9 @@ impl Cap {
         }
         self.advance();
         if self.nerve == CapNerve::Return && (self.spot - head).length() <= CATCH_DISTANCE {
-            event = Some(CapEvent::Caught);
+            events.push(CapEvent::Caught);
         }
-        event
+        events
     }
     /// The collider moves the cap by its velocity.
     fn advance(&mut self) {
@@ -278,9 +320,9 @@ impl Cap {
     }
     /// `HackCap::exeThrow`: fly on at the speed the throw set, until the
     /// cruise frames are used up.
-    fn throw(&mut self, event: &mut Option<CapEvent>) -> Option<CapNerve> {
+    fn throw(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         if self.step == 0 {
-            *event = Some(CapEvent::Thrown);
+            events.push(CapEvent::Thrown);
         }
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
     }
@@ -294,22 +336,21 @@ impl Cap {
     }
     /// `HackCap::exeThrowStay`: hover for the stay time, longer while the
     /// button is held, then go back.
-    fn throw_stay(&mut self, hold: bool) -> Option<CapNerve> {
+    fn throw_stay(&mut self, hold: bool, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         if self.step == 0 {
-            self.action = stay(self.left);
+            self.play(stay(self.left));
         }
-        if self.step <= param::STAY_FRAMES {
+        events.push(CapEvent::Staying);
+        if self.step <= param::STAY_FRAMES || hold && self.step <= param::STAY_FRAMES_MAX {
             return None;
         }
-        if hold && self.step <= param::STAY_FRAMES_MAX {
-            return None;
-        }
+        events.push(CapEvent::LeftStay);
         Some(CapNerve::Return)
     }
     /// `HackCap::exeReturn`: fly toward the head, a little faster every frame.
     fn go_back(&mut self, head: Vec3) -> Option<CapNerve> {
         if self.step == 0 {
-            self.action = flying(self.left);
+            self.play(flying(self.kind, self.air, self.left));
             self.return_speed = 0.;
         }
         let to_head = head - self.spot;
@@ -348,11 +389,27 @@ fn phase_of(nerve: CapNerve) -> CapPhase {
         CapNerve::Return => CapPhase::Return,
     }
 }
-fn flying(left: bool) -> &'static str {
-    if left { "FlyingWaitL" } else { "FlyingWaitR" }
+/// The clip of a cap in flight: the spiral and rolling throws have their own,
+/// the others tell the hands apart.
+fn flying(kind: Throw, air: bool, left: bool) -> &'static str {
+    match (kind, air) {
+        (Throw::Spin, _) => "FlyingWaitSpiral",
+        (Throw::Down, false) => "FlyingWaitRolling",
+        _ if left => "FlyingWaitL",
+        _ => "FlyingWaitR",
+    }
 }
 fn stay(left: bool) -> &'static str {
     if left { "StayL" } else { "StayR" }
+}
+/// Frames of a clip of the cap's animation archive and whether it loops
+/// (`MarioCapAnimation`: the flying clips run 11 frames, the stay's loop 9).
+fn clip_shape(name: &str) -> (u32, bool) {
+    if name.starts_with("Stay") {
+        (9, true)
+    } else {
+        (11, false)
+    }
 }
 /// `al::easeIn`.
 fn ease_in(x: f32) -> f32 {

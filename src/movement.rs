@@ -627,7 +627,13 @@ pub enum Fx {
         perfect: bool,
     },
     Dive,
+    /// The cap starts flying: its hit reaction.
     Throw(Throw),
+    /// The voice reaction of that throw (1, 2 or 3 in a row).
+    ThrowVoice(u32),
+    /// A step of the cap's stay (it sounds on every one) and the end of it.
+    CapStay,
+    CapReturn,
     Catch,
     CapBounce,
     WallSlide,
@@ -758,6 +764,8 @@ pub struct Player {
     pub cap: Option<Cap>,
     /// A throw started last frame; the cap appears when it updates.
     launch: Option<Launch>,
+    /// The last number given to a clip start of the cap (they count on).
+    cap_serial: u32,
     /// The cap is Mario's spin attack, waiting for the throw frame
     /// (the cap's `SpinAttack` nerve).
     winding: bool,
@@ -892,6 +900,7 @@ impl Default for Player {
             grounded: true,
             cap: None,
             launch: None,
+            cap_serial: 0,
             winding: false,
             caught: false,
             catching: None,
@@ -3469,6 +3478,7 @@ impl Player {
             front: self.facing.with_y(0.).normalize_or(Vec3::NEG_Z),
             kind,
             left: false,
+            air: !self.grounded,
             continuous,
         }
     }
@@ -3492,7 +3502,9 @@ impl Player {
         // sets it flying; the throw nerve itself runs from the next frame.
         if let Some(launch) = self.launch.take() {
             self.winding = false;
-            self.cap = Some(Cap::start(launch, self.pos));
+            let cap = Cap::start(launch, self.pos, self.cap_serial + 1);
+            self.cap_serial = cap.clip_serial();
+            self.cap = Some(cap);
             return;
         }
         let Some(cap) = &mut self.cap else {
@@ -3518,21 +3530,37 @@ impl Player {
             player: self.pos,
             hold: o.throw_held,
         };
-        match cap.update(&world) {
-            Some(CapEvent::Thrown) => self.events.push(Fx::Throw(cap.kind)),
-            Some(CapEvent::Caught) => {
-                self.cap = None;
-                self.caught = true;
-                self.catching = Some(-1);
-                self.events.push(Fx::Catch);
-                self.catch_window = t::CAP_CATCH_WINDOW;
-                // Standing in the wait nerve, the catch plays its sub animation;
-                // it starts before this frame's advance.
-                if self.mode == Move::Idle && self.grounded {
-                    self.start_sub("CatchCap", 10., -1.);
+        let moments = cap.update(&world);
+        self.cap_serial = cap.clip_serial();
+        for moment in moments {
+            match moment {
+                CapEvent::Thrown => {
+                    self.events.push(Fx::Throw(cap.kind));
+                    // The voice follows the throws in a row; the continuous
+                    // one is counted 0 and sounds as the third.
+                    let voice = if self.throwing.continuous {
+                        3
+                    } else {
+                        self.throwing.count.clamp(1, 2)
+                    };
+                    self.events.push(Fx::ThrowVoice(voice));
+                }
+                CapEvent::Staying => self.events.push(Fx::CapStay),
+                CapEvent::LeftStay => self.events.push(Fx::CapReturn),
+                CapEvent::Caught => {
+                    self.cap = None;
+                    self.caught = true;
+                    self.catching = Some(-1);
+                    self.events.push(Fx::Catch);
+                    self.catch_window = t::CAP_CATCH_WINDOW;
+                    // Standing in the wait nerve, the catch plays its sub
+                    // animation; it starts before this frame's advance.
+                    if self.mode == Move::Idle && self.grounded {
+                        self.start_sub("CatchCap", 10., -1.);
+                    }
+                    break;
                 }
             }
-            None => {}
         }
     }
     /// What the catch leaves for the player's own step: in midair the catch

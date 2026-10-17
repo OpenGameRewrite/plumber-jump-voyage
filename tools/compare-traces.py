@@ -348,7 +348,11 @@ def event_item(item):
     """An event as both sides compare it: the game logs a hit reaction by its
     Japanese name (`reaction:着地`), the rewrite by its English one."""
     kind, _, name = item.partition(":")
-    return f"{kind}:{reaction_name(name)}" if kind == "reaction" else item
+    if kind != "reaction":
+        return item
+    # The game marks a reaction raised on another actor with `@owner`.
+    base, at, owner = name.partition("@")
+    return f"{kind}:{reaction_name(base)}{at}{owner}"
 
 
 def compare_set(g, r, sep, ignore):
