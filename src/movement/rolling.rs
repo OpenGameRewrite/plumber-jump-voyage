@@ -422,7 +422,8 @@ impl Player {
                 before += length;
             }
             self.anim.frame = before + rate;
-            if self.anim.frame >= length {
+            self.clip_wrapped = self.anim.frame >= length;
+            if self.clip_wrapped {
                 self.anim.frame -= length;
             }
         }

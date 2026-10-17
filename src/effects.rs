@@ -338,6 +338,7 @@ fn tick(
         reactions: &reactions,
         code: &code,
         calls: &code_calls(&p),
+        wrapped: p.clip_wrapped,
     });
     // Joint positions of the model, when it has them.
     let mut joints = HashMap::new();

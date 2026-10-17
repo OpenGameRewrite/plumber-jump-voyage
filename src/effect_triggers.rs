@@ -78,6 +78,9 @@ pub struct Frame<'a> {
     /// Effects whose emit call the controller makes in this very frame (the
     /// roll calls its effect every frame it is on the ground).
     pub calls: &'a [&'a str],
+    /// The main clip looped back to its start in this frame: its entries fire
+    /// again, as they do when a clip starts.
+    pub wrapped: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -178,6 +181,7 @@ impl Triggers {
         source: Source,
         clip: Option<(&str, u32)>,
         frame: f32,
+        wrapped: bool,
     ) {
         let last = if source == Source::Mario {
             &mut self.last_mario
@@ -217,6 +221,23 @@ impl Triggers {
                 }
             }
         }
+        if wrapped && !changed {
+            let Some((name, _)) = clip else {
+                return;
+            };
+            let table = if source == Source::Mario {
+                &self.mario
+            } else {
+                &self.cap
+            };
+            for entry in table.get(name).cloned().unwrap_or_default() {
+                if entry.start <= 0 {
+                    self.start_action(changes, source, &entry);
+                } else {
+                    self.waiting.push((source, entry));
+                }
+            }
+        }
         // Entries that wait for a frame of the clip.
         let (due, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting)
             .into_iter()
@@ -234,9 +255,10 @@ impl Triggers {
             Source::Mario,
             Some((input.anim, input.serial)),
             input.frame,
+            input.wrapped,
         );
         let cap_clip = input.cap_anim.map(|name| (name, input.cap_serial));
-        self.follow_clip(&mut changes, Source::Cap, cap_clip, 0.);
+        self.follow_clip(&mut changes, Source::Cap, cap_clip, 0., false);
         for reaction in input.reactions {
             for key in self.reactions.get(*reaction).into_iter().flatten() {
                 changes.push(Change::Start {
@@ -475,6 +497,7 @@ impl Tracker {
             reactions: &reactions,
             code: &code,
             calls: &code_calls(p),
+            wrapped: p.clip_wrapped,
         });
         let mut started = vec![];
         for change in changes {
@@ -562,6 +585,7 @@ pub fn self_check() {
         reactions: &[],
         code: &[],
         calls: &[],
+        wrapped: false,
     };
     assert!(triggers.evaluate(&frame("Wait", 1, 0.)).is_empty());
     let started = triggers.evaluate(&frame("Jump", 2, 0.));

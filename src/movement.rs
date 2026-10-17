@@ -834,6 +834,8 @@ pub struct Player {
     /// The collider still reports the floor under a hop that leaves it (the
     /// roll's start), though the player is already rising.
     hop_contact: bool,
+    /// The main clip looped back to its start in this step.
+    pub clip_wrapped: bool,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -923,6 +925,7 @@ impl Default for Player {
             pull: t::GRAVITY,
             sounds: SeCtrl::default(),
             hop_contact: false,
+            clip_wrapped: false,
         }
     }
 }
@@ -1412,6 +1415,7 @@ impl Player {
     /// Advance the clips one frame, before the state runs, as the game does
     /// (`PlayerAnimator::updateAnimFrame` inside its movement).
     fn advance_clips(&mut self) {
+        self.clip_wrapped = false;
         if self.anim.name == "Move" {
             self.cycle.begin_frame();
             self.step_phase = self.cycle.phase;
@@ -1429,6 +1433,7 @@ impl Player {
                 && self.anim.frame >= length
             {
                 self.anim.frame -= length;
+                self.clip_wrapped = true;
             }
         }
         if let Some(sub) = &mut self.sub_anim {

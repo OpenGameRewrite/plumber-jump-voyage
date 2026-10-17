@@ -122,12 +122,13 @@ impl Pose {
                 slot: a.name,
                 layers: vec![Layer {
                     name: a.name,
-                    // The braking and turning clips hold their last frame while
-                    // the animator's counter runs one past it.
+                    // The braking, turning and held clips keep their last frame
+                    // while the animator's counter runs one past it.
                     frame: match a.name {
                         "Brake" => a.frame.min(clip::BRAKE as f32),
                         "Turn" => a.frame.min(clip::TURN as f32),
-                        _ => a.frame,
+                        name => clip::held_length(name)
+                            .map_or(a.frame, |length| a.frame.min(length as f32)),
                     },
                     rate: a.rate,
                     weight: 1.,
