@@ -27,6 +27,7 @@ mod movement;
 mod nerve;
 mod replay;
 mod scripted_input;
+mod se_ctrl;
 mod shots;
 #[cfg(feature = "local-assets")]
 mod sound;
@@ -67,6 +68,7 @@ fn main() {
         effect_data::self_check();
         effect_triggers::self_check();
         sound_table::self_check();
+        se_ctrl::self_check();
         game_names::self_check();
         game_columns::self_check();
         tone::self_check();

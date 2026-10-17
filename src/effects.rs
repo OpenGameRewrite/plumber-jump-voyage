@@ -11,7 +11,8 @@ use crate::{
     effect_render::{Painter, ParticleMaterial, View},
     effect_sim::{Attach, Draw, Flat, Instance, Pose},
     effect_triggers::{
-        Change, Frame, Key, ONE_SHOT_LIMIT, Triggers, cap_clip, code_driven, reactions_of,
+        Change, Frame, Key, ONE_SHOT_LIMIT, Triggers, cap_clip, code_calls, code_driven,
+        reactions_of,
     },
     fx::OriginalEffects,
     movement::{Course, Fx, Player},
@@ -27,7 +28,7 @@ use std::{
 /// Effects alive at once; the oldest end first beyond this.
 const MAX_LIVE: usize = 96;
 /// Resources that emit nothing.
-const EMPTY_RESOURCE: &str = "DummyEmitter";
+use crate::effect_triggers::EMPTY_RESOURCE;
 /// Jump dust stays where Mario took off. The tables let it follow him, but the
 /// controller leaves the ground at once while the original's dust emitter runs
 /// for six frames, which would stack puffs up in a column.
@@ -258,7 +259,13 @@ impl Effects {
             follow_rotation: trigger.has_flag("FollowRotate"),
             fade_on_stop: trigger.has_flag("OneTimeFade"),
         };
-        let timing = self.library.timing(&trigger);
+        let timing = self
+            .library
+            .timing(Some(choice))
+            .unwrap_or(crate::effect_triggers::Timing {
+                emitting: Some(0),
+                linger: 0,
+            });
         self.seed = self.seed.wrapping_add(1);
         let place = Placement {
             anchor,
@@ -307,7 +314,6 @@ fn tick(
     let effects = &mut *effects;
     let context = FxContext {
         mode: p.mode,
-        move_speed: p.move_speed,
         grounded: p.grounded,
     };
     let mut reactions = vec![];
@@ -331,6 +337,8 @@ fn tick(
         cap_serial: effects.cap_serial,
         reactions: &reactions,
         code: &code,
+        calls: &code_calls(&p),
+        wrapped: p.clip_wrapped,
     });
     // Joint positions of the model, when it has them.
     let mut joints = HashMap::new();
@@ -362,6 +370,7 @@ fn tick(
         match change {
             Change::Start { key, once, .. } => effects.start(key, once, &p, &joints, material),
             Change::Stop { key } => effects.stop(&key),
+            Change::Again { .. } => {}
         }
     }
     let cap = effects.last_cap;

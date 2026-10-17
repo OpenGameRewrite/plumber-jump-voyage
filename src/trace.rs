@@ -122,12 +122,16 @@ impl Pose {
                 slot: a.name,
                 layers: vec![Layer {
                     name: a.name,
-                    // The braking and turning clips hold their last frame while
-                    // the animator's counter runs one past it.
+                    // The braking, turning and held clips keep their last frame
+                    // while the animator's counter runs one past it.
                     frame: match a.name {
                         "Brake" => a.frame.min(clip::BRAKE as f32),
                         "Turn" => a.frame.min(clip::TURN as f32),
-                        _ => p.model_frame().unwrap_or(a.frame),
+                        // Under a sub animation the model's own frame is shown.
+                        name => p.model_frame().unwrap_or_else(|| {
+                            clip::held_length(name)
+                                .map_or(a.frame, |length| a.frame.min(length as f32))
+                        }),
                     },
                     rate: a.rate,
                     weight: 1.,
@@ -177,6 +181,12 @@ pub struct Recorder {
     boosts: u32,
     blend: Blend<Pose>,
     overlay: f32,
+    /// Name of the latest sub clip (the probe keeps it after the clip ends).
+    last_sub: &'static str,
+    /// The standing state began from the cap throw: the game's sub-nerve
+    /// counter (`sub_step`) runs with the state's there and restarts elsewhere
+    /// (the landing's `Wait/Land` into `Wait`), which the rewrite does not track.
+    after_throw: bool,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
     /// The original's effects, when their library is installed; the
@@ -186,15 +196,19 @@ pub struct Recorder {
     right_hand: bool,
 }
 impl Recorder {
-    pub fn new(table: Option<Table>, library: Option<Library>) -> Self {
+    /// `floor` is the material of the floor the run stands on (the recorded
+    /// game's), which picks the variant of each effect.
+    pub fn new(table: Option<Table>, library: Option<Library>, floor: Option<String>) -> Self {
         Self {
             table,
             right_hand: true,
-            effects: library.map(Tracker::new),
+            effects: library.map(|library| Tracker::new(library).on_floor(floor)),
             cursor: AnimCursor::default(),
             cap_watch: CapWatch::default(),
             boosts: 0,
             blend: Blend::default(),
+            last_sub: "",
+            after_throw: false,
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -215,28 +229,24 @@ impl Recorder {
             if is_voice(name) { "voice" } else { "se" },
             if cap { "@cap" } else { "" }
         ));
-        let Some(table) = &self.table else {
+        if self.table.is_none() {
             return;
-        };
-        let group = table.group(cap);
-        let Some(play) = group.plays.get(name) else {
-            return;
-        };
-        // A random play picks one layer; the trace shows the first one.
-        let layers = if play.random {
-            &play.layers[..play.layers.len().min(1)]
-        } else {
-            &play.layers[..]
-        };
-        for layer in layers {
-            let Some(resource) = table.resources.get(&layer.resource) else {
-                continue;
-            };
-            // Random variation is left at its middle (volume at its loudest).
-            let mut draws = [0.5, 0.5, 0.].into_iter();
-            let (gain, pitch) = layer.levels(resource, speed, || draws.next().unwrap_or(0.));
-            mix.push(format!("{name}/{}/{}", num(gain), num(pitch)));
         }
+        // The game logs one request per sound, however many layers answer it;
+        // the mix shows the first layer, or neutral levels for a play that has
+        // none (a material variant waits for the floor to name its sound).
+        let (gain, pitch) = self
+            .table
+            .as_ref()
+            .and_then(|table| {
+                let layer = table.group(cap).plays.get(name)?.layers.first()?;
+                let resource = table.resources.get(&layer.resource)?;
+                // Random variation is left at its middle (volume at its loudest).
+                let mut draws = [0.5, 0.5, 0.].into_iter();
+                Some(layer.levels(resource, speed, || draws.next().unwrap_or(0.)))
+            })
+            .unwrap_or((1., 1.));
+        mix.push(format!("{name}/{}/{}", num(gain), num(pitch)));
     }
     fn reaction(
         &self,
@@ -300,7 +310,6 @@ impl Recorder {
         // Movement events: sounds, then effects.
         let context = FxContext {
             mode: p.mode,
-            move_speed: speed,
             grounded: p.grounded,
         };
         let mut started = Vec::new();
@@ -310,7 +319,10 @@ impl Recorder {
             }
             for cue in fx_cues(*f, context, &mut self.boosts) {
                 match cue {
-                    Cue::Play(name) => self.play(false, name, speed, &mut events, &mut mix),
+                    Cue::Play(name) | Cue::Hold(name) => {
+                        self.play(false, name, speed, &mut events, &mut mix)
+                    }
+                    Cue::Rated(name) => self.play(false, name, p.anim.rate, &mut events, &mut mix),
                     Cue::Reaction { cap, name } => {
                         self.reaction(cap, name, speed, &mut events, &mut mix)
                     }
@@ -363,11 +375,21 @@ impl Recorder {
 
         // Animation blend and crossfade, advanced by one frame.
         let dt = 1. / FPS;
-        self.blend
-            .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
+        // The dive's landing clip covers the whole body while it plays: the
+        // pose under it neither blends nor shows, and no upper overlay is meant.
+        let covering = p.sub_anim.filter(|s| s.name == "RollingStandUp");
+        if covering.is_none() {
+            self.blend
+                .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
+        }
         let pose = &self.blend.current;
         let kept = self.blend.kept();
-        self.overlay = if p.sub_anim.is_some() {
+        if let Some(sub) = p.sub_anim {
+            self.last_sub = sub.name;
+        } else if let Some((name, _)) = p.model_sub() {
+            self.last_sub = name;
+        }
+        self.overlay = if p.sub_anim.is_some() && covering.is_none() {
             (self.overlay + dt / 0.05).min(1.)
         } else {
             (self.overlay - dt / 0.05).max(0.)
@@ -380,14 +402,18 @@ impl Recorder {
         let mut layers: Vec<String> = Vec::new();
         // The game lists the clips of the playing slot with their own weights;
         // the fade from the clip before it is the `interp` column.
-        for l in &pose.layers {
-            layers.push(layer_cell(l.name, l.frame, l.rate, l.weight));
+        if let Some(sub) = covering {
+            layers.push(layer_cell(sub.name, sub.frame, sub.rate, 1.));
+        } else {
+            for l in &pose.layers {
+                layers.push(layer_cell(l.name, l.frame, l.rate, l.weight));
+            }
         }
         if self.overlay > 0. {
             let frame = p.sub_anim.map_or(15., |s| sub_frame(&s)).min(15.9);
             layers.push(layer_cell(upper, frame, 1., self.overlay));
         }
-        let blend = if pose.layers.len() > 1 {
+        let blend = if pose.layers.len() > 1 && covering.is_none() {
             pose.layers
                 .iter()
                 .map(|l| format!("{}:{}", l.name, num(l.weight)))
@@ -400,11 +426,13 @@ impl Recorder {
             .blend
             .old
             .last()
+            .filter(|_| covering.is_none())
             .map(|(old, _, _)| format!("{}:{}", old.dominant(), num(1. - kept)))
             .unwrap_or_default();
         // Clips that need the model's data (eye and hand parts) are not known here.
         let parts = p
             .sub_anim
+            .filter(|_| covering.is_none())
             .map(|s| format!("upper:{upper}@{}", num(sub_frame(&s))))
             .unwrap_or_default();
 
@@ -430,14 +458,18 @@ impl Recorder {
         cells.num(p.anim.rate);
         cells.text(&blend);
         cells.text(&interp);
-        // The upper-body overlays are the rewrite's own partial clips; the
-        // game's sub animation (the throw's, the catch's) comes from the state.
-        let sub = p
-            .sub_anim
-            .map(|s| (s.name, sub_frame(&s)))
-            .or_else(|| p.sub_row());
-        cells.text(sub.map_or("", |s| s.0));
-        cells.text(&sub.map_or(String::new(), |s| num(s.1)));
+        // The probe reads the animator's sub slot, which keeps the name of the
+        // last sub clip after it ends and then shows the main clip's frame.
+        // Sub clips are the rewrite's own overlays (`sub_anim`) or the game's
+        // sub animation on the model that the state started (`model_sub`).
+        cells.text(self.last_sub);
+        cells.text(&match (p.sub_anim, p.model_sub()) {
+            (Some(s), _) => num(sub_frame(&s)),
+            (None, Some((_, frame))) => num(frame),
+            (None, None) if self.last_sub.is_empty() => String::new(),
+            (None, None) if p.anim.name == "Move" => num(p.run_cycle().phase),
+            (None, None) => num(pose.layers.first().map_or(p.anim.frame, |l| l.frame)),
+        });
         cells.num(info.camera_yaw_deg);
         cells.text(&events.join(";"));
         // Extended columns.
@@ -461,7 +493,10 @@ impl Recorder {
         let cap = p.cap_row();
         cells.text(cap.as_ref().map_or("", |c| c.state));
         for axis in 0..3 {
-            cells.text(&cap.as_ref().map_or(String::new(), |c| num(c.pos[axis] / UNIT)));
+            cells.text(
+                &cap.as_ref()
+                    .map_or(String::new(), |c| num(c.pos[axis] / UNIT)),
+            );
         }
         cells.text(cap.as_ref().map_or("", |c| c.clip));
         for _ in 0..4 {
@@ -475,7 +510,12 @@ impl Recorder {
         cells.int(p.state_frames() as i64);
         // The state's sub-nerve counts with the state in the standing and
         // spinning states; the others keep one counter.
-        if matches!(p.mode, Move::Idle | Move::Throw) {
+        self.after_throw = match p.mode {
+            Move::Throw => true,
+            Move::Idle => self.after_throw,
+            _ => false,
+        };
+        if self.after_throw {
             cells.int(p.state_frames() as i64);
         } else {
             cells.empty();
@@ -601,6 +641,16 @@ impl TraceFile {
     pub fn number(&self, row: usize, column: &str) -> Option<f32> {
         self.cell(row, column)?.parse().ok()
     }
+    /// The floor material the recorded game stood on (its `collision` column's
+    /// `gmat`), taken from the first row that names one.
+    pub fn floor_material(&self) -> Option<String> {
+        (0..self.rows.len()).find_map(|row| {
+            self.cell(row, "collision")?
+                .split(';')
+                .find_map(|item| item.strip_prefix("gmat="))
+                .map(str::to_string)
+        })
+    }
     /// What a row of the run state shows of its hidden state: the run cycle's
     /// pose and weights, the turn that moved the facing, the stick, how long the
     /// current nerve has been going and the nerve chosen in this row.
@@ -671,6 +721,13 @@ impl TraceFile {
         hint.last_input = Vec3::new(parts.next()?, 0., parts.next()?);
         Some(hint)
     }
+    /// The clip the next row starts (it differs from this row's and sits at
+    /// its first frame): what a nerve chosen in this row plays.
+    fn next_clip(&self, row: usize) -> Option<&'static str> {
+        let now = self.cell(row, "anim")?;
+        let next = self.cell(row + 1, "anim")?;
+        (next != now && self.number(row + 1, "anim_frame") == Some(0.)).then(|| intern(next))
+    }
     /// The injectable player state a row records, for lockstep stepping.
     pub fn snapshot(&self, row: usize) -> Snapshot {
         let n = |c| self.number(row, c).unwrap_or(0.);
@@ -714,6 +771,7 @@ impl TraceFile {
             state_frames: self.number(row, "state_step").map(|s| s.max(0.) as u32),
             counters,
             run: self.run_hint(row),
+            next_clip: self.next_clip(row),
         }
     }
 }

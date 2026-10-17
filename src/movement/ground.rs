@@ -30,13 +30,21 @@ pub const RUN_AFTER_TURN_SCALE: f32 = 0.5;
 /// narrows around them.
 const DASH_BORDER: f32 = 15.;
 const DASH_RANGE: f32 = 1.;
-/// Turn tuning of the original: the smallest angle that turns at all, the angle
-/// above which the turn is quick, and the frames of its ramps.
+/// Turn tuning of the original's run: the smallest angle that turns at all,
+/// the angle above which the turn is quick, and the frames of its ramps.
 const ROUND_MIN_DEGREES: f32 = 0.5;
 const ROUND_FAST_DEGREES: f32 = 45.;
 const ROUND_ACCEL_FRAMES: i32 = 20;
 const ROUND_ACCEL_FRAMES_FAST: i32 = 5;
 const ROUND_BRAKE_FRAMES: i32 = 20;
+/// The crawl of the squat state sets the same controller up differently
+/// (`PlayerStateSquat`'s constructor): quick turns only past 180 degrees, so
+/// never, at `SquatWalkTurnSpeed` degrees a frame over `SquatWalkTurnFrame`.
+const CRAWL_TURN_DEGREES: f32 = 30.;
+const CRAWL_FAST_DEGREES: f32 = 180.;
+const CRAWL_ACCEL_FRAMES: i32 = 10;
+const CRAWL_ACCEL_FRAMES_FAST: i32 = 1;
+const CRAWL_BRAKE_FRAMES: i32 = 10;
 /// A reversing stick is only a reversal when it did not sweep round smoothly:
 /// the average turn of the stick over five frames, in degrees per frame.
 const REVERSE_SMOOTH_RATE: f32 = 1.;
@@ -132,9 +140,35 @@ pub fn turn_power(rate: f32) -> f32 {
     ease_in(rate01(rate, ROUND_MIN_DEGREES, t::ROUND_LIMIT_DEG))
 }
 
+/// What a turn controller is set up with (`PlayerActionTurnControl::setup`):
+/// the ramps of the turn rate and whether a stick pushed the opposite way
+/// brakes (the run) or is simply turned towards (the crawl, `_88`).
+#[derive(Clone, Copy, Debug)]
+struct TurnTuning {
+    min_degrees: f32,
+    fast_degrees: f32,
+    accel_frames: i32,
+    accel_frames_fast: i32,
+    brake_frames: i32,
+    forced: bool,
+}
+impl Default for TurnTuning {
+    fn default() -> Self {
+        Self {
+            min_degrees: ROUND_MIN_DEGREES,
+            fast_degrees: ROUND_FAST_DEGREES,
+            accel_frames: ROUND_ACCEL_FRAMES,
+            accel_frames_fast: ROUND_ACCEL_FRAMES_FAST,
+            brake_frames: ROUND_BRAKE_FRAMES,
+            forced: false,
+        }
+    }
+}
+
 /// The turn controller: how fast the facing swings toward the stick.
 #[derive(Clone, Debug, Default)]
 pub struct TurnControl {
+    tuning: TurnTuning,
     limit: f32,
     fast_limit: f32,
     /// Degrees the facing turns by each frame, ramped up and down.
@@ -148,9 +182,28 @@ pub struct TurnControl {
     /// The stick asked for the opposite way while this controller was not
     /// forced: the run brakes instead of turning.
     pub reverse: bool,
+    /// The same while it was forced (`_69`): the facing keeps turning, and
+    /// whoever moves goes the stick's way at once.
+    pub reverse_forced: bool,
 }
 impl TurnControl {
-    fn reset(&mut self) {
+    /// The controller the squat state keeps for crawling.
+    pub fn crawl() -> Self {
+        Self {
+            tuning: TurnTuning {
+                min_degrees: ROUND_MIN_DEGREES,
+                fast_degrees: CRAWL_FAST_DEGREES,
+                accel_frames: CRAWL_ACCEL_FRAMES,
+                accel_frames_fast: CRAWL_ACCEL_FRAMES_FAST,
+                brake_frames: CRAWL_BRAKE_FRAMES,
+                forced: true,
+            },
+            limit: CRAWL_TURN_DEGREES,
+            fast_limit: CRAWL_TURN_DEGREES,
+            ..Self::default()
+        }
+    }
+    pub fn reset(&mut self) {
         self.rate = 0.;
         self.last_direction = Vec3::ZERO;
         self.last_axis = Vec3::ZERO;
@@ -162,10 +215,10 @@ impl TurnControl {
     }
     /// How far into a turn the controller is, 0 to 1 (`calcTurnPowerRate`).
     fn power(&self) -> f32 {
-        ease_in(rate01(self.rate, ROUND_MIN_DEGREES, self.limit))
+        ease_in(rate01(self.rate, self.tuning.min_degrees, self.limit))
     }
     /// One frame of `PlayerActionTurnControl::update` on a level floor.
-    fn update(&mut self, facing: Vec3, stick: Vec3) {
+    pub fn update(&mut self, facing: Vec3, stick: Vec3) {
         let front = unit_or_zero(flat(facing));
         let new = unit_or_zero(stick);
         let has_input = !is_zero(new);
@@ -184,15 +237,14 @@ impl TurnControl {
             self.recent.push(angle_degrees(last, new).abs());
         }
         let stick_turn = self.stick_turn();
-        // A stick pushed the opposite way: the run brakes rather than turns.
-        let mut reverse = false;
-        if has_input
+        // A stick pushed the opposite way: the run brakes rather than turns;
+        // a forced controller keeps turning and only flags it.
+        let opposed = has_input
             && !front_invalid
             && is_opposite(new, front)
-            && (skip_tracking || (have_both && stick_turn <= REVERSE_SMOOTH_RATE))
-        {
-            reverse = true;
-        }
+            && (skip_tracking || (have_both && stick_turn <= REVERSE_SMOOTH_RATE));
+        let reverse = opposed && !self.tuning.forced;
+        self.reverse_forced = opposed && self.tuning.forced;
         self.reverse = reverse;
         let turning = has_input && !front_invalid && !reverse;
         let out;
@@ -217,32 +269,32 @@ impl TurnControl {
                         extra_turn = stick_turn > 10. || stick_degrees > 3.;
                         follow_axis = stick_turn <= 10. && stick_degrees <= 3.;
                     }
-                } else if stick_degrees >= ROUND_MIN_DEGREES.max(self.rate) {
+                } else if stick_degrees >= self.tuning.min_degrees.max(self.rate) {
                     // The stick doubled back by a large step: the turn restarts.
                     self.rate = 0.;
                 } else {
                     // A small step the other way eats into the turn.
                     self.rate = converge(self.rate, 0., stick_degrees);
-                    follow_axis = stick_degrees < ROUND_MIN_DEGREES;
+                    follow_axis = stick_degrees < self.tuning.min_degrees;
                 }
             }
             // The turn rate ramps up toward what the stick's tilt and the
             // angle left allow, and down when that is reached.
             let tilt = rate01(stick.length(), 0., 0.8).clamp(0.25, 1.);
-            if remaining < ROUND_MIN_DEGREES {
-                self.rate = brake(self.rate, ROUND_BRAKE_FRAMES, self.limit);
-            } else if remaining < ROUND_FAST_DEGREES {
+            if remaining < self.tuning.min_degrees {
+                self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
+            } else if remaining < self.tuning.fast_degrees {
                 let target = tilt * self.limit;
                 self.rate = if self.rate >= target {
-                    brake(self.rate, ROUND_BRAKE_FRAMES, self.fast_limit)
+                    brake(self.rate, self.tuning.brake_frames, self.fast_limit)
                 } else {
-                    accel(self.rate, target, target / ROUND_ACCEL_FRAMES as f32)
+                    accel(self.rate, target, target / self.tuning.accel_frames as f32)
                 };
             } else {
                 self.rate = accel(
                     self.rate,
                     self.fast_limit,
-                    self.fast_limit / ROUND_ACCEL_FRAMES_FAST as f32,
+                    self.fast_limit / self.tuning.accel_frames_fast as f32,
                 );
             }
             if extra_turn || is_reverse(front, new, 0.01) {
@@ -282,7 +334,7 @@ impl TurnControl {
             out = if front_invalid { flat(facing) } else { front };
             self.last_direction = Vec3::ZERO;
             self.last_axis = Vec3::ZERO;
-            self.rate = brake(self.rate, ROUND_BRAKE_FRAMES, self.limit);
+            self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
         }
         self.direction = out;
     }

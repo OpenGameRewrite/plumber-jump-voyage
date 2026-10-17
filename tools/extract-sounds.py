@@ -217,8 +217,11 @@ WallCatchEnd WallCatchEndJump PoleCatch PoleClimb PoleFall PoleWait SwimFallIn S
 # Event tables keyed by the original's reaction names (shared with the effect tool).
 from reaction_names import MARIO_REACTIONS,CAP_REACTIONS
 CAP_ACTIONS=['FlyingWait','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
-# Footstep playback the controller triggers directly on its foot-print frames.
-FOOT=['RunL','RunR','SquatRunL','SquatRunR','FootBrake','SwimRunL','SwimRunR']
+# Sounds the player's own code starts (its per-frame sound control, not a clip's
+# frame list): footfalls with their foot lift, material variant and clothes
+# rustle, the roll's spin and the wind of a fast fall.
+FOOT=['RunL','RunR','RunMatL','RunMatR','RunUpL','RunUpR','ShakeNoiseL','ShakeNoiseR','SquatRunL','SquatRunR',
+    'FootBrake','SwimRunL','SwimRunR','Roll','FallWhoosh_loop']
 # Footwear sets (the original chooses these in code; this mapping is inferred).
 FOOTWEAR={'MarioAloha':'Sandal','MarioSwimwear':'Bare','MarioUnderwear':'Bare','MarioZombie':'Zombie','Mario64Metal':'Metal'}
 
@@ -265,6 +268,7 @@ def main():
     p.add_argument('--list',action='store_true')
     p.add_argument('--self-check',action='store_true')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
+    p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
     a=p.parse_args()
     if a.self_check:self_check();return
     if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
@@ -295,7 +299,7 @@ def main():
     out={'mario':{'actions':actions(mario,CLIPS),'reactions':reactions(mario,MARIO_REACTIONS),'plays':{}},
         'cap':{'actions':actions(cap,CAP_ACTIONS),'reactions':reactions(cap,CAP_REACTIONS),'plays':{}},
         'footwear':FOOTWEAR,'resources':{}}
-    wanted_foot=FOOT+[prefix+n for prefix in set(FOOTWEAR.values()) for n in ('RunL','RunR','Jump','Land','FootBrake')]
+    wanted_foot=FOOT+[prefix+n for prefix in set(FOOTWEAR.values()) for n in ('RunL','RunR','RunMatL','RunMatR','RunUpL','RunUpR','Jump','JumpMat','Land','LandMat','FootBrake')]
     wanted_foot+=['RunMetalL','RunMetalR','JumpMetalHeavy','LandMetalHeavy']
     for group,table in (('mario',mario_plays),('cap',cap_plays)):
         g=out[group];names={x['play'] for v in g['actions'].values() for x in v}|{x for v in g['reactions'].values() for x in v}
@@ -315,10 +319,12 @@ def main():
                     if curve and not curve.get('RtpcSource'):
                         layer[key.lower()+'_curve']=[curve['InMin'],curve['InMax'],curve['OutMin'],curve['OutMax']]
                 layers.append(layer)
-            if layers:
-                g['plays'][name]={'random':item.get('IsModeRandom',False),'loop':item.get('IsLevel',False),'layers':layers}
-    temp=extract.ROOT/'local/audio';temp.mkdir(parents=True,exist_ok=True)
-    output=extract.ROOT/'assets/local/sounds';output.mkdir(parents=True,exist_ok=True)
+            # A play without sound is still a request the game logs: the material
+            # variants (`JumpMat`, `RunMatL`) wait for the floor to name their sound.
+            g['plays'][name]={'random':item.get('IsModeRandom',False),'loop':item.get('IsLevel',False),'layers':layers}
+    output=a.output or extract.ROOT/'assets/local/sounds'
+    temp=output/'_decode' if a.output else extract.ROOT/'local/audio'
+    temp.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True,exist_ok=True)
     for old in output.glob('*.wav'):old.unlink()
     def decode(raw,stem):
         src=temp/(stem+'.bfwav');src.write_bytes(raw);dst=temp/(stem+'.wav')
@@ -357,14 +363,18 @@ def main():
                 render_sequence(layers,dst)
                 entry['files'].append('local/sounds/'+dst.name)
         for f in entry['files']:
-            with wave.open(str(extract.ROOT/'assets'/f),'rb') as audio:
+            with wave.open(str(output/Path(f).name),'rb') as audio:
                 if audio.getnframes()==0:raise ValueError('Decoded audio is empty')
         out['resources'][name]=entry
-    (output/'player.json').write_text(json.dumps(out,indent=1,ensure_ascii=False),encoding='utf-8')
+    # Replace the table in one step: running games read it at start-up.
+    table=output/'player.json.new'
+    table.write_text(json.dumps(out,indent=1,ensure_ascii=False),encoding='utf-8')
+    table.replace(output/'player.json')
     (output/'manifest.json').unlink(missing_ok=True)
     if skipped:print('Skipped sequences this tool cannot render: '+', '.join(skipped))
     if not a.keep_intermediates:
         for f in list(temp.glob('*.bfwav'))+list(temp.glob('*.wav')):f.unlink()
+        if a.output:temp.rmdir()
     print(f"Installed {len(needed)} sounds for {len(out['mario']['actions'])} animations, "
         f"{len(out['mario']['reactions'])+len(out['cap']['reactions'])} events and the cap.")
 

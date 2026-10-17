@@ -111,7 +111,7 @@ pub fn counters_from_game(cell: &str) -> Vec<(String, i64)> {
 /// The contact flags, in the game's `collision` format.
 pub fn collision_cell(p: &Player) -> String {
     let mut items = vec![
-        format!("ground={}", p.grounded as i32),
+        format!("ground={}", p.floor_normal().is_some() as i32),
         format!("wall={}", (p.wall != bevy::prelude::Vec3::ZERO) as i32),
     ];
     if let Some(n) = p.floor_normal() {

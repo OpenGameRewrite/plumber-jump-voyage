@@ -22,6 +22,8 @@ struct Sounds {
 /// A looping sound, tied to the animation or cap state that started it.
 #[derive(Component)]
 struct Looping(&'static str);
+/// Tag of the sound the player holds while its cue keeps coming (falling fast).
+const HOLD: &str = "hold";
 #[derive(Default)]
 struct Tracker {
     cursor: AnimCursor,
@@ -74,6 +76,17 @@ struct Ctx<'a, 'w, 's> {
 impl Ctx<'_, '_, '_> {
     /// Start one named sound of a group. Loops are tagged so they can stop.
     fn start(&mut self, cap: bool, name: &str, tag: Option<&'static str>, t: &mut Tracker) {
+        self.start_with(cap, name, tag, false, t);
+    }
+    /// `held` loops the sound whatever the table says: its owner stops it.
+    fn start_with(
+        &mut self,
+        cap: bool,
+        name: &str,
+        tag: Option<&'static str>,
+        held: bool,
+        t: &mut Tracker,
+    ) {
         let group = self.sounds.table.group(cap);
         // Outfits with their own footwear use its foot sounds when present.
         let worn = self.footwear.and_then(|f| {
@@ -112,7 +125,8 @@ impl Ctx<'_, '_, '_> {
                     .push((layer.delay as f32 / 60., layer.resource.clone(), cap, gain));
                 continue;
             }
-            let mode = if play.looping && tag.is_some() {
+            let looping = (play.looping || held) && tag.is_some();
+            let mode = if looping {
                 PlaybackMode::Loop
             } else {
                 PlaybackMode::Despawn
@@ -126,7 +140,7 @@ impl Ctx<'_, '_, '_> {
                     ..default()
                 },
             ));
-            if let (true, Some(tag)) = (play.looping, tag) {
+            if let (true, Some(tag)) = (looping, tag) {
                 e.insert(Looping(tag));
             }
         }
@@ -209,9 +223,9 @@ fn play(
     // Event sounds.
     let context = FxContext {
         mode: p.mode,
-        move_speed: p.move_speed,
         grounded: p.grounded,
     };
+    let mut held = false;
     for f in fx {
         let mut boosts = t.boosts;
         let cues = fx_cues(f, context, &mut boosts);
@@ -219,6 +233,18 @@ fn play(
         for cue in cues {
             match cue {
                 Cue::Play(name) => ctx.start(false, name, None, &mut t),
+                Cue::Rated(name) => {
+                    // The footsteps' curves follow the animation's rate.
+                    let speed = std::mem::replace(&mut ctx.speed, p.anim.rate);
+                    ctx.start(false, name, None, &mut t);
+                    ctx.speed = speed;
+                }
+                Cue::Hold(name) => {
+                    held = true;
+                    if !loops.iter().any(|(_, tag)| tag.0 == HOLD) {
+                        ctx.start_with(false, name, Some(HOLD), true, &mut t);
+                    }
+                }
                 Cue::Reaction { cap, name } => ctx.reaction(cap, name, &mut t),
                 Cue::Action {
                     cap,
@@ -227,6 +253,14 @@ fn play(
                     to,
                     tag,
                 } => ctx.action(cap, name, from, to, tag, &mut t),
+            }
+        }
+    }
+    // A held sound ends the frame its cue stops coming.
+    if !held {
+        for (e, tag) in &loops {
+            if tag.0 == HOLD {
+                ctx.commands.entity(e).despawn();
             }
         }
     }

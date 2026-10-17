@@ -321,14 +321,19 @@ impl Cap {
         self.front = if self.step == 0 {
             direction
         } else {
-            turn_toward(self.front, direction, param::TURN_LIMIT_DEGREES.to_radians())
+            turn_toward(
+                self.front,
+                direction,
+                param::TURN_LIMIT_DEGREES.to_radians(),
+            )
         };
         if to_head.with_y(0.).length() < RETURN_SLOW_DISTANCE {
             self.return_speed = self
                 .return_speed
                 .clamp(0., (distance * RETURN_SLOW_RATE).max(0.));
         }
-        self.return_speed = (self.return_speed + param::RETURN_STRENGTH).min(param::RETURN_SPEED_MAX);
+        self.return_speed =
+            (self.return_speed + param::RETURN_STRENGTH).min(param::RETURN_SPEED_MAX);
         // What the cap still moves across its new heading fades out.
         let across = self.velocity - self.front * self.velocity.dot(self.front);
         let ease = ease_in((self.step as f32 / RETURN_EASE_FRAMES).min(1.));

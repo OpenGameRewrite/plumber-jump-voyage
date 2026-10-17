@@ -411,10 +411,17 @@ fn dive_roll_landing() {
     let mut names = std::collections::BTreeSet::new();
     let mut rolled = 0;
     while p.mode == Move::Roll && rolled < 600 {
-        p.step(&held, &floor);
+        // The roll goes on while crouch is held and ends once it is let go.
+        let orders = if rolled < 60 {
+            &held
+        } else {
+            &Orders::default()
+        };
+        p.step(orders, &floor);
         names.insert(p.anim.name);
         rolled += 1;
     }
+    assert!(rolled > 60, "holding crouch keeps rolling: {rolled} frames");
     assert!(
         names.contains("Rolling"),
         "the roll plays its loop: {names:?}"
@@ -449,8 +456,8 @@ fn roll_timing_and_boost() {
     );
     assert_eq!(chosen(&p), (Move::Roll, "RollingStart"));
     assert!(p.cap.is_none(), "rolling does not throw the cap");
-    let mut ended = None;
-    for i in 0..900 {
+    // Holding crouch keeps the roll going, slowing a little every frame.
+    for _ in 0..100 {
         p.step(
             &Orders {
                 crouch: true,
@@ -458,19 +465,13 @@ fn roll_timing_and_boost() {
             },
             &floor,
         );
-        if p.mode == Move::Crouch {
-            ended = Some(i);
-            break;
-        }
     }
-    assert!(
-        ended.is_some_and(|f| f > 45),
-        "roll lasts its minimum then ends: {ended:?}"
-    );
-    // Boosting extends the roll.
-    p = Player::default();
+    assert_eq!(p.mode, Move::Roll);
+    assert!(p.move_speed < t::ROLL_START && p.move_speed > t::ROLL_END_SPEED - 5.);
+    // Letting go before the minimum rolls on until it is up, then stands up.
+    let mut q = Player::default();
     frames(
-        &mut p,
+        &mut q,
         Orders {
             crouch: true,
             ..default()
@@ -478,7 +479,7 @@ fn roll_timing_and_boost() {
         &floor,
         3,
     );
-    p.step(
+    q.step(
         &Orders {
             crouch: true,
             throw_pressed: true,
@@ -486,15 +487,19 @@ fn roll_timing_and_boost() {
         },
         &floor,
     );
-    frames(
-        &mut p,
-        Orders {
-            crouch: true,
-            ..default()
-        },
-        &floor,
-        20,
+    let mut ended = None;
+    for i in 0..200 {
+        q.step(&Orders::default(), &floor);
+        if q.mode == Move::RollEnd {
+            ended = Some(i);
+            break;
+        }
+    }
+    assert!(
+        ended.is_some_and(|f| f >= t::ROLL_FRAMES_MIN as usize - 2),
+        "roll lasts its minimum before standing up: {ended:?}"
     );
+    // Pressing again once the roll is charged restarts it faster.
     let before = p.move_speed;
     p.step(
         &Orders {
@@ -504,9 +509,9 @@ fn roll_timing_and_boost() {
         },
         &floor,
     );
-    assert!(p.move_speed >= t::ROLL_BOOST && p.move_speed > before);
-    // Releasing crouch unrolls after five frames.
-    frames(&mut p, Orders::default(), &floor, 30);
+    assert!(p.move_speed > before, "{} vs {before}", p.move_speed);
+    // Releasing crouch stands up once the new roll has run its minimum.
+    frames(&mut p, Orders::default(), &floor, 80);
     assert_ne!(p.mode, Move::Roll);
 }
 
@@ -524,39 +529,23 @@ fn cap_flight() {
         &floor,
     );
     assert_eq!(chosen(&p), (Move::Throw, "SpinCapStart"));
-    frames(
-        &mut p,
-        Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        10,
-    );
-    assert!(p.cap.is_none());
-    frames(
-        &mut p,
-        Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        3,
-    );
+    // The throw state calls for the cap on its twelfth step; the cap, which
+    // updates first in a frame, appears in the next one.
+    let held = Orders {
+        throw_held: true,
+        ..default()
+    };
+    frames(&mut p, held.clone(), &floor, 12);
+    assert!(p.cap.is_none() && p.launch.is_none());
+    frames(&mut p, held.clone(), &floor, 1);
+    assert!(p.cap.is_none() && p.launch.is_some());
+    frames(&mut p, held.clone(), &floor, 1);
     assert!(p.cap.is_some());
-    // The cap travels its reach, hovers while held, then returns.
-    frames(
-        &mut p,
-        Orders {
-            throw_held: true,
-            ..default()
-        },
-        &floor,
-        40,
-    );
+    // The cap travels its 678 units, hovers while held, then returns.
+    frames(&mut p, held, &floor, 40);
     let cap = p.cap.as_ref().unwrap();
     assert_eq!(cap.phase, CapPhase::Stay);
-    assert!(((cap.pos - p.pos).with_y(0.).length() - 5.).abs() < 0.3);
+    assert!(((cap.pos - p.pos).with_y(0.).length() - 6.78).abs() < 0.05);
     frames(&mut p, Orders::default(), &floor, 120);
     assert!(p.cap.is_none());
 }
@@ -580,18 +569,34 @@ fn spin_throw() {
         p.phase_clip()
     );
     let length = clip::throw(p.phase_clip()) as usize;
-    frames(
-        &mut p,
-        Orders {
-            direction: Vec2::X,
+    let mut q = Player::default();
+    q.step(
+        &Orders {
+            spin_throw: true,
             ..default()
         },
         &floor,
-        length - 3,
     );
-    assert_eq!(p.mode, Move::Throw, "moving does not cut the spin throw");
-    frames(&mut p, Orders::default(), &floor, 4);
-    assert_ne!(p.mode, Move::Throw);
+    // With the stick released the throw plays its whole clip.
+    let mut lasted = 0;
+    while p.mode == Move::Throw && lasted < 200 {
+        p.step(&Orders::default(), &floor);
+        lasted += 1;
+    }
+    assert!(
+        (length..=length + 3).contains(&lasted),
+        "{lasted} steps for a clip of {length}"
+    );
+    // The stick cuts it short once the cap is away (`isEnableCancelGround`),
+    // but not while the cap still winds up.
+    let moving = Orders {
+        direction: Vec2::X,
+        ..default()
+    };
+    frames(&mut q, moving.clone(), &floor, 5);
+    assert_eq!(q.mode, Move::Throw, "the cap has not left yet");
+    frames(&mut q, moving, &floor, 6);
+    assert_ne!(q.mode, Move::Throw);
 }
 
 #[cfg_attr(test, test)]
@@ -610,6 +615,8 @@ fn running_throw() {
     );
     assert_eq!(p.mode, Move::Run);
     assert_eq!(p.sub_anim.map(|a| a.name), Some("ThrowCapParts"));
+    assert!(p.launch.is_some());
+    p.step(&fwd(default()), &floor);
     assert!(p.cap.is_some());
 }
 
@@ -1158,7 +1165,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xf18e22e7b0c305b6,
+        hash, 0x52c5cd2273e2181b,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

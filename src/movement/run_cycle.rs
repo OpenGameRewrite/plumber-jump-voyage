@@ -98,6 +98,13 @@ impl RunCycle {
         self.weights = [0.; 5];
         self.effect = None;
     }
+    /// The pose starts over while the animator's counter runs on (the end of
+    /// the landing sub clip restarts the legs' cycle).
+    pub fn restart_pose(&mut self) {
+        self.phase = 0.;
+        self.start_clip = 0.;
+        self.advanced = true;
+    }
     /// The pose moves on by the current rate.
     fn move_on(&mut self) {
         self.phase = (self.phase + self.rate) % CYCLE;
@@ -113,6 +120,12 @@ impl RunCycle {
         }
         self.shown = self.phase + self.rate;
         self.advanced = false;
+    }
+    /// A frame while another clip covers the legs: the animator's counter just
+    /// runs on by the previous rate and the pose stays where it is.
+    pub fn begin_frame_covered(&mut self) {
+        self.shown += self.rate;
+        self.advanced = true;
     }
     /// `PlayerAnimControlRun::reset`, in the first step of a run state.
     pub fn reset(&mut self, speed: f32, after_turn: bool) {

@@ -231,7 +231,7 @@ fn colors(
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn interp_frames(name: &str, from: &str) -> f32 {
     match name {
-        "Jump" | "JumpReverse" if from == "Move" => 3.,
+        "Jump" if from == "Move" => 3.,
         "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" => 6.,
         "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
