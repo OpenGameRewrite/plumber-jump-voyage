@@ -182,19 +182,6 @@ pub fn state_from_nerve(name: &str, anim: &str, speed_h: f32) -> Option<Move> {
     candidates.first().copied()
 }
 
-/// The thrown cap's state, in the game's cap nerve names. The rewrite's flight
-/// is one outward phase that includes the braking, a hover and the return.
-pub fn cap_state(phase: crate::movement::CapPhase, kind: crate::movement::Throw) -> &'static str {
-    use crate::movement::{CapPhase, Throw};
-    match (phase, kind) {
-        (CapPhase::Out, Throw::Spin) => "ThrowSpiral",
-        (CapPhase::Out, Throw::Down) => "ThrowRolling",
-        (CapPhase::Out, _) => "Throw",
-        (CapPhase::Stay, _) => "ThrowStay",
-        (CapPhase::Return, _) => "Return",
-    }
-}
-
 #[path = "tests/game_names.rs"]
 mod checks;
 

@@ -13,7 +13,7 @@
 //! - a reaction trigger starts a one-shot effect;
 //! - the controller itself keeps a few effects running (run dust, burning).
 use crate::effect_data::{Library, Trigger};
-use crate::movement::{Cap, CapPhase, Fx, Move, Player, Throw};
+use crate::movement::{Cap, Fx, Move, Player};
 use crate::sound_table::{Cue, FxContext, fx_cues};
 use std::collections::{HashMap, HashSet};
 
@@ -294,26 +294,10 @@ pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<&'stati
     names
 }
 
-/// The clip name Cappy's effect table knows for the thrown cap.
-pub fn cap_clip(cap: &Cap, right_hand: bool) -> &'static str {
-    match (cap.phase, cap.kind) {
-        (CapPhase::Stay, _) => {
-            if right_hand {
-                "StayR"
-            } else {
-                "StayL"
-            }
-        }
-        (_, Throw::Spin) => "FlyingWaitSpiral",
-        (_, Throw::Down) => "FlyingWaitRolling",
-        _ => {
-            if right_hand {
-                "FlyingWaitR"
-            } else {
-                "FlyingWaitL"
-            }
-        }
-    }
+/// The clip name Cappy's effect table knows for the thrown cap: the clip the
+/// cap's nerve is playing.
+pub fn cap_clip(cap: &Cap, _right_hand: bool) -> &'static str {
+    cap.clip()
 }
 
 /// How long an effect emits and how long its particles outlive that.
@@ -387,6 +371,8 @@ pub struct Tracker {
     boosts: u32,
     cap_serial: u32,
     right_hand: bool,
+    /// The cap was out on the previous frame.
+    had_cap: bool,
     /// Effect name, entry, and frames of life left (none: until stopped).
     live: Vec<Live>,
 }
@@ -399,6 +385,7 @@ impl Tracker {
             boosts: 0,
             cap_serial: 0,
             right_hand: true,
+            had_cap: false,
             live: Vec::new(),
         }
     }
@@ -419,10 +406,14 @@ impl Tracker {
         for fx in events {
             reactions.extend(reactions_of(*fx, context, &mut self.boosts));
             if matches!(fx, Fx::Throw(_)) {
-                self.cap_serial += 1;
                 self.right_hand = !p.anim.name.contains("Left");
             }
         }
+        // A new cap (a throw) restarts the cap's clips.
+        if p.cap.is_some() && !self.had_cap {
+            self.cap_serial += 1;
+        }
+        self.had_cap = p.cap.is_some();
         let cap_anim = p.cap.as_ref().map(|c| cap_clip(c, self.right_hand));
         let code = code_driven(p);
         let changes = self.triggers.evaluate(&Frame {

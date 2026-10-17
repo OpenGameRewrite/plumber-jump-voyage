@@ -3,6 +3,7 @@
 
 mod air_move;
 mod asset_contract;
+mod cap;
 // The original's effects: their data and trigger rules also serve the headless trace.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 mod effect_data;
@@ -56,6 +57,7 @@ fn main() {
     }
     if args.iter().any(|a| a == "--self-check") {
         air_move::self_check();
+        cap::self_check();
         movement::self_check();
         input::self_check();
         ui::self_check();

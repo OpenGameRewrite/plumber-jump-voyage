@@ -1,11 +1,9 @@
 use super::*;
-use crate::movement::{CapPhase, Throw};
 
 pub(super) fn run() {
     names_round_trip();
     observed_names();
     shared_names();
-    cap_names();
 }
 
 #[cfg_attr(test, test)]
@@ -91,12 +89,4 @@ fn shared_names() {
         state_from_nerve("Wait/Land", "JumpReverse", 0.),
         Some(Move::Idle)
     );
-}
-
-#[cfg_attr(test, test)]
-fn cap_names() {
-    assert_eq!(cap_state(CapPhase::Out, Throw::Forward), "Throw");
-    assert_eq!(cap_state(CapPhase::Out, Throw::Spin), "ThrowSpiral");
-    assert_eq!(cap_state(CapPhase::Stay, Throw::Forward), "ThrowStay");
-    assert_eq!(cap_state(CapPhase::Return, Throw::Down), "Return");
 }

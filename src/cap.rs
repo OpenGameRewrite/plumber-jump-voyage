@@ -27,6 +27,8 @@ mod param {
     pub const STAY_FRAMES_MAX: u32 = 120;
     /// Flight speed (`mMaxVel`).
     pub const MAX_SPEED: f32 = 32.;
+    /// Flight speed of the continuous throw (`mContinuousThrowSpeed`).
+    pub const CONTINUOUS_SPEED: f32 = 64.;
     /// How hard the return accelerates and its top speed.
     pub const RETURN_STRENGTH: f32 = 18.;
     pub const RETURN_SPEED_MAX: f32 = 80.;
@@ -91,8 +93,8 @@ pub struct Launch {
     pub kind: Throw,
     /// Thrown from the left hand (the clip names carry the side).
     pub left: bool,
-    /// Speed of the throw: the standard one, or the continuous throw's.
-    pub speed: f32,
+    /// The third throw in a row, which flies faster.
+    pub continuous: bool,
 }
 
 /// Moments of the flight the player and the presentation react to.
@@ -151,7 +153,11 @@ impl Cap {
         let front = launch.front.with_y(0.).normalize_or_zero();
         let base = player / UNIT + Vec3::Y * param::THROW_HEIGHT;
         let spot = base + front * START_DISTANCE;
-        let speed = launch.speed;
+        let speed = if launch.continuous {
+            param::CONTINUOUS_SPEED
+        } else {
+            param::MAX_SPEED
+        };
         let brake_frames = param::BRAKE_FRAMES as f32;
         // The throw cruises until the braking distance (a triangle: half the
         // speed over the braking time) is all that is left of the range.
@@ -177,6 +183,21 @@ impl Cap {
         };
         cap.advance();
         cap
+    }
+    /// Send the cap on another leg toward `direction` (the flick throw, which the
+    /// original runs as `ThrowAppend`; here a fresh short throw).
+    pub fn redirect(&mut self, direction: Vec3) {
+        let Some(direction) = direction.try_normalize() else {
+            return;
+        };
+        self.front = direction;
+        self.velocity = direction * self.speed;
+        self.nerve = CapNerve::Throw;
+        self.step = 0;
+        self.cruise_frames = 6;
+        self.phase = CapPhase::Out;
+        self.returning = false;
+        self.action = flying(self.left);
     }
     /// The nerve the trace names.
     pub fn state_name(&self) -> &'static str {

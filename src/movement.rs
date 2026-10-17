@@ -6,6 +6,7 @@
 //! decompilation documents follow it; the rest are inferred from their tuning
 //! names and observed behaviour. No original code is reproduced here.
 use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
+use crate::cap::{CapEvent, CapWorld, Launch};
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use bevy::prelude::*;
@@ -187,25 +188,13 @@ mod t {
 
     pub const SPIN_CAP_THROW_FRAME: u32 = 12;
     pub const SPIN_CAP_THROW_FRAME_AIR: u32 = 8;
+    pub const SPIN_CAP_THROW_FRAME_SWING: u32 = 7;
+    pub const SPIN_CAP_THROW_FRAME_CONTINUOUS: u32 = 2;
     pub const SPIN_AIR_JUMP: f32 = 6.;
     pub const SPIN_AIR_SPEED_MAX: f32 = 7.;
     pub const SPIN_AIR_GRAVITY: f32 = 0.3;
     pub const SPIN_BRAKE_FRAMES: u32 = 15;
     pub const SPIN_BRAKE_RATE: f32 = 0.95;
-
-    // Cap flight (the cap's own parameters).
-    pub const CAP_HEIGHT: f32 = 70.;
-    pub const CAP_SPEED: f32 = 32.;
-    pub const CAP_REACH: f32 = 500.;
-    pub const CAP_BRAKE_FRAMES: f32 = 10.;
-    pub const CAP_STAY: u32 = 20;
-    pub const CAP_STAY_MAX: u32 = 120;
-    pub const CAP_RETURN_ACCEL: f32 = 18.;
-    pub const CAP_RETURN_MAX: f32 = 80.;
-    pub const CAP_SPIN_RADIUS: f32 = 250.;
-    pub const CAP_SPIN_FRAMES: u32 = 45;
-    pub const CAP_ROLL_SPEED: f32 = 30.;
-    pub const CAP_ROLL_REACH: f32 = 400.;
 
     pub const SWIM_GRAVITY: f32 = 0.25;
     pub const SWIM_FALL_MAX: f32 = 6.5;
@@ -257,6 +246,26 @@ const RUN_BLEND_FLOOR: f32 = 6.;
 /// A stick pushed beyond this much counts as held deep.
 const DEEP_STICK: f32 = 0.8;
 
+/// The clip a throw starts with (`PlayerSpinCapAttack`'s clip name builder
+/// for a throw without motion controls): the plain throw, the second and
+/// third in a row, and the spin (spiral) and up or down throws.
+fn throw_clip(kind: Throw, air: bool, count: u32, continuous: bool) -> &'static str {
+    match (kind, air, count, continuous) {
+        (Throw::Up, false, _, _) => "SpinCapStartDoubleUp",
+        (Throw::Up, true, _, _) => "SpinCapAirStartDoubleUp",
+        (Throw::Down, false, _, _) => "SpinCapStartDoubleDown",
+        (Throw::Down, true, _, _) => "SpinCapAirStartDoubleDown",
+        (Throw::Spin, false, _, _) => "SpinCapStartDoubleRight",
+        (Throw::Spin, true, _, _) => "SpinCapAirStartDoubleRight",
+        (Throw::Forward, false, 1, false) => "SpinCapStart",
+        (Throw::Forward, false, 2, false) => "SpinCapStart2Right",
+        (Throw::Forward, false, _, _) => "SpinCapStart3Right",
+        (Throw::Forward, true, 1, false) => "SpinCapAirStart",
+        (Throw::Forward, true, 2, false) => "SpinCapAirStart2Right",
+        (Throw::Forward, true, _, _) => "SpinCapAirStart3Right",
+    }
+}
+
 /// Frame counts of clips whose end the controller waits for.
 pub mod clip {
     pub const HIP_DROP_START: u32 = 24;
@@ -271,6 +280,7 @@ pub mod clip {
             "SpinCapStartLeft" | "SpinCapStartRight" => 17,
             "SpinCapStart2Left" | "SpinCapStart2Right" => 32,
             "SpinCapStart3Left" | "SpinCapStart3Right" => 42,
+            "SpinCapAirStart2Right" | "SpinCapAirStart3Right" => 72,
             "SpinCapStartDoubleUp" | "SpinCapStartDoubleDown" | "SpinCapAirStartDoubleUp" => 26,
             "SpinCapAirStartDoubleDown" => 28,
             "SpinCapStartDoubleLeft" | "SpinCapStartDoubleRight" => 44,
@@ -488,6 +498,13 @@ impl Move {
 /// Player state a replay can inject before a step (lockstep comparison). It
 /// holds what a trace records; internals the trace cannot see keep the values
 /// the rewrite's own simulation gave them.
+/// The cap as a trace row shows it.
+pub struct CapRow {
+    pub state: &'static str,
+    /// Metres.
+    pub pos: Vec3,
+    pub clip: &'static str,
+}
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub mode: Option<Move>,
@@ -611,35 +628,31 @@ pub struct Soot {
     wet: u32,
     washing: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CapPhase {
-    Out,
-    Stay,
-    Return,
-}
-#[derive(Clone, Debug)]
-pub struct Cap {
-    /// Metres.
-    pub pos: Vec3,
-    /// Seconds since the throw, for presentation.
-    pub age: f32,
-    pub returning: bool,
-    pub kind: Throw,
-    pub phase: CapPhase,
-    /// Units per frame.
-    vel: Vec3,
-    dir: Vec3,
-    travelled: f32,
-    frames: u32,
-    stay: u32,
-}
+pub use crate::cap::{Cap, CapPhase};
+
+/// The throw state's own bookkeeping (`PlayerSpinCapAttack`).
 #[derive(Debug, Default)]
 struct ThrowControl {
+    /// Frames the run keeps running after a throw on the move.
     run: u32,
+    /// Throws in a row, each within the catch window of the one before
+    /// (`PlayerSpinCapAttack::setupAttackInfo`): the clip and the throw frame follow it.
     count: u32,
-    side: bool,
-    timer: u32,
-    pending: Option<Throw>,
+    /// This throw is the third in a row: the fast, continuous one.
+    continuous: bool,
+    /// Which kind the state in progress throws.
+    kind: Option<Throw>,
+}
+/// A partial animation playing on top of the main clip (`PlayerAnimator::startSubAnim`).
+/// While one plays the main clip's frame is counted by the animator itself
+/// instead of following the model, which holds its first frame one extra frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct SubClip {
+    name: &'static str,
+    /// The frame the model's action shows in the sample.
+    frame: f32,
+    length: f32,
+    active: bool,
 }
 
 #[derive(Debug, Default)]
@@ -691,6 +704,22 @@ pub struct Player {
     pub mode: Move,
     pub grounded: bool,
     pub cap: Option<Cap>,
+    /// A throw started last frame; the cap appears when it updates.
+    launch: Option<Launch>,
+    /// The cap is Mario's spin attack, waiting for the throw frame
+    /// (the cap's `SpinAttack` nerve).
+    winding: bool,
+    /// The cap reached the head this frame; its landing work is left.
+    caught: bool,
+    /// Frames of the cap's catch nerve: -1 on the frame it arrived.
+    catching: Option<i32>,
+    /// The sub animation the model plays, and whether the main clip's next
+    /// update is skipped (a clip just started under a sub animation).
+    sub: SubClip,
+    anim_skip: bool,
+    /// Frames the cap has been the spin attack, and the clip of the throw.
+    winding_age: u32,
+    throw_clip: &'static str,
     /// Seconds in the current mode.
     pub timer: f32,
     pub since_land: f32,
@@ -799,6 +828,14 @@ impl Default for Player {
             mode: Move::Idle,
             grounded: true,
             cap: None,
+            launch: None,
+            winding: false,
+            caught: false,
+            catching: None,
+            sub: SubClip::default(),
+            anim_skip: false,
+            winding_age: 0,
+            throw_clip: "SpinCapStart",
             timer: 0.,
             since_land: 5.,
             distance: 0.,
@@ -1059,6 +1096,44 @@ impl Player {
             self.v
         }
     }
+    /// What the trace shows of the cap: its nerve, position (metres) and clip.
+    /// Besides the flight this covers the spin attack before the throw frame
+    /// and the catch after the arrival, when the cap sits on the player.
+    pub fn cap_row(&self) -> Option<CapRow> {
+        if let Some(cap) = &self.cap {
+            return Some(CapRow {
+                state: cap.state_name(),
+                pos: cap.pos,
+                clip: cap.clip(),
+            });
+        }
+        if let Some(frames) = self.catching {
+            return Some(CapRow {
+                state: if frames < 0 { "Return" } else { "Catch" },
+                pos: self.pos,
+                clip: "CatchCap",
+            });
+        }
+        // The spin attack shows once the cap's nerve has been applied, the frame
+        // after the state's first step, and until the cap is flying.
+        (self.winding && self.winding_age > 0 || self.launch.is_some()).then_some(CapRow {
+            state: "SpinAttack",
+            pos: self.pos,
+            clip: self.throw_clip,
+        })
+    }
+    /// The model's sub animation as the trace shows it: its name stays after
+    /// it ended, and then its frame is the main clip's.
+    pub fn sub_row(&self) -> Option<(&'static str, f32)> {
+        (!self.sub.name.is_empty()).then(|| {
+            let frame = if self.sub.active {
+                self.sub.frame
+            } else {
+                self.anim.frame
+            };
+            (self.sub.name, frame)
+        })
+    }
     /// The normal of the ground under the feet, when standing on it.
     pub fn floor_normal(&self) -> Option<Vec3> {
         // A ramp's height rises along +x by `slope` per metre.
@@ -1307,6 +1382,7 @@ impl Player {
             frame: 0.,
             rate: 1.,
         };
+        self.anim_skip = true;
         if name == "Move" {
             // The run cycle starts over in the nerve that plays it.
             self.cycle.start();
@@ -1361,13 +1437,30 @@ impl Player {
             self.step_phase = self.cycle.phase;
             self.anim.frame = self.cycle.shown % 60.;
         } else {
-            self.anim.frame += self.anim.rate;
+            // A clip started under a sub animation holds its first frame for
+            // one extra update (`PlayerAnimFrameCtrl::update` skips once after
+            // `startAction`); without a sub animation the frame follows the
+            // model instead (`updateSync`) and nothing is skipped.
+            let skipped = std::mem::take(&mut self.anim_skip) && self.sub.active;
+            if !skipped {
+                self.anim.frame += self.anim.rate;
+            }
             // A jump clip that has played out holds a frame past its end.
             if let Some(length) = clip::held_length(self.anim.name) {
                 self.anim.frame = self.anim.frame.min(length as f32 + 1.);
             }
             if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
                 self.anim.frame -= clip::FIRE_RUN;
+            }
+        }
+        // The model's sub animation advances one frame; once it has reached
+        // its last frame the actor's control ends it (`PlayerActorHakoniwa::control`
+        // checks `isSubAnimEnd` before the model advances).
+        if self.sub.active {
+            if self.sub.frame >= self.sub.length {
+                self.sub.active = false;
+            } else {
+                self.sub.frame += 1.;
             }
         }
         if let Some(sub) = &mut self.sub_anim {
@@ -1432,8 +1525,12 @@ impl Player {
         let was_grounded = self.grounded;
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
+        // The cap updates before the player does, within the same frame.
+        self.update_cap(&o, scene);
         self.begin_step();
-        if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
+        if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+            && !(self.mode == Move::Throw && self.grounded)
+        {
             self.pull = t::GRAVITY;
         }
         self.change_from_surroundings(scene, &o);
@@ -1441,7 +1538,7 @@ impl Player {
         if !self.nerve.deferred {
             self.run_state(&o, scene);
         }
-        self.update_cap(&o, scene);
+        self.finish_catch();
         if matches!(self.mode, Move::Ledge | Move::Pole) {
             self.finish_frame(scene);
             return;
@@ -1588,7 +1685,6 @@ impl Player {
         self.after_turn = self.after_turn.saturating_sub(1);
         self.quick_turn = self.quick_turn.saturating_sub(1);
         self.throwing.run = self.throwing.run.saturating_sub(1);
-        self.throwing.timer = self.throwing.timer.saturating_sub(1);
         self.coyote = self.coyote.saturating_sub(1);
         if self.grounded {
             self.land_frames = self.land_frames.saturating_add(1);
@@ -1662,7 +1758,7 @@ impl Player {
                         frame: 0.,
                         rate: 1.,
                     });
-                    self.launch_cap(kind);
+                    self.launch_cap(kind, false);
                 } else {
                     self.start_throw(kind);
                 }
@@ -2171,7 +2267,7 @@ impl Player {
             Throw::Forward
         } else {
             kind
-        });
+        }, false);
         false
     }
     fn burn_air(&mut self, o: &Orders) {
@@ -2364,7 +2460,7 @@ impl Player {
                     p.set_h(p.facing * s);
                     p.throwing.run = t::RUN_TIME_CONTINUOUS_THROW;
                     if p.cap.is_none() {
-                        p.launch_cap(Throw::Forward);
+                        p.launch_cap(Throw::Forward, false);
                     }
                 });
                 return;
@@ -3339,150 +3435,176 @@ impl Player {
             Throw::Forward
         }
     }
+    /// The spin throw begins (`PlayerStateSpinCap` appearing and its first
+    /// step): the throw is counted among those in a row, the clip is chosen,
+    /// and the cap waits in its spin attack for the throw frame.
     fn start_throw(&mut self, kind: Throw) {
-        if self.cap.is_some() {
+        if self.cap.is_some() || self.launch.is_some() {
             return;
         }
         let air = !self.grounded;
-        // Repeated throws alternate sides and use the follow-up clips.
-        self.throwing.count = if self.throwing.timer > 0 {
-            (self.throwing.count + 1).min(2)
+        // `PlayerSpinCapAttack::setupAttackInfo`: a throw soon after a catch
+        // continues the count; the third one is the continuous throw.
+        let recent = self.catch_window > 0;
+        self.throwing.count = if self.throwing.count != 0 && recent {
+            self.throwing.count + 1
         } else {
-            0
+            1
         };
-        self.throwing.side = !self.throwing.side;
-        let name = match (kind, air) {
-            (Throw::Up, false) => "SpinCapStartDoubleUp",
-            (Throw::Up, true) => "SpinCapAirStartDoubleUp",
-            (Throw::Down, false) => "SpinCapStartDoubleDown",
-            (Throw::Down, true) => "SpinCapAirStartDoubleDown",
-            (Throw::Spin, false) => {
-                if self.throwing.side {
-                    "SpinCapStartDoubleRight"
-                } else {
-                    "SpinCapStartDoubleLeft"
-                }
-            }
-            (Throw::Spin, true) => {
-                if self.throwing.side {
-                    "SpinCapAirStartDoubleRight"
-                } else {
-                    "SpinCapAirStartDoubleLeft"
-                }
-            }
-            (Throw::Forward, true) => {
-                if self.throwing.side {
-                    "SpinCapAirStart"
-                } else {
-                    "SpinCapAirStartLeft"
-                }
-            }
-            (Throw::Forward, false) => match (self.throwing.count, self.throwing.side) {
-                (1, true) => "SpinCapStart2Right",
-                (1, false) => "SpinCapStart2Left",
-                (2, true) => "SpinCapStart3Right",
-                (2, false) => "SpinCapStart3Left",
-                (_, true) => "SpinCapStart",
-                (_, false) => "SpinCapStartLeft",
-            },
-        };
+        self.throwing.continuous = recent && self.throwing.count >= 3;
+        if self.throwing.continuous {
+            self.throwing.count = 0;
+        }
+        self.throwing.kind = Some(kind);
+        let name = throw_clip(kind, air, self.throwing.count, self.throwing.continuous);
         let hang = air && !self.air_throw_used;
         if hang {
             self.air_throw_used = true;
+        }
+        if !air {
+            // The state's ground control pulls the player to the floor from
+            // the frame it is chosen.
+            self.pull = GRAVITY_MOVE;
+            self.v.y = -GRAVITY_MOVE;
         }
         self.change(Move::Throw, name, move |p| {
             if hang {
                 // One small hang per airtime.
                 p.v.y = p.v.y.max(t::SPIN_AIR_JUMP);
             }
-            p.throwing.pending = Some(kind);
+            p.winding = true;
+            p.winding_age = 0;
+            p.throw_clip = name;
+            if air {
+                // The air spin has no sub animation (`startCapSpinAttackAir`).
+                p.sub.active = false;
+            } else {
+                p.start_sub(name, clip::throw(name) as f32, 0.);
+            }
         });
     }
-    fn throw_state(&mut self, o: &Orders) {
-        let air = !self.grounded;
-        let release = if air {
+    /// Start a sub animation on the model; `frame` is where its counter
+    /// stands before this frame's advance.
+    fn start_sub(&mut self, name: &'static str, length: f32, frame: f32) {
+        self.sub = SubClip {
+            name,
+            frame,
+            length,
+            active: true,
+        };
+    }
+    /// The step of the throw state at which the cap leaves
+    /// (`PlayerSpinCapAttack::getThrowFrameGround` and `getThrowFrameAir`).
+    fn throw_frame(&self, kind: Throw, air: bool) -> u32 {
+        if self.throwing.continuous {
+            t::SPIN_CAP_THROW_FRAME_CONTINUOUS
+        } else if kind != Throw::Forward || self.throwing.count == 2 {
+            t::SPIN_CAP_THROW_FRAME_SWING
+        } else if air {
             t::SPIN_CAP_THROW_FRAME_AIR
-        } else if self.throwing.count > 0 {
-            2
         } else {
             t::SPIN_CAP_THROW_FRAME
-        };
-        if let Some(kind) = self.throwing.pending
-            && self.frame >= release
-        {
-            self.throwing.pending = None;
-            self.launch_cap(kind);
+        }
+    }
+    /// The throw state (`PlayerStateSpinCap`): `exeSpinGround` on the ground,
+    /// `exeSpinAir` in the air.
+    fn throw_state(&mut self, o: &Orders) {
+        let kind = self.throwing.kind.unwrap_or(Throw::Forward);
+        let air = !self.grounded;
+        let step = self.frame;
+        // The cap leaves on the throw frame, if it is still the spin attack.
+        if self.winding && self.launch.is_none() && step == self.throw_frame(kind, air) {
+            self.launch_cap(kind, self.throwing.continuous);
         }
         if air {
-            let h = self.v.with_y(0.).clamp_length_max(
-                t::SPIN_AIR_SPEED_MAX.max(self.max_air_speed.min(t::SPIN_AIR_SPEED_MAX)),
-            );
-            self.set_h(h);
-            self.v.y = (self.v.y - t::SPIN_AIR_GRAVITY).max(-t::FALL_MAX);
-            if self.frame >= 24
-                || self.throwing.pending.is_none()
-                    && self.frame >= release + 6
-                    && (self.pre_jump > 0 || o.crouch_pressed)
-            {
-                self.set(Move::Fall);
-                self.gravity = t::GRAVITY_AIR;
-                if o.crouch_pressed {
-                    self.start_hip_drop();
-                }
-            }
+            self.spin_air(o, step);
         } else {
-            if self.frame < t::SPIN_BRAKE_FRAMES {
-                let h = self.v.with_y(0.) * t::SPIN_BRAKE_RATE;
-                self.set_h(h);
-            }
-            self.v.y = -t::GRAVITY;
-            // Jumping or crouching cancels once the cap is out. Moving cancels only
-            // the tail of a plain throw; spin and motion throws play out in full.
-            let length = clip::throw(self.anim.name);
-            let after = self.throwing.pending.is_none() && self.frame >= release + 2;
-            let tail = !self.anim.name.contains("Double") && self.frame * 4 >= length * 3;
-            if after && (self.pre_jump > 0 || o.crouch)
-                || tail && self.tilt > 0.3
-                || self.anim_done(length)
-            {
-                self.throwing.timer = 30;
-                self.go(Move::Idle, "Wait");
-                if self.pre_jump > 0 {
-                    self.ground_jump(o);
-                }
+            self.spin_ground(o, step);
+        }
+    }
+    /// `PlayerStateSpinCap::exeSpinGround` and the actor's cancels
+    /// (`PlayerActorHakoniwa::exeSpinCap`).
+    fn spin_ground(&mut self, o: &Orders, step: u32) {
+        // `updateSpinGroundNerve`: the spin brakes the momentum for its first
+        // frames, then the ground control takes over; the floor pulls with
+        // the ground control's gravity throughout.
+        if step < t::SPIN_BRAKE_FRAMES {
+            let h = self.v.with_y(0.) * t::SPIN_BRAKE_RATE;
+            self.set_h(h);
+        }
+        self.v.y = -GRAVITY_MOVE;
+        self.pull = GRAVITY_MOVE;
+        // The state ends when its clip has, once the cap is away.
+        if self.anim_done(clip::throw(self.anim.name)) && !self.winding {
+            self.go(Move::Idle, "Wait");
+            return;
+        }
+        // Once the cap is away the other actions may cancel the spin
+        // (`isEnableCancelGround`): jump, crouch, then the run.
+        if self.winding {
+            return;
+        }
+        if self.pre_jump > 0 {
+            self.ground_jump(o);
+        } else if o.crouch {
+            self.start_squat();
+        } else if self.tilt >= STICK_DEADZONE {
+            self.go(Move::Walk, "Move");
+        }
+    }
+    /// `PlayerStateSpinCap::exeSpinAir`: the small hang, the cap leaving on
+    /// the air throw frame, then the fall once the cap is away.
+    fn spin_air(&mut self, o: &Orders, step: u32) {
+        let h = self.v.with_y(0.).clamp_length_max(
+            t::SPIN_AIR_SPEED_MAX.max(self.max_air_speed.min(t::SPIN_AIR_SPEED_MAX)),
+        );
+        self.set_h(h);
+        self.v.y = (self.v.y - t::SPIN_AIR_GRAVITY).max(-t::FALL_MAX);
+        let release = self.throw_frame(self.throwing.kind.unwrap_or(Throw::Forward), true);
+        if step > 22 && !self.winding
+            || !self.winding && step >= release + 6 && (self.pre_jump > 0 || o.crouch_pressed)
+        {
+            self.set(Move::Fall);
+            self.gravity = t::GRAVITY_AIR;
+            if o.crouch_pressed {
+                self.start_hip_drop();
             }
         }
     }
-    fn launch_cap(&mut self, kind: Throw) {
-        let hand = self.pos + Vec3::Y * t::CAP_HEIGHT * UNIT;
-        let dir = match kind {
-            Throw::Up => Vec3::Y,
-            Throw::Down if self.grounded => self.facing,
-            Throw::Down => (self.facing * 0.5 - Vec3::Y).normalize(),
-            _ => self.facing,
-        };
-        self.cap = Some(Cap {
-            pos: hand,
-            age: 0.,
-            returning: false,
+    fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {
+        Launch {
+            front: self.facing.with_y(0.).normalize_or(Vec3::NEG_Z),
             kind,
-            phase: CapPhase::Out,
-            vel: dir * t::CAP_SPEED,
-            dir,
-            travelled: 0.,
-            frames: 0,
-            stay: 0,
-        });
-        self.events.push(Fx::Throw(kind));
+            left: false,
+            continuous,
+        }
     }
+    /// `HackCap::startThrow`: the cap starts flying on the next frame.
+    fn launch_cap(&mut self, kind: Throw, continuous: bool) {
+        self.launch = Some(self.throw_launch(kind, continuous));
+    }
+    /// The cap's frame, which comes before the player's
+    /// (`HackCap::movement` before `PlayerActorHakoniwa::movement`).
     fn update_cap(&mut self, o: &Orders, scene: &Course) {
-        let hand = self.pos + Vec3::Y * t::CAP_HEIGHT * UNIT;
-        let facing = self.facing;
+        self.caught = false;
+        if self.winding {
+            self.winding_age += 1;
+        }
+        // The catch nerve counts its frames after the arrival.
+        if let Some(frames) = self.catching {
+            let frames = frames + 1;
+            self.catching = (frames <= crate::cap::CATCH_FRAMES as i32).then_some(frames);
+        }
+        // A throw started last frame: the cap's throw start places it and
+        // sets it flying; the throw nerve itself runs from the next frame.
+        if let Some(launch) = self.launch.take() {
+            self.winding = false;
+            self.cap = Some(Cap::start(launch, self.pos));
+            return;
+        }
         let Some(cap) = &mut self.cap else {
             return;
         };
-        cap.frames += 1;
-        cap.age = cap.frames as f32 / FPS;
         if o.homing && cap.phase != CapPhase::Return && cap.kind != Throw::Spin {
             // A flick redirects the cap toward a nearby target or the stick.
             let target = scene
@@ -3493,76 +3615,45 @@ impl Player {
                     a.distance_squared(cap.pos)
                         .total_cmp(&b.distance_squared(cap.pos))
                 });
-            cap.dir = target
+            let dir = target
                 .map(|t| (*t - cap.pos).normalize_or_zero())
                 .or_else(|| Vec3::new(o.direction.x, 0., o.direction.y).try_normalize())
-                .unwrap_or(cap.dir);
-            cap.phase = CapPhase::Out;
-            cap.travelled = t::CAP_REACH * 0.4;
-            cap.vel = cap.dir * t::CAP_SPEED;
+                .unwrap_or(Vec3::ZERO);
+            cap.redirect(dir);
         }
-        match cap.phase {
-            CapPhase::Out => {
-                if cap.kind == Throw::Spin {
-                    let a = cap.frames as f32 * 0.25;
-                    let r = t::CAP_SPIN_RADIUS * (cap.frames as f32 / 8.).min(1.) * UNIT;
-                    cap.pos = hand + Vec3::new(a.cos(), 0., a.sin()) * r;
-                    if cap.frames >= t::CAP_SPIN_FRAMES {
-                        cap.phase = CapPhase::Return;
-                    }
-                } else {
-                    let (reach, speed) = if cap.kind == Throw::Down && cap.dir.y.abs() < 0.1 {
-                        (t::CAP_ROLL_REACH, t::CAP_ROLL_SPEED)
-                    } else {
-                        (t::CAP_REACH, t::CAP_SPEED)
-                    };
-                    // Constant speed, then a brake over the final stretch.
-                    let brake_dist = speed * t::CAP_BRAKE_FRAMES / 2.;
-                    let left = reach - cap.travelled;
-                    let s = if left > brake_dist {
-                        speed
-                    } else {
-                        (speed * left / brake_dist).max(1.5)
-                    };
-                    cap.vel = cap.dir * s;
-                    cap.pos += cap.vel * UNIT;
-                    cap.travelled += s;
-                    if cap.travelled >= reach - 1. {
-                        cap.phase = CapPhase::Stay;
-                        cap.vel = Vec3::ZERO;
-                    }
-                }
-            }
-            CapPhase::Stay => {
-                cap.stay += 1;
-                if cap.stay >= t::CAP_STAY_MAX || cap.stay >= t::CAP_STAY && !o.throw_held {
-                    cap.phase = CapPhase::Return;
-                }
-            }
-            CapPhase::Return => {}
-        }
-        if cap.phase == CapPhase::Return {
-            cap.returning = true;
-            let to = hand - cap.pos;
-            let speed = (cap.vel.length() + t::CAP_RETURN_ACCEL).min(t::CAP_RETURN_MAX);
-            cap.vel = to.normalize_or_zero() * speed;
-            let step = (speed * UNIT).min(to.length());
-            cap.pos += to.normalize_or_zero() * step;
-            if cap.pos.distance(hand) < 0.4 {
+        let world = CapWorld {
+            player: self.pos,
+            hold: o.throw_held,
+        };
+        match cap.update(&world) {
+            Some(CapEvent::Thrown) => self.events.push(Fx::Throw(cap.kind)),
+            Some(CapEvent::Caught) => {
                 self.cap = None;
+                self.caught = true;
+                self.catching = Some(-1);
                 self.events.push(Fx::Catch);
                 self.catch_window = t::CAP_CATCH_WINDOW;
-                self.throwing.timer = 30;
-                if !self.grounded && self.mode.airborne_jump() && self.v.y < 0. {
-                    // Catching in midair gives a small pop.
-                    self.v.y = t::CAP_CATCH_POP_POWER;
-                    self.gravity = t::CAP_CATCH_POP_GRAVITY;
-                    self.air.set_gravity(t::CAP_CATCH_POP_GRAVITY);
-                    self.play("JumpCapCatchCommon");
+                // Standing in the wait nerve, the catch plays its sub animation;
+                // it starts before this frame's advance.
+                if self.mode == Move::Idle && self.grounded {
+                    self.start_sub("CatchCap", 10., -1.);
                 }
             }
+            None => {}
         }
-        let _ = facing;
+    }
+    /// What the catch leaves for the player's own step: in midair the catch
+    /// gives a small pop.
+    fn finish_catch(&mut self) {
+        if !std::mem::take(&mut self.caught) {
+            return;
+        }
+        if !self.grounded && self.mode.airborne_jump() && self.v.y < 0. {
+            self.v.y = t::CAP_CATCH_POP_POWER;
+            self.gravity = t::CAP_CATCH_POP_GRAVITY;
+            self.air.set_gravity(t::CAP_CATCH_POP_GRAVITY);
+            self.play("JumpCapCatchCommon");
+        }
     }
     fn cap_contact(&mut self) {
         let Some(cap) = &self.cap else {

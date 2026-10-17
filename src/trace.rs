@@ -8,10 +8,10 @@
 //! empty cell as "missing", never as a value.
 use crate::{
     effect_data::Library,
-    effect_triggers::{Tracker, cap_clip},
+    effect_triggers::Tracker,
     fx,
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
-    game_names::{cap_state, nerve, state_from_nerve},
+    game_names::{nerve, state_from_nerve},
     local_assets::{Blend, Posed, looping},
     movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip},
     sound_table::{AnimCursor, CapWatch, Cue, FxContext, Table, fx_cues, is_voice},
@@ -430,8 +430,14 @@ impl Recorder {
         cells.num(p.anim.rate);
         cells.text(&blend);
         cells.text(&interp);
-        cells.text(p.sub_anim.map_or("", |s| s.name));
-        cells.text(&p.sub_anim.map_or(String::new(), |s| num(sub_frame(&s))));
+        // The upper-body overlays are the rewrite's own partial clips; the
+        // game's sub animation (the throw's, the catch's) comes from the state.
+        let sub = p
+            .sub_anim
+            .map(|s| (s.name, sub_frame(&s)))
+            .or_else(|| p.sub_row());
+        cells.text(sub.map_or("", |s| s.0));
+        cells.text(&sub.map_or(String::new(), |s| num(s.1)));
         cells.num(info.camera_yaw_deg);
         cells.text(&events.join(";"));
         // Extended columns.
@@ -452,12 +458,12 @@ impl Recorder {
         cells.int(looping(p.anim.name) as i64 | (p.anim.name == "Move") as i64);
         cells.text(&parts);
         cells.empty(); // bones need the skeleton
-        let cap = p.cap.as_ref();
-        cells.text(cap.map_or("", |c| cap_state(c.phase, c.kind)));
+        let cap = p.cap_row();
+        cells.text(cap.as_ref().map_or("", |c| c.state));
         for axis in 0..3 {
-            cells.text(&cap.map_or(String::new(), |c| num(c.pos[axis] / UNIT)));
+            cells.text(&cap.as_ref().map_or(String::new(), |c| num(c.pos[axis] / UNIT)));
         }
-        cells.text(cap.map_or("", |c| cap_clip(c, self.right_hand)));
+        cells.text(cap.as_ref().map_or("", |c| c.clip));
         for _ in 0..4 {
             cells.empty(); // camera position and pitch are the renderer's
         }
@@ -467,7 +473,13 @@ impl Recorder {
             format!("{}/{}/{}", num(n.x), num(n.y), num(n.z))
         }));
         cells.int(p.state_frames() as i64);
-        cells.empty(); // sub_step: the rewrite keeps one counter per state
+        // The state's sub-nerve counts with the state in the standing and
+        // spinning states; the others keep one counter.
+        if matches!(p.mode, Move::Idle | Move::Throw) {
+            cells.int(p.state_frames() as i64);
+        } else {
+            cells.empty();
+        }
         cells.text(&format!(
             "{}/{}/{}",
             num(info.direction.x),

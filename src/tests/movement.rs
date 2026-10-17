@@ -621,18 +621,25 @@ fn cap_bounce() {
     p.pos.y = 3.;
     p.grounded = false;
     p.mode = Move::Fall;
-    p.cap = Some(Cap {
-        pos: p.pos + Vec3::Y * 0.8,
-        age: 0.5,
-        returning: false,
-        kind: Throw::Forward,
-        phase: CapPhase::Stay,
-        vel: Vec3::ZERO,
-        dir: Vec3::NEG_Z,
-        travelled: t::CAP_REACH,
-        frames: 30,
-        stay: 0,
-    });
+    let mut cap = Cap::start(
+        crate::cap::Launch {
+            front: Vec3::NEG_Z,
+            kind: Throw::Forward,
+            left: false,
+            continuous: false,
+        },
+        Vec3::ZERO,
+    );
+    // Hovering where the player falls onto it.
+    cap.resume(
+        crate::cap::CapNerve::ThrowStay,
+        5,
+        (p.pos + Vec3::Y * 0.8) / UNIT,
+        Vec3::ZERO,
+        0.,
+    );
+    cap.frames = 30;
+    p.cap = Some(cap);
     p.v.y = -5.;
     p.step(
         &Orders {
