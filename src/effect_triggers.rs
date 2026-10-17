@@ -309,9 +309,11 @@ impl Triggers {
 pub fn code_driven(p: &Player) -> Vec<&'static str> {
     let mut wanted = vec![];
     // The run cycle's control picks the dust for the pose it plays.
+    // The dust starts with the run state's first step and lasts as long as the
+    // state, through its brake and turn.
     if p.grounded
-        && p.anim.name == "Move"
         && matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+        && matches!(p.anim.name, "Move" | "Brake" | "Turn" | "TurnPoint")
     {
         wanted.extend(p.run_cycle().effect);
     }
