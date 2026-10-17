@@ -223,9 +223,7 @@ fn play(
         }
     }
     // Event sounds.
-    let context = FxContext {
-        mode: p.mode,
-    };
+    let context = FxContext { mode: p.mode };
     let mut held = false;
     for f in fx {
         let mut boosts = t.boosts;
@@ -271,12 +269,9 @@ fn play(
     match &p.cap {
         Some(cap) => {
             let name = cap_action_name(cap.clip());
-            let advance = t.cap_cursor.advance(
-                name,
-                cap.clip_serial(),
-                cap.clip_frame(),
-                false,
-            );
+            let advance = t
+                .cap_cursor
+                .advance(name, cap.clip_serial(), cap.clip_frame(), false);
             if advance.restarted {
                 for (e, tag) in &loops {
                     if tag.0 == "cap" {

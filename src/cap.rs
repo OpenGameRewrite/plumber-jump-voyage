@@ -44,9 +44,16 @@ const START_DISTANCE: f32 = 150.;
 /// Height of the player's head above the feet (`rs::getPlayerHeadPos`
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
-/// The cap is caught when it is this close to the head. The original catches
-/// it when the cap's catch sensor meets the player's; the recordings bracket
-/// the distance between 99.2 (caught) and 130.7 (not yet).
+/// The cap is caught when its centre is this close to the head point. The
+/// catch is a sensor contact: the player's sensor sends the catch message to
+/// the cap's "Catch" sensor, which the cap takes in its return nerve
+/// (`HackCap::receiveMsg`). That sensor's radius is 100 (`HackCap::init`) and
+/// the player's head sensor sits 110 up (`PlayerActorHakoniwa` sensor list).
+/// Adding the player sensor's own radius (40) would catch at 140, but the
+/// recordings reject that: a cap 131 from the head after its move is not
+/// caught (`areas-cascade`) while one 99 away is (`capthrow`). The centre
+/// distance of 100 is the reading that fits; the contact rule behind it
+/// (what the sensor test really compares) is not derived.
 const CATCH_DISTANCE: f32 = 100.;
 /// The return only slows down this near the head: speed is limited to a
 /// fraction of the distance there.
@@ -74,6 +81,16 @@ pub enum CapNerve {
     Return,
 }
 impl CapNerve {
+    /// The nerve a recorded cap state names, when it is one of the flight's.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Throw" => Self::Throw,
+            "ThrowBrake" => Self::ThrowBrake,
+            "ThrowStay" => Self::ThrowStay,
+            "Return" => Self::Return,
+            _ => return None,
+        })
+    }
     /// The nerve's name in the game's traces.
     pub fn name(self) -> &'static str {
         match self {
@@ -83,6 +100,19 @@ impl CapNerve {
             Self::Return => "Return",
         }
     }
+}
+
+/// A cap as a recording shows it at one moment: the nerve it is in, the steps
+/// it has run there, where it is, how fast it moves and the speed it was thrown at.
+#[derive(Clone, Copy, Debug)]
+pub struct Moment {
+    pub nerve: CapNerve,
+    pub step: u32,
+    /// Centimetres, and centimetres per frame.
+    pub spot: Vec3,
+    pub velocity: Vec3,
+    pub speed: f32,
+    pub return_speed: f32,
 }
 
 /// What the player hands the cap when it throws (`HackCap::startThrow`).
@@ -171,9 +201,6 @@ impl Cap {
             param::MAX_SPEED
         };
         let brake_frames = param::BRAKE_FRAMES as f32;
-        // The throw cruises until the braking distance (a triangle: half the
-        // speed over the braking time) is all that is left of the range.
-        let cruise = ((param::RANGE - speed * brake_frames / 2.) / speed).floor();
         let mut cap = Self {
             pos: spot * UNIT,
             age: 0.,
@@ -192,7 +219,7 @@ impl Cap {
             velocity: front * speed,
             front,
             speed,
-            cruise_frames: cruise.max(0.) as u32,
+            cruise_frames: cruise_frames(speed),
             brake_step: -speed / brake_frames,
             return_speed: 0.,
         };
@@ -247,43 +274,46 @@ impl Cap {
     pub fn clip_serial(&self) -> u32 {
         self.action_serial
     }
-    /// Centimetres per frame, for the trace and the lockstep.
-    pub fn units(&self) -> Vec3 {
-        self.spot
+    /// A cap put back into place each frame (lockstep) keeps the numbering of
+    /// the clip it is in the middle of.
+    pub fn continue_clip(&mut self, before: &Cap) {
+        self.action_serial = before.action_serial + u32::from(before.action != self.action);
+        if before.action == self.action {
+            self.action_frame = before.action_frame;
+        }
     }
-    /// Steps the current nerve has run.
-    pub fn nerve_step(&self) -> u32 {
-        self.step
-    }
-    /// The speed the return has built up.
-    pub fn return_speed(&self) -> f32 {
-        self.return_speed
-    }
-    /// Put the cap into a recorded moment (lockstep): the nerve it was in,
-    /// the steps it had run, where it was and how fast it moved.
-    pub fn resume(
-        &mut self,
-        nerve: CapNerve,
-        step: u32,
-        spot: Vec3,
-        velocity: Vec3,
-        return_speed: f32,
-    ) {
-        self.nerve = nerve;
-        self.step = step;
-        self.spot = spot;
-        self.pos = spot * UNIT;
-        self.velocity = velocity;
-        self.return_speed = return_speed;
-        self.phase = phase_of(nerve);
-        self.returning = nerve == CapNerve::Return;
-        self.action = match nerve {
-            CapNerve::ThrowStay => stay(self.left),
-            _ => flying(self.kind, self.air, self.left),
+    /// Put the cap into a recorded moment (lockstep).
+    pub fn resume(&mut self, moment: &Moment) {
+        self.nerve = moment.nerve;
+        self.step = moment.step;
+        self.spot = moment.spot;
+        self.pos = moment.spot * UNIT;
+        self.velocity = moment.velocity;
+        self.return_speed = moment.return_speed;
+        self.phase = phase_of(moment.nerve);
+        self.returning = moment.nerve == CapNerve::Return;
+        // The throw's speed fixes how long it cruises and how hard it brakes.
+        self.speed = moment.speed;
+        let brake_frames = param::BRAKE_FRAMES as f32;
+        self.cruise_frames = cruise_frames(moment.speed);
+        self.brake_step = -moment.speed / brake_frames;
+        // The stay and the return start their clips on their first step, so
+        // their first row still shows the clip before.
+        let (action, frame) = match (moment.nerve, moment.step) {
+            (CapNerve::Throw, step) => (flying(self.kind, self.air, self.left), step),
+            (CapNerve::ThrowBrake, step) => (
+                flying(self.kind, self.air, self.left),
+                self.cruise_frames + 1 + step,
+            ),
+            (CapNerve::ThrowStay, 0) => (flying(self.kind, self.air, self.left), 0),
+            (CapNerve::ThrowStay, step) => (stay(self.left), step - 1),
+            (CapNerve::Return, 0) => (stay(self.left), 0),
+            (CapNerve::Return, step) => (flying(self.kind, self.air, self.left), step - 1),
         };
-        self.action_frame = step;
-        if velocity.length() > NEAR_ZERO {
-            self.front = velocity.normalize();
+        self.action = action;
+        self.action_frame = frame;
+        if moment.velocity.length() > NEAR_ZERO {
+            self.front = moment.velocity.normalize();
         }
     }
     /// Run one frame: the current nerve, then the collider's move. Returns
@@ -381,6 +411,19 @@ impl Cap {
         self.velocity = self.front * self.return_speed + across * (1. - ease);
         None
     }
+}
+/// A throw this fast is the continuous one (the third in a row).
+pub fn is_continuous_speed(speed: f32) -> bool {
+    speed > param::MAX_SPEED + 0.5
+}
+/// Frames the throw cruises before it brakes: until the braking distance (a
+/// triangle, half the speed over the braking time) is all that is left of the
+/// range.
+fn cruise_frames(speed: f32) -> u32 {
+    let brake_frames = param::BRAKE_FRAMES as f32;
+    ((param::RANGE - speed * brake_frames / 2.) / speed)
+        .floor()
+        .max(0.) as u32
 }
 fn phase_of(nerve: CapNerve) -> CapPhase {
     match nerve {

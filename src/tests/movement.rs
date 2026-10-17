@@ -640,13 +640,14 @@ fn cap_bounce() {
         1,
     );
     // Hovering where the player falls onto it.
-    cap.resume(
-        crate::cap::CapNerve::ThrowStay,
-        5,
-        (p.pos + Vec3::Y * 0.8) / UNIT,
-        Vec3::ZERO,
-        0.,
-    );
+    cap.resume(&crate::cap::Moment {
+        nerve: crate::cap::CapNerve::ThrowStay,
+        step: 5,
+        spot: (p.pos + Vec3::Y * 0.8) / UNIT,
+        velocity: Vec3::ZERO,
+        speed: 32.,
+        return_speed: 0.,
+    });
     cap.frames = 30;
     p.cap = Some(cap);
     p.v.y = -5.;
@@ -1167,7 +1168,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x52c5cd2273e2181b,
+        hash, 0xc1af43f77604eccb,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

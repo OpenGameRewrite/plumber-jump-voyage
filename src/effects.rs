@@ -310,9 +310,7 @@ fn tick(
         return;
     }
     let effects = &mut *effects;
-    let context = FxContext {
-        mode: p.mode,
-    };
+    let context = FxContext { mode: p.mode };
     let mut reactions = vec![];
     for f in &fx {
         reactions.extend(reactions_of(*f, context, &mut effects.boosts));
@@ -332,7 +330,10 @@ fn tick(
         cap_anim,
         cap_serial: p.cap.as_ref().map_or(0, crate::movement::Cap::clip_serial),
         cap_frame: p.cap.as_ref().map_or(0., crate::movement::Cap::clip_frame),
-        cap_wrapped: p.cap.as_ref().is_some_and(crate::movement::Cap::clip_wrapped),
+        cap_wrapped: p
+            .cap
+            .as_ref()
+            .is_some_and(crate::movement::Cap::clip_wrapped),
         reactions: &reactions,
         code: &code,
         calls: &code_calls(&p),

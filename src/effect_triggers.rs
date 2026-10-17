@@ -482,9 +482,7 @@ impl Tracker {
     /// (the frame the clip displays in that frame's sample, or the one the
     /// controller holds after its step) so the trace can follow the game.
     pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
-        let context = FxContext {
-            mode: p.mode,
-        };
+        let context = FxContext { mode: p.mode };
         let mut reactions = vec![];
         for fx in events {
             reactions.extend(reactions_of(*fx, context, &mut self.boosts));
@@ -710,9 +708,7 @@ pub fn self_check() {
     p.grounded = false;
     assert!(code_driven(&p).is_empty());
     // Reaction names share the sound rules and add the effect-only ones.
-    let context = FxContext {
-        mode: Move::Run,
-    };
+    let context = FxContext { mode: Move::Run };
     let mut boosts = 0;
     let names = |raised: Vec<Raised>| raised.iter().map(|r| r.name).collect::<Vec<_>>();
     assert_eq!(

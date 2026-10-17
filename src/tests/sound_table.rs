@@ -48,9 +48,7 @@ fn voice_names_and_triggers() {
 
 #[cfg_attr(test, test)]
 fn event_cues() {
-    let on = |mode| FxContext {
-        mode,
-    };
+    let on = |mode| FxContext { mode };
     let mut boosts = 0;
     let land = |mode, boosts: &mut u32| fx_cues(Fx::Land { hard: false }, on(mode), boosts);
     let reaction = |name| [Cue::Reaction { cap: false, name }];

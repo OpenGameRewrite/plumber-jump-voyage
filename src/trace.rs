@@ -288,10 +288,7 @@ impl Recorder {
         mix: &mut Vec<String>,
     ) {
         // The game marks a reaction raised on Cappy with `@cap` as well.
-        events.push(format!(
-            "reaction:{name}{}",
-            if cap { "@cap" } else { "" }
-        ));
+        events.push(format!("reaction:{name}{}", if cap { "@cap" } else { "" }));
         if let Some(table) = &self.table {
             for play in table.group(cap).reaction_plays(name) {
                 self.play(cap, &play, speed, events, mix);
@@ -359,9 +356,7 @@ impl Recorder {
             None => self.cap_cursor = AnimCursor::default(),
         }
         // Movement events: sounds, then effects.
-        let context = FxContext {
-            mode: p.mode,
-        };
+        let context = FxContext { mode: p.mode };
         let mut started = Vec::new();
         for f in &fxs {
             if matches!(f, Fx::Throw(_)) {
@@ -575,9 +570,7 @@ impl Recorder {
         let label = nerve(p.mode, p.phase_clip()).name;
         self.sub_steps = match self.last_state {
             None => p.state_frames(),
-            Some((last, steps)) if last == label && steps < p.state_frames() => {
-                self.sub_steps + 1
-            }
+            Some((last, steps)) if last == label && steps < p.state_frames() => self.sub_steps + 1,
             Some(_) => 0,
         };
         self.last_state = Some((label, p.state_frames()));
@@ -790,6 +783,140 @@ impl TraceFile {
         let next = self.cell(row + 1, "anim")?;
         (next != now && self.number(row + 1, "anim_frame") == Some(0.)).then(|| intern(next))
     }
+    /// A recorded position of the cap in centimetres, when the row has one.
+    fn cap_spot(&self, row: usize) -> Option<Vec3> {
+        Some(Vec3::new(
+            self.number(row, "cap_px")?,
+            self.number(row, "cap_py")?,
+            self.number(row, "cap_pz")?,
+        ))
+    }
+    /// The cap in flight, as the recording shows it at a row: its nerve and
+    /// steps, where it is and how fast it moves (the move of the frame). The
+    /// arrival row, where the cap already sits on the player, is not flight.
+    fn cap_moment(&self, row: usize) -> Option<crate::cap::Moment> {
+        use crate::cap::{CapNerve, Moment};
+        let flying = |row: usize| {
+            let nerve = CapNerve::from_name(self.cell(row, "cap_state")?)?;
+            let arrived = self
+                .cell(row, "cap_anim")
+                .is_some_and(|c| c.starts_with("CatchCap"));
+            (!arrived).then_some(nerve)
+        };
+        let nerve = flying(row)?;
+        let spot = self.cap_spot(row)?;
+        let step = self.number(row, "cap_step").map_or(0, |s| s.max(0.) as u32);
+        // The first row of a cap has no row before it: it left the throw point
+        // (150 in front of the player, 70 up) at its flight speed.
+        let velocity = |row: usize| -> Option<Vec3> {
+            let spot = self.cap_spot(row)?;
+            if row > 0 && flying(row - 1).is_some() {
+                return Some(spot - self.cap_spot(row - 1)?);
+            }
+            let player = Vec3::new(
+                self.number(row, "px")?,
+                self.number(row, "py")?,
+                self.number(row, "pz")?,
+            );
+            let front = Vec3::new(self.number(row, "fx")?, 0., self.number(row, "fz")?);
+            Some(spot - (player + Vec3::Y * 70. + front * 150.))
+        };
+        let moving = velocity(row)?;
+        // The flight speed is the one the throw cruised at.
+        let mut speed = 0f32;
+        let mut at = row;
+        loop {
+            if matches!(flying(at), Some(CapNerve::Throw | CapNerve::ThrowBrake))
+                && let Some(v) = velocity(at)
+            {
+                speed = speed.max(v.length());
+            }
+            if at == 0 || flying(at - 1).is_none() {
+                break;
+            }
+            at -= 1;
+        }
+        Some(Moment {
+            nerve,
+            step,
+            spot,
+            velocity: moving,
+            speed: if speed > 0. { speed } else { 32. },
+            return_speed: if nerve == CapNerve::Return {
+                moving.length()
+            } else {
+                0.
+            },
+        })
+    }
+    /// The spin throw state at a row: whether the cap is still the spin attack
+    /// and for how long, whether the throw frame just passed, and what kind of
+    /// throw it is (the clip names it).
+    fn throw_hint(&self, row: usize) -> Option<crate::movement::ThrowHint> {
+        use crate::movement::{Throw, ThrowHint};
+        if !self.cell(row, "state")?.starts_with("SpinCap/") {
+            return None;
+        }
+        let spinning = |row: usize| self.cell(row, "cap_state") == Some("SpinAttack");
+        let (kind, count, continuous) = match self.cell(row, "anim")? {
+            "SpinCapStartDoubleUp" | "SpinCapAirStartDoubleUp" => (Throw::Up, 1, false),
+            "SpinCapStartDoubleDown" | "SpinCapAirStartDoubleDown" => (Throw::Down, 1, false),
+            name if name.contains("Double") => (Throw::Spin, 1, false),
+            name if name.contains("Start2") => (Throw::Forward, 2, false),
+            name if name.contains("Start3") => (Throw::Forward, 0, true),
+            _ => (Throw::Forward, 1, false),
+        };
+        let mut age = 0;
+        while age <= row && spinning(row - age) {
+            age += 1;
+        }
+        let state_runs = self.cell(row, "cap_state").is_none();
+        Some(ThrowHint {
+            winding: age > 0 || state_runs,
+            age: age as u32,
+            launch: age > 0 && self.cell(row + 1, "cap_state") == Some("Throw"),
+            kind,
+            count,
+            continuous,
+        })
+    }
+    /// Frames since the cap arrived at the player, -1 on the arrival itself.
+    fn catching(&self, row: usize) -> Option<i32> {
+        let arrival = |row: usize| {
+            self.cell(row, "cap_state") == Some("Return")
+                && self
+                    .cell(row, "cap_anim")
+                    .is_some_and(|c| c.starts_with("CatchCap"))
+        };
+        if arrival(row) {
+            return Some(-1);
+        }
+        let mut frames = -1;
+        let mut at = row;
+        while self.cell(at, "cap_state") == Some("Catch") {
+            frames += 1;
+            at = at.checked_sub(1)?;
+        }
+        (frames >= 0).then_some(frames)
+    }
+    /// The model's sub animation at a row: the last start or end the probe
+    /// logged decides whether one plays.
+    fn sub_hint(&self, row: usize) -> Option<(&'static str, f32, f32)> {
+        let name = (0..=row).rev().find_map(|at| {
+            let events = self.cell(at, "events")?;
+            let marked = events
+                .split(';')
+                .rev()
+                .find(|e| e.starts_with("subanim:") || e.starts_with("endsub:"))?;
+            Some(marked.strip_prefix("subanim:").map(intern))
+        })??;
+        let length = if name.starts_with("SpinCap") {
+            clip::throw(name) as f32
+        } else {
+            10.
+        };
+        Some((name, self.number(row, "sub_frame")?, length))
+    }
     /// The injectable player state a row records, for lockstep stepping.
     pub fn snapshot(&self, row: usize) -> Snapshot {
         let n = |c| self.number(row, c).unwrap_or(0.);
@@ -834,6 +961,10 @@ impl TraceFile {
             counters,
             run: self.run_hint(row),
             next_clip: self.next_clip(row),
+            cap: self.cap_moment(row),
+            throw: self.throw_hint(row),
+            catching: self.catching(row),
+            sub: self.sub_hint(row),
         }
     }
 }

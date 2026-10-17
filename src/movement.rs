@@ -567,6 +567,26 @@ pub struct Snapshot {
     /// The clip the next row starts, when the state chosen in this row plays
     /// a new one (the roll's nerves).
     pub next_clip: Option<&'static str>,
+    /// The thrown cap in flight.
+    pub cap: Option<crate::cap::Moment>,
+    /// The spin throw's own progress, while its state runs.
+    pub throw: Option<ThrowHint>,
+    /// Frames since the cap arrived, while it is caught (-1 on the arrival).
+    pub catching: Option<i32>,
+    /// The model's sub animation while one plays: name, frame and length.
+    pub sub: Option<(&'static str, f32, f32)>,
+}
+/// What a recorded row shows of the spin throw state (`PlayerStateSpinCap`).
+#[derive(Clone, Copy, Debug)]
+pub struct ThrowHint {
+    /// The cap is the spin attack, and for how many frames it has been.
+    pub winding: bool,
+    pub age: u32,
+    /// The throw frame passed: the cap appears in the next frame.
+    pub launch: bool,
+    pub kind: Throw,
+    pub count: u32,
+    pub continuous: bool,
 }
 /// The run's hidden state as far as a recorded row shows it: the pose's place
 /// in the cycle, its weights, and the turn in progress.
@@ -1391,6 +1411,7 @@ impl Player {
         if matches!(self.mode, Move::Roll | Move::RollEnd) {
             self.resume_roll(s.state_frames.unwrap_or(0), s.next_clip);
         }
+        self.resume_cap(s);
         for (name, value) in &s.counters {
             self.set_counter(name, *value);
         }
@@ -1399,6 +1420,63 @@ impl Player {
         } else {
             self.peak.max(self.pos.y)
         };
+    }
+    /// The cap and the spin throw as a recorded row shows them.
+    fn resume_cap(&mut self, s: &Snapshot) {
+        let previous = self.cap.take();
+        self.launch = None;
+        self.winding = false;
+        self.winding_age = 0;
+        self.caught = false;
+        self.catching = s.catching;
+        self.sub = SubClip::default();
+        if let Some((name, frame, length)) = s.sub {
+            self.sub = SubClip {
+                name,
+                frame,
+                length,
+                active: true,
+            };
+            // A clip just started under a sub animation holds its first frame.
+            self.anim_skip = frame == 0. && s.anim.is_some_and(|(_, frame)| frame == 0.);
+        } else {
+            self.anim_skip = false;
+        }
+        if let Some(hint) = s.throw {
+            self.throwing.kind = Some(hint.kind);
+            self.throwing.count = hint.count;
+            self.throwing.continuous = hint.continuous;
+            self.winding = hint.winding;
+            self.winding_age = hint.age;
+            self.throw_clip = s.anim.map_or("SpinCapStart", |(name, _)| name);
+        }
+        let front = self.facing.with_y(0.).normalize_or(Vec3::NEG_Z);
+        let launch = Launch {
+            front,
+            kind: self.throwing.kind.unwrap_or(Throw::Forward),
+            left: false,
+            air: !self.grounded,
+            continuous: self.throwing.continuous,
+        };
+        if s.throw.is_some_and(|hint| hint.launch) {
+            self.launch = Some(launch);
+        }
+        if let Some(moment) = &s.cap {
+            let launch = Launch {
+                front: moment.velocity.with_y(0.).normalize_or(front),
+                continuous: crate::cap::is_continuous_speed(moment.speed),
+                ..launch
+            };
+            let mut cap = Cap::start(launch, self.pos, self.cap_serial + 1);
+            cap.resume(moment);
+            cap.frames = moment.step + 1;
+            // The same clip keeps playing from one injected row to the next.
+            if let Some(previous) = &previous {
+                cap.continue_clip(previous);
+            }
+            self.cap_serial = cap.clip_serial();
+            self.cap = Some(cap);
+        }
     }
     pub fn reset(&mut self) {
         let checkpoint = self.checkpoint;
