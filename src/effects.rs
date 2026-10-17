@@ -27,7 +27,7 @@ use std::{
 /// Effects alive at once; the oldest end first beyond this.
 const MAX_LIVE: usize = 96;
 /// Resources that emit nothing.
-const EMPTY_RESOURCE: &str = "DummyEmitter";
+use crate::effect_triggers::EMPTY_RESOURCE;
 /// Jump dust stays where Mario took off. The tables let it follow him, but the
 /// controller leaves the ground at once while the original's dust emitter runs
 /// for six frames, which would stack puffs up in a column.
@@ -258,7 +258,13 @@ impl Effects {
             follow_rotation: trigger.has_flag("FollowRotate"),
             fade_on_stop: trigger.has_flag("OneTimeFade"),
         };
-        let timing = self.library.timing(&trigger);
+        let timing = self
+            .library
+            .timing(Some(choice))
+            .unwrap_or(crate::effect_triggers::Timing {
+                emitting: Some(0),
+                linger: 0,
+            });
         self.seed = self.seed.wrapping_add(1);
         let place = Placement {
             anchor,

@@ -186,11 +186,13 @@ pub struct Recorder {
     right_hand: bool,
 }
 impl Recorder {
-    pub fn new(table: Option<Table>, library: Option<Library>) -> Self {
+    /// `floor` is the material of the floor the run stands on (the recorded
+    /// game's), which picks the variant of each effect.
+    pub fn new(table: Option<Table>, library: Option<Library>, floor: Option<String>) -> Self {
         Self {
             table,
             right_hand: true,
-            effects: library.map(Tracker::new),
+            effects: library.map(|library| Tracker::new(library).on_floor(floor)),
             cursor: AnimCursor::default(),
             cap_watch: CapWatch::default(),
             boosts: 0,
@@ -586,6 +588,16 @@ impl TraceFile {
     }
     pub fn number(&self, row: usize, column: &str) -> Option<f32> {
         self.cell(row, column)?.parse().ok()
+    }
+    /// The floor material the recorded game stood on (its `collision` column's
+    /// `gmat`), taken from the first row that names one.
+    pub fn floor_material(&self) -> Option<String> {
+        (0..self.rows.len()).find_map(|row| {
+            self.cell(row, "collision")?
+                .split(';')
+                .find_map(|item| item.strip_prefix("gmat="))
+                .map(str::to_string)
+        })
     }
     /// What a row of the run state shows of its hidden state: the run cycle's
     /// pose and weights, the turn that moved the facing, the stick, how long the
