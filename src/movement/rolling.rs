@@ -179,15 +179,17 @@ impl Player {
     fn slide_direction(&self) -> Vec3 {
         let up = self.floor_up();
         let down = Vec3::NEG_Y - up * Vec3::NEG_Y.dot(up);
-        down.try_normalize().filter(|_| down.length() > 1e-4).unwrap_or(Vec3::ZERO)
+        down.try_normalize()
+            .filter(|_| down.length() > 1e-4)
+            .unwrap_or(Vec3::ZERO)
     }
     /// Choose another nerve of the running state; its first step is next step.
     fn roll_to(&mut self, nerve: RollNerve) {
         self.rolling.nerve = nerve;
         self.rolling.steps = 0;
         // Unrolling keeps the rolling clip's frame (`setAnimFrame`).
-        let keep = (nerve == RollNerve::UnRoll && self.anim.name == "Rolling")
-            .then_some(self.anim.frame);
+        let keep =
+            (nerve == RollNerve::UnRoll && self.anim.name == "Rolling").then_some(self.anim.frame);
         self.defer(Move::Roll, nerve_clip(nerve), move |p| {
             p.roll_enter(nerve);
             if let Some(frame) = keep {

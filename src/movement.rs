@@ -265,8 +265,8 @@ mod sounds;
 mod squat;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
-pub use run_cycle::RunCycle;
 use rolling::{RollControl, RollStart};
+pub use run_cycle::RunCycle;
 use squat::SquatControl;
 
 /// How much of the way to its target direction the body swings in a frame
@@ -2632,25 +2632,19 @@ impl Player {
     fn long_jump_as(&mut self, mode: Move) {
         const NAMES: [&str; 3] = ["JumpBroad", "JumpBroad2", "JumpBroad3"];
         let name = NAMES[self.long_combo.count as usize % 3];
-        self.jump_with(
-            mode,
-            name,
-            t::LONG_JUMP_POWER,
-            t::LONG_JUMP_GRAVITY,
-            |p| {
-                p.long_combo.count_up();
-                p.v = air_move::long_jump_velocity(
-                    p.prior_v,
-                    &air_move::LongJumpTakeoff {
-                        move_pow: t::LONG_JUMP_MOVE_POW,
-                        speed_min: t::LONG_JUMP_SPEED_MIN,
-                        init_speed: t::LONG_JUMP_INIT_SPEED,
-                        power: t::LONG_JUMP_POWER,
-                    },
-                );
-                p.jump_extend = false;
-            },
-        );
+        self.jump_with(mode, name, t::LONG_JUMP_POWER, t::LONG_JUMP_GRAVITY, |p| {
+            p.long_combo.count_up();
+            p.v = air_move::long_jump_velocity(
+                p.prior_v,
+                &air_move::LongJumpTakeoff {
+                    move_pow: t::LONG_JUMP_MOVE_POW,
+                    speed_min: t::LONG_JUMP_SPEED_MIN,
+                    init_speed: t::LONG_JUMP_INIT_SPEED,
+                    power: t::LONG_JUMP_POWER,
+                },
+            );
+            p.jump_extend = false;
+        });
     }
     /// The stick as a push in the world (length up to one).
     fn push(&self) -> Vec3 {

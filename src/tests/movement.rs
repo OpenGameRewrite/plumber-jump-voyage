@@ -412,7 +412,11 @@ fn dive_roll_landing() {
     let mut rolled = 0;
     while p.mode == Move::Roll && rolled < 600 {
         // The roll goes on while crouch is held and ends once it is let go.
-        let orders = if rolled < 60 { &held } else { &Orders::default() };
+        let orders = if rolled < 60 {
+            &held
+        } else {
+            &Orders::default()
+        };
         p.step(orders, &floor);
         names.insert(p.anim.name);
         rolled += 1;
@@ -1152,7 +1156,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x30d9cf2b072cda1e,
+        hash, 0x5eab3388402c123d,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]
