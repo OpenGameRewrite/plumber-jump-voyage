@@ -91,6 +91,8 @@ struct Layer {
     rate: f32,
     weight: f32,
 }
+/// Frames the main clip blends in over when a sub animation ends and restarts it.
+const RESTART_BLEND_FRAMES: u32 = 5;
 /// What the animation blend holds for one frame.
 #[derive(Clone, Default)]
 struct Pose {
@@ -117,6 +119,18 @@ impl Pose {
     /// Dash and DashFast by speed, with the weights the renderer uses.
     fn of(p: &Player) -> Self {
         let a = p.anim;
+        // A sub animation of another clip plays instead of the main one.
+        if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != a.name) {
+            return Self {
+                slot: name,
+                layers: vec![Layer {
+                    name,
+                    frame,
+                    rate: 1.,
+                    weight: 1.,
+                }],
+            };
+        }
         if a.name != "Move" {
             return Self {
                 slot: a.name,
@@ -191,6 +205,14 @@ pub struct Recorder {
     /// state's own step.
     last_state: Option<(&'static str, u32)>,
     sub_steps: u32,
+    /// The main clip of the previous row and the one before it, and the model's
+    /// sub animation then: when a sub animation of another clip ends, the
+    /// animator restarts the main clip with a blend from the clip before it
+    /// (`PlayerAnimator::endSubAnim`), which `restart` counts through.
+    main_clip: &'static str,
+    stale_clip: &'static str,
+    sub_clip: Option<&'static str>,
+    restart: Option<(&'static str, u32)>,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
     /// The original's effects, when their library is installed; the
@@ -214,6 +236,10 @@ impl Recorder {
             last_sub: "",
             last_state: None,
             sub_steps: 0,
+            main_clip: "",
+            stale_clip: "",
+            sub_clip: None,
+            restart: None,
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -437,13 +463,35 @@ impl Recorder {
         } else {
             String::new()
         };
-        let interp = self
+        let mut interp = self
             .blend
             .old
             .last()
             .filter(|_| covering.is_none())
             .map(|(old, _, _)| format!("{}:{}", old.dominant(), num(1. - kept)))
             .unwrap_or_default();
+        // A sub animation of another clip just ended: the main clip restarts
+        // blending in over `RESTART_BLEND_FRAMES` from the clip it followed.
+        if self.main_clip != p.anim.name {
+            self.stale_clip = self.main_clip;
+            self.main_clip = p.anim.name;
+        }
+        let sub_now = p.model_sub().map(|(name, _)| name);
+        if let Some(ended) = self.sub_clip
+            && sub_now.is_none()
+            && ended != p.anim.name
+            && !self.stale_clip.is_empty()
+        {
+            self.restart = Some((self.stale_clip, 0));
+        }
+        self.sub_clip = sub_now;
+        if let Some((from, done)) = self.restart {
+            let done = done + 1;
+            self.restart = (done < RESTART_BLEND_FRAMES).then_some((from, done));
+            if interp.is_empty() && done < RESTART_BLEND_FRAMES {
+                interp = format!("{from}:{}", num(done as f32 / RESTART_BLEND_FRAMES as f32));
+            }
+        }
         // Clips that need the model's data (eye and hand parts) are not known here.
         let parts = p
             .sub_anim
