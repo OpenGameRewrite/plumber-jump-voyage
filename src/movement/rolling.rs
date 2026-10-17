@@ -187,6 +187,7 @@ impl Player {
                 // The hop: the start jump power along the ground's normal.
                 self.v += self.floor_up() * t::ROLL_START_JUMP;
                 self.grounded = false;
+                self.hop_contact = true;
                 self.events.push(Fx::RollStart);
             }
             RollNerve::BoostStart => self.events.push(Fx::RollBoost { perfect: true }),

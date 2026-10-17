@@ -16,9 +16,15 @@ pub const UNIT: f32 = 0.01;
 /// Simulation rate, matching the original.
 pub const FPS: f32 = 60.;
 pub const RADIUS: f32 = 0.45;
-/// Metres a fall must go below a surface to touch it: arriving exactly on the
-/// surface is no contact yet, as in the original's collision.
+/// Metres a fall must go below a surface to touch it: an upright body that
+/// arrives exactly on the surface is no contact yet (backflip, side somersault
+/// and triple jump land a row later in the original).
 const CONTACT_MARGIN: f32 = 1e-5;
+/// The same for the crouched body: the roll's hop lands exactly on the floor
+/// and is already touching it in the original's trace. The reason is unknown
+/// (the shorter collider is the only difference the traces show); a fall that
+/// stops a hair above the surface, as the long jump's does, still falls on.
+const CROUCHED_CONTACT_MARGIN: f32 = 1e-6;
 /// Radius of the course's climbable poles.
 pub const POLE_RADIUS: f32 = 0.18;
 pub const HEIGHT: f32 = 1.6;
@@ -823,6 +829,9 @@ pub struct Player {
     pull: f32,
     /// The sounds the player's code starts itself (footsteps, roll, fall).
     sounds: SeCtrl,
+    /// The collider still reports the floor under a hop that leaves it (the
+    /// roll's start), though the player is already rising.
+    hop_contact: bool,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -911,6 +920,7 @@ impl Default for Player {
             after_turn_speed: t::NORMAL_MAX,
             pull: t::GRAVITY,
             sounds: SeCtrl::default(),
+            hop_contact: false,
         }
     }
 }
@@ -1107,8 +1117,7 @@ impl Player {
     /// The normal of the ground under the feet, when standing on it.
     pub fn floor_normal(&self) -> Option<Vec3> {
         // A ramp's height rises along +x by `slope` per metre.
-        self.grounded
-            .then(|| Vec3::new(-self.slope, 1., 0.).normalize())
+        (self.grounded || self.hop_contact).then(|| Vec3::new(-self.slope, 1., 0.).normalize())
     }
     /// The run cycle's animation control, for the trace and the renderer.
     pub fn run_cycle(&self) -> &RunCycle {
@@ -1477,6 +1486,7 @@ impl Player {
         }
         self.read_input(&o);
         self.landing_speed = 0.;
+        self.hop_contact = false;
         self.nerve.deferred = false;
         self.nerve.renewed = false;
         let was_grounded = self.grounded;
@@ -3591,6 +3601,12 @@ impl Player {
                 | Move::Dive
         ) || self.grounded && o.crouch;
         let height = if crouched { SQUAT_HEIGHT } else { HEIGHT };
+        // How far past the surface (negative: short of it) the body must be.
+        let contact_reach = if crouched {
+            CROUCHED_CONTACT_MARGIN
+        } else {
+            -CONTACT_MARGIN
+        };
         let old = self.pos;
         let was_grounded = self.grounded;
         self.grounded = false;
@@ -3618,7 +3634,7 @@ impl Player {
                     if axis == 1 {
                         if self.v.y <= 0.
                             && before.y >= b.top(before.x.clamp(lo.x, hi.x)) - 0.15
-                            && self.pos.y < top - CONTACT_MARGIN
+                            && self.pos.y < top + contact_reach
                             && self.pos.y + height > lo.y
                         {
                             self.pos.y = top;
