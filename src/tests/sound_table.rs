@@ -48,22 +48,49 @@ fn voice_names_and_triggers() {
 
 #[cfg_attr(test, test)]
 fn event_cues() {
-    let on = |mode, move_speed| FxContext {
+    let on = |mode| FxContext {
         mode,
-        move_speed,
         grounded: true,
     };
     let mut boosts = 0;
-    let land =
-        |mode, speed, boosts: &mut u32| fx_cues(Fx::Land { hard: false }, on(mode, speed), boosts);
+    let land = |mode, boosts: &mut u32| fx_cues(Fx::Land { hard: false }, on(mode), boosts);
     let reaction = |name| [Cue::Reaction { cap: false, name }];
-    assert_eq!(land(Move::Run, 10., &mut boosts), reaction("LandRun"));
-    assert_eq!(land(Move::Idle, 0., &mut boosts), reaction("Land"));
-    assert_eq!(land(Move::Roll, 10., &mut boosts), reaction("RollLand"));
-    assert!(fx_cues(Fx::Step { left: true }, on(Move::Crawl, 3.), &mut boosts).is_empty());
+    // The state that takes over after the landing names the reaction.
+    assert_eq!(land(Move::Run, &mut boosts), reaction("LandRun"));
+    assert_eq!(land(Move::Jump, &mut boosts), reaction("LandRun"));
+    assert_eq!(land(Move::Idle, &mut boosts), reaction("Land"));
+    assert_eq!(land(Move::Roll, &mut boosts), reaction("RollLand"));
+    assert!(land(Move::Crouch, &mut boosts).is_empty());
     assert_eq!(
-        fx_cues(Fx::Step { left: false }, on(Move::Swim, 3.), &mut boosts),
+        fx_cues(Fx::PoundLand, on(Move::PoundLand), &mut boosts),
+        reaction("HipDropLand")
+    );
+    // A footfall starts the step, its material variant and the rustle; the
+    // crawl's steps come from its clip, the swim's are plain.
+    assert_eq!(
+        fx_cues(Fx::Step { left: true }, on(Move::Run), &mut boosts),
+        [
+            Cue::Rated("RunL"),
+            Cue::Rated("RunMatL"),
+            Cue::Rated("ShakeNoiseL")
+        ]
+    );
+    assert_eq!(
+        fx_cues(Fx::FootLift { left: false }, on(Move::Run), &mut boosts),
+        [Cue::Rated("RunUpR")]
+    );
+    assert!(fx_cues(Fx::Step { left: true }, on(Move::Crawl), &mut boosts).is_empty());
+    assert_eq!(
+        fx_cues(Fx::Step { left: false }, on(Move::Swim), &mut boosts),
         [Cue::Play("SwimRunR")]
+    );
+    assert_eq!(
+        fx_cues(Fx::RollSpin, on(Move::Roll), &mut boosts),
+        [Cue::Play("Roll")]
+    );
+    assert_eq!(
+        fx_cues(Fx::FallWhoosh { frames: 2 }, on(Move::Fall), &mut boosts),
+        [Cue::Hold("FallWhoosh_loop")]
     );
     // The first roll boost sounds different from the ones after it.
     let boost = Fx::RollBoost { perfect: false };
@@ -71,13 +98,13 @@ fn event_cues() {
         Cue::Reaction { name, .. } => name,
         other => panic!("{other:?}"),
     };
-    let roll = on(Move::Roll, 20.);
+    let roll = on(Move::Roll);
     assert_eq!(name(fx_cues(boost, roll, &mut boosts)), "RollBoost");
     assert_eq!(name(fx_cues(boost, roll, &mut boosts)), "RollBoostAgain");
     fx_cues(Fx::RollStart, roll, &mut boosts);
     assert_eq!(name(fx_cues(boost, roll, &mut boosts)), "RollBoost");
     // A grounded down-throw flies as the rolling cap.
-    let throw = fx_cues(Fx::Throw(Throw::Down), on(Move::Throw, 0.), &mut boosts);
+    let throw = fx_cues(Fx::Throw(Throw::Down), on(Move::Throw), &mut boosts);
     assert_eq!(throw.len(), 2);
     assert!(matches!(
         throw[1],
@@ -86,7 +113,7 @@ fn event_cues() {
             ..
         }
     ));
-    assert!(fx_cues(Fx::Skid, on(Move::Skid, 12.), &mut boosts).is_empty());
+    assert!(fx_cues(Fx::Skid, on(Move::Skid), &mut boosts).is_empty());
 }
 
 #[cfg_attr(test, test)]

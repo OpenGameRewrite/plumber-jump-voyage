@@ -352,6 +352,17 @@ impl Trigger {
     pub fn has_flag(&self, flag: &str) -> bool {
         self.flags.iter().any(|f| f == flag)
     }
+    /// The resource for a floor material: the entry's own variant, else the
+    /// common one. An entry with neither is silent on that floor.
+    pub fn resource_for(&self, material: Option<&str>) -> Option<&ResourceChoice> {
+        material
+            .and_then(|m| {
+                self.resources
+                    .iter()
+                    .find(|r| r.material.as_deref() == Some(m))
+            })
+            .or_else(|| self.resources.iter().find(|r| r.material.is_none()))
+    }
     /// The resource for the default floor (the first one without a material).
     pub fn default_resource(&self) -> Option<&ResourceChoice> {
         self.resources

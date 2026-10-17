@@ -12,13 +12,19 @@
 //!   entry says to keep the emitter;
 //! - a reaction trigger starts a one-shot effect;
 //! - the controller itself keeps a few effects running (run dust, burning).
-use crate::effect_data::{Library, Trigger};
+use crate::effect_data::{Library, ResourceChoice};
 use crate::movement::{Cap, CapPhase, Fx, Move, Player, Throw};
 use crate::sound_table::{Cue, FxContext, fx_cues};
 use std::collections::{HashMap, HashSet};
 
 /// Frames after which a one-shot effect with a never-ending emitter is stopped.
 pub const ONE_SHOT_LIMIT: u32 = 120;
+/// The resource the tables name for floors that raise nothing.
+pub const EMPTY_RESOURCE: &str = "DummyEmitter";
+/// Frames an effect keeps reporting itself emitting after its last particle's
+/// life: the emitter starts a frame late and the check runs a frame behind
+/// (recorded: a one-shot of 17 frames reads as live for 19).
+const REPORT_LAG: u32 = 2;
 
 /// An effect entry: the effect's name and which of its table entries.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -86,6 +92,9 @@ pub struct Triggers {
     last_cap: Option<(String, u32)>,
     /// Names of all effects in the library; controller requests for others are ignored.
     known: HashSet<String>,
+    /// Entries that follow the actor: only these end when their clip does,
+    /// the others (dust left behind) live out their own particles.
+    follows: HashSet<Key>,
 }
 
 impl Triggers {
@@ -100,6 +109,9 @@ impl Triggers {
                     effect: effect.clone(),
                     trigger: index,
                 };
+                if trigger.has_flag("FollowTrans") || trigger.has_flag("FollowRotate") {
+                    triggers.follows.insert(key.clone());
+                }
                 for action in &trigger.actions {
                     let table = if trigger.table == "Cap" {
                         &mut triggers.cap
@@ -177,7 +189,9 @@ impl Triggers {
                 .collect();
             for key in ended {
                 self.running.remove(&key);
-                changes.push(Change::Stop { key });
+                if self.follows.contains(&key) {
+                    changes.push(Change::Stop { key });
+                }
             }
             let Some((name, _)) = clip else {
                 return;
@@ -285,7 +299,6 @@ pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<&'stati
         .collect();
     match fx {
         Fx::Land { hard: true } => names.push("LandFall"),
-        Fx::PoundLand => names.push("HipDropLand"),
         Fx::Quenched => names.push("SootWash"),
         Fx::Splash => names.push("WaterDive"),
         Fx::Catch => names.push("Catch"),
@@ -326,18 +339,17 @@ pub struct Timing {
 }
 
 impl Library {
-    /// Timing of the effect an entry starts with (its default-floor resource).
-    pub fn timing(&self, trigger: &Trigger) -> Timing {
+    /// Timing of the effect a resource choice starts; none when the choice
+    /// emits nothing (an entry without a resource for the floor, or the empty
+    /// dummy the tables name for floors that raise no dust).
+    pub fn timing(&self, choice: Option<&ResourceChoice>) -> Option<Timing> {
         let mut timing = Timing {
             emitting: Some(0),
             linger: 0,
         };
-        let Some(resource) = trigger
-            .default_resource()
-            .and_then(|r| self.resources.get(&r.name))
-        else {
-            return timing;
-        };
+        let resource = choice
+            .filter(|c| c.name != EMPTY_RESOURCE)
+            .and_then(|c| self.resources.get(&c.name))?;
         fn visit(timing: &mut Timing, emitters: &[crate::effect_data::Emitter]) {
             for e in emitters {
                 if e.emission.one_time {
@@ -356,18 +368,16 @@ impl Library {
             }
         }
         visit(&mut timing, &resource.emitters);
-        timing
+        Some(timing)
     }
 }
 
 /// An effect the tracker keeps alive: its table entry, the actor whose effect
-/// keeper owns it, frames of life left (none: until stopped) and how long its
-/// particles outlive the emission.
+/// keeper owns it and the frames of life left (none: until stopped).
 struct Live {
     key: Key,
     owner: &'static str,
     left: Option<u32>,
-    linger: u32,
 }
 /// The real game's name for the actor whose effect keeper runs an effect: its
 /// model for Mario's own and the controller's, its cap for Cappy's.
@@ -389,6 +399,8 @@ pub struct Tracker {
     right_hand: bool,
     /// Effect name, entry, and frames of life left (none: until stopped).
     live: Vec<Live>,
+    /// The material of the floor the effects start on (their resource variant).
+    floor: Option<String>,
 }
 
 impl Tracker {
@@ -400,7 +412,13 @@ impl Tracker {
             cap_serial: 0,
             right_hand: true,
             live: Vec::new(),
+            floor: None,
         }
+    }
+    /// Effects start on this floor material (the course's, when it has one).
+    pub fn on_floor(mut self, material: Option<String>) -> Self {
+        self.floor = material;
+        self
     }
 
     /// One frame after the player stepped; `events` are the frame's movement
@@ -412,7 +430,6 @@ impl Tracker {
     pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
         let context = FxContext {
             mode: p.mode,
-            move_speed: p.move_speed,
             grounded: p.grounded,
         };
         let mut reactions = vec![];
@@ -438,21 +455,6 @@ impl Tracker {
         for change in changes {
             match change {
                 Change::Start { key, source, once } => {
-                    let timing = self
-                        .library
-                        .effects
-                        .get(&key.effect)
-                        .and_then(|t| t.get(key.trigger))
-                        .map(|t| self.library.timing(t))
-                        .unwrap_or(Timing {
-                            emitting: Some(0),
-                            linger: 0,
-                        });
-                    let emitting = match timing.emitting {
-                        Some(frames) => Some(frames),
-                        None if once => Some(ONE_SHOT_LIMIT),
-                        None => None,
-                    };
                     let owner = owner(source);
                     if source == Source::Reaction {
                         started.push(key.effect.clone());
@@ -460,21 +462,32 @@ impl Tracker {
                         started.push(format!("{}@{owner}", key.effect));
                     }
                     self.live.retain(|l| l.key != key);
+                    // An entry with no resource for this floor starts nothing
+                    // that emits, so it never shows among the live effects.
+                    let Some(timing) = self
+                        .library
+                        .effects
+                        .get(&key.effect)
+                        .and_then(|t| t.get(key.trigger))
+                        .and_then(|t| t.resource_for(self.floor.as_deref()))
+                        .and_then(|choice| self.library.timing(Some(choice)))
+                    else {
+                        continue;
+                    };
+                    let emitting = match timing.emitting {
+                        Some(frames) => Some(frames),
+                        None if once => Some(ONE_SHOT_LIMIT),
+                        None => None,
+                    };
                     self.live.push(Live {
                         key,
                         owner,
-                        left: emitting.map(|e| e + timing.linger),
-                        linger: timing.linger,
+                        left: emitting.map(|e| e + timing.linger + REPORT_LAG),
                     });
                 }
-                Change::Stop { key } => {
-                    for live in &mut self.live {
-                        if live.key == key {
-                            let linger = live.linger;
-                            live.left = Some(live.left.map_or(linger, |l| l.min(linger)));
-                        }
-                    }
-                }
+                // A stopped effect no longer emits at once; the particles it
+                // left only fade.
+                Change::Stop { key } => self.live.retain(|l| l.key != key),
             }
         }
         self.live.retain_mut(|live| match &mut live.left {
@@ -499,11 +512,12 @@ impl Tracker {
 pub fn self_check() {
     let json = br#"{"version":1,"effects":{
         "Puff":[{"table":"Mario","actions":[{"name":"Jump","start":-1,"keep":false}],
-            "resources":[{"name":"A"}]}],
+            "flags":["FollowTrans"],"resources":[{"name":"A"}]}],
         "Late":[{"table":"Mario","actions":[{"name":"Jump","start":4,"keep":false}]}],
         "Stay":[{"table":"Mario","actions":[{"name":"Jump","start":-1,"keep":true}]}],
         "Thud":[{"table":"Reaction","reactions":["Land"],"resources":[{"name":"A"}]}],
-        "Trail":[{"table":"Cap","actions":[{"name":"FlyingWaitR","start":-1}]}],
+        "Trail":[{"table":"Cap","actions":[{"name":"FlyingWaitR","start":-1}],
+            "flags":["FollowTrans"]}],
         "Run":[{"table":"Mario","resources":[{"name":"A"}]}]},
         "resources":{"A":{"emitters":[{"emission":{"one_time":true,"duration":3},
             "life":{"frames":10}}]}}}"#;
@@ -545,9 +559,12 @@ pub fn self_check() {
     assert!(ended.contains(&Change::Stop {
         key: effect("Puff")
     }));
-    assert!(ended.contains(&Change::Stop {
-        key: effect("Late")
-    }));
+    assert!(
+        !ended.contains(&Change::Stop {
+            key: effect("Late")
+        }),
+        "effects that do not follow the actor live out their particles"
+    );
     assert!(
         !ended.contains(&Change::Stop {
             key: effect("Stay")
@@ -631,7 +648,6 @@ pub fn self_check() {
     // Reaction names share the sound rules and add the effect-only ones.
     let context = FxContext {
         mode: Move::Run,
-        move_speed: 10.,
         grounded: true,
     };
     let mut boosts = 0;

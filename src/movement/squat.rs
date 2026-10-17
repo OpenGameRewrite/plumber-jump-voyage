@@ -207,11 +207,6 @@ impl Player {
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
         self.swing_front(turned, SLERP_QUAT_RATE);
-        for (at, left) in [(2., true), (20., false)] {
-            if (self.anim.frame % 36.) < at && ((self.anim.frame + 1.) % 36.) >= at {
-                self.events.push(Fx::Step { left });
-            }
-        }
     }
     /// `setNerveStandUpOrKill`: the stand-up clip and the stop come with the
     /// next step; this step still acts.

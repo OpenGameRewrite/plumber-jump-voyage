@@ -8,6 +8,7 @@
 use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
 use crate::input::Orders;
 use crate::nerve::Nerve;
+use crate::se_ctrl::SeCtrl;
 use bevy::prelude::*;
 
 /// Metres per original distance unit.
@@ -250,6 +251,8 @@ mod ground;
 mod rolling;
 #[path = "movement/run_cycle.rs"]
 mod run_cycle;
+#[path = "movement/sounds.rs"]
+mod sounds;
 #[path = "movement/squat.rs"]
 mod squat;
 pub use ground::turn_power;
@@ -573,8 +576,19 @@ pub enum Fx {
     Land {
         hard: bool,
     },
+    /// A foot comes down (the sound control decides when, not the clip).
     Step {
         left: bool,
+    },
+    /// A foot lifts a little before the next step.
+    FootLift {
+        left: bool,
+    },
+    /// The rolling clip passed the frame its spin sound starts on.
+    RollSpin,
+    /// The fall is loud: held every frame, with the frames held so far.
+    FallWhoosh {
+        frames: u32,
     },
     Skid,
     TurnDust,
@@ -616,16 +630,17 @@ impl Anim {
     pub fn held(&self) -> f32 {
         self.frame + self.rate
     }
-    /// The frame animation triggers are scanned up to in the trace. The jump,
-    /// pound, dive and landing clips fire a trigger in the row whose pose shows
-    /// its frame; the other clips (the throw's, whose pose reads one row
-    /// behind its time, and the run cycle) keep the `held` rule.
+    /// The frame animation triggers are scanned up to in the trace. A clip's
+    /// trigger fires in the row whose pose shows its frame (the footfalls of the
+    /// crouch walk, the jump's, the pound's, the landings'); only the throw's
+    /// clips, whose pose reads one row behind their time, and the run cycle keep
+    /// the `held` rule.
     pub fn trigger_frame(&self) -> f32 {
-        const ON_POSE: [&str; 4] = ["Jump", "HipDrop", "HeadSliding", "Land"];
-        if ON_POSE.iter().any(|prefix| self.name.starts_with(prefix)) {
-            self.frame
-        } else {
+        const LAGGING: [&str; 2] = ["SpinCap", "Move"];
+        if LAGGING.iter().any(|prefix| self.name.starts_with(prefix)) {
             self.held()
+        } else {
+            self.frame
         }
     }
 }
@@ -806,6 +821,8 @@ pub struct Player {
     after_turn_speed: f32,
     /// Pull on the ground the latest ground step kept, units per frame.
     pull: f32,
+    /// The sounds the player's code starts itself (footsteps, roll, fall).
+    sounds: SeCtrl,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -893,6 +910,7 @@ impl Default for Player {
             brake_dir: Vec3::Z,
             after_turn_speed: t::NORMAL_MAX,
             pull: t::GRAVITY,
+            sounds: SeCtrl::default(),
         }
     }
 }
@@ -1645,6 +1663,7 @@ impl Player {
         }
         self.vel = self.v * UNIT * FPS;
         self.move_speed = self.speed_h();
+        self.update_sounds();
         self.timer = self.frame as f32 / FPS;
         self.since_land = self.land_frames as f32 / FPS;
         if self.grounded {
@@ -1856,23 +1875,10 @@ impl Player {
         if self.anim.name != "Move" {
             return;
         }
-        let before = self.cycle.phase;
         let tilt = self.ground_stick().length();
         self.cycle.update(speed, tilt);
         self.anim.rate = self.cycle.rate;
-        let after = self.cycle.phase;
-        self.step_phase = after;
-        // Footfalls at the original's foot-print frames of the cycle.
-        for (at, left) in [(4., true), (35., false)] {
-            let crossed = if before <= after {
-                before < at && after >= at
-            } else {
-                before < at || after >= at
-            };
-            if crossed && speed > 0.5 {
-                self.events.push(Fx::Step { left });
-            }
-        }
+        self.step_phase = self.cycle.phase;
     }
     /// The brake, the turn after it and the pivot on the spot: the rest of
     /// the run state's nerves.

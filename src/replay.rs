@@ -370,7 +370,11 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let course = flat_floor();
     let start_yaw = script.start_yaw_deg.to_radians();
     let mut player = Player::spawn_at(Vec3::ZERO, Vec3::new(start_yaw.sin(), 0., start_yaw.cos()));
-    let mut recorder = Recorder::new(options.table, options.library);
+    let floor = options
+        .camera
+        .or(options.lockstep)
+        .and_then(TraceFile::floor_material);
+    let mut recorder = Recorder::new(options.table, options.library, floor);
     let settle = Span {
         frames: 0,
         stick: Vec2::ZERO,
