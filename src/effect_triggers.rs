@@ -512,11 +512,12 @@ impl Tracker {
 pub fn self_check() {
     let json = br#"{"version":1,"effects":{
         "Puff":[{"table":"Mario","actions":[{"name":"Jump","start":-1,"keep":false}],
-            "resources":[{"name":"A"}]}],
+            "flags":["FollowTrans"],"resources":[{"name":"A"}]}],
         "Late":[{"table":"Mario","actions":[{"name":"Jump","start":4,"keep":false}]}],
         "Stay":[{"table":"Mario","actions":[{"name":"Jump","start":-1,"keep":true}]}],
         "Thud":[{"table":"Reaction","reactions":["Land"],"resources":[{"name":"A"}]}],
-        "Trail":[{"table":"Cap","actions":[{"name":"FlyingWaitR","start":-1}]}],
+        "Trail":[{"table":"Cap","actions":[{"name":"FlyingWaitR","start":-1}],
+            "flags":["FollowTrans"]}],
         "Run":[{"table":"Mario","resources":[{"name":"A"}]}]},
         "resources":{"A":{"emitters":[{"emission":{"one_time":true,"duration":3},
             "life":{"frames":10}}]}}}"#;
@@ -558,9 +559,12 @@ pub fn self_check() {
     assert!(ended.contains(&Change::Stop {
         key: effect("Puff")
     }));
-    assert!(ended.contains(&Change::Stop {
-        key: effect("Late")
-    }));
+    assert!(
+        !ended.contains(&Change::Stop {
+            key: effect("Late")
+        }),
+        "effects that do not follow the actor live out their particles"
+    );
     assert!(
         !ended.contains(&Change::Stop {
             key: effect("Stay")
