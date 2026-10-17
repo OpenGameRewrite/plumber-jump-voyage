@@ -455,7 +455,7 @@ impl Recorder {
             Some(s) => num(sub_frame(&s)),
             None if self.last_sub.is_empty() => String::new(),
             None if p.anim.name == "Move" => num(p.run_cycle().phase),
-            None => num(p.anim.frame),
+            None => num(pose.layers.first().map_or(p.anim.frame, |l| l.frame)),
         });
         cells.num(info.camera_yaw_deg);
         cells.text(&events.join(";"));
