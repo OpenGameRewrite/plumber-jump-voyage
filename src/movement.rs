@@ -836,6 +836,9 @@ pub struct Player {
     hop_contact: bool,
     /// The main clip looped back to its start in this step.
     pub clip_wrapped: bool,
+    /// Steps until the run cycle that follows a dive's landing restarts
+    /// (the animator starts it a second time one step after the first).
+    cycle_restart_in: u8,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -926,6 +929,7 @@ impl Default for Player {
             sounds: SeCtrl::default(),
             hop_contact: false,
             clip_wrapped: false,
+            cycle_restart_in: 0,
         }
     }
 }
@@ -1445,7 +1449,13 @@ impl Player {
                 16.
             };
             if sub.held() >= length {
+                let whole_body = sub.name == "RollingStandUp";
                 self.sub_anim = None;
+                if whole_body && self.anim.name == "Move" {
+                    // The landing clip covered the legs; their cycle starts
+                    // over underneath it, the counter running on.
+                    self.cycle.restart_pose();
+                }
             }
         }
     }
@@ -1456,6 +1466,14 @@ impl Player {
         let (clip, work) = self.nerve.start();
         if let Some(clip) = clip {
             self.start_clip(clip);
+        }
+        if self.cycle_restart_in > 0 {
+            self.cycle_restart_in -= 1;
+            if self.cycle_restart_in == 0 && self.anim.name == "Move" {
+                self.cycle.start();
+                self.anim.frame = 0.;
+                self.step_phase = 0.;
+            }
         }
         if let Some(work) = work {
             work(self);
@@ -3538,7 +3556,10 @@ impl Player {
             // plays the roll's stand-up as an overlay on its legs.
             Move::Dive if self.tilt > 0.05 => {
                 self.run_frames = t::BRAKE_ON_COUNTER;
+                // The run state pulls to the floor from the step it is chosen.
+                self.pull = GRAVITY_MOVE;
                 self.go(Move::Run, "Move");
+                self.cycle_restart_in = 2;
                 self.sub_anim = Some(Anim {
                     name: "RollingStandUp",
                     serial: self.anim.serial.wrapping_add(7),
@@ -3581,6 +3602,7 @@ impl Player {
                     self.ground_jump(o);
                 } else if self.tilt > 0.05 && speed > 0.5 {
                     self.run_frames = t::BRAKE_ON_COUNTER;
+                    self.pull = GRAVITY_MOVE;
                     self.go(Move::Run, "Move");
                 } else {
                     // The landing clip depends on the clip the jump was playing

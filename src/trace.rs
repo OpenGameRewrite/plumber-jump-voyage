@@ -178,6 +178,8 @@ pub struct Recorder {
     boosts: u32,
     blend: Blend<Pose>,
     overlay: f32,
+    /// Name of the latest sub clip (the probe keeps it after the clip ends).
+    last_sub: &'static str,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
     /// The original's effects, when their library is installed; the
@@ -198,6 +200,7 @@ impl Recorder {
             cap_watch: CapWatch::default(),
             boosts: 0,
             blend: Blend::default(),
+            last_sub: "",
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -364,11 +367,19 @@ impl Recorder {
 
         // Animation blend and crossfade, advanced by one frame.
         let dt = 1. / FPS;
-        self.blend
-            .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
+        // The dive's landing clip covers the whole body while it plays: the
+        // pose under it neither blends nor shows, and no upper overlay is meant.
+        let covering = p.sub_anim.filter(|s| s.name == "RollingStandUp");
+        if covering.is_none() {
+            self.blend
+                .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
+        }
         let pose = &self.blend.current;
         let kept = self.blend.kept();
-        self.overlay = if p.sub_anim.is_some() {
+        if let Some(sub) = p.sub_anim {
+            self.last_sub = sub.name;
+        }
+        self.overlay = if p.sub_anim.is_some() && covering.is_none() {
             (self.overlay + dt / 0.05).min(1.)
         } else {
             (self.overlay - dt / 0.05).max(0.)
@@ -381,14 +392,18 @@ impl Recorder {
         let mut layers: Vec<String> = Vec::new();
         // The game lists the clips of the playing slot with their own weights;
         // the fade from the clip before it is the `interp` column.
-        for l in &pose.layers {
-            layers.push(layer_cell(l.name, l.frame, l.rate, l.weight));
+        if let Some(sub) = covering {
+            layers.push(layer_cell(sub.name, sub.frame, sub.rate, 1.));
+        } else {
+            for l in &pose.layers {
+                layers.push(layer_cell(l.name, l.frame, l.rate, l.weight));
+            }
         }
         if self.overlay > 0. {
             let frame = p.sub_anim.map_or(15., |s| sub_frame(&s)).min(15.9);
             layers.push(layer_cell(upper, frame, 1., self.overlay));
         }
-        let blend = if pose.layers.len() > 1 {
+        let blend = if pose.layers.len() > 1 && covering.is_none() {
             pose.layers
                 .iter()
                 .map(|l| format!("{}:{}", l.name, num(l.weight)))
@@ -401,11 +416,13 @@ impl Recorder {
             .blend
             .old
             .last()
+            .filter(|_| covering.is_none())
             .map(|(old, _, _)| format!("{}:{}", old.dominant(), num(1. - kept)))
             .unwrap_or_default();
         // Clips that need the model's data (eye and hand parts) are not known here.
         let parts = p
             .sub_anim
+            .filter(|_| covering.is_none())
             .map(|s| format!("upper:{upper}@{}", num(sub_frame(&s))))
             .unwrap_or_default();
 
@@ -431,8 +448,15 @@ impl Recorder {
         cells.num(p.anim.rate);
         cells.text(&blend);
         cells.text(&interp);
-        cells.text(p.sub_anim.map_or("", |s| s.name));
-        cells.text(&p.sub_anim.map_or(String::new(), |s| num(sub_frame(&s))));
+        // The probe reads the animator's sub slot, which keeps the name of the
+        // last sub clip after it ends and then shows the main clip's frame.
+        cells.text(self.last_sub);
+        cells.text(&match p.sub_anim {
+            Some(s) => num(sub_frame(&s)),
+            None if self.last_sub.is_empty() => String::new(),
+            None if p.anim.name == "Move" => num(p.run_cycle().phase),
+            None => num(p.anim.frame),
+        });
         cells.num(info.camera_yaw_deg);
         cells.text(&events.join(";"));
         // Extended columns.

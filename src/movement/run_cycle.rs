@@ -98,6 +98,13 @@ impl RunCycle {
         self.weights = [0.; 5];
         self.effect = None;
     }
+    /// The pose starts over while the animator's counter runs on (the end of
+    /// the landing sub clip restarts the legs' cycle).
+    pub fn restart_pose(&mut self) {
+        self.phase = 0.;
+        self.start_clip = 0.;
+        self.advanced = true;
+    }
     /// The pose moves on by the current rate.
     fn move_on(&mut self) {
         self.phase = (self.phase + self.rate) % CYCLE;
