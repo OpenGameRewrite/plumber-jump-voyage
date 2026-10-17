@@ -211,6 +211,46 @@ impl Player {
         }
     }
 
+    /// Rebuild the roll's hidden state from a recorded row (lockstep): the
+    /// nerve the clip names, counters from the steps the state has taken, and
+    /// the nerve a choice in this row starts in the next step.
+    pub(super) fn resume_roll(&mut self, state_steps: u32, next_clip: Option<&'static str>) {
+        // A row on the ground reports the pull or the fall the floor already
+        // took out of the velocity.
+        if self.grounded {
+            self.v.y = 0.;
+        }
+        let clip = next_clip.unwrap_or(self.anim.name);
+        let nerve = match clip {
+            "RollingStart" => RollNerve::Start,
+            "RollingEnd" => RollNerve::UnRoll,
+            "RollingLand" => RollNerve::Land,
+            _ => RollNerve::Rolling,
+        };
+        let steps = state_steps as i32;
+        self.rolling = RollControl {
+            nerve,
+            steps: state_steps,
+            frames: steps.min(t::ROLL_FRAMES_MIN + 1),
+            charge: steps.min(t::ROLL_RESTART_CHARGE + 1),
+            force: steps.min(t::ROLL_RESTART_FORCE),
+            restarts: 0,
+            air_frames: 0,
+            ground_normal: self.floor_up(),
+            dir_slide: self.slide_direction(),
+            horizontal_speed: self.v.with_y(0.).length(),
+            effect_on: self.is_on_ground() && self.anim.name == "Rolling",
+            effect_called: false,
+        };
+        if let Some(clip) = next_clip {
+            if self.mode == Move::RollEnd {
+                self.nerve.queue(clip, |p| p.rolling.effect_on = false);
+            } else {
+                self.nerve.queue(clip, move |p| p.roll_enter(nerve));
+            }
+        }
+    }
+
     /// One step of the roll nerves, then `PlayerStateRolling::control`.
     pub(super) fn roll(&mut self, o: &Orders) {
         self.rolling.steps += 1;

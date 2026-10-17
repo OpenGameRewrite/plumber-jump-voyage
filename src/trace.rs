@@ -694,6 +694,13 @@ impl TraceFile {
         hint.last_input = Vec3::new(parts.next()?, 0., parts.next()?);
         Some(hint)
     }
+    /// The clip the next row starts (it differs from this row's and sits at
+    /// its first frame): what a nerve chosen in this row plays.
+    fn next_clip(&self, row: usize) -> Option<&'static str> {
+        let now = self.cell(row, "anim")?;
+        let next = self.cell(row + 1, "anim")?;
+        (next != now && self.number(row + 1, "anim_frame") == Some(0.)).then(|| intern(next))
+    }
     /// The injectable player state a row records, for lockstep stepping.
     pub fn snapshot(&self, row: usize) -> Snapshot {
         let n = |c| self.number(row, c).unwrap_or(0.);
@@ -737,6 +744,7 @@ impl TraceFile {
             state_frames: self.number(row, "state_step").map(|s| s.max(0.) as u32),
             counters,
             run: self.run_hint(row),
+            next_clip: self.next_clip(row),
         }
     }
 }

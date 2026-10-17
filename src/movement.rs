@@ -547,6 +547,9 @@ pub struct Snapshot {
     pub counters: Vec<(String, i64)>,
     /// What a recorded run cycle shows of the run's hidden state.
     pub run: Option<RunHint>,
+    /// The clip the next row starts, when the state chosen in this row plays
+    /// a new one (the roll's nerves).
+    pub next_clip: Option<&'static str>,
 }
 /// The run's hidden state as far as a recorded row shows it: the pose's place
 /// in the cycle, its weights, and the turn in progress.
@@ -1294,6 +1297,9 @@ impl Player {
                     self.nerve.queue(clip, move |p| p.enter_nerve(nerve));
                 }
             }
+        }
+        if matches!(self.mode, Move::Roll | Move::RollEnd) {
+            self.resume_roll(s.state_frames.unwrap_or(0), s.next_clip);
         }
         for (name, value) in &s.counters {
             self.set_counter(name, *value);
