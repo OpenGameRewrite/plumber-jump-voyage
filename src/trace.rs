@@ -127,7 +127,7 @@ impl Pose {
                     frame: match a.name {
                         "Brake" => a.frame.min(clip::BRAKE as f32),
                         "Turn" => a.frame.min(clip::TURN as f32),
-                        _ => a.frame,
+                        _ => p.model_frame().unwrap_or(a.frame),
                     },
                     rate: a.rate,
                     weight: 1.,
@@ -288,7 +288,7 @@ impl Recorder {
         let advance = self.cursor.advance(
             p.anim.name,
             p.anim.serial,
-            p.anim.trigger_frame(),
+            p.trigger_frame(),
             looping(p.anim.name),
         );
         if let Some((from, to, with_cap)) = advance.scan {
@@ -339,7 +339,7 @@ impl Recorder {
         }
         // Effects: the original's by their table names, or the stand-ins'.
         let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
-            let (names, alive) = tracker.step(p, &fxs, p.anim.trigger_frame());
+            let (names, alive) = tracker.step(p, &fxs, p.trigger_frame());
             events.extend(names.into_iter().map(|n| format!("effect:{n}")));
             alive.into_iter().collect()
         } else {

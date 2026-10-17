@@ -326,7 +326,7 @@ fn tick(
     let changes = effects.triggers.evaluate(&Frame {
         anim: p.anim.name,
         serial: p.anim.serial,
-        frame: p.anim.trigger_frame(),
+        frame: p.trigger_frame(),
         cap_anim,
         cap_serial: effects.cap_serial,
         reactions: &reactions,

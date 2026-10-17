@@ -1096,6 +1096,20 @@ impl Player {
             self.v
         }
     }
+    /// The clip frame animation triggers (sounds, effects) are scanned up to.
+    /// While a sub animation plays the same clip, the model's own action
+    /// frame decides, not the animator's counter.
+    pub fn trigger_frame(&self) -> f32 {
+        match self.model_frame() {
+            Some(frame) => frame,
+            None => self.anim.trigger_frame(),
+        }
+    }
+    /// The frame of the model's action when a sub animation is playing the
+    /// main clip too.
+    pub fn model_frame(&self) -> Option<f32> {
+        (self.sub.active && self.sub.name == self.anim.name).then_some(self.sub.frame)
+    }
     /// What the trace shows of the cap: its nerve, position (metres) and clip.
     /// Besides the flight this covers the spin attack before the throw frame
     /// and the catch after the arrival, when the cap sits on the player.
