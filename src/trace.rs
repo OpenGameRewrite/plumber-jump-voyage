@@ -215,28 +215,24 @@ impl Recorder {
             if is_voice(name) { "voice" } else { "se" },
             if cap { "@cap" } else { "" }
         ));
-        let Some(table) = &self.table else {
+        if self.table.is_none() {
             return;
-        };
-        let group = table.group(cap);
-        let Some(play) = group.plays.get(name) else {
-            return;
-        };
-        // A random play picks one layer; the trace shows the first one.
-        let layers = if play.random {
-            &play.layers[..play.layers.len().min(1)]
-        } else {
-            &play.layers[..]
-        };
-        for layer in layers {
-            let Some(resource) = table.resources.get(&layer.resource) else {
-                continue;
-            };
-            // Random variation is left at its middle (volume at its loudest).
-            let mut draws = [0.5, 0.5, 0.].into_iter();
-            let (gain, pitch) = layer.levels(resource, speed, || draws.next().unwrap_or(0.));
-            mix.push(format!("{name}/{}/{}", num(gain), num(pitch)));
         }
+        // The game logs one request per sound, however many layers answer it;
+        // the mix shows the first layer, or neutral levels for a play that has
+        // none (a material variant waits for the floor to name its sound).
+        let (gain, pitch) = self
+            .table
+            .as_ref()
+            .and_then(|table| {
+                let layer = table.group(cap).plays.get(name)?.layers.first()?;
+                let resource = table.resources.get(&layer.resource)?;
+                // Random variation is left at its middle (volume at its loudest).
+                let mut draws = [0.5, 0.5, 0.].into_iter();
+                Some(layer.levels(resource, speed, || draws.next().unwrap_or(0.)))
+            })
+            .unwrap_or((1., 1.));
+        mix.push(format!("{name}/{}/{}", num(gain), num(pitch)));
     }
     fn reaction(
         &self,
@@ -300,7 +296,6 @@ impl Recorder {
         // Movement events: sounds, then effects.
         let context = FxContext {
             mode: p.mode,
-            move_speed: speed,
             grounded: p.grounded,
         };
         let mut started = Vec::new();
@@ -310,7 +305,10 @@ impl Recorder {
             }
             for cue in fx_cues(*f, context, &mut self.boosts) {
                 match cue {
-                    Cue::Play(name) => self.play(false, name, speed, &mut events, &mut mix),
+                    Cue::Play(name) | Cue::Hold(name) => {
+                        self.play(false, name, speed, &mut events, &mut mix)
+                    }
+                    Cue::Rated(name) => self.play(false, name, p.anim.rate, &mut events, &mut mix),
                     Cue::Reaction { cap, name } => {
                         self.reaction(cap, name, speed, &mut events, &mut mix)
                     }

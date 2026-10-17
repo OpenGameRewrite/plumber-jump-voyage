@@ -307,7 +307,6 @@ fn tick(
     let effects = &mut *effects;
     let context = FxContext {
         mode: p.mode,
-        move_speed: p.move_speed,
         grounded: p.grounded,
     };
     let mut reactions = vec![];

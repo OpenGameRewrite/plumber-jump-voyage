@@ -132,6 +132,11 @@ pub fn is_voice(play: &str) -> bool {
 pub enum Cue {
     /// Start a play of Mario's group directly.
     Play(&'static str),
+    /// Start a play whose curves follow the animation's rate (the footsteps'
+    /// "animation rate" parameter) instead of the walking speed.
+    Rated(&'static str),
+    /// Hold a play for as long as the cue keeps coming (the fall's wind).
+    Hold(&'static str),
     Reaction {
         cap: bool,
         name: &'static str,
@@ -149,28 +154,53 @@ pub enum Cue {
 #[derive(Clone, Copy, Debug)]
 pub struct FxContext {
     pub mode: Move,
-    pub move_speed: f32,
     pub grounded: bool,
+}
+/// The reaction a landing raises, by the state that takes over: the original
+/// starts it from that state's first step. The crouch has none.
+fn landing_reaction(mode: Move) -> Option<&'static str> {
+    match mode {
+        Move::Roll => Some("RollLand"),
+        Move::Walk
+        | Move::Run
+        | Move::Jump
+        | Move::DoubleJump
+        | Move::TripleJump
+        | Move::LongJump
+        | Move::Backflip
+        | Move::Sideflip
+        | Move::PoundJump
+        | Move::RollJump => Some("LandRun"),
+        Move::SquatBrake | Move::Crouch | Move::Crawl => None,
+        _ => Some("Land"),
+    }
 }
 /// Sounds for one movement event. `boosts` counts roll boosts since the roll
 /// began: the first boost sounds different from the following ones.
 pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
     let reaction = |name| vec![Cue::Reaction { cap: false, name }];
     match fx {
+        // The footfall, its material variant and the clothes' rustle.
         Fx::Step { left } => match (context.mode, left) {
             (Move::Crawl, _) => vec![],
             (Move::Swim | Move::SwimDash, true) => vec![Cue::Play("SwimRunL")],
             (Move::Swim | Move::SwimDash, false) => vec![Cue::Play("SwimRunR")],
-            (_, true) => vec![Cue::Play("RunL")],
-            (_, false) => vec![Cue::Play("RunR")],
+            (_, true) => vec![
+                Cue::Rated("RunL"),
+                Cue::Rated("RunMatL"),
+                Cue::Rated("ShakeNoiseL"),
+            ],
+            (_, false) => vec![
+                Cue::Rated("RunR"),
+                Cue::Rated("RunMatR"),
+                Cue::Rated("ShakeNoiseR"),
+            ],
         },
-        Fx::Land { .. } => reaction(if context.mode == Move::Roll {
-            "RollLand"
-        } else if context.move_speed > 3. {
-            "LandRun"
-        } else {
-            "Land"
-        }),
+        Fx::FootLift { left } => vec![Cue::Rated(if left { "RunUpL" } else { "RunUpR" })],
+        Fx::RollSpin => vec![Cue::Play("Roll")],
+        Fx::FallWhoosh { .. } => vec![Cue::Hold("FallWhoosh_loop")],
+        Fx::Land { .. } => landing_reaction(context.mode).map_or(vec![], reaction),
+        Fx::PoundLand => reaction("HipDropLand"),
         Fx::RollStart => {
             *boosts = 0;
             vec![]

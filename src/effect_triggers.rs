@@ -285,7 +285,6 @@ pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<&'stati
         .collect();
     match fx {
         Fx::Land { hard: true } => names.push("LandFall"),
-        Fx::PoundLand => names.push("HipDropLand"),
         Fx::Quenched => names.push("SootWash"),
         Fx::Splash => names.push("WaterDive"),
         Fx::Catch => names.push("Catch"),
@@ -412,7 +411,6 @@ impl Tracker {
     pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
         let context = FxContext {
             mode: p.mode,
-            move_speed: p.move_speed,
             grounded: p.grounded,
         };
         let mut reactions = vec![];
@@ -631,7 +629,6 @@ pub fn self_check() {
     // Reaction names share the sound rules and add the effect-only ones.
     let context = FxContext {
         mode: Move::Run,
-        move_speed: 10.,
         grounded: true,
     };
     let mut boosts = 0;
