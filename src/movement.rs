@@ -113,18 +113,29 @@ mod t {
     pub const ROLL_START: f32 = 20.;
     pub const ROLL_BOOST: f32 = 30.;
     pub const ROLL_MAX: f32 = 35.;
-    pub const ROLL_FRAMES_MIN: u32 = 45;
-    pub const ROLL_FRAMES_MIN_BOOST: u32 = 30;
+    pub const ROLL_FRAMES_MIN: i32 = 45;
+    pub const ROLL_FRAMES_MIN_BOOST: i32 = 30;
     pub const ROLL_START_JUMP: f32 = 12.;
     pub const ROLL_SLOPE_ACCEL: f32 = 0.6;
     pub const ROLL_BRAKE: f32 = 0.998;
     pub const ROLL_END_SPEED: f32 = 17.;
     pub const ROLL_SIDE_ACCEL: f32 = 0.4;
     pub const ROLL_UNROLL_FRAMES: u32 = 5;
-    pub const ROLL_END_BRAKE: f32 = 0.95;
-    pub const ROLL_END_BRAKE_END: f32 = 10.;
+    pub const ROLL_AGAINST: f32 = 0.5;
+    pub const ROLL_ANGLE_POWER_MAX: f32 = 30.;
+    pub const ROLL_SIDE_BRAKE: f32 = 0.985;
+    pub const ROLL_SIDE_MAX: f32 = 10.;
+    pub const ROLL_RESTART_MAX_ADD: f32 = 3.;
+    pub const ROLL_RESTART_CHARGE: i32 = 40;
+    pub const ROLL_RESTART_FORCE: i32 = 60;
+    pub const ROLL_ANIM_SPEED_MIN: f32 = 5.;
+    pub const ROLL_ANIM_SPEED_MAX: f32 = 35.;
+    pub const ROLL_ANIM_RATE_MIN: f32 = 0.2;
+    pub const ROLL_ANIM_RATE_MAX: f32 = 1.;
+    /// Ground this steep or steeper is not stood on (`StandAngleMin`).
+    pub const STAND_ANGLE_MIN: f32 = 60.;
     pub const ROLL_RESTART_ACCEL: f32 = 6.;
-    pub const ROLL_RESTART_INTERVAL: u32 = 15;
+    pub const ROLL_RESTART_INTERVAL: i32 = 15;
 
     pub const DAMAGE_FIRE_JUMP_POWER_1ST: f32 = 20.;
     pub const DAMAGE_FIRE_JUMP_POWER_2ND: f32 = 20.;
@@ -235,11 +246,21 @@ mod t {
 
 #[path = "movement/ground.rs"]
 mod ground;
+#[path = "movement/rolling.rs"]
+mod rolling;
 #[path = "movement/run_cycle.rs"]
 mod run_cycle;
+#[path = "movement/squat.rs"]
+mod squat;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
 pub use run_cycle::RunCycle;
+use rolling::{RollControl, RollStart};
+use squat::SquatControl;
+
+/// How much of the way to its target direction the body swings in a frame
+/// (`SlerpQuatRate`, used by `rs::slerpUpFront`).
+const SLERP_QUAT_RATE: f32 = 0.15;
 
 /// The nerves of the original's run state. Running (also after turning) is
 /// the walk/run modes; braking is `Skid`; turning and the pivot are `Turn`.
@@ -262,7 +283,8 @@ pub mod clip {
     pub const HIP_DROP_START: u32 = 24;
     pub const HIP_DROP_LAND: u32 = 44;
     pub const ROLLING_START: u32 = 6;
-    pub const ROLLING_END: u32 = 12;
+    pub const ROLLING_LAND: u32 = 20;
+    pub const ROLLING_STAND_UP: u32 = 9;
     pub const HEAD_SLIDING_START: u32 = 48;
     pub const LAND_ROLLING: u32 = 36;
     /// Lengths of the cap-throw clips (the spin family).
@@ -283,11 +305,21 @@ pub mod clip {
     /// state goes on (the jump state never switches them to the fall clip).
     pub fn held_length(name: &str) -> Option<u32> {
         match name {
+            "SquatStart" => Some(3),
             "Jump" | "JumpReverse" => Some(84),
             "Jump2" => Some(42),
             "Jump3" | "JumpBack" => Some(68),
             "JumpTurn" => Some(60),
             "JumpBroad" => Some(38),
+            _ => None,
+        }
+    }
+    /// Length of the clips that loop (their frame wraps).
+    pub fn loop_length(name: &str) -> Option<f32> {
+        match name {
+            "SquatWait" => Some(120.),
+            "SquatWalk" => Some(36.),
+            "Rolling" => Some(9.),
             _ => None,
         }
     }
@@ -643,13 +675,6 @@ struct ThrowControl {
 }
 
 #[derive(Debug, Default)]
-struct RollControl {
-    boost_frames: u32,
-    last_boost: u32,
-    unroll: u32,
-}
-
-#[derive(Debug, Default)]
 struct ClimbControl {
     base: Vec3,
     height: f32,
@@ -682,6 +707,7 @@ pub struct Player {
     fire: FireControl,
     climbing: ClimbControl,
     rolling: RollControl,
+    squat: SquatControl,
     throwing: ThrowControl,
     /// Metres.
     pub pos: Vec3,
@@ -792,6 +818,7 @@ impl Default for Player {
             fire: FireControl::default(),
             climbing: ClimbControl::default(),
             rolling: RollControl::default(),
+            squat: SquatControl::default(),
             throwing: ThrowControl::default(),
             pos: SPAWN,
             vel: Vec3::ZERO,
@@ -1369,6 +1396,11 @@ impl Player {
             if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
                 self.anim.frame -= clip::FIRE_RUN;
             }
+            if let Some(length) = clip::loop_length(self.anim.name)
+                && self.anim.frame >= length
+            {
+                self.anim.frame -= length;
+            }
         }
         if let Some(sub) = &mut self.sub_anim {
             sub.frame += sub.rate;
@@ -1523,7 +1555,8 @@ impl Player {
             Move::GroundPound => self.hip_drop(o),
             Move::PoundLand => self.hip_drop_land(o),
             Move::Roll => self.roll(o),
-            Move::RollEnd => self.roll_end(o),
+            Move::RollEnd => self.roll_stand_up_step(o),
+            Move::RollJump => self.long_jump_air(o),
             Move::Dive => self.head_sliding(o),
             Move::Slide => self.belly_slide(o),
             Move::SlopeSlide => self.slope_slide(o),
@@ -1634,11 +1667,6 @@ impl Player {
         }
         if o.crouch && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
             self.start_slope_slide();
-            return true;
-        }
-        if o.crouch && speed >= t::DASH_JUDGE {
-            // Crouching at dash speed goes straight into a roll.
-            self.start_roll(speed.max(t::ROLL_START), false);
             return true;
         }
         if o.crouch && !matches!(self.mode, Move::SquatBrake | Move::Crouch | Move::Crawl) {
@@ -1963,25 +1991,6 @@ impl Player {
     }
 
     // ---- Squat, roll, slides --------------------------------------------
-    fn start_squat(&mut self) {
-        let from_roll = self.clip() == "RollingEnd";
-        self.change(
-            Move::SquatBrake,
-            if from_roll { "SquatWait" } else { "SquatStart" },
-            |p| {
-                let speed = p.speed_h();
-                let forward = p.v.with_y(0.).dot(p.facing);
-                // Crouching keeps forward momentum as a short crouch slide.
-                let s = if speed <= t::NORMAL_MAX && forward > 0. {
-                    let s = speed * t::SQUAT_ACCEL_RATE;
-                    if s <= t::SQUAT_BRAKE_END { 0. } else { s }
-                } else {
-                    forward.max(0.)
-                };
-                p.set_h(p.facing * s);
-            },
-        );
-    }
     /// Ground at least this many degrees steep.
     fn steep(&self, degrees: f32) -> bool {
         self.grounded && self.slope.abs().atan().to_degrees() >= degrees
@@ -2005,9 +2014,9 @@ impl Player {
             self.ground_jump(o);
             return;
         }
-        if (self.pre_throw > 0 || o.throw_pressed) && self.grounded {
+        if o.crouch && o.throw_pressed && self.grounded {
             self.pre_throw = 0;
-            self.start_roll(self.speed_h().max(t::ROLL_START), false);
+            self.start_roll(RollStart::Normal);
             return;
         }
         if !self.grounded {
@@ -2275,182 +2284,6 @@ impl Player {
             );
         } else {
             self.go(Move::Fall, "Fall");
-        }
-    }
-    fn squat(&mut self, o: &Orders) {
-        if o.crouch && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
-            self.start_slope_slide();
-            return;
-        }
-        let speed = self.speed_h();
-        let sliding = speed > t::SQUAT_BRAKE_END;
-        if self.pre_jump > 0 {
-            self.pre_jump = 0;
-            // Only the braking sub-state can start the long jump, and only
-            // while moving forward.
-            if self.mode == Move::SquatBrake && self.v.dot(self.facing) > 0. {
-                // The brake of this frame has already slowed the slide when
-                // the jump is taken (the squat state runs before the actor
-                // looks for the jump).
-                if sliding {
-                    let slowed = self.v.with_y(0.) * t::SQUAT_BRAKE_RATE;
-                    self.set_h(slowed);
-                }
-                self.long_jump();
-            } else {
-                self.backflip();
-            }
-            return;
-        }
-        if self.pre_throw > 0 || o.throw_pressed {
-            self.pre_throw = 0;
-            self.start_roll(speed.max(t::ROLL_START), false);
-            return;
-        }
-        if !o.crouch {
-            // Standing up is the squat nerve's last sub-state.
-            self.set(Move::Idle);
-            self.play("SquatEnd");
-            return;
-        }
-        if self.mode == Move::SquatBrake {
-            if sliding {
-                let s = speed * t::SQUAT_BRAKE_RATE;
-                self.set_h(self.v.with_y(0.).normalize_or(self.facing) * s);
-            } else {
-                // The slide is over: crouching in place is the next sub-state.
-                self.set_h(Vec3::ZERO);
-                self.defer(Move::Crouch, "SquatWait", |_| {});
-            }
-        } else if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, 30_f32.to_radians() / 10.);
-            self.set_h(self.facing * t::SQUAT_WALK);
-            self.set(Move::Crawl);
-            self.keep("SquatWalk");
-            for (at, left) in [(2., true), (20., false)] {
-                if (self.anim.frame % 36.) < at && ((self.anim.frame + 1.) % 36.) >= at {
-                    self.events.push(Fx::Step { left });
-                }
-            }
-        } else {
-            self.set_h(Vec3::ZERO);
-            self.set(Move::Crouch);
-            if self.anim.name != "SquatStart" || self.anim.frame > 2. {
-                self.keep("SquatWait");
-            }
-        }
-        self.v.y = -t::GRAVITY;
-    }
-    fn start_roll(&mut self, speed: f32, boosted: bool) {
-        self.change(Move::Roll, "RollingStart", move |p| {
-            if let Some(w) = (p.tilt > 0.1).then_some(p.stick) {
-                p.facing = w;
-            }
-            p.set_h(p.facing * speed.min(t::ROLL_MAX));
-            p.v.y = t::ROLL_START_JUMP * 0.25;
-            p.rolling.boost_frames = if boosted { t::ROLL_FRAMES_MIN_BOOST } else { 0 };
-            p.rolling.last_boost = 0;
-            p.rolling.unroll = 0;
-            p.events.push(Fx::RollStart);
-        });
-    }
-    fn roll(&mut self, o: &Orders) {
-        if self.pre_jump > 0 && self.grounded {
-            self.pre_jump = 0;
-            if o.throw_pressed {
-                // Roll cancel: stand up at speed with a cap throw.
-                let s = self.speed_h().min(t::RUN_SPEED_CONTINUOUS_THROW);
-                self.change(Move::Run, "Move", move |p| {
-                    p.set_h(p.facing * s);
-                    p.throwing.run = t::RUN_TIME_CONTINUOUS_THROW;
-                    if p.cap.is_none() {
-                        p.launch_cap(Throw::Forward);
-                    }
-                });
-                return;
-            }
-            let s = self.speed_h();
-            self.jump_with(
-                Move::RollJump,
-                "RollingJump",
-                t::JUMP_POWER_MAX,
-                t::JUMP_GRAVITY,
-                move |p| p.max_air_speed = s.min(t::JUMP_MOVE_MAX),
-            );
-            return;
-        }
-        if self.clip() == "RollingStart" && self.anim_done(clip::ROLLING_START) {
-            self.play("Rolling");
-        }
-        self.rolling.last_boost += 1;
-        if (self.pre_throw > 0 || o.throw_pressed)
-            && self.grounded
-            && self.rolling.last_boost >= t::ROLL_RESTART_INTERVAL
-        {
-            self.pre_throw = 0;
-            // Boost: a hop and a push; pressing on the roll's rhythm keeps it going.
-            let perfect = self.rolling.last_boost <= t::ROLL_RESTART_INTERVAL * 3;
-            let s = (self.speed_h() + t::ROLL_RESTART_ACCEL).clamp(t::ROLL_BOOST, t::ROLL_MAX);
-            self.set_h(self.facing * s);
-            self.v.y = t::ROLL_START_JUMP;
-            self.grounded = false;
-            self.rolling.last_boost = 0;
-            self.rolling.boost_frames = 0;
-            self.frame = 0;
-            self.events.push(Fx::RollBoost { perfect });
-        }
-        let mut s = self.speed_h();
-        if self.tilt > 0.1 {
-            // Steering: the side push turns the roll gradually.
-            let max = (t::ROLL_SIDE_ACCEL / s.max(1.)).atan();
-            self.facing = turn(self.facing, self.stick, max);
-        }
-        if self.grounded {
-            let downhill = -self.slope * self.facing.x;
-            s = s * if self.slick { 0.9995 } else { t::ROLL_BRAKE }
-                + downhill * t::ROLL_SLOPE_ACCEL * 4.;
-            if s < 0. {
-                self.facing = -self.facing;
-                s = -s;
-            }
-            self.v.y = -t::GRAVITY;
-        } else {
-            self.v.y = (self.v.y - t::GRAVITY_AIR).max(-t::FALL_MAX);
-        }
-        s = s.min(t::ROLL_MAX);
-        self.set_h(self.facing * s);
-        self.rolling.unroll = if o.crouch { 0 } else { self.rolling.unroll + 1 };
-        let min_frames = if self.rolling.boost_frames > 0 {
-            t::ROLL_FRAMES_MIN_BOOST
-        } else {
-            t::ROLL_FRAMES_MIN
-        };
-        if self.grounded
-            && (self.rolling.unroll >= t::ROLL_UNROLL_FRAMES
-                || self.frame >= min_frames
-                    && s < t::ROLL_END_SPEED
-                    && -self.slope * self.facing.x <= 0.05)
-        {
-            self.set(Move::RollEnd);
-            self.play("RollingEnd");
-        }
-        self.anim.rate = lerp_clamped(0.2, 1., (s - 5.) / (35. - 5.));
-    }
-    fn roll_end(&mut self, o: &Orders) {
-        let s = self.speed_h();
-        let s = if s > t::ROLL_END_BRAKE_END {
-            s * t::ROLL_END_BRAKE
-        } else {
-            (s - 1.).max(0.)
-        };
-        self.set_h(self.facing * s);
-        self.v.y = -t::GRAVITY;
-        if self.anim_done(clip::ROLLING_END) && s <= t::ROLL_END_BRAKE_END {
-            if o.crouch {
-                self.start_squat();
-            } else {
-                self.go(Move::Idle, "Wait");
-            }
         }
     }
     /// A dive's landing: the forward roll on the ground, slowing to a stop.
@@ -2746,10 +2579,14 @@ impl Player {
         );
     }
     fn long_jump(&mut self) {
+        self.long_jump_as(Move::LongJump);
+    }
+    /// A long jump in the state `mode` (the roll's jump is one too).
+    fn long_jump_as(&mut self, mode: Move) {
         const NAMES: [&str; 3] = ["JumpBroad", "JumpBroad2", "JumpBroad3"];
         let name = NAMES[self.long_combo.count as usize % 3];
         self.jump_with(
-            Move::LongJump,
+            mode,
             name,
             t::LONG_JUMP_POWER,
             t::LONG_JUMP_GRAVITY,
@@ -3012,7 +2849,7 @@ impl Player {
             self.pre_throw = 0;
             if o.crouch {
                 // Roll straight out of the pound with a strong start.
-                self.start_roll(t::ROLL_BOOST, true);
+                self.start_roll(RollStart::Boost);
             } else if self.cap.is_none() {
                 self.start_throw(Throw::Down);
             }
@@ -3670,9 +3507,10 @@ impl Player {
             }
             // Holding crouch turns the momentum into a real roll; otherwise a
             // dive lands in its forward roll and stands up.
-            Move::Dive | Move::LongJump | Move::RollJump if o.crouch && speed > t::NORMAL_MIN => {
-                self.start_roll(speed.max(t::ROLL_START), false);
+            Move::Dive | Move::LongJump if o.crouch && speed >= t::DASH_JUDGE => {
+                self.start_roll(RollStart::Landing);
             }
+            Move::RollJump if o.crouch => self.start_roll(RollStart::JumpLanding),
             // With the stick held the dive lands straight into the run, which
             // plays the roll's stand-up as an overlay on its legs.
             Move::Dive if self.tilt > 0.05 => {
@@ -3824,7 +3662,7 @@ impl Player {
                             .normalize_or(self.wall);
                             self.set_h(self.facing * 6.);
                             self.set(Move::RollEnd);
-                            self.play("RollingEnd");
+                            self.play("RollingStandUp");
                         }
                         if !was_grounded && self.v.y < 0. && into > 0.1 {
                             self.touch_wall(top, o);
