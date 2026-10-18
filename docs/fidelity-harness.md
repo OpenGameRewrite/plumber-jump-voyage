@@ -120,8 +120,9 @@ Empty cells mean the rewrite has no equivalent:
   has an equivalent (see below), then its own internal counters.
 - `cap_state` and `cap_anim` use the game's cap nerve and clip names
   (`SpinAttack` while the cap waits on the player for the throw frame, then
-  `Throw`, `ThrowBrake`, `ThrowStay`, `Return` and `Catch`; `FlyingWaitR`,
-  `StayR`, `CatchCap`). Reactions raised on the cap are logged with `@cap`.
+  `Throw`, `ThrowBrake`, `ThrowStay`, `TrampleReturn` (the player stood on the
+  hovering cap, the cap jump), `Return` and `Catch`; `FlyingWaitR`, `StayR`,
+  `Trample`, `CatchCap`, `CatchCapJumpParts`). Reactions raised on the cap are logged with `@cap`.
 - `sub_step` counts the game's sub-nerve: it starts over whenever the state
   label changes or the actor nerve restarts, and at the start of a replay it
   equals `state_step`.

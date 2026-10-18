@@ -1306,7 +1306,9 @@ impl Player {
         if let Some(frames) = self.catching {
             return Some(CapRow {
                 state: if frames < 0 { "Return" } else { "Catch" },
-                pos: self.pos,
+                // The cap moves before the player, so it sits where the
+                // player was when the frame began.
+                pos: self.prev,
                 clip: self.catch_clip,
             });
         }
@@ -1427,6 +1429,13 @@ impl Player {
         if let Some(frames) = s.state_frames {
             self.frame = frames;
             self.nerve.step = frames;
+        }
+        // The pound's landing counts its own steps (the cancel window is read
+        // from them), not the actor nerve's.
+        if self.mode == Move::PoundLand
+            && let Some(steps) = s.sub_steps
+        {
+            self.frame = steps;
         }
         if let Some(steps) = s.sub_steps {
             self.set_wait_steps(steps);
