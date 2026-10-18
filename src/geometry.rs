@@ -118,7 +118,7 @@ impl TriangleMesh {
         let index_of = |v: &serde_json::Value, key: &str| {
             v.get(key).and_then(|n| n.as_u64()).unwrap_or(0) as u16
         };
-        let codes = root["attributes"]
+        let codes: Vec<CollisionCodes> = root["attributes"]
             .as_array()
             .ok_or("geometry: no attributes table")?
             .iter()
@@ -133,6 +133,9 @@ impl TriangleMesh {
                 camera_index: index_of(a, "CameraCodeIndex"),
             })
             .collect();
+        if codes.is_empty() {
+            return Err("geometry: the attributes table is empty".into());
+        }
         let objects = root["objects"]
             .as_array()
             .map(|list| list.iter().map(|o| text_of(o, "model")).collect())
