@@ -4234,7 +4234,10 @@ impl Player {
 
 #[path = "tests/movement.rs"]
 mod checks;
+#[path = "tests/spin.rs"]
+mod spin_checks;
 
 pub fn self_check() {
     checks::run();
+    spin_checks::run();
 }

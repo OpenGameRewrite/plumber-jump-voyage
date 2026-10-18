@@ -104,6 +104,14 @@ impl Posed for Pose {
     fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
+    fn scale(&mut self, share: f32) {
+        for layer in &mut self.layers {
+            layer.weight *= share;
+        }
+    }
+    fn merge(&mut self, other: Self) {
+        self.layers.extend(other.layers);
+    }
 }
 /// The clip frame a trace row shows is the frame the pose displays in the
 /// game's sample (after its animation update of the logic frame). The game

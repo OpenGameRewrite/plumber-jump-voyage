@@ -255,6 +255,10 @@ pub fn skeleton_clip(action: &str) -> &str {
 /// A pose the animation blend can freeze and fade out.
 pub trait Posed {
     fn is_empty(&self) -> bool;
+    /// Multiply every clip's weight (the share of a mixture it keeps).
+    fn scale(&mut self, share: f32);
+    /// Add another pose's clips to this one.
+    fn merge(&mut self, other: Self);
 }
 /// The playing request and the frozen poses it is blending away from. The
 /// renderer blends clip poses; the headless trace blends clip names, so both
@@ -273,10 +277,19 @@ impl<P: Default + Posed> Blend<P> {
     pub fn update(&mut self, name: &'static str, serial: u32, next: P, dt: f32) {
         if self.name != name || self.serial != serial {
             let frames = interp_frames(name, self.name);
-            let old = std::mem::take(&mut self.current);
+            let mut old = std::mem::take(&mut self.current);
             if frames > 0. && !old.is_empty() {
+                // The pose being left is what the blend shows now: the clip
+                // and the fading rest of the clips before it. The animator
+                // freezes all of it as one pose that fades over the new
+                // clip's frames (the trace's `interp` shows that one fade).
                 let total: f32 = 1. - self.old.iter().map(|o| o.1).sum::<f32>();
-                self.old.push((old, total.max(0.), 60. / frames));
+                old.scale(total.max(0.));
+                for (mut earlier, weight, _) in self.old.drain(..) {
+                    earlier.scale(weight);
+                    old.merge(earlier);
+                }
+                self.old.push((old, 1., 60. / frames));
             } else {
                 self.old.clear();
             }
@@ -394,6 +407,14 @@ mod imported {
     impl Posed for Pose {
         fn is_empty(&self) -> bool {
             self.clips.is_empty()
+        }
+        fn scale(&mut self, share: f32) {
+            for clip in &mut self.clips {
+                clip.1 *= share;
+            }
+        }
+        fn merge(&mut self, other: Self) {
+            self.clips.extend(other.clips);
         }
     }
     type Blend = super::Blend<Pose>;

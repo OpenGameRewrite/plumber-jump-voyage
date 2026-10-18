@@ -26,6 +26,12 @@ pub const EMPTY_RESOURCE: &str = "DummyEmitter";
 /// (recorded: a one-shot of 17 frames reads as live for 19).
 const REPORT_LAG: u32 = 2;
 
+/// The run state's dust: the run control picks which one the pose asks for
+/// (`code_driven`), whoever started it. The turn clip's own entry for
+/// `RunStart` (kept past the clip) does not take it out of the control's hands:
+/// the dust of the next run clip replaces it.
+const RUN_DUST: [&str; 4] = ["Run", "RunStart", "Dash", "DashFast"];
+
 /// An effect entry: the effect's name and which of its table entries.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
@@ -119,6 +125,9 @@ pub struct Triggers {
     /// Entries that follow the actor: only these end when their clip does,
     /// the others (dust left behind) live out their own particles.
     follows: HashSet<Key>,
+    /// Entries running that their clip started with itself (start frame -1),
+    /// that follow the actor and are not kept.
+    clip_bound: HashSet<Key>,
 }
 
 impl Triggers {
@@ -136,6 +145,14 @@ impl Triggers {
                 if trigger.has_flag("FollowTrans") || trigger.has_flag("FollowRotate") {
                     triggers.follows.insert(key.clone());
                 }
+                // Keeping the emitter lets a one-shot emission finish after
+                // the clip ends (the brake's sparks); an emitter that never
+                // ends by itself still stops with the clip (the ground spin's
+                // dust, recorded stopping as the next clip starts).
+                let endless = trigger
+                    .resources
+                    .iter()
+                    .any(|r| library.timing(Some(r)).is_some_and(|t| t.emitting.is_none()));
                 for action in &trigger.actions {
                     let table = if trigger.table == "Cap" {
                         &mut triggers.cap
@@ -148,7 +165,7 @@ impl Triggers {
                         .push(ActionEntry {
                             key: key.clone(),
                             start: action.start,
-                            keep: action.keep,
+                            keep: action.keep && !endless,
                         });
                 }
                 for reaction in &trigger.reactions {
@@ -172,6 +189,11 @@ impl Triggers {
     }
 
     fn start_action(&mut self, changes: &mut Vec<Change>, source: Source, entry: &ActionEntry) {
+        if entry.start < 0 && !entry.keep && self.follows.contains(&entry.key) {
+            self.clip_bound.insert(entry.key.clone());
+        } else {
+            self.clip_bound.remove(&entry.key);
+        }
         if self
             .running
             .insert(entry.key.clone(), (source, entry.keep))
@@ -214,6 +236,7 @@ impl Triggers {
                 .collect();
             for key in ended {
                 self.running.remove(&key);
+                self.clip_bound.remove(&key);
                 if self.follows.contains(&key) {
                     changes.push(Change::Stop { key });
                 }
@@ -262,6 +285,14 @@ impl Triggers {
         for (s, entry) in due {
             self.start_action(changes, s, &entry);
         }
+    }
+
+    /// The effect the clip started with itself and that follows the actor: it
+    /// is alive until the clip ends and has no life of its own (recorded: the
+    /// jump's dust is still there after the hundred frames of a spin jump,
+    /// longer than its particles live).
+    fn lives_with_clip(&self, key: &Key) -> bool {
+        self.clip_bound.contains(key)
     }
 
     pub fn evaluate(&mut self, input: &Frame) -> Vec<Change> {
@@ -320,7 +351,10 @@ impl Triggers {
         let dropped: Vec<Key> = self
             .running
             .iter()
-            .filter(|(k, (s, _))| *s == Source::Code && !wanted.contains(&k.effect.as_str()))
+            .filter(|(k, (s, _))| {
+                (*s == Source::Code || RUN_DUST.contains(&k.effect.as_str()))
+                    && !wanted.contains(&k.effect.as_str())
+            })
             .map(|(k, _)| k.clone())
             .collect();
         for key in dropped {
@@ -546,6 +580,7 @@ impl Tracker {
                     // them. The others end when their emitters and particles do.
                     let left = match source {
                         Source::Reaction => None,
+                        _ if self.triggers.lives_with_clip(&key) => None,
                         _ => emitting.map(|e| e + timing.linger + REPORT_LAG),
                     };
                     self.live.push(Live { key, owner, left });

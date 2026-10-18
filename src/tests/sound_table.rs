@@ -151,7 +151,7 @@ fn cursors() {
     // A loop that wrapped replays its repeating sounds for Mario only.
     assert!(!cursor.advance("Wait", 3, 50., true).replay);
     let wrapped = cursor.advance("Wait", 3, 4., true);
-    assert_eq!(wrapped.scan, Some((-1., 4., false)));
+    assert_eq!(wrapped.scan, Some((0., 4., false)));
     // From then on the clip's one-time sounds are spent, until it restarts.
     assert!(wrapped.replay);
     assert!(cursor.advance("Wait", 3, 5., true).replay);
