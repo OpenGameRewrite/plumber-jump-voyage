@@ -128,7 +128,9 @@ Empty cells mean the rewrite has no equivalent:
 - Not available headless: `bones`, camera position and pitch, clip lengths
   other than the run cycle's, hand/face/eye part clips, model offsets and the face.
 - `effects_live` is approximate: bursts for their nominal lifetime plus the
-  state's trail effects.
+  state's trail effects. The effects a hit reaction starts (`Land`,
+  `HipDropLand`, listed as `player:...`) stay live until the same reaction
+  starts them again, as in every recording of the game.
 - `qx..qw` is the facing yaw only; the renderer's smoothed lean is not part of
   the simulation.
 

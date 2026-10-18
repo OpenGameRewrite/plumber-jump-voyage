@@ -735,7 +735,8 @@ pub fn self_check() {
             name: "Catch"
         }]
     );
-    // The tracker keeps one-shot effects alive for their emission plus their particles' life.
+    // A hit reaction's effect stays among the player's live effects; only the
+    // same reaction starting it again renews it (no recording shows it end).
     let mut tracker = Tracker::new(library);
     let mut player = Player::default();
     let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
@@ -747,5 +748,13 @@ pub fn self_check() {
     for _ in 0..20 {
         last = tracker.step(&player, &[], 0.).1.len();
     }
-    assert_eq!(last, 0, "3 frames of emission and 10 of life are over");
+    assert_eq!(
+        last, 1,
+        "a reaction's effect outlives its emission and life"
+    );
+    let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
+    assert_eq!(
+        (started, alive),
+        (vec!["Thud".to_string()], vec!["player:Thud".to_string()])
+    );
 }
