@@ -22,8 +22,12 @@
 //! * `capjump=0|1`: whether a cap bounce is still possible (`cap_jump_possible`).
 //! * `prejump=frames`: the buffered jump press (`pre_jump`).
 //! * `collision`: `ground`, `wall`, the ground normal `gn` when standing and the
-//!   wall normal `wn` on a wall. No ceiling flag and no material names exist in
-//!   the rewrite, so `ceiling` and `gmat` are left out.
+//!   wall normal `wn` on a wall. Against the real stage's triangles (a replay
+//!   with geometry) the rewrite also knows the codes of the surface: `ceiling`,
+//!   and for the ground `gmat` (the material), `gcode` (the floor code; the
+//!   game names a few special codes and calls the rest `Ground`) and `gcodeidx`
+//!   (the floor code's number). On its own flat floor it has no such codes and
+//!   leaves them out.
 //! * `triggers`: the game's keys are raw flag words of its player trigger
 //!   object, and the rewrite has no such words. It writes `fx=` (its own
 //!   movement event names) which the game has no counterpart for.
@@ -114,13 +118,43 @@ pub fn collision_cell(p: &Player) -> String {
         format!("ground={}", p.floor_normal().is_some() as i32),
         format!("wall={}", (p.wall != bevy::prelude::Vec3::ZERO) as i32),
     ];
+    if p.touched.active {
+        items.insert(2, format!("ceiling={}", p.touched.ceiling.is_some() as i32));
+    }
     if let Some(n) = p.floor_normal() {
         items.push(format!("gn={}", vector(n)));
+        if let Some(codes) = &p.touched.floor {
+            items.push(format!("gmat={}", codes.material));
+            items.push(format!("gcode={}", floor_code_label(&codes.floor)));
+            items.push(format!("gcodeidx={}", codes.floor_index));
+        }
     }
     if p.wall != bevy::prelude::Vec3::ZERO {
         items.push(format!("wn={}", vector(p.wall)));
     }
     items.join(";")
+}
+/// The floor codes the game's probe tests for by name; every other floor code
+/// shows as `Ground` there.
+const NAMED_FLOOR_CODES: [&str; 11] = [
+    "Poison",
+    "Needle",
+    "DamageFire",
+    "SandSink",
+    "Slide",
+    "Jump",
+    "JumpSmall",
+    "Bed",
+    "Chair",
+    "GrabCeil",
+    "Pole",
+];
+fn floor_code_label(code: &str) -> &str {
+    if NAMED_FLOOR_CODES.contains(&code) {
+        code
+    } else {
+        "Ground"
+    }
 }
 /// The rewrite's own movement events, in the `triggers` format.
 pub fn triggers_cell(events: &[String]) -> String {

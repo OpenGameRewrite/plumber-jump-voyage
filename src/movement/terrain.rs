@@ -13,6 +13,9 @@ use crate::geometry::CollisionCodes;
 /// The collision codes of the surfaces the body touched in the last step.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Touched {
+    /// The last step was collided against a mesh (the other fields are only
+    /// meaningful then).
+    pub active: bool,
     pub floor: Option<CollisionCodes>,
     pub wall: Option<CollisionCodes>,
     pub ceiling: Option<CollisionCodes>,
@@ -72,6 +75,7 @@ impl Player {
         }
         let collider = &self.collider;
         self.touched = Touched {
+            active: true,
             floor: collider.floor.as_ref().map(|c| mesh.codes_of(c.triangle).clone()),
             wall: collider.wall.as_ref().map(|c| mesh.codes_of(c.triangle).clone()),
             ceiling: collider

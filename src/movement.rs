@@ -20,15 +20,15 @@ pub const UNIT: f32 = 0.01;
 /// Simulation rate, matching the original.
 pub const FPS: f32 = 60.;
 pub const RADIUS: f32 = 0.45;
-/// Metres a fall must go below a surface to touch it: an upright body that
-/// arrives exactly on the surface is no contact yet (backflip, side somersault
-/// and triple jump land a row later in the original).
-const CONTACT_MARGIN: f32 = 1e-5;
-/// The same for the crouched body: the roll's hop lands exactly on the floor
-/// and is already touching it in the original's trace. The reason is unknown
-/// (the shorter collider is the only difference the traces show); a fall that
-/// stops a hair above the surface, as the long jump's does, still falls on.
-const CROUCHED_CONTACT_MARGIN: f32 = 1e-6;
+/// How close to a surface, in metres, a fall counts as having reached it. The
+/// box solids of the demo course follow the rule the traces show and the
+/// game's collider explains (`collider.rs`): an upright body is held by three
+/// arrows that only collide once the feet have gone below the surface (a fall
+/// that ends exactly on it lands a row later: backflip, side somersault, triple
+/// jump), a crouched body by a sphere whose lowest point is the feet, which
+/// touches on arrival (the roll's hop). Positions are single-precision metres,
+/// so "exactly" is within this much (`terrain.rs` takes the same grid).
+const SURFACE_GRID: f32 = 1e-5;
 /// Radius of the course's climbable poles.
 pub const POLE_RADIUS: f32 = 0.18;
 pub const HEIGHT: f32 = 1.6;
@@ -3959,9 +3959,9 @@ impl Player {
         let height = if crouched { SQUAT_HEIGHT } else { HEIGHT };
         // How far past the surface (negative: short of it) the body must be.
         let contact_reach = if crouched {
-            CROUCHED_CONTACT_MARGIN
+            SURFACE_GRID
         } else {
-            -CONTACT_MARGIN
+            -SURFACE_GRID
         };
         let motion = self.v * UNIT;
         // Sub-steps keep each move shorter than the collider radius.
