@@ -203,9 +203,13 @@ mod t {
     pub const WALL_CLIMB_JUMP_H: f32 = 3.;
     pub const WALL_CLIMB_JUMP_GRAVITY: f32 = 1.5;
 
-    pub const CAP_LEAPFROG_POWER: f32 = 32.;
-    pub const CAP_LEAPFROG_POWER_AIR: f32 = 26.;
-    pub const CAP_LEAPFROG_GRAVITY: f32 = 1.;
+    /// The jump off a trampled cap (`PlayerStateJump::appear`, request 11):
+    /// `TrampleHighJumpPower` and `TrampleHighGravity`.
+    pub const TRAMPLE_HIGH_JUMP_POWER: f32 = 25.;
+    pub const TRAMPLE_HIGH_GRAVITY: f32 = 1.;
+    /// Share of the horizontal speed a rising player keeps when he tramples
+    /// with the stick pushed (`TrampleRisingBrakeVelH`).
+    pub const TRAMPLE_RISING_BRAKE: f32 = 0.3;
     pub const CAP_CATCH_POP_POWER: f32 = 10.;
     pub const CAP_CATCH_POP_GRAVITY: f32 = 0.8;
     pub const CAP_CATCH_JUMP_POWER: f32 = 22.;
@@ -309,6 +313,10 @@ fn throw_clip(kind: Throw, air: bool, count: u32, continuous: bool) -> &'static 
         (Throw::Forward, true, _, _) => "SpinCapAirStart3Right",
     }
 }
+
+/// The last frame of the upper-body catch animation
+/// (`CatchCapJumpParts` plays frames 0 to 12).
+const UPPER_CATCH_LAST: i32 = 12;
 
 /// Frame counts of clips whose end the controller waits for.
 pub mod clip {
@@ -420,13 +428,12 @@ pub enum Move {
     Swim,
     SwimDash,
     CapBounce,
-    CapVault,
     CatchJump,
     Throw,
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 39] = [
+    pub const ALL: [Move; 38] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -463,7 +470,6 @@ impl Move {
         Self::Swim,
         Self::SwimDash,
         Self::CapBounce,
-        Self::CapVault,
         Self::CatchJump,
         Self::Throw,
     ];
@@ -502,7 +508,6 @@ impl Move {
             Self::Swim => "Swim",
             Self::SwimDash => "Swim dash",
             Self::CapBounce => "Cap jump",
-            Self::CapVault => "Cap vault",
             Self::CatchJump => "Catch jump",
             Self::Throw => "Cap throw",
         }
@@ -532,7 +537,6 @@ impl Move {
                 | Self::TripleJump
                 | Self::PoundJump
                 | Self::CapBounce
-                | Self::CapVault
                 | Self::CatchJump
                 | Self::Fall
         )
@@ -550,7 +554,6 @@ impl Move {
                 | Self::RollJump
                 | Self::WallJump
                 | Self::CapBounce
-                | Self::CapVault
                 | Self::CatchJump
                 | Self::Fall
         )
@@ -684,7 +687,10 @@ pub enum Fx {
     /// The cap turned along a wall; the number is how square the hit was.
     CapWallHit(f32),
     Catch,
+    /// The cap was trampled: its first step in the trample nerve.
     CapBounce,
+    /// The stay began while the button is held: the reaction it raises.
+    CapStayStart,
     WallSlide,
     Ledge,
     Pole,
@@ -827,6 +833,15 @@ pub struct Player {
     spin_fall: bool,
     /// Frames of the cap's catch nerve: -1 on the frame it arrived.
     catching: Option<i32>,
+    /// The clip the cap catch plays (it differs with the player's state).
+    catch_clip: &'static str,
+    /// A hit sensor restarted the actor nerve in this frame's update, after the
+    /// nerve's own step counter was reset (the trace's `sub_step` restarts
+    /// with it and runs the first step in the same row).
+    sensor_restart: bool,
+    /// Frames of the upper-body catch animation the player plays when he is
+    /// not standing (13 recorded in the air), -1 on the frame it starts.
+    upper_catch: Option<i32>,
     /// The sub animation the model plays, and whether the main clip's next
     /// update is skipped (a clip just started under a sub animation).
     sub: SubClip,
@@ -976,6 +991,9 @@ impl Default for Player {
             caught: false,
             spin_fall: false,
             catching: None,
+            catch_clip: "CatchCap",
+            sensor_restart: false,
+            upper_catch: None,
             sub: SubClip::default(),
             anim_skip: false,
             counter_restarted: false,
@@ -1289,7 +1307,7 @@ impl Player {
             return Some(CapRow {
                 state: if frames < 0 { "Return" } else { "Catch" },
                 pos: self.pos,
-                clip: "CatchCap",
+                clip: self.catch_clip,
             });
         }
         // The spin attack shows once the cap's nerve has been applied, the frame
@@ -1512,6 +1530,8 @@ impl Player {
         self.winding_age = 0;
         self.caught = false;
         self.catching = s.catching;
+        self.catch_clip = self.clip_of_catch();
+        self.upper_catch = None;
         self.sub = SubClip::default();
         if let Some((name, frame, length)) = s.sub {
             self.sub = SubClip {
@@ -1732,6 +1752,13 @@ impl Player {
                 self.clip_wrapped = true;
             }
         }
+        // The upper-body catch animation runs 13 frames.
+        if let Some(frame) = &mut self.upper_catch {
+            *frame += 1;
+            if *frame > UPPER_CATCH_LAST {
+                self.upper_catch = None;
+            }
+        }
         // The model's sub animation advances one frame; once it has reached
         // its last frame the actor's control ends it (`PlayerActorHakoniwa::control`
         // checks `isSubAnimEnd` before the model advances).
@@ -1766,6 +1793,7 @@ impl Player {
     fn begin_step(&mut self) {
         self.counter_restarted = false;
         self.roll_forget_effect_call();
+        let first_step = self.nerve.step == 0;
         self.advance_clips();
         let (clip, work) = self.nerve.start();
         if let Some(clip) = clip {
@@ -1782,6 +1810,22 @@ impl Player {
         if let Some(work) = work {
             work(self);
         }
+        self.refresh_cap_jump(first_step);
+    }
+    /// A cap jump is possible again (`PlayerCapActionHistory::
+    /// clearLandLimitStandAngle` and `clearLandLimit`): the first step of the
+    /// ground nerves on level ground, every step of the spin throw's ground
+    /// state and of the pound, and the first step of the climbing and swimming
+    /// ones.
+    fn refresh_cap_jump(&mut self, first_step: bool) {
+        let restored = match self.actor_name() {
+            "Wait" | "Squat" | "Run" | "Rolling" => self.grounded && first_step,
+            "SpinCap" => self.grounded,
+            "HipDrop" => self.grounded,
+            "WallCatch" | "PoleClimb" | "GrabCeil" | "Swim" => first_step,
+            _ => false,
+        };
+        self.cap_jump_possible |= restored;
     }
     fn set_h(&mut self, h: Vec3) {
         self.v.x = h.x;
@@ -1818,11 +1862,13 @@ impl Player {
         self.hop_contact = false;
         self.nerve.deferred = false;
         self.nerve.renewed = false;
+        self.sensor_restart = false;
         let was_grounded = self.grounded;
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
         // The cap updates before the player does, within the same frame.
         self.update_cap(&o, scene);
+        self.cap_sensor_phase(&o);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
@@ -1844,7 +1890,6 @@ impl Player {
             self.finish_frame(scene);
             return;
         }
-        self.cap_contact();
         self.collide(&o, scene);
         // Hot ground takes over any landing; shallow water puts a burn out.
         let hot = self.grounded && scene.hot(self.pos);
@@ -2702,7 +2747,7 @@ impl Player {
             Move::DoubleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_2ND),
             Move::TripleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_3RD),
             Move::Jump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY),
-            Move::CapBounce | Move::CapVault => (0, t::CAP_LEAPFROG_GRAVITY),
+            Move::CapBounce => (0, t::TRAMPLE_HIGH_GRAVITY),
             Move::CatchJump => (0, t::CAP_CATCH_JUMP_GRAVITY),
             _ => (0, t::JUMP_GRAVITY),
         };
@@ -3689,7 +3734,8 @@ impl Player {
         // The catch nerve counts its frames after the arrival.
         if let Some(frames) = self.catching {
             let frames = frames + 1;
-            self.catching = (frames <= crate::cap::CATCH_FRAMES as i32).then_some(frames);
+            self.catching =
+                (frames <= crate::cap::catch_frames(self.catch_clip) as i32).then_some(frames);
         }
         // A throw started last frame: the cap's throw start places it and
         // sets it flying; the throw nerve itself runs from the next frame.
@@ -3741,6 +3787,8 @@ impl Player {
                 }
                 CapEvent::WallHit(strength) => self.events.push(Fx::CapWallHit(strength)),
                 CapEvent::Staying => self.events.push(Fx::CapStay),
+                CapEvent::StayStarted => self.events.push(Fx::CapStayStart),
+                CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {
                     self.cap = None;
@@ -3749,14 +3797,32 @@ impl Player {
                     self.events.push(Fx::Catch);
                     self.catch_window = t::CAP_CATCH_WINDOW;
                     // Standing in the wait nerve, the catch plays its sub
-                    // animation; it starts before this frame's advance.
-                    if self.mode == Move::Idle && self.grounded {
+                    // animation; otherwise it plays an upper-body one. Either
+                    // starts before this frame's advance.
+                    self.catch_clip = self.clip_of_catch();
+                    if self.catch_clip == "CatchCap" {
                         self.start_sub("CatchCap", 10., -1.);
+                    } else {
+                        self.upper_catch = Some(-1);
                     }
                     break;
                 }
             }
         }
+    }
+    /// The catch clip of the player's state.
+    fn clip_of_catch(&self) -> &'static str {
+        if self.mode == Move::Idle && self.grounded {
+            "CatchCap"
+        } else if self.grounded {
+            "CatchCapParts"
+        } else {
+            "CatchCapJumpParts"
+        }
+    }
+    /// The upper-body catch animation while it plays.
+    pub fn upper_catch(&self) -> Option<&'static str> {
+        self.upper_catch.map(|_| self.catch_clip)
     }
     /// What the catch leaves for the player's own step: in midair the catch
     /// gives a small pop.
@@ -3771,59 +3837,92 @@ impl Player {
             self.play("JumpCapCatchCommon");
         }
     }
-    fn cap_contact(&mut self) {
-        let Some(cap) = &self.cap else {
+    /// The hit sensors' phase of the frame, after the cap moved and before the
+    /// player does: the foot sensor against the hovering cap's `Trample` sensor
+    /// (`PlayerActorHakoniwa::attackSensor` and `HackCap::receiveMsg`), found
+    /// with the player where the last frame left him. When the cap takes the
+    /// trample the jump nerve restarts inside this frame's update, so the
+    /// jump's first step is this frame's.
+    fn cap_sensor_phase(&mut self, o: &Orders) {
+        if !self.can_trample() {
+            return;
+        }
+        let Some(cap) = &mut self.cap else {
             return;
         };
-        if !self.cap_jump_possible
-            || cap.returning
-            || cap.frames < 6
-            || cap.kind == Throw::Up
-            || matches!(
-                self.mode,
-                Move::GroundPound
-                    | Move::Ledge
-                    | Move::Pole
-                    | Move::Swim
-                    | Move::SwimDash
-                    | Move::Throw
-                    | Move::PoundLand
-            )
-        {
+        let foot = self.pos / UNIT + Vec3::Y * crate::cap::FOOT_SENSOR_Y;
+        if !cap.take_trample(foot, o.throw_held, self.cap_jump_possible) {
             return;
         }
-        let body = self.pos + Vec3::Y * 0.8;
-        let d = cap.pos - body;
-        if d.with_y(0.).length() > 0.95 || d.y.abs() > 1.1 {
-            return;
-        }
-        let ground = self.grounded || matches!(self.mode, Move::Roll);
-        if !ground && self.v.y > 8. && self.mode != Move::Dive {
-            return;
-        }
-        let keep = self.speed_h();
-        let (mode, power) = if ground {
-            (Move::CapVault, t::CAP_LEAPFROG_POWER)
+        self.cap_jump_possible = false;
+        self.trample_jump();
+        // The nerve was named before this frame's update, which runs its
+        // first step now: no frame passes in the chosen state.
+        self.nerve.deferred = false;
+        self.nerve.renewed = false;
+        self.nerve.step = 0;
+        self.nerve.actor = "Jump";
+        self.sensor_restart = true;
+    }
+    /// The actor nerve was restarted by a hit sensor in this frame and has run
+    /// its first step already.
+    pub fn restarted_by_sensor(&self) -> bool {
+        self.sensor_restart
+    }
+    /// The states the player's foot can trample the cap in
+    /// (`PlayerActorHakoniwa::attackSensor`): not while swimming, on a pole,
+    /// grabbing a ledge or ceiling, rolling, pounding, or spinning the cap in
+    /// the air.
+    fn can_trample(&self) -> bool {
+        !matches!(
+            self.mode,
+            Move::Swim
+                | Move::SwimDash
+                | Move::Pole
+                | Move::Ledge
+                | Move::GroundPound
+                | Move::PoundLand
+                | Move::Roll
+                | Move::RollEnd
+                | Move::RollJump
+        ) && !(self.mode == Move::Throw && !self.grounded)
+    }
+    /// The jump off the cap (`PlayerStateJump::appear`, request 11, shared
+    /// with the jump on an enemy): `TrampleHighJumpPower` with
+    /// `TrampleHighGravity`, no extension, the ordinary jump clip, and the
+    /// player's speed kept when the stick is pushed, scaled down when he was
+    /// still rising, and dropped when it is not.
+    fn trample_jump(&mut self) {
+        self.combo_kept = true;
+        let clip = if self.side_faces_camera() {
+            "Jump"
         } else {
-            (Move::CapBounce, t::CAP_LEAPFROG_POWER_AIR)
+            "JumpReverse"
         };
+        let falling = self.v.y <= 0.;
+        let pushing = self.tilt >= STICK_DEADZONE;
         self.jump_with(
-            mode,
-            "JumpCapLeapFrog",
-            power,
-            t::CAP_LEAPFROG_GRAVITY,
+            Move::CapBounce,
+            clip,
+            t::TRAMPLE_HIGH_JUMP_POWER,
+            t::TRAMPLE_HIGH_GRAVITY,
             move |p| {
-                p.set_h(p.facing * keep.min(t::JUMP_MOVE_MAX));
-                p.max_air_speed = keep.clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
+                match (pushing, falling) {
+                    (true, true) => {}
+                    (true, false) => {
+                        let h = p.v.with_y(0.) * t::TRAMPLE_RISING_BRAKE;
+                        p.set_h(h);
+                    }
+                    (false, _) => p.set_h(Vec3::ZERO),
+                }
+                p.max_air_speed = p.speed_h().clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
                 p.jump_extend = false;
+                // Guesses: the new jump may be left with a dive and the air
+                // throw is available again.
                 p.dive_possible = true;
                 p.air_throw_used = false;
-                p.events.push(Fx::CapBounce);
             },
         );
-        self.cap_jump_possible = false;
-        self.hitstop = 0.035;
-        self.cap = None;
     }
 
     // ---- Landing and collision ------------------------------------------------
@@ -3870,7 +3969,6 @@ impl Player {
         }
         let speed = self.speed_h();
         self.land_frames = 0;
-        self.cap_jump_possible = true;
         self.dive_possible = true;
         self.air_throw_used = false;
         self.gravity = t::GRAVITY_AIR;

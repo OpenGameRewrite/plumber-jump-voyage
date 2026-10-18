@@ -73,13 +73,45 @@ const SLIDE_LIMIT: f32 = 0.866_025_4;
 /// same wall (cosine of 5 degrees).
 const GRAZE_LIMIT: f32 = 0.087_155_74;
 const SAME_WALL: f32 = 0.996_194_7;
+/// Frames the cap stays put after it was trampled (`exeTrample` compares its
+/// step with 15).
+const TRAMPLE_FRAMES: u32 = 15;
+/// What `HackCap::receiveMsg` takes of a trample on its `Trample` sensor: the
+/// vertical and horizontal distance between the player's foot sensor and its
+/// own sensor must not exceed these.
+const TRAMPLE_MAX_VERTICAL: f32 = 70.;
+const TRAMPLE_MAX_HORIZONTAL: f32 = 200.;
+/// The cap's `Trample` hit sensor (`PlayerFunction::initCapModelActor`): a
+/// sphere of 300 around a point 20 centimetres off the cap along its up axis.
+/// The offset's direction is a reading of the recordings, not of the code: the
+/// cap-bounce run is first trampled in the frame the player's foot comes within
+/// the vertical limit of a sensor 20 below the cap, while a sensor above the
+/// cap would have been reached some frames earlier or not at all. The cap's
+/// pose is not simulated, so the offset is taken downward here.
+const TRAMPLE_SENSOR_RADIUS: f32 = 300.;
+const TRAMPLE_SENSOR_Y: f32 = -20.;
+/// The player's foot sensor (`PlayerActorHakoniwa/InitSensor`: `Foot`).
+pub const FOOT_SENSOR_RADIUS: f32 = 40.;
+pub const FOOT_SENSOR_Y: f32 = 40.;
+/// `rs::isEnableSendTrampleMsg`: the foot must be within 70 degrees of straight
+/// above the cap's sensor (cosine of 70 degrees).
+const TRAMPLE_ANGLE_COS: f32 = 0.342_020_15;
 /// Speed is considered gone below this (`al::isNearZero`).
 const NEAR_ZERO: f32 = 0.001;
 /// Frames over which the return gives up the velocity it had (ease-in).
 const RETURN_EASE_FRAMES: f32 = 10.;
 /// The catch animation lasts this many frames; the cap hides when the nerve
-/// has run longer than that.
-pub const CATCH_FRAMES: u32 = 5;
+/// has run longer than that. The cap plays the clip of the way the player
+/// takes it (`PlayerActorHakoniwa::attackSensor`, the cap's catch message):
+/// `CatchCap` standing, `CatchCapJumpParts` in the air, `CatchCapParts` on the
+/// ground in any other state. The first two lengths are recorded; the
+/// last one is a guess (the standing one's).
+pub fn catch_frames(clip: &str) -> u32 {
+    match clip {
+        "CatchCapJumpParts" => 3,
+        _ => 5,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapPhase {
@@ -92,6 +124,10 @@ pub enum CapNerve {
     Throw,
     ThrowBrake,
     ThrowStay,
+    /// The player stood on the hovering cap (`HackCap::exeTrample`, which the
+    /// recordings name `TrampleReturn`): it stays put for a short while, then
+    /// goes back.
+    Trample,
     Return,
 }
 impl CapNerve {
@@ -101,6 +137,7 @@ impl CapNerve {
             "Throw" => Self::Throw,
             "ThrowBrake" => Self::ThrowBrake,
             "ThrowStay" => Self::ThrowStay,
+            "TrampleReturn" => Self::Trample,
             "Return" => Self::Return,
             _ => return None,
         })
@@ -111,6 +148,7 @@ impl CapNerve {
             Self::Throw => "Throw",
             Self::ThrowBrake => "ThrowBrake",
             Self::ThrowStay => "ThrowStay",
+            Self::Trample => "TrampleReturn",
             Self::Return => "Return",
         }
     }
@@ -152,6 +190,11 @@ pub enum CapEvent {
     Staying,
     /// The stay nerve chose the return (the reaction named after it).
     LeftStay,
+    /// The first step of the stay nerve while the button is held: the
+    /// reaction `Stay状態開始`.
+    StayStarted,
+    /// The first step of the trample nerve: the reaction `通常Trample`.
+    Trampled,
     /// The cap reached the head.
     Caught,
     /// The cap met a wall at an angle and turned along it: the collision
@@ -205,6 +248,11 @@ pub struct Cap {
     brake_step: f32,
     /// The speed the return has built up (`_288`).
     return_speed: f32,
+    /// The player trampled the cap in this frame's sensor phase: the trample
+    /// nerve is entered when the cap next updates (`al::setNerve`).
+    trampled: bool,
+    /// `Stay状態開始` was raised (once per throw, while the button is held).
+    stay_reaction_done: bool,
     /// Cappy's collider (`PlayerColliderHackCap`), against a triangle mesh.
     collider: PlayerCollider,
     /// The normal of the wall the last reaction turned along (`+0x514`) and
@@ -248,6 +296,8 @@ impl Cap {
             cruise_frames: cruise_frames(speed),
             brake_step: -speed / brake_frames,
             return_speed: 0.,
+            trampled: false,
+            stay_reaction_done: false,
             collider: PlayerCollider::for_cap(),
             wall_memory: Vec3::ZERO,
             wall_last_frame: false,
@@ -269,6 +319,32 @@ impl Cap {
         self.phase = CapPhase::Out;
         self.returning = false;
         self.play(flying(self.kind, self.air, self.left));
+    }
+    /// `HackCap::receiveMsg` for a trample on the `Trample` sensor
+    /// (`rs::sendMsgPlayerCapTrample`): the player's foot sensor is at `foot`
+    /// (centimetres). The cap takes it while it hovers (`ThrowStay`) with the
+    /// button held, when the foot is within 70 degrees of straight above its
+    /// sensor, the sensors touch, and the distance between them is at most 70
+    /// vertically and 200 horizontally; the cap then stands still and returns
+    /// (the nerve is entered when it next updates). `jump_possible` is
+    /// `PlayerCapActionHistory`'s flag: one cap jump per time on the ground.
+    pub fn take_trample(&mut self, foot: Vec3, hold: bool, jump_possible: bool) -> bool {
+        if self.nerve != CapNerve::ThrowStay || self.trampled || !hold || !jump_possible {
+            return false;
+        }
+        let sensor = self.spot + Vec3::Y * TRAMPLE_SENSOR_Y;
+        let between = foot - sensor;
+        let reach = (TRAMPLE_SENSOR_RADIUS + FOOT_SENSOR_RADIUS).powi(2);
+        let above = between.try_normalize().map_or(0., |dir| dir.y);
+        if between.length_squared() >= reach
+            || above <= TRAMPLE_ANGLE_COS
+            || between.y.abs() > TRAMPLE_MAX_VERTICAL
+            || between.with_y(0.).length() > TRAMPLE_MAX_HORIZONTAL
+        {
+            return false;
+        }
+        self.trampled = true;
+        true
     }
     /// Start a clip over.
     fn play(&mut self, action: &'static str) {
@@ -336,6 +412,8 @@ impl Cap {
             ),
             (CapNerve::ThrowStay, 0) => (flying(self.kind, self.air, self.left), 0),
             (CapNerve::ThrowStay, step) => (stay(self.left), step - 1),
+            (CapNerve::Trample, 0) => (stay(self.left), 0),
+            (CapNerve::Trample, step) => ("Trample", step - 1),
             (CapNerve::Return, 0) => (stay(self.left), 0),
             (CapNerve::Return, step) => (flying(self.kind, self.air, self.left), step - 1),
         };
@@ -359,10 +437,16 @@ impl Cap {
             events.push(CapEvent::Caught);
             return events;
         }
+        if std::mem::take(&mut self.trampled) {
+            self.nerve = CapNerve::Trample;
+            self.step = 0;
+            self.phase = CapPhase::Stay;
+        }
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events),
             CapNerve::ThrowBrake => self.throw_brake(&mut events),
             CapNerve::ThrowStay => self.throw_stay(world.hold, &mut events),
+            CapNerve::Trample => self.trample(&mut events),
             CapNerve::Return => self.go_back(head),
         };
         self.step += 1;
@@ -458,11 +542,25 @@ impl Cap {
             self.play(stay(self.left));
         }
         events.push(CapEvent::Staying);
+        if hold && !self.stay_reaction_done {
+            self.stay_reaction_done = true;
+            events.push(CapEvent::StayStarted);
+        }
         if self.step <= param::STAY_FRAMES || hold && self.step <= param::STAY_FRAMES_MAX {
             return None;
         }
         events.push(CapEvent::LeftStay);
         Some(CapNerve::Return)
+    }
+    /// `HackCap::exeTrample`: face the way the joint does, start the trample
+    /// clip, stand still for fifteen steps, then return.
+    fn trample(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+        if self.step == 0 {
+            self.play("Trample");
+            self.velocity = Vec3::ZERO;
+            events.push(CapEvent::Trampled);
+        }
+        (self.step >= TRAMPLE_FRAMES).then_some(CapNerve::Return)
     }
     /// `HackCap::exeReturn`: fly toward the head, a little faster every frame.
     fn go_back(&mut self, head: Vec3) -> Option<CapNerve> {
@@ -542,7 +640,7 @@ fn cruise_frames(speed: f32) -> u32 {
 fn phase_of(nerve: CapNerve) -> CapPhase {
     match nerve {
         CapNerve::Throw | CapNerve::ThrowBrake => CapPhase::Out,
-        CapNerve::ThrowStay => CapPhase::Stay,
+        CapNerve::ThrowStay | CapNerve::Trample => CapPhase::Stay,
         CapNerve::Return => CapPhase::Return,
     }
 }
@@ -564,6 +662,8 @@ fn stay(left: bool) -> &'static str {
 fn clip_shape(name: &str) -> (u32, bool) {
     if name.starts_with("Stay") {
         (9, true)
+    } else if name == "Trample" {
+        (TRAMPLE_FRAMES, false)
     } else {
         (11, false)
     }

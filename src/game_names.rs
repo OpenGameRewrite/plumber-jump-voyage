@@ -48,7 +48,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         // and the jump counters differ in the game.
         Move::DoubleJump | Move::TripleJump => known("Jump/Jump"),
         Move::PoundJump => guessed("Jump/Jump"),
-        Move::CapBounce | Move::CapVault | Move::CatchJump => guessed("Jump/Jump"),
+        Move::CapBounce | Move::CatchJump => guessed("Jump/Jump"),
         Move::LongJump => known("LongJump/Jump"),
         Move::Backflip => known("Jump/JumpBack"),
         Move::Sideflip => known("Jump/JumpTurn"),
@@ -146,7 +146,6 @@ fn state_of_clip(anim: &str) -> Option<Move> {
         "Jump2" => Move::DoubleJump,
         "Jump3" => Move::TripleJump,
         "JumpHipDrop" => Move::PoundJump,
-        "JumpCapLeapFrog" => Move::CapVault,
         "JumpCapCatchCommon" => Move::CatchJump,
         "SpinJumpStart" | "SpinJumpLoop" => Move::SpinJump,
         "RollingStandUp" => Move::RollEnd,

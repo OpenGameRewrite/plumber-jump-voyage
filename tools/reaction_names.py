@@ -25,6 +25,10 @@ CAP_REACTIONS = {
     '帽子投げボイス[3段目]': 'ThrowVoice3',
     # Raised when the cap's stay ends in the return.
     'Stay状態からのリターン': 'ReturnFromStay',
+    # Raised when the stay begins with the button held, and when the hovering
+    # cap is trampled (the player's cap jump).
+    'Stay状態開始': 'StayStart',
+    '通常Trample': 'Trample',
 }
 # Reactions only the effect tables listen to.
 EFFECT_REACTIONS = {

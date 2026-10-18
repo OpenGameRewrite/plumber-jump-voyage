@@ -267,7 +267,7 @@ fn react(
             Fx::Jump(kind) => {
                 // The original puffs smoke on every ground jump clip except the
                 // cap leapfrog and the roll jump; wall jumps burst off the wall.
-                if matches!(kind, Move::CapBounce | Move::CapVault | Move::RollJump) {
+                if matches!(kind, Move::CapBounce | Move::RollJump) {
                     continue;
                 }
                 if kind == Move::WallJump {
@@ -557,7 +557,6 @@ fn trails(
         | Move::Sideflip
         | Move::SpinJump
         | Move::PoundJump
-        | Move::CapVault
         | Move::CapBounce
             if !p.grounded && p.timer < 0.7 =>
         {
@@ -664,7 +663,7 @@ fn shadow(
 /// conditions; the headless trace records them as `effect:` events.
 pub fn burst_names(fx: Fx, flat_speed: f32) -> Vec<&'static str> {
     match fx {
-        Fx::Jump(Move::CapBounce | Move::CapVault | Move::RollJump) => vec![],
+        Fx::Jump(Move::CapBounce | Move::RollJump) => vec![],
         Fx::Jump(Move::WallJump) => vec!["WallJumpDust"],
         Fx::Jump(Move::PoundJump | Move::TripleJump) => vec!["JumpDust", "JumpRing"],
         Fx::Jump(_) => vec!["JumpDust"],
@@ -724,7 +723,6 @@ pub fn trail_names(p: &Player) -> Vec<&'static str> {
         | Move::Sideflip
         | Move::SpinJump
         | Move::PoundJump
-        | Move::CapVault
         | Move::CapBounce
             if !p.grounded && p.timer < 0.7 =>
         {

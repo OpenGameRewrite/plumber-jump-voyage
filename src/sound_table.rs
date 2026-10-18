@@ -252,12 +252,16 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
             cap: true,
             name: "Catch",
         }],
-        Fx::CapBounce => vec![Cue::Action {
+        // `HackCap::exeTrample`'s first step raises its reaction (the trample
+        // clip's own sounds follow its frames); the stay raises one when it
+        // starts with the button held.
+        Fx::CapBounce => vec![Cue::Reaction {
             cap: true,
             name: "Trample",
-            from: -1.,
-            to: 60.,
-            tag: "none",
+        }],
+        Fx::CapStayStart => vec![Cue::Reaction {
+            cap: true,
+            name: "StayStart",
         }],
         Fx::Quenched => reaction("FireQuench"),
         Fx::Burned(again) => reaction(if again { "BurnBounce" } else { "BurnJump" }),

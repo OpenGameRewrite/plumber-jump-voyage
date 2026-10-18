@@ -481,7 +481,9 @@ impl Recorder {
             self.stale_clip = self.main_clip;
             self.main_clip = p.anim.name;
         }
-        let sub_now = p.model_sub().map(|(name, _)| name);
+        // The animation that played over the main clip: the model's sub
+        // animation, or the upper-body one of a catch on the move.
+        let sub_now = p.model_sub().map(|(name, _)| name).or(p.upper_catch());
         // The main slot's own blend is not reported while a sub animation of
         // another clip plays over it.
         if sub_now.is_some_and(|name| name != p.anim.name) {
@@ -586,6 +588,8 @@ impl Recorder {
         self.sub_steps = match self.last_state {
             None => p.state_frames(),
             Some((last, steps)) if last == label && steps < p.state_frames() => self.sub_steps + 1,
+            // A hit sensor restarted the nerve and its first step ran already.
+            Some(_) if p.restarted_by_sensor() => p.state_frames(),
             Some(_) => 0,
         };
         self.last_state = Some((label, p.state_frames()));
