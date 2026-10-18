@@ -266,7 +266,6 @@ impl TriangleMesh {
     /// Height (cm) of the highest floor-like surface at or below `y_max` at
     /// the horizontal position (x, z): a vertical ray against the triangles.
     pub fn floor_below(&self, x: f32, z: f32, y_max: f32, min_up: f32) -> Option<f32> {
-        let probe = Vec3::new(x, y_max, z);
         let mut best: Option<f32> = None;
         // Anything under the probe, however far down.
         let column = Aabb {

@@ -6,11 +6,14 @@
 //! decompilation documents follow it; the rest are inferred from their tuning
 //! names and observed behaviour. No original code is reproduced here.
 use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
+use crate::collider::PlayerCollider;
+use crate::geometry::TriangleMesh;
 use crate::cap::{CapEvent, CapWorld, Launch};
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use crate::se_ctrl::SeCtrl;
 use bevy::prelude::*;
+use std::sync::Arc;
 
 /// Metres per original distance unit.
 pub const UNIT: f32 = 0.01;
@@ -250,6 +253,8 @@ mod rolling;
 mod run_cycle;
 #[path = "movement/sounds.rs"]
 mod sounds;
+#[path = "movement/terrain.rs"]
+mod terrain;
 #[path = "movement/squat.rs"]
 mod squat;
 pub use ground::turn_power;
@@ -899,6 +904,12 @@ pub struct Player {
     /// The collider still reports the floor under a hop that leaves it (the
     /// roll's start), though the player is already rising.
     hop_contact: bool,
+    /// The real game's player collider, used when the course is a triangle mesh.
+    collider: PlayerCollider,
+    /// The normal of the mesh floor the collider found this step.
+    mesh_ground: Option<Vec3>,
+    /// The collision codes of the mesh surfaces the body touched this step.
+    pub touched: terrain::Touched,
     /// The main clip looped back to its start in this step.
     pub clip_wrapped: bool,
     /// Steps until the run cycle that follows a dive's landing restarts
@@ -1003,6 +1014,9 @@ impl Default for Player {
             pull: t::GRAVITY,
             sounds: SeCtrl::default(),
             hop_contact: false,
+            collider: PlayerCollider::default(),
+            mesh_ground: None,
+            touched: terrain::Touched::default(),
             clip_wrapped: false,
             cycle_restart_in: 0,
         }
@@ -1036,6 +1050,9 @@ pub struct Course {
     /// Shallow water to stand in: centre of the surface and half extents.
     pub puddles: Vec<(Vec3, Vec3)>,
     pub targets: Vec<Vec3>,
+    /// The real game's stage collision, when a replay loads one. It takes the
+    /// place of the solids for the player's contact.
+    pub mesh: Option<Arc<TriangleMesh>>,
 }
 impl Course {
     pub fn wet(&self, pos: Vec3) -> bool {
@@ -1057,6 +1074,13 @@ impl Course {
     }
     /// Highest walkable surface at or below `pos`, for shadows and the camera.
     pub fn ground(&self, pos: Vec3) -> Option<f32> {
+        if let Some(mesh) = &self.mesh {
+            // Seen from above, like the solids: the mesh works in cm.
+            let limit = crate::collider::walkable_normal_y();
+            return mesh
+                .floor_below(pos.x / UNIT, pos.z / UNIT, pos.y / UNIT + 5., limit)
+                .map(|y| y * UNIT);
+        }
         self.solids
             .iter()
             .filter(|b| {
@@ -1246,8 +1270,12 @@ impl Player {
     }
     /// The normal of the ground under the feet, when standing on it.
     pub fn floor_normal(&self) -> Option<Vec3> {
-        // A ramp's height rises along +x by `slope` per metre.
-        (self.grounded || self.hop_contact).then(|| Vec3::new(-self.slope, 1., 0.).normalize())
+        // A ramp's height rises along +x by `slope` per metre; on a triangle
+        // mesh the collider's average floor normal is the answer.
+        (self.grounded || self.hop_contact).then(|| {
+            self.mesh_ground
+                .unwrap_or_else(|| Vec3::new(-self.slope, 1., 0.).normalize())
+        })
     }
     /// The run cycle's animation control, for the trace and the renderer.
     pub fn run_cycle(&self) -> &RunCycle {
@@ -3868,6 +3896,56 @@ impl Player {
         });
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
+        let old = self.pos;
+        let was_grounded = self.grounded;
+        self.grounded = false;
+        self.landing_speed = 0.;
+        self.wall = Vec3::ZERO;
+        match &scene.mesh {
+            Some(mesh) => self.collide_mesh(o, mesh, was_grounded),
+            None => self.collide_solids(o, scene, was_grounded),
+        }
+        if self.mode == Move::Ledge {
+            // Just caught an edge: the actor moves onto it.
+            self.pos = self.ledge;
+            self.grounded = false;
+            self.v = Vec3::ZERO;
+            return;
+        }
+        // Poles are solid when not held.
+        for pole in &scene.poles {
+            let d = (self.pos - pole.center).with_y(0.);
+            let min = POLE_RADIUS + RADIUS;
+            if d.length() < min
+                && self.pos.y < pole.center.y + pole.height
+                && self.pos.y + HEIGHT > pole.center.y
+            {
+                self.pos += d.normalize_or(-self.facing) * (min - d.length());
+            }
+        }
+        if self.mode == Move::WallSlide
+            && (self.wall == Vec3::ZERO || self.grounded)
+            && !self.grounded
+        {
+            // Lost the wall: keep falling.
+            self.go(Move::Fall, "Fall");
+        }
+        // Stay glued to ramps and steps down (the box solids' own rule; the
+        // mesh's ground is held by the collider's arrows alone).
+        if scene.mesh.is_none()
+            && !self.grounded
+            && was_grounded
+            && self.v.y <= 0.
+            && let Some(ground) = scene.ground(self.pos)
+            && self.pos.y - ground < 0.3
+        {
+            self.pos.y = ground;
+            self.grounded = true;
+        }
+        self.distance += (self.pos - old).with_y(0.).length();
+    }
+    /// The player's contact with the course's box solids (the windowed demo).
+    fn collide_solids(&mut self, o: &Orders, scene: &Course, was_grounded: bool) {
         let crouched = matches!(
             self.mode,
             Move::SquatBrake
@@ -3885,11 +3963,6 @@ impl Player {
         } else {
             -CONTACT_MARGIN
         };
-        let old = self.pos;
-        let was_grounded = self.grounded;
-        self.grounded = false;
-        self.landing_speed = 0.;
-        self.wall = Vec3::ZERO;
         let motion = self.v * UNIT;
         // Sub-steps keep each move shorter than the collider radius.
         let steps = (motion.length() / (RADIUS * 0.8)).ceil().max(1.) as usize;
@@ -3971,42 +4044,6 @@ impl Player {
                 }
             }
         }
-        if self.mode == Move::Ledge {
-            // Just caught an edge: the actor moves onto it.
-            self.pos = self.ledge;
-            self.grounded = false;
-            self.v = Vec3::ZERO;
-            return;
-        }
-        // Poles are solid when not held.
-        for pole in &scene.poles {
-            let d = (self.pos - pole.center).with_y(0.);
-            let min = POLE_RADIUS + RADIUS;
-            if d.length() < min
-                && self.pos.y < pole.center.y + pole.height
-                && self.pos.y + HEIGHT > pole.center.y
-            {
-                self.pos += d.normalize_or(-self.facing) * (min - d.length());
-            }
-        }
-        if self.mode == Move::WallSlide
-            && (self.wall == Vec3::ZERO || self.grounded)
-            && !self.grounded
-        {
-            // Lost the wall: keep falling.
-            self.go(Move::Fall, "Fall");
-        }
-        // Stay glued to ramps and steps down.
-        if !self.grounded
-            && was_grounded
-            && self.v.y <= 0.
-            && let Some(ground) = scene.ground(self.pos)
-            && self.pos.y - ground < 0.3
-        {
-            self.pos.y = ground;
-            self.grounded = true;
-        }
-        self.distance += (self.pos - old).with_y(0.).length();
     }
     fn touch_wall(&mut self, top: f32, o: &Orders) {
         if matches!(

@@ -72,6 +72,11 @@ fn slope_limit() -> f32 {
     (SLOPE_LIMIT_DEGREES * DEGREES_TO_RADIANS).cos()
 }
 
+/// The smallest `y` of a face normal that is still floor.
+pub fn walkable_normal_y() -> f32 {
+    slope_limit()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Form {
     /// `changeCollisionNormal`
@@ -543,6 +548,9 @@ fn across(v: Vec3, axis: Vec3) -> Vec3 {
 pub struct Outcome {
     /// Where the feet end up (cm, replay frame).
     pub pos: Vec3,
+    /// A shape was in collision somewhere along the move (the position may
+    /// still be the plain end of the move, when the contact asked for nothing).
+    pub collided: bool,
 }
 
 impl PlayerCollider {
@@ -593,7 +601,7 @@ impl PlayerCollider {
         // replay hands the collider the actor's own position, so the move is
         // empty; it still resolves an overlap the body starts in.
         let mut at = pose.pos;
-        self.move_collide(
+        let mut collided = self.move_collide(
             mesh,
             &pose,
             &mut at,
@@ -603,8 +611,8 @@ impl PlayerCollider {
         );
         // The frame's own move.
         let target = at + velocity;
-        self.move_collide(mesh, &pose, &mut at, target, velocity, range.min(LONGEST_STEP));
-        Outcome { pos: at }
+        collided |= self.move_collide(mesh, &pose, &mut at, target, velocity, range.min(LONGEST_STEP));
+        Outcome { pos: at, collided }
     }
 
     /// `PlayerCollider::moveCollide`.
@@ -616,12 +624,12 @@ impl PlayerCollider {
         target: Vec3,
         intended: Vec3,
         step: f32,
-    ) {
+    ) -> bool {
         let mut sweep = Sweep::new(*at, target, step);
         let mut results = Results::default();
         if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
             *at = sweep.pos();
-            return;
+            return false;
         }
         let mut rounds = 0;
         let mut previous_direction = Vec3::ZERO;
@@ -632,7 +640,7 @@ impl PlayerCollider {
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
-                return;
+                return true;
             }
             let length = fix.length();
             let mut direction = Vec3::ZERO;
@@ -647,10 +655,10 @@ impl PlayerCollider {
             // A remaining move against the intended one ends the sweep.
             let against = remain.dot(intended);
             if against < 0. && against.abs() > 1e-3 {
-                return;
+                return true;
             }
             if remain.length() <= 1e-3 && previous_direction.dot(direction) < 0. {
-                return;
+                return true;
             }
             previous_direction = direction;
             // Sweep again from the pose that was in collision to where the
@@ -660,11 +668,11 @@ impl PlayerCollider {
             results = Results::default();
             if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
                 *at = sweep.pos();
-                return;
+                return true;
             }
             rounds += 1;
             if rounds > MAX_ROUNDS - 1 {
-                return;
+                return true;
             }
         }
     }

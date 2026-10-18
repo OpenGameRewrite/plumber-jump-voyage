@@ -2,6 +2,7 @@
 
     py tools/fidelity-report.py <runs dir> [--exe path] [--no-build] [--only name ...]
         [--scenarios dir] [--allow-contaminated] [--profile debug|release]
+        [--geometry dir]
 
 <runs dir> holds one folder per scenario with the probe's `game.csv` (and its
 `game.env.json` / `game.meta.json`). For each of them this
@@ -19,6 +20,9 @@ named in `game.meta.json`, else `<name>.input`, in `--scenarios` (default: the
 `scenarios` folder beside the runs dir). Folders without a game trace or a
 script are listed as skipped. A contaminated real-game run is reported as
 refused, as compare-traces.py does, unless --allow-contaminated is given.
+--geometry names a folder of the local stage-collision exports (<stage>.json):
+each replay then runs in the stage its run recorded (game.meta.json) instead of
+on the flat floor, when the folder has that stage.
 Run from the repository root: the replay finds the local sound and effect
 tables through `assets/`.
 """
@@ -78,12 +82,12 @@ def find_script(run_dir, name, scenarios):
     return next((c for c in candidates if os.path.exists(c)), None)
 
 
-def replay(exe, script, game, out):
+def replay(exe, script, game, out, geometry=None):
     """Run the rewrite's headless replay; returns an error text or None."""
-    done = subprocess.run(
-        [exe, "--replay", script, "--trace", out, "--camera", game],
-        cwd=ROOT, capture_output=True, text=True,
-    )
+    command = [exe, "--replay", script, "--trace", out, "--camera", game]
+    if geometry:
+        command += ["--geometry-dir", geometry]
+    done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     if done.returncode != 0:
         return (done.stderr or done.stdout).strip()[-400:]
     return None
@@ -181,11 +185,13 @@ def main():
     ap.add_argument("--only", nargs="*", default=[], help="only these scenario folders")
     ap.add_argument("--allow-contaminated", action="store_true",
                     help="compare contaminated runs too (their listed frames are left out)")
+    ap.add_argument("--geometry", help="folder of stage collision exports (<stage>.json) to replay in")
     args = ap.parse_args()
 
     runs = os.path.abspath(args.runs)
     scenarios = os.path.abspath(args.scenarios or os.path.join(runs, "..", "scenarios"))
     compare = load_compare()
+    geometry = os.path.abspath(args.geometry) if args.geometry else None
     exe = args.exe or find_exe(args.profile)
     if not args.exe and not args.no_build:
         build(args.profile)
@@ -213,7 +219,7 @@ def main():
             table.append((name, env_text, "REFUSED", "", ""))
             continue
         rewrite = os.path.join(folder, "rewrite.csv")
-        error = replay(exe, script, game, rewrite)
+        error = replay(exe, script, game, rewrite, geometry)
         if error:
             skipped.append((name, f"the replay failed: {error}"))
             continue

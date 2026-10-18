@@ -16,11 +16,13 @@
 use crate::{
     effect_data::Library,
     input::{ACTIONS, Orders, Settings, bound, rotate},
+    geometry::TriangleMesh,
     movement::{Course, Player, Solid},
     sound_table::Table,
     trace::{COLUMNS, FrameInfo, Recorder, TraceFile},
 };
 use bevy::prelude::*;
+use std::sync::Arc;
 
 /// Frames the player idles after the teleport before frame 0.
 pub const SETTLE_FRAMES: usize = 10;
@@ -58,6 +60,8 @@ pub struct Script {
     pub start: Vec3,
     pub start_yaw_deg: f32,
     pub camera_yaw_deg: Option<f32>,
+    /// The stage the real game loaded (`stage <Name> [scenario]`), when named.
+    pub stage: Option<String>,
     pub spans: Vec<Span>,
     pub shots: Vec<u32>,
 }
@@ -101,10 +105,12 @@ impl Script {
                     script.start_yaw_deg = yaw;
                     has_start = true;
                 }
-                // Header lines for the real game's probe: the stage it loads, the
-                // outfit it dresses Mario in and whether its HUD shows. The
-                // rewrite replays on its own flat floor in its own outfit.
-                "stage" | "outfit" | "hud" => {}
+                // The real game's probe loads this stage; a replay that has the
+                // stage's geometry (`--geometry-dir`) runs in it.
+                "stage" => script.stage = words.get(1).map(|w| w.to_string()),
+                // The outfit the probe dresses Mario in and whether its HUD
+                // shows: the rewrite replays in its own outfit.
+                "outfit" | "hud" => {}
                 "camera" => {
                     let n = numbers(&words[1..])?;
                     let [yaw] = n[..] else {
@@ -347,6 +353,9 @@ pub struct Options<'a> {
     pub table: Option<Table>,
     /// The original's particle effects, for their names in the trace.
     pub library: Option<Library>,
+    /// The real stage's collision for the player to run in, instead of the
+    /// flat floor.
+    pub geometry: Option<Arc<TriangleMesh>>,
 }
 /// Result of a replay: the CSV text and the sound table's presence.
 pub struct Trace {
@@ -367,7 +376,13 @@ impl Trace {
 pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let camera = CameraTrack::new(script, options.camera)?;
     let bindings = Settings::default().bindings;
-    let course = flat_floor();
+    let course = match &options.geometry {
+        Some(mesh) => Course {
+            mesh: Some(mesh.clone()),
+            ..default()
+        },
+        None => flat_floor(),
+    };
     let start_yaw = script.start_yaw_deg.to_radians();
     let mut player = Player::spawn_at(Vec3::ZERO, Vec3::new(start_yaw.sin(), 0., start_yaw.cos()));
     let floor = options
@@ -430,7 +445,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
 }
 
 const USAGE: &str = "usage: plumber-jump-voyage --replay <file.input> --trace <out.csv> \
-[--camera <game.csv>] [--lockstep <game.csv>] [--random <game.csv>]
+[--camera <game.csv>] [--lockstep <game.csv>] [--random <game.csv>] [--geometry <stage.json> | --geometry-dir <dir>]
    or: plumber-jump-voyage --replay <file.input> --shots <dir> [--camera <game.csv>]
 (--replay --states lists the state names the trace uses)";
 
@@ -442,6 +457,52 @@ fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
             .map(|v| Some(v.as_str()))
             .ok_or_else(|| format!("{name} needs a value\n{USAGE}")),
     }
+}
+/// The stage collision a replay runs in, when it is asked for: `--geometry`
+/// names an export file; `--geometry-dir` names a folder of exports and picks
+/// `<stage>.json` for the stage the script names, else the one the game's
+/// `game.meta.json` beside the `--camera` or `--lockstep` trace records. The
+/// script's `start` is the origin of the traces and of the loaded triangles.
+fn load_geometry(
+    args: &[String],
+    script: &Script,
+    trace_paths: &[Option<&str>],
+) -> Result<Option<Arc<TriangleMesh>>, String> {
+    let path = if let Some(file) = flag(args, "--geometry")? {
+        std::path::PathBuf::from(file)
+    } else if let Some(dir) = flag(args, "--geometry-dir")? {
+        let named = script.stage.clone().or_else(|| {
+            trace_paths.iter().flatten().find_map(|trace| {
+                let meta = std::path::Path::new(trace).with_file_name("game.meta.json");
+                let text = std::fs::read_to_string(meta).ok()?;
+                let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+                json["stage"].as_str().map(str::to_string)
+            })
+        });
+        let Some(stage) = named else {
+            eprintln!("--geometry-dir: the replay names no stage, so it runs on the flat floor");
+            return Ok(None);
+        };
+        let file = std::path::Path::new(dir).join(format!("{stage}.json"));
+        if !file.exists() {
+            eprintln!("--geometry-dir: no {} (flat floor)", file.display());
+            return Ok(None);
+        }
+        file
+    } else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mesh = TriangleMesh::from_json(&text, script.start).map_err(|e| format!("{}: {e}", path.display()))?;
+    eprintln!(
+        "geometry: {} ({} triangles, origin {:.1} {:.1} {:.1})",
+        path.display(),
+        mesh.triangles.len(),
+        script.start.x,
+        script.start.y,
+        script.start.z
+    );
+    Ok(Some(Arc::new(mesh)))
 }
 /// Entry point for `--replay`: writes the trace when `--trace` is given, and
 /// returns the driver of a rendered replay when `--shots` asks for pictures.
@@ -462,6 +523,11 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
     .map_err(|e| format!("{script_path}: {e}"))?;
     let camera = flag(args, "--camera")?.map(TraceFile::read).transpose()?;
     let lockstep = flag(args, "--lockstep")?.map(TraceFile::read).transpose()?;
+    let geometry = load_geometry(
+        args,
+        &script,
+        &[flag(args, "--camera")?, flag(args, "--lockstep")?],
+    )?;
     // The rewrite's gameplay uses no random numbers; the game's logged
     // choices are read so a bad file is reported, but nothing changes.
     if let Some(path) = flag(args, "--random")? {
@@ -495,6 +561,7 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
                 lockstep: lockstep.as_ref(),
                 table,
                 library,
+                geometry,
             },
         )?;
         if let Some(dir) = std::path::Path::new(trace_path).parent()
