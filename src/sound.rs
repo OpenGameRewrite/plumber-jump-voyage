@@ -247,13 +247,6 @@ fn play(
                 }
                 Cue::CapPlay(name) => ctx.start(true, name, None, &mut t),
                 Cue::Reaction { cap, name } => ctx.reaction(cap, name, &mut t),
-                Cue::Action {
-                    cap,
-                    name,
-                    from,
-                    to,
-                    tag,
-                } => ctx.action(cap, name, from, to, tag, false, &mut t),
             }
         }
     }

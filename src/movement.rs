@@ -3235,7 +3235,15 @@ impl Player {
             }
             return;
         }
-        let can_move = self.frame >= t::HIP_DROP_LAND_CANCEL;
+        // From its 24th step (`isEnableMove`, counted like the cancel window)
+        // the landing hands over to the run when the stick is pushed, and to
+        // an ordinary jump when one is buffered (the pound's jump needed the
+        // window above).
+        let can_move = self.frame + 1 >= t::HIP_DROP_LAND_CANCEL;
+        if can_move && self.pre_jump > 0 && self.tilt <= 0.1 && !o.crouch {
+            self.ground_jump(o);
+            return;
+        }
         if can_move && (self.tilt > 0.1 || o.crouch) || self.anim_done(clip::HIP_DROP_LAND) {
             if o.crouch {
                 self.start_squat();

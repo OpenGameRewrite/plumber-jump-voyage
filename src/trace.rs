@@ -371,13 +371,6 @@ impl Recorder {
                     Cue::Reaction { cap, name } => {
                         self.reaction(cap, name, speed, &mut events, &mut mix)
                     }
-                    Cue::Action {
-                        cap,
-                        name,
-                        from,
-                        to,
-                        ..
-                    } => self.action((cap, name, from, to, false), speed, &mut events, &mut mix),
                 }
             }
             if self.effects.is_none() {
@@ -514,7 +507,14 @@ impl Recorder {
         let v = p.units_per_frame();
         // A negative zero would put a half turn on the other side of the circle.
         let yaw = (p.facing.x + 0.).atan2(p.facing.z);
-        let q = Quat::from_rotation_y(yaw);
+        // The game derives the quaternion from the pose matrix, taking the
+        // largest of the trace and the diagonal: the scalar part for a turn of
+        // up to a quarter, the vertical axis for more, which keeps its
+        // component positive (a half turn reads `(0, 1, 0, 0)`).
+        let mut q = Quat::from_rotation_y(yaw);
+        if yaw.abs() > std::f32::consts::FRAC_PI_2 && q.y < 0. {
+            q = -q;
+        }
         let mut cells = Cells::default();
         cells.int(info.frame);
         for axis in [p.pos.x, p.pos.y, p.pos.z] {

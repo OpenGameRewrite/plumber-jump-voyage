@@ -146,14 +146,6 @@ pub enum Cue {
         cap: bool,
         name: &'static str,
     },
-    /// The sounds an action schedules between two frames of its clip.
-    Action {
-        cap: bool,
-        name: &'static str,
-        from: f32,
-        to: f32,
-        tag: &'static str,
-    },
 }
 /// The player facts the event sounds depend on.
 #[derive(Clone, Copy, Debug)]

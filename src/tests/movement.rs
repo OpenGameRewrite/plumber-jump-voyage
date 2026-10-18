@@ -57,6 +57,7 @@ pub(super) fn run() {
     brake_and_sideflip();
     crouch_jumps();
     ground_pound();
+    pound_jump_window();
     dive_from_pound();
     dive_roll_landing();
     roll_timing_and_boost();
@@ -394,6 +395,43 @@ fn ground_pound() {
         },
         &floor,
     );
+    assert_eq!(chosen(&p), (Move::PoundJump, "JumpHipDrop"));
+}
+
+#[cfg_attr(test, test)]
+fn pound_jump_window() {
+    let floor = floor();
+    // The landing nerve may be cancelled into a jump from its fifth step
+    // (`isEnableLandCancel` reads the step after the nerve's own update has
+    // counted the one in progress): a jump pressed on the second step is
+    // buffered and chosen on the fifth. The recorded run chooses it that way.
+    let mut p = Player::default();
+    p.pos.y = 6.;
+    p.grounded = false;
+    p.mode = Move::Fall;
+    p.step(
+        &Orders {
+            crouch_pressed: true,
+            crouch: true,
+            ..default()
+        },
+        &floor,
+    );
+    until_landed(&mut p, Orders::default(), &floor);
+    assert_eq!(chosen(&p).0, Move::PoundLand);
+    p.step(&Orders::default(), &floor);
+    p.step(
+        &Orders {
+            jump: true,
+            ..default()
+        },
+        &floor,
+    );
+    for _ in 0..2 {
+        p.step(&Orders::default(), &floor);
+        assert_eq!(p.mode, Move::PoundLand);
+    }
+    p.step(&Orders::default(), &floor);
     assert_eq!(chosen(&p), (Move::PoundJump, "JumpHipDrop"));
 }
 
@@ -799,42 +837,66 @@ fn running_throw() {
 #[cfg_attr(test, test)]
 fn cap_bounce() {
     let floor = floor();
-    // Cap jump: dive into a hovering cap.
-    let mut p = Player::default();
-    p.pos.y = 3.;
-    p.grounded = false;
-    p.mode = Move::Fall;
-    let mut cap = Cap::start(
-        crate::cap::Launch {
-            front: Vec3::NEG_Z,
-            kind: Throw::Forward,
-            left: false,
-            air: false,
-            continuous: false,
-        },
-        Vec3::ZERO,
-        1,
-    );
-    // Hovering where the player falls onto it.
-    cap.resume(&crate::cap::Moment {
-        nerve: crate::cap::CapNerve::ThrowStay,
-        step: 5,
-        spot: (p.pos + Vec3::Y * 0.8) / UNIT,
-        velocity: Vec3::ZERO,
-        speed: 32.,
-        return_speed: 0.,
-    });
-    cap.frames = 30;
-    p.cap = Some(cap);
-    p.v.y = -5.;
-    p.step(
-        &Orders {
-            throw_held: true,
+    // Cap jump: fall onto a hovering cap with the button held. The recorded
+    // run first tramples it with the feet at 67 cm, 127 cm short of the cap.
+    let falling = || {
+        let mut p = Player {
+            pos: Vec3::new(0., 0.6734, 5.5125),
+            grounded: false,
+            mode: Move::Fall,
+            v: Vec3::new(0., -13.57, 0.),
             ..default()
-        },
-        &floor,
-    );
-    assert_eq!(chosen(&p), (Move::CapBounce, "JumpCapLeapFrog"));
+        };
+        let mut cap = Cap::start(
+            crate::cap::Launch {
+                front: Vec3::Z,
+                kind: Throw::Forward,
+                left: false,
+                air: false,
+                continuous: false,
+            },
+            Vec3::ZERO,
+            1,
+        );
+        cap.resume(&crate::cap::Moment {
+            nerve: crate::cap::CapNerve::ThrowStay,
+            step: 30,
+            spot: Vec3::new(0., 70., 678.),
+            velocity: Vec3::ZERO,
+            speed: 32.,
+            return_speed: 0.,
+        });
+        p.cap = Some(cap);
+        p
+    };
+    let held = Orders {
+        throw_held: true,
+        ..default()
+    };
+    // Without the button the cap takes nothing.
+    let mut p = falling();
+    p.step(&Orders::default(), &floor);
+    assert_eq!(p.mode, Move::Fall);
+    // With it the jump nerve restarts inside the frame: its first step is
+    // this one (state step 1, the jump power less one gravity), and the cap
+    // enters its trample nerve when it next updates.
+    let mut p = falling();
+    p.step(&held, &floor);
+    assert_eq!((p.mode, p.state_frames()), (Move::CapBounce, 1));
+    assert!((p.v.y - 24.).abs() < 1e-3, "{}", p.v.y);
+    assert_eq!(p.cap.as_ref().unwrap().state_name(), "ThrowStay");
+    p.step(&held, &floor);
+    assert_eq!(p.cap.as_ref().unwrap().state_name(), "TrampleReturn");
+    // One cap jump per time on the ground.
+    let mut again = falling();
+    again.step(&held, &floor);
+    again.pos.y = 0.6734;
+    again.pos.z = 5.5125;
+    again.v.y = -13.57;
+    again.mode = Move::Fall;
+    again.cap = falling().cap;
+    again.step(&held, &floor);
+    assert_eq!(again.mode, Move::Fall);
 }
 
 #[cfg_attr(test, test)]

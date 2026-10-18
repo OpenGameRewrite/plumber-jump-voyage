@@ -660,6 +660,30 @@ mod tests {
     }
 
     #[test]
+    fn the_spin_throw_control_gains_a_flat_rate() {
+        // `PlayerStateSpinCap` keeps the default control: no ramp, so a speed of
+        // 14 over 40 frames is 0.35 a frame from the first (recorded in the
+        // cap-bounce run), and the velocity follows the facing at once.
+        let mut control = GroundMove::plain();
+        control.reset(Vec3::ZERO, Vec3::Z);
+        let mut velocity = Vec3::ZERO;
+        for frame in 1..=3 {
+            let steer = control.update(&SteerInput {
+                velocity,
+                front: Vec3::Z,
+                stick: Vec3::Z,
+                max_speed: 14.,
+                accel_frames: 40,
+            });
+            velocity = steer.velocity;
+            assert!(
+                (velocity.z - 0.35 * frame as f32).abs() < 1.0e-5,
+                "{velocity}"
+            );
+        }
+    }
+
+    #[test]
     fn a_stick_reversal_brakes_instead_of_turning() {
         let mut turn = TurnControl {
             limit: 8.5,
