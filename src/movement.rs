@@ -661,6 +661,8 @@ pub enum Fx {
     /// A step of the cap's stay (it sounds on every one) and the end of it.
     CapStay,
     CapReturn,
+    /// The cap turned along a wall; the number is how square the hit was.
+    CapWallHit(f32),
     Catch,
     CapBounce,
     WallSlide,
@@ -3669,6 +3671,7 @@ impl Player {
         let world = CapWorld {
             player: self.pos,
             hold: o.throw_held,
+            mesh: scene.mesh.as_deref(),
         };
         let moments = cap.update(&world);
         self.cap_serial = cap.clip_serial();
@@ -3685,6 +3688,7 @@ impl Player {
                     };
                     self.events.push(Fx::ThrowVoice(voice));
                 }
+                CapEvent::WallHit(strength) => self.events.push(Fx::CapWallHit(strength)),
                 CapEvent::Staying => self.events.push(Fx::CapStay),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {

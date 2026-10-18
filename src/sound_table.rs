@@ -234,6 +234,15 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
             cap: true,
             name: "ReturnFromStay",
         }],
+        // The collision reaction `HackCap` raises when it turns along a wall,
+        // and the sound it starts with it.
+        Fx::CapWallHit(_) => vec![
+            Cue::Reaction {
+                cap: true,
+                name: "コリジョン衝突方向転換",
+            },
+            Cue::CapPlay("HitCol"),
+        ],
         Fx::Catch => vec![Cue::Reaction {
             cap: true,
             name: "Catch",

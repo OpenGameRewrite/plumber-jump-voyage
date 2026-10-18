@@ -3,8 +3,11 @@
 //! Written from the original's `HackCap` (its throw start, `exeThrow`,
 //! `exeThrowBrake`, `exeThrowStay` and `exeReturn`, with their parameter
 //! block `HackCapThrowParam`) as read from the 1.0.0 executable and confirmed
-//! against recorded runs (`capthrow`, `spin-throw`). Only the flight over
-//! open ground is reproduced: Cappy's wall and floor reactions, the stick
+//! against recorded runs (`capthrow`, `spin-throw`). The flight over open
+//! ground is reproduced, and in a stage's real collision (`geometry.rs`) the
+//! cap collides with the walls and slides along one it meets at an angle.
+//! Cappy's other wall reactions (a head-on hit that stops it, the
+//! lock-on, the attack on what it hits), its floor reactions, the stick
 //! steering of a throw in progress, the spiral and rolling throws and the
 //! re-throw have no counterpart yet.
 //!
@@ -13,6 +16,8 @@
 //! it by its velocity, so a nerve that sets the velocity moves the cap in that
 //! very frame. A nerve change (`al::setNerve`) takes effect on the next frame;
 //! the nerve name a trace row shows is the one the frame left behind.
+use crate::collider::{Location, PlayerCollider};
+use crate::geometry::TriangleMesh;
 use crate::movement::{Throw, UNIT};
 use bevy::prelude::*;
 
@@ -60,6 +65,14 @@ const CATCH_DISTANCE: f32 = 200.;
 /// fraction of the distance there.
 const RETURN_SLOW_DISTANCE: f32 = 200.;
 const RETURN_SLOW_RATE: f32 = 0.8;
+/// `tryCollideWallReaction` slides the cap along a wall it meets at an angle
+/// whose cosine to the cap's heading is under this (30 degrees from head-on).
+const SLIDE_LIMIT: f32 = 0.866_025_4;
+/// Under this cosine to the wall the cap grazes it and raises no reaction
+/// (sine of 5 degrees); a wall within 5 degrees of the last one counts as that
+/// same wall (cosine of 5 degrees).
+const GRAZE_LIMIT: f32 = 0.087_155_74;
+const SAME_WALL: f32 = 0.996_194_7;
 /// Speed is considered gone below this (`al::isNearZero`).
 const NEAR_ZERO: f32 = 0.001;
 /// Frames over which the return gives up the velocity it had (ease-in).
@@ -131,7 +144,7 @@ pub struct Launch {
 }
 
 /// Moments of the flight the player and the presentation react to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CapEvent {
     /// The first step of the throw nerve: the throw's hit reaction and voice.
     Thrown,
@@ -141,15 +154,21 @@ pub enum CapEvent {
     LeftStay,
     /// The cap reached the head.
     Caught,
+    /// The cap met a wall at an angle and turned along it: the collision
+    /// reaction, its effect and the sound `HitCol`, which is louder the
+    /// squarer the hit (the cosine of the angle).
+    WallHit(f32),
 }
 
-/// What the cap needs to know of the player each frame.
+/// What the cap needs to know of the player and the stage each frame.
 #[derive(Clone, Copy, Debug)]
-pub struct CapWorld {
+pub struct CapWorld<'a> {
     /// Player position, metres.
     pub player: Vec3,
     /// The throw button is held (`PlayerInput::isHoldSpinCap`).
     pub hold: bool,
+    /// The stage's triangles, when the replay has them.
+    pub mesh: Option<&'a TriangleMesh>,
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +205,12 @@ pub struct Cap {
     brake_step: f32,
     /// The speed the return has built up (`_288`).
     return_speed: f32,
+    /// Cappy's collider (`PlayerColliderHackCap`), against a triangle mesh.
+    collider: PlayerCollider,
+    /// The normal of the wall the last reaction turned along (`+0x514`) and
+    /// whether the collider found a wall in the previous frame.
+    wall_memory: Vec3,
+    wall_last_frame: bool,
 }
 impl Cap {
     /// Place a cap as `exeThrowStart` does on its one step: in front of the
@@ -223,8 +248,11 @@ impl Cap {
             cruise_frames: cruise_frames(speed),
             brake_step: -speed / brake_frames,
             return_speed: 0.,
+            collider: PlayerCollider::for_cap(),
+            wall_memory: Vec3::ZERO,
+            wall_last_frame: false,
         };
-        cap.advance();
+        cap.advance(None);
         cap
     }
     /// Send the cap on another leg toward `direction` (the flick throw, which the
@@ -333,7 +361,7 @@ impl Cap {
         }
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events),
-            CapNerve::ThrowBrake => self.throw_brake(),
+            CapNerve::ThrowBrake => self.throw_brake(&mut events),
             CapNerve::ThrowStay => self.throw_stay(world.hold, &mut events),
             CapNerve::Return => self.go_back(head),
         };
@@ -344,13 +372,66 @@ impl Cap {
             self.phase = phase_of(next);
             self.returning = next == CapNerve::Return;
         }
-        self.advance();
+        self.advance(world.mesh);
         events
     }
-    /// The collider moves the cap by its velocity.
-    fn advance(&mut self) {
-        self.spot += self.velocity;
+    /// The collider moves the cap by its velocity: in a stage's collision it
+    /// stops at the surfaces it meets, otherwise the move is free.
+    fn advance(&mut self, mesh: Option<&TriangleMesh>) {
+        match mesh {
+            Some(mesh) => {
+                let out = self.collider.collide(mesh, self.spot, self.velocity, 0.);
+                self.wall_last_frame = self.collider.wall.is_some();
+                if out.collided {
+                    self.spot = out.pos;
+                } else {
+                    self.spot += self.velocity;
+                }
+            }
+            None => self.spot += self.velocity,
+        }
         self.pos = self.spot * UNIT;
+    }
+    /// `HackCap::tryCollideWallReaction` for a wall the cap met on a face
+    /// last frame, at the start of the throw and brake nerves: a wall at an
+    /// angle (`0x409624`) turns the cap along it at the speed it had and moves
+    /// it one centimetre into the wall (the collider pushes it back out); a
+    /// head-on wall stops the cap in the original (`stayWallHit`), which is
+    /// not reproduced here.
+    fn wall_reaction(&mut self, events: &mut Vec<CapEvent>) {
+        let Some(wall) = &self.collider.wall else {
+            return;
+        };
+        if wall.location != Location::Face {
+            return;
+        }
+        let Some(normal) = wall.normal.with_y(0.).try_normalize() else {
+            return;
+        };
+        // The same wall as the last reaction's, met again right away, is no
+        // new hit. The original decides this with a trigger word of the cap
+        // that is not read here; "a wall last frame" is its likely meaning.
+        let first = !self.wall_last_frame
+            || self.wall_memory.length() < NEAR_ZERO
+            || self.wall_memory.dot(normal) <= SAME_WALL;
+        let alignment = self.front.dot(normal).abs();
+        if alignment >= SLIDE_LIMIT {
+            return;
+        }
+        let speed = self.velocity.length();
+        let along = self.velocity - normal * self.velocity.dot(normal);
+        let Some(front) = along.try_normalize() else {
+            return;
+        };
+        self.spot -= normal;
+        if alignment > GRAZE_LIMIT && first {
+            events.push(CapEvent::WallHit(alignment));
+        }
+        self.front = front;
+        self.velocity = front * speed;
+        if first {
+            self.wall_memory = normal;
+        }
     }
     /// `HackCap::exeThrow`: fly on at the speed the throw set, until the
     /// cruise frames are used up.
@@ -358,11 +439,13 @@ impl Cap {
         if self.step == 0 {
             events.push(CapEvent::Thrown);
         }
+        self.wall_reaction(events);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
     }
     /// `HackCap::exeThrowBrake`: take a tenth of the speed off each frame; the
     /// cap stays where it has stopped.
-    fn throw_brake(&mut self) -> Option<CapNerve> {
+    fn throw_brake(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+        self.wall_reaction(events);
         self.velocity += self.front * self.brake_step;
         let stopped = self.velocity.length() < NEAR_ZERO;
         let reversed = self.velocity.dot(self.front) < 0.;

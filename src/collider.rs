@@ -118,6 +118,9 @@ impl Shape {
 pub struct Keeper {
     shapes: Vec<Shape>,
     check_step: f32,
+    /// Whether the keeper has arrows (`CollisionShapeKeeper::mHasShapeArrow`):
+    /// the player's has, Cappy's does not, and the floor rules differ.
+    has_arrow: bool,
 }
 impl Keeper {
     pub fn new(form: Form) -> Self {
@@ -159,7 +162,26 @@ impl Keeper {
             .iter()
             .map(Shape::check_range)
             .fold(f32::MAX, f32::min);
-        Self { shapes, check_step }
+        Self {
+            shapes,
+            check_step,
+            has_arrow: true,
+        }
+    }
+
+    /// `PlayerColliderHackCap::init`: Cappy is one plain sphere, "Body", of
+    /// radius 60 centred 10 above the cap's position.
+    pub fn cap() -> Self {
+        let shapes = vec![Shape::Sphere {
+            center: Vec3::new(0., 10., 0.),
+            radius: 60.,
+            support: None,
+        }];
+        Self {
+            check_step: 60.,
+            shapes,
+            has_arrow: false,
+        }
     }
 }
 
@@ -555,9 +577,18 @@ pub struct Outcome {
 
 impl PlayerCollider {
     pub fn new(form: Form) -> Self {
+        Self::with_keeper(form, Keeper::new(form))
+    }
+
+    /// Cappy's collider (`PlayerColliderHackCap`).
+    pub fn for_cap() -> Self {
+        Self::with_keeper(Form::Normal, Keeper::cap())
+    }
+
+    fn with_keeper(form: Form, keeper: Keeper) -> Self {
         Self {
             form,
-            keeper: Keeper::new(form),
+            keeper,
             floor: None,
             wall: None,
             ceiling: None,
@@ -862,6 +893,14 @@ impl PlayerCollider {
         };
         let class = classify(normal);
         let fix = match class {
+            Class::Floor if !self.keeper.has_arrow => {
+                // No arrows: the sphere itself is the floor contact.
+                if flags.floor {
+                    by_normal
+                } else {
+                    radial_or_normal(at_face, by_normal, radial())
+                }
+            }
             Class::Floor => {
                 // A floor-like face under a sphere that supports the body is
                 // ground when the contact is directly underneath it, or on

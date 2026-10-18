@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn run() {
     straight_throw_matches_the_recording();
+    a_wall_at_an_angle_turns_the_cap();
 }
 
 /// The standing throw of the recorded `capthrow` run: the cap appears 150 in
@@ -23,6 +24,7 @@ fn straight_throw_matches_the_recording() {
     let world = CapWorld {
         player: Vec3::ZERO,
         hold: false,
+        mesh: None,
     };
     let z = |cap: &Cap| cap.pos.z / UNIT;
     assert!((z(&cap) - 182.).abs() < 1e-3 && (cap.pos.y / UNIT - 70.).abs() < 1e-3);
@@ -58,4 +60,55 @@ fn straight_throw_matches_the_recording() {
     assert_eq!(log[21].0, "ThrowStay");
     assert_eq!(log[43].0, "Return");
     assert!((log[44].1 - 660.0).abs() < 0.1);
+}
+
+/// A cap thrown at a wall at an angle stops short of it by its radius (60),
+/// turns along it at the speed it had and raises the collision reaction once.
+#[cfg_attr(test, test)]
+fn a_wall_at_an_angle_turns_the_cap() {
+    // A wall at x = 500 facing -x, tall enough for the cap at 70.
+    let mesh = TriangleMesh::from_corners(&[
+        [
+            Vec3::new(500., -100., -2000.),
+            Vec3::new(500., 300., 2000.),
+            Vec3::new(500., 300., -2000.),
+        ],
+        [
+            Vec3::new(500., -100., -2000.),
+            Vec3::new(500., -100., 2000.),
+            Vec3::new(500., 300., 2000.),
+        ],
+    ]);
+    assert!(mesh.triangles.iter().all(|t| t.normal.x < -0.99));
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::new(1., 0., 1.).normalize(),
+            kind: Throw::Forward,
+            left: false,
+            air: false,
+            continuous: false,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: Some(&mesh),
+    };
+    let mut hits = 0;
+    let mut deepest = f32::MIN;
+    for _ in 0..40 {
+        for event in cap.update(&world) {
+            if matches!(event, CapEvent::WallHit(_)) {
+                hits += 1;
+            }
+        }
+        deepest = deepest.max(cap.pos.x / UNIT);
+    }
+    assert_eq!(hits, 1);
+    // The sphere's radius keeps the cap's position 60 from the wall.
+    assert!(deepest <= 440.01, "reached x = {deepest}");
+    // Free flight at 45 degrees ends near z = 480; turned along the wall it goes on.
+    assert!(cap.pos.z / UNIT > 485., "slid to z = {}", cap.pos.z / UNIT);
 }
