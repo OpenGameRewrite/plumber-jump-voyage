@@ -575,6 +575,8 @@ pub struct Snapshot {
     pub catching: Option<i32>,
     /// The model's sub animation while one plays: name, frame and length.
     pub sub: Option<(&'static str, f32, f32)>,
+    /// The state is the spin cap state's fall.
+    pub spin_fall: bool,
 }
 /// What a recorded row shows of the spin throw state (`PlayerStateSpinCap`).
 #[derive(Clone, Copy, Debug)]
@@ -686,12 +688,12 @@ impl Anim {
     }
     /// The frame animation triggers are scanned up to in the trace. A clip's
     /// trigger fires in the row whose pose shows its frame (the footfalls of the
-    /// crouch walk, the jump's, the pound's, the landings'); only the throw's
-    /// clips, whose pose reads one row behind their time, and the run cycle keep
-    /// the `held` rule.
+    /// crouch walk, the jump's, the pound's, the landings', the air throw's);
+    /// only the run cycle keeps the `held` rule. The ground throw's clip plays
+    /// as a sub animation too, and then the model's frame decides
+    /// (`Player::trigger_frame`).
     pub fn trigger_frame(&self) -> f32 {
-        const LAGGING: [&str; 2] = ["SpinCap", "Move"];
-        if LAGGING.iter().any(|prefix| self.name.starts_with(prefix)) {
+        if self.name.starts_with("Move") {
             self.held()
         } else {
             self.frame
@@ -791,6 +793,9 @@ pub struct Player {
     winding: bool,
     /// The cap reached the head this frame; its landing work is left.
     caught: bool,
+    /// The air throw is over but its state runs on: the fall of the spin cap
+    /// state (`PlayerStateSpinCap`'s `Fall` nerve) until the player lands.
+    spin_fall: bool,
     /// Frames of the cap's catch nerve: -1 on the frame it arrived.
     catching: Option<i32>,
     /// The sub animation the model plays, and whether the main clip's next
@@ -923,6 +928,7 @@ impl Default for Player {
             cap_serial: 0,
             winding: false,
             caught: false,
+            spin_fall: false,
             catching: None,
             sub: SubClip::default(),
             anim_skip: false,
@@ -1226,9 +1232,11 @@ impl Player {
         }
         // The spin attack shows once the cap's nerve has been applied, the frame
         // after the state's first step, and until the cap is flying.
+        // The cap, which moves before the player, follows where the player was
+        // when the frame began.
         (self.winding && self.winding_age > 0 || self.launch.is_some()).then_some(CapRow {
             state: "SpinAttack",
-            pos: self.pos,
+            pos: self.prev,
             clip: self.throw_clip,
         })
     }
@@ -1344,7 +1352,8 @@ impl Player {
             // ground has already stopped it.
             self.v.y = 0.;
         }
-        self.nerve.actor = crate::game_names::actor(self.mode, self.anim.name);
+        self.spin_fall = s.spin_fall;
+        self.nerve.actor = self.actor_name();
         self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
@@ -1566,6 +1575,18 @@ impl Player {
     /// leads the visible clip by the frame the clip waits.
     pub fn phase_clip(&self) -> &'static str {
         self.clip()
+    }
+    /// The game's name for the state the player is in.
+    pub fn nerve_name(&self) -> crate::game_names::Nerve {
+        if self.spin_fall && self.mode == Move::Fall {
+            return crate::game_names::known("SpinCap/Fall");
+        }
+        crate::game_names::nerve(self.mode, self.clip())
+    }
+    /// The actor nerve of that state (the part before the sub-state).
+    fn actor_name(&self) -> &'static str {
+        let name = self.nerve_name().name;
+        name.split('/').next().unwrap_or(name)
     }
     /// Ask for a clip unless the state is already playing or about to play it.
     fn keep(&mut self, name: &'static str) {
@@ -1887,7 +1908,10 @@ impl Player {
         // A state chosen this step has run no step yet: its first one is next.
         // The nerve's own steps restart with a new actor nerve, chosen or
         // reached by a sub-state that belongs to another one.
-        let actor = crate::game_names::actor(self.mode, self.clip());
+        if self.mode != Move::Fall {
+            self.spin_fall = false;
+        }
+        let actor = self.actor_name();
         if self.nerve.renewed || actor != self.nerve.actor {
             self.nerve.actor = actor;
             self.nerve.step = 0;
@@ -2682,7 +2706,7 @@ impl Player {
     /// counts down only while standing or running (any other state ends it),
     /// and the long jump's count runs down outside the long jump.
     fn update_combo_counters(&mut self) {
-        let nerve = crate::game_names::actor(self.mode, self.clip());
+        let nerve = self.actor_name();
         if nerve != "Jump" {
             self.combo
                 .update(matches!(nerve, "Wait" | "Run"), t::CONTINUOUS_JUMP_TIMER);
@@ -2927,7 +2951,16 @@ impl Player {
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
         if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, 0.1);
+            // A stick more than `JumpTurnAngleFast` from the facing swings it
+            // by up to `JumpTurnAngleFastLimit` a frame (the recorded air
+            // throw with the stick pulled back turned exactly 25 degrees).
+            let apart = wrap(yaw(self.stick) - yaw(self.facing)).abs().to_degrees();
+            let limit = if apart > t::JUMP_TURN_FAST_DEG {
+                t::JUMP_TURN_FAST_LIMIT_DEG.to_radians()
+            } else {
+                0.1
+            };
+            self.facing = turn(self.facing, self.stick, limit);
         }
         self.air_actions(o);
     }
@@ -3545,6 +3578,7 @@ impl Player {
             || !self.winding && step >= release + 6 && (self.pre_jump > 0 || o.crouch_pressed)
         {
             self.set(Move::Fall);
+            self.spin_fall = true;
             self.gravity = t::GRAVITY_AIR;
             if o.crouch_pressed {
                 self.start_hip_drop();
@@ -3725,7 +3759,7 @@ impl Player {
             self.air.update(&mut v, push, o.jump_held, &steer);
             self.set_h(v);
         }
-        if crate::game_names::actor(self.mode, self.clip()) == "Jump" {
+        if self.actor_name() == "Jump" {
             self.count_jump_combo();
         }
         self.air_for = None;

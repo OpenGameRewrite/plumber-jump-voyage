@@ -25,7 +25,7 @@ pub struct Nerve {
     pub name: &'static str,
     pub guess: bool,
 }
-const fn known(name: &'static str) -> Nerve {
+pub const fn known(name: &'static str) -> Nerve {
     Nerve { name, guess: false }
 }
 const fn guessed(name: &'static str) -> Nerve {
@@ -82,12 +82,6 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::Throw if anim.contains("Air") => known("SpinCap/SpinAir"),
         Move::Throw => known("SpinCap/SpinGround"),
     }
-}
-/// The actor nerve a state belongs to (`Wait`, `Run`, `Squat`): the part of
-/// its name before the sub-state. The step counter restarts when it changes.
-pub fn actor(mode: Move, anim: &str) -> &'static str {
-    let name = nerve(mode, anim).name;
-    name.split('/').next().unwrap_or(name)
 }
 /// Standing: the landing and stand-up clips are sub-states of their own.
 fn idle(anim: &str) -> Nerve {

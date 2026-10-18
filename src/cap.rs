@@ -44,17 +44,18 @@ const START_DISTANCE: f32 = 150.;
 /// Height of the player's head above the feet (`rs::getPlayerHeadPos`
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
-/// The cap is caught when its centre is this close to the head point. The
-/// catch is a sensor contact: the player's sensor sends the catch message to
-/// the cap's "Catch" sensor, which the cap takes in its return nerve
-/// (`HackCap::receiveMsg`). That sensor's radius is 100 (`HackCap::init`) and
-/// the player's head sensor sits 110 up (`PlayerActorHakoniwa` sensor list).
-/// Adding the player sensor's own radius (40) would catch at 140, but the
-/// recordings reject that: a cap 131 from the head after its move is not
-/// caught (`areas-cascade`) while one 99 away is (`capthrow`). The centre
-/// distance of 100 is the reading that fits; the contact rule behind it
-/// (what the sensor test really compares) is not derived.
-const CATCH_DISTANCE: f32 = 100.;
+/// The cap is caught when it starts a frame this close to the player's head:
+/// the contact is found at the end of the frame the cap flew into range, and
+/// the catch itself runs when the next frame begins (`HackCap::receiveMsg`
+/// takes the catch message and flags the cap, the player's movement then
+/// puts it on). Nine recorded catches and 72 frames of returns that were not
+/// caught bracket the range at 198 to 210 from the head (a cap 198 away was
+/// caught, one 210 away was not); 200 is also the distance the return code
+/// compares (see `RETURN_SLOW_DISTANCE`). The cap's own catch sensor is 100
+/// wide, which is not what the recordings show: the real contact test between
+/// the player's sensors and the cap's is not derived, so this range is a
+/// reading of the recordings, not of the code.
+const CATCH_DISTANCE: f32 = 200.;
 /// The return only slows down this near the head: speed is limited to a
 /// fraction of the distance there.
 const RETURN_SLOW_DISTANCE: f32 = 200.;
@@ -268,7 +269,7 @@ impl Cap {
     /// A looping clip came back to its first frame this frame.
     pub fn clip_wrapped(&self) -> bool {
         let (length, looping) = clip_shape(self.action);
-        looping && self.action_frame > 0 && self.action_frame % length == 0
+        looping && self.action_frame > 0 && self.action_frame.is_multiple_of(length)
     }
     /// Which start of a clip the cap's clip is.
     pub fn clip_serial(&self) -> u32 {
@@ -324,6 +325,12 @@ impl Cap {
         self.action_frame += 1;
         let head = world.player / UNIT + Vec3::Y * HEAD_HEIGHT;
         let mut events = Vec::new();
+        // In range at the start of the frame: the catch happens before the
+        // cap moves any further.
+        if self.nerve == CapNerve::Return && (self.spot - head).length() <= CATCH_DISTANCE {
+            events.push(CapEvent::Caught);
+            return events;
+        }
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events),
             CapNerve::ThrowBrake => self.throw_brake(),
@@ -338,9 +345,6 @@ impl Cap {
             self.returning = next == CapNerve::Return;
         }
         self.advance();
-        if self.nerve == CapNerve::Return && (self.spot - head).length() <= CATCH_DISTANCE {
-            events.push(CapEvent::Caught);
-        }
         events
     }
     /// The collider moves the cap by its velocity.
@@ -385,9 +389,7 @@ impl Cap {
         }
         let to_head = head - self.spot;
         let distance = to_head.length();
-        let Some(direction) = to_head.try_normalize() else {
-            return None;
-        };
+        let direction = to_head.try_normalize()?;
         // The cap's heading follows the head, at most the turn limit a frame.
         self.front = if self.step == 0 {
             direction

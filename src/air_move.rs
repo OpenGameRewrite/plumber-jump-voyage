@@ -219,8 +219,16 @@ impl AirMove {
             v.y -= self.gravity;
         }
         if self.input_lock == 0 {
-            // The direction follows the velocity, whichever way it points.
-            if v.dot(self.dir) < 0. {
+            // The direction follows the velocity, whichever way it points. A
+            // jump with no horizontal speed has none: it takes the stick's
+            // (the recorded air throw out of a standing jump with the stick
+            // pulled back gains 0.5 along the stick, not the braking 1).
+            if flat(*v).length_squared() < 1e-8 {
+                if let Some(dir) = flat(input).try_normalize() {
+                    self.dir = dir;
+                    self.side = dir.cross(DOWN).normalize_or_zero();
+                }
+            } else if v.dot(self.dir) < 0. {
                 self.dir = -self.dir;
             }
             let along = input.dot(self.dir);

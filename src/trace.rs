@@ -11,7 +11,7 @@ use crate::{
     effect_triggers::Tracker,
     fx,
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
-    game_names::{nerve, state_from_nerve},
+    game_names::state_from_nerve,
     local_assets::{Blend, Posed, looping},
     movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip},
     sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
@@ -119,18 +119,6 @@ impl Pose {
     /// Dash and DashFast by speed, with the weights the renderer uses.
     fn of(p: &Player) -> Self {
         let a = p.anim;
-        // A sub animation of another clip plays instead of the main one.
-        if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != a.name) {
-            return Self {
-                slot: name,
-                layers: vec![Layer {
-                    name,
-                    frame,
-                    rate: 1.,
-                    weight: 1.,
-                }],
-            };
-        }
         if a.name != "Move" {
             return Self {
                 slot: a.name,
@@ -440,6 +428,9 @@ impl Recorder {
         // the fade from the clip before it is the `interp` column.
         if let Some(sub) = covering {
             layers.push(layer_cell(sub.name, sub.frame, sub.rate, 1.));
+        } else if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != p.anim.name) {
+            // A sub animation of another clip plays instead of the main one.
+            layers.push(layer_cell(name, frame, 1., 1.));
         } else {
             for l in &pose.layers {
                 layers.push(layer_cell(l.name, l.frame, l.rate, l.weight));
@@ -472,6 +463,11 @@ impl Recorder {
             self.main_clip = p.anim.name;
         }
         let sub_now = p.model_sub().map(|(name, _)| name);
+        // The main slot's own blend is not reported while a sub animation of
+        // another clip plays over it.
+        if sub_now.is_some_and(|name| name != p.anim.name) {
+            interp.clear();
+        }
         if let Some(ended) = self.sub_clip
             && sub_now.is_none()
             && ended != p.anim.name
@@ -509,7 +505,7 @@ impl Recorder {
         cells.num(p.facing.x);
         cells.num(p.facing.z);
         cells.int(p.grounded as i64);
-        cells.text(nerve(p.mode, p.phase_clip()).name);
+        cells.text(p.nerve_name().name);
         // The run cycle is one slot, `Move`, whose clips are the blend layers.
         cells.text(p.anim.name);
         cells.num(shown);
@@ -567,7 +563,7 @@ impl Recorder {
         }));
         cells.int(p.state_frames() as i64);
         // The sub-nerve's own step counter (see `last_state`).
-        let label = nerve(p.mode, p.phase_clip()).name;
+        let label = p.nerve_name().name;
         self.sub_steps = match self.last_state {
             None => p.state_frames(),
             Some((last, steps)) if last == label && steps < p.state_frames() => self.sub_steps + 1,
@@ -924,9 +920,14 @@ impl TraceFile {
         let speed = self
             .number(row, "speed_h")
             .unwrap_or_else(|| (n("vx") * n("vx") + n("vz") * n("vz")).sqrt());
-        let mode = self
-            .cell(row, "state")
-            .and_then(|s| state_from_nerve(s, anim_name, speed));
+        let spin_fall = self.cell(row, "state") == Some("SpinCap/Fall");
+        // The spin cap state's fall is the rewrite's plain fall, named for the state.
+        let mode = if spin_fall {
+            Some(Move::Fall)
+        } else {
+            self.cell(row, "state")
+                .and_then(|s| state_from_nerve(s, anim_name, speed))
+        };
         let shown = n("anim_frame");
         let moving_cycle = ["Move", "Walk", "Run", "Dash", "DashFast"].contains(&anim_name)
             && matches!(mode, Some(Move::Walk | Move::Run));
@@ -965,6 +966,7 @@ impl TraceFile {
             throw: self.throw_hint(row),
             catching: self.catching(row),
             sub: self.sub_hint(row),
+            spin_fall,
         }
     }
 }
