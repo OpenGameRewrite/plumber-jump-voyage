@@ -123,7 +123,7 @@ impl Pose {
             return Self {
                 slot: a.name,
                 layers: vec![Layer {
-                    name: a.name,
+                    name: crate::local_assets::skeleton_clip(a.name),
                     // The braking, turning and held clips keep their last frame
                     // while the animator's counter runs one past it.
                     frame: match a.name {
@@ -284,15 +284,24 @@ impl Recorder {
             }
         }
     }
+    /// The sounds a clip schedules between two frames. `previous` is the clip
+    /// it replaced when it has just started: a level sound both clips list is
+    /// already sounding and is not requested again.
     fn action(
         &self,
         (cap, name, from, to, replay): (bool, &str, f32, f32, bool),
+        previous: &str,
         speed: f32,
         events: &mut Vec<String>,
         mix: &mut Vec<String>,
     ) {
         if let Some(table) = &self.table {
-            for play in table.group(cap).triggered(name, from, to, replay) {
+            let group = table.group(cap);
+            let carried = group.continuing(previous, name);
+            for play in group.triggered(name, from, to, replay) {
+                if from < 0. && carried.contains(&play) {
+                    continue;
+                }
                 self.play(cap, &play, speed, events, mix);
             }
         }
@@ -325,6 +334,7 @@ impl Recorder {
         if let Some((from, to, with_cap)) = advance.scan {
             self.action(
                 (false, p.anim.name, from, to, advance.replay),
+                advance.previous,
                 speed,
                 &mut events,
                 &mut mix,
@@ -332,6 +342,7 @@ impl Recorder {
             if with_cap {
                 self.action(
                     (true, p.anim.name, from, to, false),
+                    "",
                     speed,
                     &mut events,
                     &mut mix,
@@ -349,7 +360,13 @@ impl Recorder {
                 );
                 if let Some((from, to, _)) = advance.scan {
                     let name = cap_action_name(cap.clip());
-                    self.action((true, name, from, to, false), speed, &mut events, &mut mix);
+                    self.action(
+                        (true, name, from, to, false),
+                        "",
+                        speed,
+                        &mut events,
+                        &mut mix,
+                    );
                 }
             }
             None => self.cap_cursor = AnimCursor::default(),

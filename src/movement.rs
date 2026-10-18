@@ -12,6 +12,7 @@ use crate::geometry::TriangleMesh;
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use crate::se_ctrl::SeCtrl;
+use crate::spin_input::SpinInput;
 use bevy::prelude::*;
 use std::sync::Arc;
 
@@ -105,8 +106,11 @@ mod t {
     pub const SPIN_DOWN_FALL_INIT: f32 = 35.;
     pub const SPIN_DOWN_FALL_POWER: f32 = 1.5;
     pub const SPIN_DOWN_FALL_MAX: f32 = 45.;
+    pub const SPIN_DOWN_FALL_FRAME_MIN: u32 = 5;
     pub const GROUND_SPIN_FRAMES: u32 = 90;
     pub const GROUND_SPIN_MOVE_MAX: f32 = 8.;
+    pub const GROUND_SPIN_ACCEL_RATE: f32 = 0.5;
+    pub const GROUND_SPIN_BRAKE_RATE: f32 = 0.95;
 
     pub const HIP_DROP_SPEED: f32 = 45.;
     pub const HIP_DROP_LAND_CANCEL: u32 = 24;
@@ -261,6 +265,8 @@ mod rolling;
 mod run_cycle;
 #[path = "movement/sounds.rs"]
 mod sounds;
+#[path = "movement/spin.rs"]
+mod spin;
 #[path = "movement/squat.rs"]
 mod squat;
 #[path = "movement/terrain.rs"]
@@ -370,6 +376,12 @@ pub mod clip {
             "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
+            // The spin family's clips cycle: the ground spin and the drop
+            // are 10 frames long, the spin jump's body 8.
+            "SpinGroundL" | "SpinGroundR" | "SpinJumpDownFallL" | "SpinJumpDownFallR" => Some(10.),
+            "StartSpinJumpL" | "StartSpinJumpR" | "RestartSpinJumpL" | "RestartSpinJumpR" => {
+                Some(8.)
+            }
             _ => None,
         }
     }
@@ -536,6 +548,7 @@ impl Move {
                 | Self::DoubleJump
                 | Self::TripleJump
                 | Self::PoundJump
+                | Self::SpinJump
                 | Self::CapBounce
                 | Self::CatchJump
                 | Self::Fall
@@ -909,9 +922,12 @@ pub struct Player {
     jump_extend: bool,
     max_air_speed: f32,
     peak: f32,
-    spin: u32,
-    spin_turn: f32,
-    last_stick: Vec2,
+    /// The stick-circle detector the player's input holds
+    /// (`al::SpinInputAnalyzer`), fed every frame.
+    spin_input: SpinInput,
+    /// The direction of the ground spin in progress, which the spin jump and
+    /// the spin drop that follow it keep (left or right clips).
+    spin_clockwise: bool,
     stick: Vec3,
     tilt: f32,
     slope: f32,
@@ -1047,9 +1063,8 @@ impl Default for Player {
             jump_extend: false,
             max_air_speed: t::JUMP_MOVE_MIN,
             peak: SPAWN.y,
-            spin: 0,
-            spin_turn: 0.,
-            last_stick: Vec2::ZERO,
+            spin_input: SpinInput::default(),
+            spin_clockwise: false,
             stick: Vec3::ZERO,
             tilt: 0.,
             slope: 0.,
@@ -1223,6 +1238,18 @@ fn jump_takeoff(extend_frames: u32, power: f32, gravity: f32) -> air_move::Takeo
         input_lock: 0,
         speed_window: Some((0., air_move::tune::JUMP_BASE_SPEED_MAX)),
         fall_max: t::FALL_MAX,
+    }
+}
+/// What the air control is set up with for a jump of this state: the
+/// spin jump keeps its own, lower, speed limit (`SpinJumpMoveSpeedMax`).
+fn takeoff_of(mode: Move, extend_frames: u32, power: f32, gravity: f32) -> air_move::Takeoff {
+    let takeoff = jump_takeoff(extend_frames, power, gravity);
+    match mode {
+        Move::SpinJump => air_move::Takeoff {
+            speed_limit: t::SPIN_JUMP_MOVE_MAX,
+            ..takeoff
+        },
+        _ => takeoff,
     }
 }
 /// A fall (`PlayerStateFallHakoniwa`'s first step): the vertical speed stays,
@@ -1458,6 +1485,9 @@ impl Player {
             self.resume_air_control(s);
         }
         if let Some((name, frame)) = s.anim {
+            if let Some(clockwise) = spin::clip_is_clockwise(name) {
+                self.spin_clockwise = clockwise;
+            }
             if self.anim.name != name {
                 self.start_clip(name);
             }
@@ -1906,8 +1936,10 @@ impl Player {
         if quench {
             self.events.push(Fx::Quenched);
             self.end_burn();
-        } else if self.grounded && !was_grounded && !hot {
+        } else if self.grounded && !was_grounded && !hot && self.mode != Move::GroundSpin {
             // The contact is flagged now; the next step decides what it means.
+            // (The ground spin only regains the floor it let go of when it was
+            // chosen; no state looks at that as a landing.)
             self.nerve.touchdown = true;
             self.touchdown_speed = self.landing_speed;
         }
@@ -1916,6 +1948,7 @@ impl Player {
         } else if !self.grounded
             && was_grounded
             && self.v.y <= 0.
+            && !(self.mode == Move::GroundSpin && self.nerve.deferred)
             && matches!(
                 self.mode,
                 Move::Idle
@@ -2008,28 +2041,7 @@ impl Player {
         } else {
             0
         };
-        // Circling the stick arms a spin, as in the original's spin jump/throw.
-        if o.direction.length_squared() > 0.25 && self.last_stick.length_squared() > 0.25 {
-            let angle = self.last_stick.angle_to(o.direction);
-            if angle.abs() < 1.2
-                && (self.spin_turn == 0. || angle.signum() == self.spin_turn.signum())
-            {
-                self.spin_turn += angle;
-            } else {
-                self.spin_turn = 0.;
-            }
-            if self.spin_turn.abs() > 5.5 {
-                self.spin = 30;
-                self.spin_turn = 0.;
-            }
-        } else {
-            self.spin_turn = 0.;
-        }
-        if o.spin_throw {
-            self.spin = 30;
-        }
-        self.spin = self.spin.saturating_sub(1);
-        self.last_stick = o.direction;
+        self.read_spin_input(o);
         self.catch_window = self.catch_window.saturating_sub(1);
         self.climbing.cooldown = self.climbing.cooldown.saturating_sub(1);
         self.after_turn = self.after_turn.saturating_sub(1);
@@ -2113,18 +2125,6 @@ impl Player {
                 }
                 return true;
             }
-        }
-        if self.spin > 0 && self.tilt > 0.5 && self.mode != Move::GroundSpin {
-            self.spin = 0;
-            self.go(
-                Move::GroundSpin,
-                if self.spin_turn >= 0. {
-                    "SpinGroundL"
-                } else {
-                    "SpinGroundR"
-                },
-            );
-            return true;
         }
         false
     }
@@ -2238,8 +2238,10 @@ impl Player {
         } else {
             false
         };
-        // The actor's judges (jump, crouch, throw) look at the state's result.
+        // The run state's own judge for the ground spin comes before the
+        // actor's (jump, crouch, throw), which look at the state's result.
         if !ended {
+            self.try_start_ground_spin();
             self.ground_actions(o);
         }
     }
@@ -2287,6 +2289,10 @@ impl Player {
             RunNerve::Pivot => self.pivot_step(),
             RunNerve::Turn => self.turn_step(step),
             _ => self.brake_step(step),
+        }
+        // A pivot that ends the state has no spin judge.
+        if !self.nerve.deferred {
+            self.try_start_ground_spin();
         }
         // The actor's judges look at the state's result: the brake of this
         // frame has already slowed the player when a turning jump is chosen.
@@ -2369,31 +2375,6 @@ impl Player {
             }
         }
     }
-    fn ground_spin(&mut self, o: &Orders) {
-        if self.pre_jump > 0 {
-            self.spin = 30;
-            self.ground_jump(o);
-            return;
-        }
-        if self.pre_throw > 0 && self.cap.is_none() {
-            self.pre_throw = 0;
-            self.start_throw(Throw::Spin);
-            return;
-        }
-        let speed = self.speed_h();
-        let s = if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, 0.2);
-            (speed + 0.5).min(t::GROUND_SPIN_MOVE_MAX)
-        } else {
-            speed * 0.95
-        };
-        self.set_h(self.facing * s);
-        self.v.y = -t::GRAVITY;
-        if self.frame >= 20 && self.tilt < 0.05 || self.frame >= t::GROUND_SPIN_FRAMES {
-            self.go(Move::Idle, "Wait");
-        }
-    }
-
     // ---- Squat, roll, slides --------------------------------------------
     /// Ground at least this many degrees steep.
     fn steep(&self, degrees: f32) -> bool {
@@ -2737,7 +2718,7 @@ impl Player {
         } else {
             0
         };
-        let takeoff = jump_takeoff(extend, power, gravity);
+        let takeoff = takeoff_of(mode, extend, power, gravity);
         self.air.setup(&mut self.v, self.facing, &takeoff);
         self.air_for = Some(mode);
         self.jump_power = power;
@@ -2758,12 +2739,13 @@ impl Player {
             Move::Jump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY),
             Move::CapBounce => (0, t::TRAMPLE_HIGH_GRAVITY),
             Move::CatchJump => (0, t::CAP_CATCH_JUMP_GRAVITY),
+            Move::SpinJump => (0, t::SPIN_JUMP_GRAVITY),
             _ => (0, t::JUMP_GRAVITY),
         };
         let takeoff = if self.mode == Move::Fall {
             fall_takeoff(self.v.y)
         } else {
-            jump_takeoff(extend, self.v.y, gravity)
+            takeoff_of(self.mode, extend, self.v.y, gravity)
         };
         // The window is still open when the button was held since take-off.
         let held = self.jump_held_frames > frames;
@@ -2873,6 +2855,12 @@ impl Player {
         self.jump_with(mode, clip, power, gravity, |_| {});
     }
     fn ground_jump(&mut self, _o: &Orders) {
+        // The actor's jump judge during the ground spin fills the request of
+        // the spin jump before any other kind is considered.
+        if self.mode == Move::GroundSpin {
+            self.spin_jump();
+            return;
+        }
         if self.mode == Move::PoundLand && self.pound_jump_permitted() {
             self.jump_with(
                 Move::PoundJump,
@@ -2893,20 +2881,6 @@ impl Player {
                 t::CAP_CATCH_JUMP_POWER,
                 t::CAP_CATCH_JUMP_GRAVITY,
                 |p| p.jump_extend = false,
-            );
-            return;
-        }
-        if self.spin > 0 {
-            self.spin = 0;
-            self.jump_with(
-                Move::SpinJump,
-                "SpinJumpStart",
-                t::SPIN_JUMP_POWER,
-                t::SPIN_JUMP_GRAVITY,
-                |p| {
-                    p.jump_extend = false;
-                    p.max_air_speed = t::SPIN_JUMP_MOVE_MAX;
-                },
             );
             return;
         }
@@ -3077,7 +3051,7 @@ impl Player {
         self.air_actions(o);
     }
     /// Free flight of the states that keep the older approximation of the
-    /// air control: the spin jump, the roll jump and the wall jump.
+    /// air control: the roll jump and the wall jump.
     fn air(&mut self, o: &Orders) {
         if self.air_actions(o) {
             return;
@@ -3125,13 +3099,8 @@ impl Player {
         if !extending && !takeoff {
             self.v.y -= self.gravity;
         }
-        let max = if self.mode == Move::SpinJump && self.v.y < 0. {
-            4.
-        } else {
-            t::FALL_MAX
-        };
-        self.v.y = self.v.y.max(-max);
-        if self.v.y < 0. && self.gravity != t::GRAVITY_AIR && !matches!(self.mode, Move::SpinJump) {
+        self.v.y = self.v.y.max(-t::FALL_MAX);
+        if self.v.y < 0. && self.gravity != t::GRAVITY_AIR {
             self.gravity = t::GRAVITY_AIR;
         }
         // Jump clips end in a fall pose; then the fall loop takes over.
@@ -3151,9 +3120,6 @@ impl Player {
         if ends.is_some_and(|n| self.anim_done(n)) && self.v.y < 0. {
             self.play("Fall");
         }
-        if self.mode == Move::SpinJump && self.anim.name == "SpinJumpStart" && self.anim_done(26) {
-            self.play("SpinJumpLoop");
-        }
     }
     /// Airborne transitions shared by every free-flight state.
     fn air_actions(&mut self, o: &Orders) -> bool {
@@ -3169,9 +3135,7 @@ impl Player {
         }
         if o.crouch_pressed && !matches!(self.mode, Move::Throw) {
             if self.mode == Move::SpinJump {
-                self.change(Move::SpinDrop, "SpinJumpDownFall", |p| {
-                    p.v = Vec3::NEG_Y * t::SPIN_DOWN_FALL_INIT;
-                });
+                self.start_spin_drop();
                 return true;
             }
             // The pound needs room above the ground (`PlayerJudgeStartHipDrop`).
@@ -3559,18 +3523,21 @@ impl Player {
             });
         }
     }
-    fn spin_drop(&mut self, _o: &Orders) {
-        self.set_h(Vec3::ZERO);
-        self.v.y = (self.v.y - t::SPIN_DOWN_FALL_POWER).max(-t::SPIN_DOWN_FALL_MAX);
-    }
-
     // ---- Cap ---------------------------------------------------------------
     fn throw_kind(&self, o: &Orders) -> Throw {
         if o.up_throw {
             Throw::Up
         } else if o.down_throw {
             Throw::Down
-        } else if o.spin_throw || self.spin > 0 {
+        } else if o.spin_throw
+            || matches!(
+                self.mode,
+                Move::GroundSpin | Move::SpinJump | Move::SpinDrop
+            )
+        {
+            // A throw during a spin sets the trigger the cap's spin move
+            // throw reads (`PlayerTrigger::isOnSpinMoveCapThrow`); which clip
+            // and flight it picks is a guess (`throw_clip`).
             Throw::Spin
         } else {
             Throw::Forward

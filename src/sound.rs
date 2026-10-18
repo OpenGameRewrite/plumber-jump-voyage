@@ -162,10 +162,14 @@ impl Ctx<'_, '_, '_> {
         to: f32,
         tag: &'static str,
         replay: bool,
+        carried: &[String],
         t: &mut Tracker,
     ) {
         let group = self.sounds.table.group(cap);
         for play in group.triggered(name, from, to, replay) {
+            if from < 0. && carried.contains(&play) {
+                continue;
+            }
             self.start(cap, &play, Some(tag), t);
         }
     }
@@ -210,7 +214,16 @@ fn play(
         p.trigger_frame(),
         crate::local_assets::looping(p.anim.name),
     );
-    if advance.restarted {
+    // A level sound both clips list keeps sounding across the change.
+    let carried = if advance.restarted {
+        ctx.sounds
+            .table
+            .group(false)
+            .continuing(advance.previous, p.anim.name)
+    } else {
+        Vec::new()
+    };
+    if advance.restarted && carried.is_empty() {
         for (e, tag) in &loops {
             if tag.0 == "anim" {
                 ctx.commands.entity(e).despawn();
@@ -218,9 +231,18 @@ fn play(
         }
     }
     if let Some((from, to, with_cap)) = advance.scan {
-        ctx.action(false, p.anim.name, from, to, "anim", advance.replay, &mut t);
+        ctx.action(
+            false,
+            p.anim.name,
+            from,
+            to,
+            "anim",
+            advance.replay,
+            &carried,
+            &mut t,
+        );
         if with_cap {
-            ctx.action(true, p.anim.name, from, to, "anim", false, &mut t);
+            ctx.action(true, p.anim.name, from, to, "anim", false, &[], &mut t);
         }
     }
     // Event sounds.
@@ -274,7 +296,7 @@ fn play(
                 }
             }
             if let Some((from, to, _)) = advance.scan {
-                ctx.action(true, name, from, to, "cap", false, &mut t);
+                ctx.action(true, name, from, to, "cap", false, &[], &mut t);
             }
         }
         None => {

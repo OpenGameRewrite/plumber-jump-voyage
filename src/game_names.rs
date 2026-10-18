@@ -11,7 +11,8 @@
 //! * observed: the probe's runs log it (`Wait/Wait`, `Wait/Land`, `Run/Run3D`,
 //!   `Jump/Jump` for the first, second and third jump, `Jump/JumpBack`,
 //!   `Jump/JumpTurn`, `LongJump/Jump`, `HipDrop/*`, `HeadSliding/Dive`,
-//!   `Squat/*`, `Rolling/*`, `SpinCap/SpinGround`). The braking and turning
+//!   `Squat/*`, `Rolling/*`, `SpinCap/SpinGround`, `Run/GroundSpin3D`,
+//!   `Jump/JumpSpinGround`, `Jump/JumpSpinGroundDownFall`). The braking and turning
 //!   clips play inside `Run/Run3D`, so the rewrite's skid and turn use that
 //!   name too.
 //! * symbol: the nerve exists in the 1.0.0 symbol list of the public
@@ -52,9 +53,9 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::LongJump => known("LongJump/Jump"),
         Move::Backflip => known("Jump/JumpBack"),
         Move::Sideflip => known("Jump/JumpTurn"),
-        Move::SpinJump => guessed("Jump/JumpSpinGround"),
-        Move::SpinDrop => guessed("Jump/JumpSpinGroundDownFall"),
-        Move::GroundSpin => guessed("Run/GroundSpin3D"),
+        Move::SpinJump => known("Jump/JumpSpinGround"),
+        Move::SpinDrop => known("Jump/JumpSpinGroundDownFall"),
+        Move::GroundSpin => known("Run/GroundSpin3D"),
         Move::GroundPound if anim == "HipDropStart" => known("HipDrop/Start"),
         Move::GroundPound => known("HipDrop/Fall"),
         Move::PoundLand => known("HipDrop/Land"),
@@ -147,7 +148,6 @@ fn state_of_clip(anim: &str) -> Option<Move> {
         "Jump3" => Move::TripleJump,
         "JumpHipDrop" => Move::PoundJump,
         "JumpCapCatchCommon" => Move::CatchJump,
-        "SpinJumpStart" | "SpinJumpLoop" => Move::SpinJump,
         "RollingStandUp" => Move::RollEnd,
         "FireRunStart" => Move::BurnJump,
         _ => return None,

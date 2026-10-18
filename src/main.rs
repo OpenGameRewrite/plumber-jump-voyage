@@ -36,6 +36,7 @@ mod sound;
 // Pure sound rules, shared by the audio and the headless trace.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 mod sound_table;
+mod spin_input;
 mod tone;
 mod trace;
 mod ui;
@@ -73,6 +74,7 @@ fn main() {
         effect_triggers::self_check();
         sound_table::self_check();
         se_ctrl::self_check();
+        spin_input::self_check();
         game_names::self_check();
         game_columns::self_check();
         tone::self_check();

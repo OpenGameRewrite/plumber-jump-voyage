@@ -244,10 +244,13 @@ impl Triggers {
                 &self.cap
             };
             for entry in table.get(name).cloned().unwrap_or_default() {
-                if entry.start <= 0 {
-                    self.start_action(changes, source, &entry);
-                } else {
-                    self.waiting.push((source, entry));
+                // Start frame 0 is passed again by every loop; -1 means the
+                // clip's start only (the ground spin's dust starts once, the
+                // spin jump's wind starts every loop).
+                match entry.start {
+                    0 => self.start_action(changes, source, &entry),
+                    start if start > 0 => self.waiting.push((source, entry)),
+                    _ => {}
                 }
             }
         }

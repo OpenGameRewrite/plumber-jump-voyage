@@ -96,6 +96,23 @@ impl Layer {
     }
 }
 impl Group {
+    /// The level sounds (`IsLevel`, the looping plays) a clip change carries
+    /// on: both clips list them, so the sound that is playing keeps playing and
+    /// the new clip's trigger does not start it again. The ground spin's charge
+    /// sound goes on through the spin jump; the drop between ends it, and the
+    /// jump restarting after the drop starts it anew.
+    pub fn continuing(&self, previous: &str, next: &str) -> Vec<String> {
+        let (Some(before), Some(after)) = (self.actions.get(previous), self.actions.get(next))
+        else {
+            return Vec::new();
+        };
+        after
+            .iter()
+            .filter(|t| self.plays.get(&t.play).is_some_and(|p| p.looping))
+            .filter(|t| before.iter().any(|b| b.play == t.play))
+            .map(|t| t.play.clone())
+            .collect()
+    }
     /// Plays a reaction starts.
     pub fn reaction_plays(&self, name: &str) -> Vec<String> {
         self.reactions.get(name).cloned().unwrap_or_default()
@@ -273,6 +290,8 @@ pub struct AnimCursor {
 pub struct AnimAdvance {
     /// The clip was restarted or replaced: its looping sounds end.
     pub restarted: bool,
+    /// The clip it replaced (empty when it started the first time).
+    pub previous: &'static str,
     /// Frames to look for triggers between, and whether the cap's sounds
     /// are searched too (a wrapped loop only replays Mario's).
     pub scan: Option<(f32, f32, bool)>,
@@ -288,6 +307,7 @@ impl AnimCursor {
         looped: bool,
     ) -> AnimAdvance {
         let restarted = (name, serial) != self.anim;
+        let previous = self.anim.0;
         if restarted {
             self.anim = (name, serial);
             self.frame = -1.;
@@ -296,15 +316,19 @@ impl AnimCursor {
         let scan = if frame >= self.frame {
             Some((self.frame, frame, true))
         } else if looped {
-            // A looping clip wrapped: replay its repeating sounds.
+            // A looping clip wrapped: replay its repeating sounds. The loop's
+            // first frame is the frame it just left (the frame counter goes
+            // from the last frame to 1), so a sound on frame 0 is not heard
+            // again (the ground spin's charge sound plays once).
             self.wrapped = true;
-            Some((-1., frame, false))
+            Some((0., frame, false))
         } else {
             None
         };
         self.frame = frame;
         AnimAdvance {
             restarted,
+            previous,
             scan,
             replay: self.wrapped,
         }

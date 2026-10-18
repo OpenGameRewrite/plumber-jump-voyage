@@ -242,6 +242,16 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
         _ => 0.,
     }
 }
+/// The skeleton clip an action plays when the action table (`ActionAnimCtrl`)
+/// names another one: the spin jump's start and restart actions both play the
+/// 8-frame `SpinJumpL` or `SpinJumpR`.
+pub fn skeleton_clip(action: &str) -> &str {
+    match action {
+        "StartSpinJumpL" | "RestartSpinJumpL" => "SpinJumpL",
+        "StartSpinJumpR" | "RestartSpinJumpR" => "SpinJumpR",
+        other => other,
+    }
+}
 /// A pose the animation blend can freeze and fade out.
 pub trait Posed {
     fn is_empty(&self) -> bool;
@@ -310,7 +320,13 @@ pub fn looping(name: &str) -> bool {
             | "FireRun"
             | "SpinGroundL"
             | "SpinGroundR"
+            | "StartSpinJumpL"
+            | "StartSpinJumpR"
+            | "RestartSpinJumpL"
+            | "RestartSpinJumpR"
             | "SpinJumpDownFall"
+            | "SpinJumpDownFallL"
+            | "SpinJumpDownFallR"
             | "SpinCapWait"
     )
 }
@@ -323,6 +339,7 @@ pub fn fallback(name: &str) -> &'static str {
         "LandJump3" | "LandTurn" | "LandStiffen" | "LandDownFall" | "LandRolling" => "Land",
         "TurnPoint" | "Turn" => "Brake",
         "SpinJumpStart" | "SpinJumpLoop" | "SpinJumpDownFall" => "SpinJump",
+        "SpinJumpDownFallL" | "SpinJumpDownFallR" => "SpinJumpDownFall",
         "RollingStandUp" => "RollingEnd",
         "WallKeep" => "WallSlideL",
         "WallCatchEnd" => "WallCatch",
@@ -690,7 +707,8 @@ mod imported {
         loaded.masked = found;
     }
     /// Look up a clip, following the fallback chain for missing ones.
-    fn clip(loaded: &Loaded, mut name: &str) -> Option<(AnimationNodeIndex, f32)> {
+    fn clip(loaded: &Loaded, name: &str) -> Option<(AnimationNodeIndex, f32)> {
+        let mut name = skeleton_clip(name);
         for _ in 0..4 {
             if let Some(found) = loaded.nodes.get(name) {
                 return Some(*found);

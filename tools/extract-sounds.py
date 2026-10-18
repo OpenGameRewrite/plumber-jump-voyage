@@ -207,6 +207,7 @@ CLIPS='''Wait WaitRelaxStart WaitRelax SnoozeStart Snooze SleepStart Sleep
 RunStart Brake TurnPoint Turn Land LandStiffen LandJump3 LandTurn LandDownFall LandRolling
 Jump JumpReverse Jump2 Jump3 JumpBack JumpTurn JumpBroad JumpBroad2 JumpBroad3 Fall
 SpinJumpStart SpinJumpLoop SpinJumpDownFall SpinGroundL SpinGroundR
+StartSpinJumpL StartSpinJumpR RestartSpinJumpL RestartSpinJumpR SpinJumpDownFallL SpinJumpDownFallR
 HipDropStart HipDrop HipDropLand JumpHipDrop RollingStart Rolling RollingEnd RollingJump RollingStandUp
 HeadSlidingStart HeadSliding Slide FireRunStart FireRun SquatStart SquatWait SquatWalk SquatEnd
 SpinCapStart SpinCapStartLeft SpinCapStartRight SpinCapStart2Left SpinCapStart2Right SpinCapStart3Left SpinCapStart3Right
