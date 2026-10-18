@@ -83,7 +83,12 @@ Empty cells mean the rewrite has no equivalent:
 - `counters`, `collision` and `triggers` use the game's keys where the rewrite
   has an equivalent (see below), then its own internal counters.
 - `cap_state` and `cap_anim` use the game's cap nerve and clip names
-  (`Throw`, `ThrowStay`, `Return`; `FlyingWaitR`, `StayR`).
+  (`SpinAttack` while the cap waits on the player for the throw frame, then
+  `Throw`, `ThrowBrake`, `ThrowStay`, `Return` and `Catch`; `FlyingWaitR`,
+  `StayR`, `CatchCap`). Reactions raised on the cap are logged with `@cap`.
+- `sub_step` counts the game's sub-nerve: it starts over whenever the state
+  label changes or the actor nerve restarts, and at the start of a replay it
+  equals `state_step`.
 - Not available headless: `bones`, camera position and pitch, clip lengths
   other than the run cycle's, hand/face/eye part clips, model offsets and the face.
 - `effects_live` is approximate: bursts for their nominal lifetime plus the
@@ -173,9 +178,11 @@ with their values.
 With `--lockstep game.csv`, before each step after the first the player is put
 into the game's previous row: state (mapped back from the nerve name), position,
 velocity, front, ground, clip and frame, state frame count and any counters
-whose names match `Player::counters`. Internals the trace cannot show (throw,
-roll, climb and fire controls, the cap, how long a jump may still extend) keep
-the rewrite's own values, and gravity and air-speed limits are set to what
+whose names match `Player::counters`. The thrown cap (nerve, steps, place,
+speed), the spin throw's progress and the model's sub animation are restored
+from the cap columns and the logged `subanim`/`endsub` events. Internals the
+trace cannot show (roll, climb and fire controls, how long a jump may still
+extend) keep the rewrite's own values, and gravity and air-speed limits are set to what
 entering that state would have given. A row at the contact with the ground
 (`ground` 1 in a state that flies) is injected with the landing still to be
 decided. A row whose `sub_step` is 0 shows a state that was only chosen, and a
