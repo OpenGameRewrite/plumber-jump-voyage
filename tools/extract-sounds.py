@@ -203,7 +203,8 @@ def render_sequence(layers,dst):
         w.setnchannels(1);w.setsampwidth(2);w.setframerate(rate);w.writeframes(pcm.tobytes())
 
 # Animations the controller plays (their sound triggers are installed).
-CLIPS='''Wait RunStart Brake TurnPoint Turn Land LandStiffen LandJump3 LandTurn LandDownFall LandRolling
+CLIPS='''Wait WaitRelaxStart WaitRelax SnoozeStart Snooze SleepStart Sleep
+RunStart Brake TurnPoint Turn Land LandStiffen LandJump3 LandTurn LandDownFall LandRolling
 Jump JumpReverse Jump2 Jump3 JumpBack JumpTurn JumpBroad JumpBroad2 JumpBroad3 Fall
 SpinJumpStart SpinJumpLoop SpinJumpDownFall SpinGroundL SpinGroundR
 HipDropStart HipDrop HipDropLand JumpHipDrop RollingStart Rolling RollingEnd RollingJump RollingStandUp

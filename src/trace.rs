@@ -285,13 +285,13 @@ impl Recorder {
     }
     fn action(
         &self,
-        (cap, name, from, to): (bool, &str, f32, f32),
+        (cap, name, from, to, replay): (bool, &str, f32, f32, bool),
         speed: f32,
         events: &mut Vec<String>,
         mix: &mut Vec<String>,
     ) {
         if let Some(table) = &self.table {
-            for play in table.group(cap).triggered(name, from, to) {
+            for play in table.group(cap).triggered(name, from, to, replay) {
                 self.play(cap, &play, speed, events, mix);
             }
         }
@@ -322,9 +322,19 @@ impl Recorder {
             looping(p.anim.name),
         );
         if let Some((from, to, with_cap)) = advance.scan {
-            self.action((false, p.anim.name, from, to), speed, &mut events, &mut mix);
+            self.action(
+                (false, p.anim.name, from, to, advance.replay),
+                speed,
+                &mut events,
+                &mut mix,
+            );
             if with_cap {
-                self.action((true, p.anim.name, from, to), speed, &mut events, &mut mix);
+                self.action(
+                    (true, p.anim.name, from, to, false),
+                    speed,
+                    &mut events,
+                    &mut mix,
+                );
             }
         }
         // The cap's own clip: what it starts when it begins (its flying loop).
@@ -338,7 +348,7 @@ impl Recorder {
                 );
                 if let Some((from, to, _)) = advance.scan {
                     let name = cap_action_name(cap.clip());
-                    self.action((true, name, from, to), speed, &mut events, &mut mix);
+                    self.action((true, name, from, to, false), speed, &mut events, &mut mix);
                 }
             }
             None => self.cap_cursor = AnimCursor::default(),
@@ -366,7 +376,7 @@ impl Recorder {
                         from,
                         to,
                         ..
-                    } => self.action((cap, name, from, to), speed, &mut events, &mut mix),
+                    } => self.action((cap, name, from, to, false), speed, &mut events, &mut mix),
                 }
             }
             if self.effects.is_none() {
@@ -959,6 +969,7 @@ impl TraceFile {
             grounded: self.cell(row, "ground") == Some("1"),
             anim,
             state_frames: self.number(row, "state_step").map(|s| s.max(0.) as u32),
+            sub_steps: self.number(row, "sub_step").map(|s| s.max(0.) as u32),
             counters,
             run: self.run_hint(row),
             next_clip: self.next_clip(row),

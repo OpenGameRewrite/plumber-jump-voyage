@@ -91,9 +91,13 @@ fn idle(anim: &str) -> Nerve {
         "LandDownFall" => guessed("Wait/Land"),
         "LandStiffen" => known("Wait/LandStiffen"),
         "SquatEnd" => known("Squat/StandUp"),
-        // The game's idle variants; the rewrite has no such clips yet.
+        // The idle sequence: each sub-nerve of the wait state plays one clip.
         "WaitRelaxStart" => known("Wait/WaitRelaxStart"),
         "WaitRelax" => known("Wait/WaitRelax"),
+        "SnoozeStart" => known("Wait/WaitSnoozeStart"),
+        "Snooze" => known("Wait/WaitSnooze"),
+        "SleepStart" => known("Wait/WaitSleepStart"),
+        "Sleep" => known("Wait/WaitSleep"),
         _ => known("Wait/Wait"),
     }
 }

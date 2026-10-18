@@ -257,11 +257,14 @@ mod sounds;
 mod squat;
 #[path = "movement/terrain.rs"]
 mod terrain;
+#[path = "movement/wait.rs"]
+mod wait;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
 use rolling::{RollControl, RollStart};
 pub use run_cycle::RunCycle;
 use squat::SquatControl;
+use wait::WaitControl;
 
 /// How much of the way to its target direction the body swings in a frame
 /// (`SlerpQuatRate`, used by `rs::slerpUpFront`).
@@ -312,6 +315,11 @@ pub mod clip {
     pub const ROLLING_STAND_UP: u32 = 9;
     pub const HEAD_SLIDING_START: u32 = 48;
     pub const LAND_ROLLING: u32 = 36;
+    /// The idle sequence's one-shot clips (`WaitRelaxStart`, `SnoozeStart`,
+    /// `SleepStart`).
+    pub const WAIT_RELAX_START: u32 = 150;
+    pub const SNOOZE_START: u32 = 507;
+    pub const SLEEP_START: u32 = 608;
     /// Lengths of the cap-throw clips (the spin family).
     pub fn throw(name: &str) -> u32 {
         match name {
@@ -343,7 +351,9 @@ pub mod clip {
     /// Length of the clips that loop (their frame wraps).
     pub fn loop_length(name: &str) -> Option<f32> {
         match name {
-            "SquatWait" => Some(120.),
+            "Wait" | "Snooze" => Some(180.),
+            "WaitRelax" => Some(1200.),
+            "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
             _ => None,
@@ -565,6 +575,8 @@ pub struct Snapshot {
     /// Clip and its frame (for "Move", the cycle phase).
     pub anim: Option<(&'static str, f32)>,
     pub state_frames: Option<u32>,
+    /// Steps the state's sub-nerve has run (the row's `sub_step`).
+    pub sub_steps: Option<u32>,
     /// Counters by the names `Player::counters` lists.
     pub counters: Vec<(String, i64)>,
     /// What a recorded run cycle shows of the run's hidden state.
@@ -782,6 +794,8 @@ pub struct Player {
     climbing: ClimbControl,
     rolling: RollControl,
     squat: SquatControl,
+    /// The standing state's idle sequence (`PlayerStateWait`).
+    wait: WaitControl,
     throwing: ThrowControl,
     /// Metres.
     pub pos: Vec3,
@@ -930,6 +944,7 @@ impl Default for Player {
             climbing: ClimbControl::default(),
             rolling: RollControl::default(),
             squat: SquatControl::default(),
+            wait: WaitControl::default(),
             throwing: ThrowControl::default(),
             pos: SPAWN,
             vel: Vec3::ZERO,
@@ -1374,6 +1389,9 @@ impl Player {
             self.frame = frames;
             self.nerve.step = frames;
         }
+        if let Some(steps) = s.sub_steps {
+            self.set_wait_steps(steps);
+        }
         // On the ground in a state that flies: the contact row, whose landing
         // the next step decides.
         self.nerve.touchdown = self.grounded && self.mode.in_flight();
@@ -1577,6 +1595,7 @@ impl Player {
     }
     /// Start a clip now: the first step of a state, or an injected snapshot.
     fn start_clip(&mut self, name: &'static str) {
+        self.restart_wait_steps(name);
         self.anim = Anim {
             name,
             serial: self.anim.serial.wrapping_add(1),
@@ -2050,14 +2069,14 @@ impl Player {
             return;
         }
         self.run_frames = 0;
+        let step = self.count_wait_step();
         let s = (self.speed_h() - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
         self.set_h(self.facing * s);
         if s <= 0. {
-            // Standing again; the landing and stand-up clips play out first.
+            // Standing again; the landing and stand-up clips play out first,
+            // then the idle sequence runs (`PlayerStateWait`).
             self.set(Move::Idle);
-            if !self.standing_clip_playing() && self.clip() != "Wait" {
-                self.play("Wait");
-            }
+            self.wait_nerve(step);
         }
         self.v.y = -t::GRAVITY;
     }

@@ -101,13 +101,16 @@ impl Group {
         self.reactions.get(name).cloned().unwrap_or_default()
     }
     /// Plays an action schedules between two frames of its clip; a negative
-    /// `from` means the clip is just starting.
-    pub fn triggered(&self, action: &str, from: f32, to: f32) -> Vec<String> {
+    /// `from` means the clip is just starting. `replay` marks the scan after a
+    /// looping clip wrapped: the triggers flagged one-time (`IsOneTime`) play
+    /// once per start of the clip and stay silent on later passes.
+    pub fn triggered(&self, action: &str, from: f32, to: f32, replay: bool) -> Vec<String> {
         let Some(triggers) = self.actions.get(action) else {
             return Vec::new();
         };
         triggers
             .iter()
+            .filter(|trigger| !(replay && trigger.once))
             .filter(|trigger| {
                 // Unset or negative start frames play as the clip begins.
                 let at = trigger.frame.max(0.);
@@ -265,6 +268,8 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
 pub struct AnimCursor {
     anim: (&'static str, u32),
     frame: f32,
+    /// The clip has looped since it started.
+    wrapped: bool,
 }
 /// What an update of the cursor asks the sound system to do.
 pub struct AnimAdvance {
@@ -273,6 +278,8 @@ pub struct AnimAdvance {
     /// Frames to look for triggers between, and whether the cap's sounds
     /// are searched too (a wrapped loop only replays Mario's).
     pub scan: Option<(f32, f32, bool)>,
+    /// The clip has wrapped since it started: its one-time sounds are spent.
+    pub replay: bool,
 }
 impl AnimCursor {
     pub fn advance(
@@ -286,17 +293,23 @@ impl AnimCursor {
         if restarted {
             self.anim = (name, serial);
             self.frame = -1.;
+            self.wrapped = false;
         }
         let scan = if frame >= self.frame {
             Some((self.frame, frame, true))
         } else if looped {
             // A looping clip wrapped: replay its repeating sounds.
+            self.wrapped = true;
             Some((-1., frame, false))
         } else {
             None
         };
         self.frame = frame;
-        AnimAdvance { restarted, scan }
+        AnimAdvance {
+            restarted,
+            scan,
+            replay: self.wrapped,
+        }
     }
 }
 /// The name the cap's sound table knows a clip of the cap by: the table does

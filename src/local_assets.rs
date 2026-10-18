@@ -233,7 +233,7 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
     match name {
         "Jump" if from == "Move" => 3.,
         "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
-        "Wait" | "Fall" => 6.,
+        "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
         | "SquatWait" | "SwimWait" | "SwimLand" | "SwimStand" => 3.,
         "SpinJumpDownFall" => 4.,
@@ -290,6 +290,9 @@ pub fn looping(name: &str) -> bool {
     matches!(
         name,
         "Wait"
+            | "WaitRelax"
+            | "Snooze"
+            | "Sleep"
             | "Fall"
             | "Rolling"
             | "HeadSliding"

@@ -33,15 +33,19 @@ fn sample_group() -> Group {
 #[cfg_attr(test, test)]
 fn voice_names_and_triggers() {
     assert!(is_voice("vJump") && !is_voice("RunL") && !is_voice("vague") && !is_voice("v"));
-    let group = sample_group();
+    let mut group = sample_group();
     // A clip that is just starting plays the unset-frame sounds; later ones wait.
-    assert_eq!(group.triggered("Jump", -1., 1.), ["Jump"]);
-    assert_eq!(group.triggered("Jump", 1., 3.), ["vJump"]);
+    assert_eq!(group.triggered("Jump", -1., 1., false), ["Jump"]);
+    assert_eq!(group.triggered("Jump", 1., 3., false), ["vJump"]);
     assert!(
-        group.triggered("Jump", 3., 5.).is_empty(),
+        group.triggered("Jump", 3., 5., false).is_empty(),
         "each trigger plays once"
     );
-    assert!(group.triggered("Wait", -1., 5.).is_empty());
+    assert!(group.triggered("Wait", -1., 5., false).is_empty());
+    // A looped clip replays its repeating sounds but not the one-time ones.
+    group.actions.get_mut("Jump").unwrap()[1].once = true;
+    assert_eq!(group.triggered("Jump", -1., 3., false), ["Jump", "vJump"]);
+    assert_eq!(group.triggered("Jump", -1., 3., true), ["Jump"]);
     assert_eq!(group.reaction_plays("Land"), ["Land", "LandMat"]);
     assert!(group.reaction_plays("Nothing").is_empty());
 }
@@ -139,12 +143,14 @@ fn cursors() {
     let again = cursor.advance("Jump", 2, 1., false);
     assert!(again.restarted, "a new serial restarts the same clip");
     // A loop that wrapped replays its repeating sounds for Mario only.
-    cursor.advance("Wait", 3, 50., true);
-    assert_eq!(
-        cursor.advance("Wait", 3, 4., true).scan,
-        Some((-1., 4., false))
-    );
-    assert_eq!(cursor.advance("Wait", 3, 1., false).scan, None);
+    assert!(!cursor.advance("Wait", 3, 50., true).replay);
+    let wrapped = cursor.advance("Wait", 3, 4., true);
+    assert_eq!(wrapped.scan, Some((-1., 4., false)));
+    // From then on the clip's one-time sounds are spent, until it restarts.
+    assert!(wrapped.replay);
+    assert!(cursor.advance("Wait", 3, 5., true).replay);
+    assert!(!cursor.advance("Wait", 4, 1., true).replay);
+    assert_eq!(cursor.advance("Wait", 4, 0.5, false).scan, None);
     assert_eq!(cap_action_name("FlyingWaitR"), "FlyingWait");
     assert_eq!(cap_action_name("FlyingWaitSpiral"), "FlyingWaitSpiral");
     assert_eq!(cap_action_name("StayL"), "StayL");

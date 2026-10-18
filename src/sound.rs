@@ -161,10 +161,11 @@ impl Ctx<'_, '_, '_> {
         from: f32,
         to: f32,
         tag: &'static str,
+        replay: bool,
         t: &mut Tracker,
     ) {
         let group = self.sounds.table.group(cap);
-        for play in group.triggered(name, from, to) {
+        for play in group.triggered(name, from, to, replay) {
             self.start(cap, &play, Some(tag), t);
         }
     }
@@ -217,9 +218,9 @@ fn play(
         }
     }
     if let Some((from, to, with_cap)) = advance.scan {
-        ctx.action(false, p.anim.name, from, to, "anim", &mut t);
+        ctx.action(false, p.anim.name, from, to, "anim", advance.replay, &mut t);
         if with_cap {
-            ctx.action(true, p.anim.name, from, to, "anim", &mut t);
+            ctx.action(true, p.anim.name, from, to, "anim", false, &mut t);
         }
     }
     // Event sounds.
@@ -252,7 +253,7 @@ fn play(
                     from,
                     to,
                     tag,
-                } => ctx.action(cap, name, from, to, tag, &mut t),
+                } => ctx.action(cap, name, from, to, tag, false, &mut t),
             }
         }
     }
@@ -280,7 +281,7 @@ fn play(
                 }
             }
             if let Some((from, to, _)) = advance.scan {
-                ctx.action(true, name, from, to, "cap", &mut t);
+                ctx.action(true, name, from, to, "cap", false, &mut t);
             }
         }
         None => {
