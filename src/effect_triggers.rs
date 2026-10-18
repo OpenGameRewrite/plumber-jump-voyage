@@ -322,6 +322,10 @@ impl Triggers {
             .collect();
         for key in dropped {
             self.running.remove(&key);
+            // The step that ended the effect made its emit call first.
+            if input.calls.contains(&key.effect.as_str()) {
+                changes.push(Change::Again { key: key.clone() });
+            }
             changes.push(Change::Stop { key });
         }
         changes

@@ -60,7 +60,13 @@ fn event_cues() {
     assert_eq!(land(Move::Run, &mut boosts), reaction("LandRun"));
     assert_eq!(land(Move::Jump, &mut boosts), reaction("LandRun"));
     assert_eq!(land(Move::Idle, &mut boosts), reaction("Land"));
-    assert_eq!(land(Move::Roll, &mut boosts), reaction("RollLand"));
+    // Landing into the roll raises the plain reaction; the roll's own landing
+    // after a long flight is its own event.
+    assert_eq!(land(Move::Roll, &mut boosts), reaction("Land"));
+    assert_eq!(
+        fx_cues(Fx::RollLand, on(Move::Roll), &mut boosts),
+        reaction("RollLand")
+    );
     assert!(land(Move::Crouch, &mut boosts).is_empty());
     assert_eq!(
         fx_cues(Fx::PoundLand, on(Move::PoundLand), &mut boosts),

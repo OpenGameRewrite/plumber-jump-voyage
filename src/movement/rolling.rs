@@ -76,6 +76,9 @@ pub(super) struct RollControl {
     /// deletes it in the air; `exeStart` and the stand-up delete it once.
     effect_on: bool,
     effect_called: bool,
+    /// The unrolling clip began this step at the rolling clip's frame; the
+    /// step's rate update must not advance it again.
+    frame_kept: bool,
 }
 impl Default for RollControl {
     fn default() -> Self {
@@ -92,6 +95,7 @@ impl Default for RollControl {
             horizontal_speed: 0.,
             effect_on: false,
             effect_called: false,
+            frame_kept: false,
         }
     }
 }
@@ -121,9 +125,14 @@ impl Player {
     pub fn roll_effect_on(&self) -> bool {
         matches!(self.mode, Move::Roll | Move::RollEnd | Move::RollJump) && self.rolling.effect_on
     }
-    /// The roll called its effect's emit this step.
+    /// A new step: the emit call of the last one is over.
+    pub(super) fn roll_forget_effect_call(&mut self) {
+        self.rolling.effect_called = false;
+    }
+    /// The roll called its effect's emit this step, also when the step ended
+    /// the state (the brake emits before it hands the actor over).
     pub fn roll_effect_called(&self) -> bool {
-        self.roll_effect_on() && self.rolling.effect_called
+        self.rolling.effect_called
     }
     /// The roll is in its brake nerve, which shares the unrolling clip.
     pub(super) fn is_roll_brake(&self) -> bool {
@@ -192,13 +201,18 @@ impl Player {
     fn roll_to(&mut self, nerve: RollNerve) {
         self.rolling.nerve = nerve;
         self.rolling.steps = 0;
-        // Unrolling keeps the rolling clip's frame (`setAnimFrame`).
-        let keep =
-            (nerve == RollNerve::UnRoll && self.anim.name == "Rolling").then_some(self.anim.frame);
+        // Unrolling keeps the rolling clip's frame (`setAnimFrame`), taken
+        // after that clip's advance of the step the unrolling starts in. The
+        // animator's own counter starts over, which the row shows.
+        let keep = (nerve == RollNerve::UnRoll && self.anim.name == "Rolling")
+            .then_some((self.anim.frame, self.anim.rate));
         self.defer(Move::Roll, nerve_clip(nerve), move |p| {
             p.roll_enter(nerve);
-            if let Some(frame) = keep {
-                p.anim.frame = frame;
+            if let Some((frame, rate)) = keep {
+                let length = clip::loop_length("Rolling").unwrap_or(f32::MAX);
+                p.anim.frame = (frame + rate) % length;
+                p.rolling.frame_kept = true;
+                p.counter_restarted = true;
             }
         });
         if nerve == RollNerve::Brake {
@@ -218,6 +232,8 @@ impl Player {
                 self.events.push(Fx::RollStart);
             }
             RollNerve::BoostStart => self.events.push(Fx::RollBoost { perfect: true }),
+            // These nerves stop the rolling effect as their first step.
+            RollNerve::UnRoll | RollNerve::Land => self.rolling.effect_on = false,
             _ => {}
         }
     }
@@ -228,6 +244,7 @@ impl Player {
     pub(super) fn resume_roll(
         &mut self,
         state_steps: u32,
+        nerve_steps: u32,
         next_clip: Option<&'static str>,
         brake: bool,
     ) {
@@ -247,7 +264,7 @@ impl Player {
         let steps = state_steps as i32;
         self.rolling = RollControl {
             nerve,
-            steps: state_steps,
+            steps: nerve_steps,
             frames: steps.min(t::ROLL_FRAMES_MIN + 1),
             charge: steps.min(t::ROLL_RESTART_CHARGE + 1),
             force: steps.min(t::ROLL_RESTART_FORCE),
@@ -258,6 +275,7 @@ impl Player {
             horizontal_speed: self.v.with_y(0.).length(),
             effect_on: self.is_on_ground() && self.anim.name == "Rolling",
             effect_called: false,
+            frame_kept: false,
         };
         if let Some(clip) = next_clip {
             if self.mode == Move::RollEnd {
@@ -271,7 +289,6 @@ impl Player {
     /// One step of the roll nerves, then `PlayerStateRolling::control`.
     pub(super) fn roll(&mut self, o: &Orders) {
         self.rolling.steps += 1;
-        self.rolling.effect_called = false;
         let pressed = o.crouch && o.throw_pressed && self.grounded;
         match self.rolling.nerve {
             RollNerve::Start => self.roll_start_step(),
@@ -401,7 +418,6 @@ impl Player {
     /// the charge does not).
     pub(super) fn roll_jump_step(&mut self, o: &Orders) {
         self.rolling.steps += 1;
-        self.rolling.effect_called = false;
         if self.rolling.steps == 1 {
             // `exeJump`'s first step: the rolling effect stops, the charge empties.
             self.rolling.effect_on = false;
@@ -533,7 +549,11 @@ impl Player {
         let rate = t::ROLL_ANIM_RATE_MIN + (t::ROLL_ANIM_RATE_MAX - t::ROLL_ANIM_RATE_MIN) * share;
         let old = self.anim.rate;
         self.anim.rate = rate;
-        // A clip that began this step has not advanced yet.
+        // A clip that began this step has not advanced yet; the unrolling clip
+        // took the rolling clip's advance with it.
+        if std::mem::take(&mut self.rolling.frame_kept) {
+            return;
+        }
         if self.anim.frame > 0. {
             let length = clip::loop_length(self.anim.name).unwrap_or(f32::MAX);
             let mut before = self.anim.frame - old;

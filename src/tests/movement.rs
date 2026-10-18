@@ -60,6 +60,8 @@ pub(super) fn run() {
     dive_from_pound();
     dive_roll_landing();
     roll_timing_and_boost();
+    roll_winds_down();
+    roll_jump_is_a_nerve_of_the_roll();
     cap_flight();
     spin_throw();
     running_throw();
@@ -569,6 +571,124 @@ fn roll_timing_and_boost() {
     // Releasing crouch stands up once the new roll has run its minimum.
     frames(&mut p, Orders::default(), &floor, 80);
     assert_ne!(p.mode, Move::Roll);
+}
+
+/// A roll that slows below the end speed with crouch held unrolls, brakes
+/// and hands the actor to the squat (the recorded `roll-unroll`).
+#[cfg_attr(test, test)]
+fn roll_winds_down() {
+    let floor = floor();
+    let held = Orders {
+        crouch: true,
+        ..default()
+    };
+    let mut p = Player::default();
+    frames(&mut p, held.clone(), &floor, 3);
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            ..held.clone()
+        },
+        &floor,
+    );
+    let mut names = vec![];
+    for _ in 0..400 {
+        p.step(&held, &floor);
+        let name = p.nerve_name().name;
+        if names.last() != Some(&name) {
+            names.push(name);
+        }
+        if p.mode == Move::SquatBrake {
+            break;
+        }
+    }
+    // The brake shares the unrolling clip; only the nerve tells them apart.
+    assert_eq!(
+        &names[names.len() - 4..],
+        [
+            "Rolling/Rolling",
+            "Rolling/UnRoll",
+            "Rolling/Brake",
+            "Squat/Brake"
+        ]
+    );
+    // The squat the brake hands over to skips its start clip.
+    assert_eq!(p.phase_clip(), "SquatWait");
+}
+
+/// The roll's jump and its landing are nerves of the roll state: its step
+/// count runs on through them, and landing with crouch held rolls on.
+#[cfg_attr(test, test)]
+fn roll_jump_is_a_nerve_of_the_roll() {
+    let floor = floor();
+    let held = Orders {
+        crouch: true,
+        ..default()
+    };
+    let mut p = Player::default();
+    frames(&mut p, held.clone(), &floor, 3);
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            ..held.clone()
+        },
+        &floor,
+    );
+    frames(&mut p, held.clone(), &floor, 20);
+    p.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..held.clone()
+        },
+        &floor,
+    );
+    assert_eq!(p.nerve_name().name, "Rolling/Jump");
+    assert!(
+        p.state_frames() > 20,
+        "the roll's steps run on: {}",
+        p.state_frames()
+    );
+    let steps = p.state_frames();
+    p.step(&held, &floor);
+    assert_eq!(p.state_frames(), steps + 1);
+    // The long jump's count rises at take-off and waits in the air.
+    assert_eq!(p.long_combo.count, 1);
+    let waiting = p.long_combo.timer;
+    frames(&mut p, held.clone(), &floor, 5);
+    assert_eq!(p.long_combo.timer, waiting);
+    until_landed(&mut p, held.clone(), &floor);
+    assert_eq!(p.nerve_name().name, "Rolling/Land");
+    assert!(
+        p.state_frames() > steps + 20,
+        "no restart: {}",
+        p.state_frames()
+    );
+    // Without crouch the landing ends the roll instead.
+    let mut q = Player::default();
+    frames(&mut q, held.clone(), &floor, 3);
+    q.step(
+        &Orders {
+            throw_pressed: true,
+            ..held.clone()
+        },
+        &floor,
+    );
+    frames(&mut q, held.clone(), &floor, 20);
+    q.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..held
+        },
+        &floor,
+    );
+    until_landed(&mut q, Orders::default(), &floor);
+    assert!(
+        !matches!(q.mode, Move::Roll | Move::RollJump),
+        "{:?}",
+        q.mode
+    );
 }
 
 #[cfg_attr(test, test)]

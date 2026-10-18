@@ -465,7 +465,15 @@ impl Recorder {
             .old
             .last()
             .filter(|_| covering.is_none())
-            .map(|(old, _, _)| format!("{}:{}", old.dominant(), num(1. - kept)))
+            .map(|(old, _, _)| {
+                // A clip restarted over itself fades from the clip it first
+                // followed: the interpolation source keeps its name.
+                let from = match old.dominant() {
+                    name if name == p.anim.name && !self.stale_clip.is_empty() => self.stale_clip,
+                    name => name,
+                };
+                format!("{from}:{}", num(1. - kept))
+            })
             .unwrap_or_default();
         // A sub animation of another clip just ended: the main clip restarts
         // blending in over `RESTART_BLEND_FRAMES` from the clip it followed.
@@ -519,7 +527,7 @@ impl Recorder {
         cells.text(p.nerve_name().name);
         // The run cycle is one slot, `Move`, whose clips are the blend layers.
         cells.text(p.anim.name);
-        cells.num(shown);
+        cells.num(if p.counter_restarted { 0. } else { shown });
         cells.num(p.anim.rate);
         cells.text(&blend);
         cells.text(&interp);

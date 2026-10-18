@@ -41,11 +41,7 @@ impl Player {
     fn collision_form(&self) -> Form {
         if matches!(
             self.mode,
-            Move::SquatBrake
-                | Move::Crouch
-                | Move::Crawl
-                | Move::Roll
-                | Move::RollEnd
+            Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd
         ) {
             Form::Mini
         } else {

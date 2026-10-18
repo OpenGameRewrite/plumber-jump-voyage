@@ -830,6 +830,10 @@ pub struct Player {
     /// update is skipped (a clip just started under a sub animation).
     sub: SubClip,
     anim_skip: bool,
+    /// The clip began at a frame set by hand (`setAnimFrame`): the animator's
+    /// counter, which the trace's `anim_frame` shows, starts over at zero for
+    /// the row while the pose shows the frame.
+    pub counter_restarted: bool,
     /// Frames the cap has been the spin attack, and the clip of the throw.
     winding_age: u32,
     throw_clip: &'static str,
@@ -970,6 +974,7 @@ impl Default for Player {
             catching: None,
             sub: SubClip::default(),
             anim_skip: false,
+            counter_restarted: false,
             winding_age: 0,
             throw_clip: "SpinCapStart",
             timer: 0.,
@@ -1477,7 +1482,12 @@ impl Player {
             }
         }
         if matches!(self.mode, Move::Roll | Move::RollEnd) {
-            self.resume_roll(s.state_frames.unwrap_or(0), s.next_clip, s.roll_brake);
+            self.resume_roll(
+                s.state_frames.unwrap_or(0),
+                s.sub_steps.unwrap_or(0),
+                s.next_clip,
+                s.roll_brake,
+            );
         }
         self.resume_cap(s);
         for (name, value) in &s.counters {
@@ -1695,6 +1705,11 @@ impl Player {
             // `startAction`); without a sub animation the frame follows the
             // model instead (`updateSync`) and nothing is skipped.
             let skipped = std::mem::take(&mut self.anim_skip) && self.sub.active;
+            // The unrolling clip holds its last frame; the counter goes on
+            // from there with the rate.
+            if self.anim.name == "RollingEnd" {
+                self.anim.frame = self.anim.frame.min(clip::ROLLING_END as f32);
+            }
             if !skipped {
                 self.anim.frame += self.anim.rate;
             }
@@ -1744,6 +1759,8 @@ impl Player {
     /// First step of a state chosen last step: start its clip, then do the
     /// work only its first step does.
     fn begin_step(&mut self) {
+        self.counter_restarted = false;
+        self.roll_forget_effect_call();
         self.advance_clips();
         let (clip, work) = self.nerve.start();
         if let Some(clip) = clip {
@@ -3982,12 +3999,7 @@ impl Player {
     fn collide_solids(&mut self, o: &Orders, scene: &Course, was_grounded: bool) {
         let crouched = matches!(
             self.mode,
-            Move::SquatBrake
-                | Move::Crouch
-                | Move::Crawl
-                | Move::Roll
-                | Move::RollEnd
-                | Move::Dive
+            Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd | Move::Dive
         ) || self.grounded && o.crouch;
         let height = if crouched { SQUAT_HEIGHT } else { HEIGHT };
         // How far past the surface (negative: short of it) the body must be.
