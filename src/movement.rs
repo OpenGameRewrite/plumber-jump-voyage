@@ -130,6 +130,10 @@ mod t {
     pub const ROLL_SLOPE_ACCEL: f32 = 0.6;
     pub const ROLL_BRAKE: f32 = 0.998;
     pub const ROLL_END_SPEED: f32 = 17.;
+    /// `SlopeRollingEndBrake` and `SlopeRollingEndBrakeEndSpeed`: the winding
+    /// down roll's brake and the speed under which it ends.
+    pub const ROLL_END_BRAKE: f32 = 0.95;
+    pub const ROLL_END_BRAKE_END_SPEED: f32 = 10.;
     pub const ROLL_SIDE_ACCEL: f32 = 0.4;
     pub const ROLL_UNROLL_FRAMES: u32 = 5;
     pub const ROLL_AGAINST: f32 = 0.5;
@@ -311,6 +315,7 @@ pub mod clip {
     pub const HIP_DROP_START: u32 = 24;
     pub const HIP_DROP_LAND: u32 = 44;
     pub const ROLLING_START: u32 = 6;
+    pub const ROLLING_END: u32 = 12;
     pub const ROLLING_LAND: u32 = 20;
     pub const ROLLING_STAND_UP: u32 = 9;
     pub const HEAD_SLIDING_START: u32 = 48;
@@ -403,7 +408,6 @@ pub enum Move {
     RollEnd,
     RollJump,
     Dive,
-    Slide,
     SlopeSlide,
     BurnJump,
     BurnBounce,
@@ -421,7 +425,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 40] = [
+    pub const ALL: [Move; 39] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -447,7 +451,6 @@ impl Move {
         Self::RollEnd,
         Self::RollJump,
         Self::Dive,
-        Self::Slide,
         Self::SlopeSlide,
         Self::BurnJump,
         Self::BurnBounce,
@@ -487,7 +490,6 @@ impl Move {
             Self::Roll | Self::RollEnd => "Roll",
             Self::RollJump => "Roll jump",
             Self::Dive => "Dive",
-            Self::Slide => "Dive landing",
             Self::SlopeSlide => "Slope slide",
             Self::BurnJump => "Hot!",
             Self::BurnBounce => "Hot! (bounce)",
@@ -592,6 +594,8 @@ pub struct Snapshot {
     pub catching: Option<i32>,
     /// The model's sub animation while one plays: name, frame and length.
     pub sub: Option<(&'static str, f32, f32)>,
+    /// The state is the roll's brake (its clip is the unrolling clip's).
+    pub roll_brake: bool,
     /// The state is the spin cap state's fall.
     pub spin_fall: bool,
 }
@@ -643,6 +647,9 @@ pub enum Fx {
     Land {
         hard: bool,
     },
+    /// A roll touched down after a long flight: the roll's own landing
+    /// reaction (`PlayerStateRolling::control`), not the ground landing's.
+    RollLand,
     /// A foot comes down (the sound control decides when, not the clip).
     Step {
         left: bool,
@@ -900,6 +907,9 @@ pub struct Player {
     /// Fall speed the ground stopped in the latest step (zero when it did not
     /// land), kept for the trace: the original still reports it that frame.
     landing_speed: f32,
+    /// The fall speed of the step that reached the ground, which the step that
+    /// decides the landing (the next one) still knows.
+    touchdown_speed: f32,
     /// The run cycle's animation control (the `Move` slot).
     cycle: RunCycle,
     /// Ground steering of the run and its pivot on the spot.
@@ -1021,6 +1031,7 @@ impl Default for Player {
             swim_rise: 0,
             step_phase: 0.,
             landing_speed: 0.,
+            touchdown_speed: 0.,
             cycle: RunCycle::default(),
             ground: GroundMove::default(),
             pivot: PivotTurn::default(),
@@ -1466,7 +1477,7 @@ impl Player {
             }
         }
         if matches!(self.mode, Move::Roll | Move::RollEnd) {
-            self.resume_roll(s.state_frames.unwrap_or(0), s.next_clip);
+            self.resume_roll(s.state_frames.unwrap_or(0), s.next_clip, s.roll_brake);
         }
         self.resume_cap(s);
         for (name, value) in &s.counters {
@@ -1630,6 +1641,9 @@ impl Player {
         if self.spin_fall && self.mode == Move::Fall {
             return crate::game_names::known("SpinCap/Fall");
         }
+        if self.is_roll_brake() {
+            return crate::game_names::known("Rolling/Brake");
+        }
         crate::game_names::nerve(self.mode, self.clip())
     }
     /// The actor nerve of that state (the part before the sub-state).
@@ -1773,7 +1787,7 @@ impl Player {
                     && (self.pos.z - b.center.z).abs() < b.half.z + RADIUS
             });
         let mut o = o.clone();
-        if low_ceiling && !matches!(self.mode, Move::Roll | Move::Slide) {
+        if low_ceiling && self.mode != Move::Roll {
             o.crouch = true;
             o.jump = false;
         }
@@ -1819,6 +1833,7 @@ impl Player {
         } else if self.grounded && !was_grounded && !hot {
             // The contact is flagged now; the next step decides what it means.
             self.nerve.touchdown = true;
+            self.touchdown_speed = self.landing_speed;
         }
         if hot {
             self.burn();
@@ -1837,7 +1852,6 @@ impl Player {
                     | Move::Crawl
                     | Move::GroundSpin
                     | Move::Throw
-                    | Move::Slide
             )
         {
             // Walked off an edge: likewise, the fall is chosen next step.
@@ -1881,9 +1895,8 @@ impl Player {
             Move::PoundLand => self.hip_drop_land(o),
             Move::Roll => self.roll(o),
             Move::RollEnd => self.roll_stand_up_step(o),
-            Move::RollJump => self.long_jump_air(o),
+            Move::RollJump => self.roll_jump_step(o),
             Move::Dive => self.head_sliding(o),
-            Move::Slide => self.belly_slide(o),
             Move::SlopeSlide => self.slope_slide(o),
             Move::BurnJump | Move::BurnBounce => self.burn_air(o),
             Move::FireRun => self.fire_run(o),
@@ -2604,36 +2617,6 @@ impl Player {
             self.go(Move::Fall, "Fall");
         }
     }
-    /// A dive's landing: the forward roll on the ground, slowing to a stop.
-    fn belly_slide(&mut self, o: &Orders) {
-        if self.pre_jump > 0 {
-            self.pre_jump = 0;
-            self.jump_with(
-                Move::Jump,
-                "Jump",
-                t::JUMP_POWER_MIN,
-                t::JUMP_GRAVITY,
-                |_| {},
-            );
-            return;
-        }
-        let s = (self.speed_h() - t::HEAD_SLIDING_BRAKE).max(0.);
-        if self.tilt > 0.1 {
-            self.facing = turn(self.facing, self.stick, 0.02);
-        }
-        self.set_h(self.facing * s);
-        self.v.y = -t::GRAVITY;
-        if self.anim_done(clip::LAND_ROLLING) {
-            if o.crouch {
-                self.start_squat();
-            } else if self.tilt > 0.05 && s > t::NORMAL_MIN {
-                self.set(Move::Run);
-                self.play("Move");
-            } else {
-                self.go(Move::Idle, "Wait");
-            }
-        }
-    }
 
     // ---- Jumps ------------------------------------------------------------
     /// Take off into a jump state. The take-off itself (the impulse, the
@@ -2760,7 +2743,9 @@ impl Player {
             self.combo
                 .update(matches!(nerve, "Wait" | "Run"), t::CONTINUOUS_JUMP_TIMER);
         }
-        if self.mode != Move::LongJump {
+        // `PlayerActorHakoniwa::movement` skips it in the long jump's nerve
+        // and in the roll's jump (`PlayerStateRolling::isRollingJump`).
+        if !matches!(self.mode, Move::LongJump | Move::RollJump) {
             self.long_combo.update(t::CONTINUOUS_LONG_JUMP_TIMER);
         }
     }
@@ -2925,6 +2910,11 @@ impl Player {
     /// slow forward acceleration, a stronger brake, light steering, and the
     /// facing follows the travel.
     fn long_jump_air(&mut self, o: &Orders) {
+        self.long_jump_motion();
+        self.air_actions(o);
+    }
+    /// The movement of a long jump step, without what the actor decides after.
+    fn long_jump_motion(&mut self) {
         let mut facing = self.facing;
         let push = self.push();
         air_move::move_diving_jump(
@@ -2943,7 +2933,6 @@ impl Player {
             },
         );
         self.facing = facing;
-        self.air_actions(o);
     }
     /// Backflip flight (`rs::moveParallelJump`): a light push along and across
     /// the travel, a low speed cap and the squat jump's gravity.
@@ -3199,8 +3188,14 @@ impl Player {
         });
     }
     fn head_sliding(&mut self, _o: &Orders) {
-        // Diving flight (`rs::moveDivingJump` with the dive's values): no
-        // forward acceleration, braking when pulled back, a light side push.
+        self.head_sliding_motion();
+        if self.anim.name == "HeadSlidingStart" && self.anim_done(clip::HEAD_SLIDING_START) {
+            self.play("HeadSliding");
+        }
+    }
+    /// Diving flight (`rs::moveDivingJump` with the dive's values): no
+    /// forward acceleration, braking when pulled back, a light side push.
+    fn head_sliding_motion(&mut self) {
         let mut facing = self.facing;
         let push = self.push();
         air_move::move_diving_jump(
@@ -3219,9 +3214,6 @@ impl Player {
             },
         );
         self.facing = facing;
-        if self.anim.name == "HeadSlidingStart" && self.anim_done(clip::HEAD_SLIDING_START) {
-            self.play("HeadSliding");
-        }
     }
 
     // ---- Walls, ledges, poles --------------------------------------------
@@ -3814,6 +3806,28 @@ impl Player {
             self.count_jump_combo();
         }
         self.air_for = None;
+        // The last step of a dive or a long jump ran before the landing was
+        // seen. The roll that follows (`PlayerJudgeDirectRolling`, the roll
+        // jump's own landing) judges and keeps the velocity that step left,
+        // gravity included; the states that follow otherwise set their own.
+        let flown = (self.v, self.facing);
+        if o.crouch {
+            self.v.y = self.touchdown_speed;
+            match self.mode {
+                Move::Dive => self.head_sliding_motion(),
+                Move::LongJump | Move::RollJump => self.long_jump_motion(),
+                _ => {}
+            }
+        }
+        let rolls = o.crouch
+            && match self.mode {
+                Move::Dive | Move::LongJump => self.speed_h() >= t::DASH_JUDGE,
+                Move::RollJump => self.roll_goes_on_after_jump(o.crouch),
+                _ => false,
+            };
+        if !rolls {
+            (self.v, self.facing) = flown;
+        }
         let speed = self.speed_h();
         self.land_frames = 0;
         self.cap_jump_possible = true;
@@ -3845,10 +3859,8 @@ impl Player {
             }
             // Holding crouch turns the momentum into a real roll; otherwise a
             // dive lands in its forward roll and stands up.
-            Move::Dive | Move::LongJump if o.crouch && speed >= t::DASH_JUDGE => {
-                self.start_roll(RollStart::Landing);
-            }
-            Move::RollJump if o.crouch => self.start_roll(RollStart::JumpLanding),
+            Move::Dive | Move::LongJump if rolls => self.start_roll(RollStart::Landing),
+            Move::RollJump if rolls => self.roll_land_from_jump(),
             // With the stick held the dive lands straight into the run, which
             // plays the roll's stand-up as an overlay on its legs.
             Move::Dive if self.is_move() => {
@@ -3864,7 +3876,6 @@ impl Player {
                     rate: 0.6,
                 });
             }
-            Move::Dive => self.defer(Move::Slide, "LandRolling", |_| {}),
             // The roll raises its own landing reaction when it has flown long
             // enough (`PlayerStateRolling::control`).
             Move::Roll => return,
@@ -3976,7 +3987,6 @@ impl Player {
                 | Move::Crawl
                 | Move::Roll
                 | Move::RollEnd
-                | Move::Slide
                 | Move::Dive
         ) || self.grounded && o.crouch;
         let height = if crouched { SQUAT_HEIGHT } else { HEIGHT };

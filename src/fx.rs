@@ -284,6 +284,7 @@ fn react(
                     s.ring(feet, 1.6, 0.35, false);
                 }
             }
+            Fx::RollLand => s.dust_ring(feet, 6, 3., 0.42),
             Fx::Land { hard } => {
                 s.dust_ring(
                     feet,
@@ -491,7 +492,7 @@ fn trails(
                 0,
             );
         }
-        Move::Skid | Move::Slide if p.grounded => {
+        Move::Skid if p.grounded => {
             s.particle(
                 p.pos + p.facing * 0.3 + Vec3::Y * 0.1,
                 Vec3::Y * 0.8 + back,
@@ -668,7 +669,7 @@ pub fn burst_names(fx: Fx, flat_speed: f32) -> Vec<&'static str> {
         Fx::Jump(Move::PoundJump | Move::TripleJump) => vec!["JumpDust", "JumpRing"],
         Fx::Jump(_) => vec!["JumpDust"],
         Fx::Land { hard: true } => vec!["LandDustHard"],
-        Fx::Land { hard: false } => vec!["LandDust"],
+        Fx::Land { hard: false } | Fx::RollLand => vec!["LandDust"],
         Fx::Step { .. } if flat_speed > 5. => vec!["RunDust"],
         Fx::Skid => vec!["SkidDust"],
         Fx::TurnDust => vec!["TurnDust"],
@@ -708,7 +709,7 @@ pub fn trail_names(p: &Player) -> Vec<&'static str> {
     let mut names = vec![];
     match p.mode {
         Move::SlopeSlide if p.grounded => names.push("SlideDust"),
-        Move::Skid | Move::Slide if p.grounded => names.push("SkidTrail"),
+        Move::Skid if p.grounded => names.push("SkidTrail"),
         Move::Roll => {
             names.push("RollBlur");
             if p.grounded && p.flat_speed() > 3. {

@@ -867,6 +867,7 @@ pub fn animate(
         match f {
             Fx::Jump(_) | Fx::CapBounce => vis.squash_vel += 3.2,
             Fx::Land { hard } => vis.squash_vel -= if *hard { 5.5 } else { 3. },
+            Fx::RollLand => vis.squash_vel -= 3.,
             Fx::PoundLand => vis.squash = -0.28,
             Fx::RollBoost { .. } => vis.squash_vel -= 2.,
             _ => {}
@@ -915,8 +916,6 @@ pub fn animate(
         Move::Roll => Quat::from_rotation_x(-p.distance * 2.5),
         Move::Dive => Quat::from_rotation_x(-1.3),
         Move::SlopeSlide => Quat::from_rotation_x(0.5),
-        // The dive's landing roll: one forward turn over the clip.
-        Move::Slide => Quat::from_rotation_x(-(p.timer / 0.6).min(1.) * std::f32::consts::TAU),
         Move::Backflip => Quat::from_rotation_x((p.timer * 7.).min(std::f32::consts::TAU)),
         Move::Sideflip => Quat::from_rotation_z((p.timer * 7.).min(std::f32::consts::TAU)),
         Move::GroundPound if p.timer < 0.28 => {

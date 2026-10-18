@@ -129,6 +129,7 @@ impl Pose {
                     frame: match a.name {
                         "Brake" => a.frame.min(clip::BRAKE as f32),
                         "Turn" => a.frame.min(clip::TURN as f32),
+                        "RollingEnd" => a.frame.min(clip::ROLLING_END as f32),
                         // Under a sub animation the model's own frame is shown.
                         name => p.model_frame().unwrap_or_else(|| {
                             clip::held_length(name)
@@ -977,6 +978,7 @@ impl TraceFile {
             throw: self.throw_hint(row),
             catching: self.catching(row),
             sub: self.sub_hint(row),
+            roll_brake: self.cell(row, "state") == Some("Rolling/Brake"),
             spin_fall,
         }
     }

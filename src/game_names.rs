@@ -60,14 +60,14 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::PoundLand => known("HipDrop/Land"),
         Move::Roll if anim == "RollingStart" => known("Rolling/Start"),
         // The slow roll winds down in `UnRoll` (its clip is `RollingEnd`, kept
-        // from the rolling clip's frame) and lands in `Land`.
-        Move::Roll if anim == "RollingEnd" => guessed("Rolling/UnRoll"),
-        Move::Roll if anim == "RollingLand" => guessed("Rolling/Land"),
+        // from the rolling clip's frame), slides on in `Brake` (same clip, see
+        // `Player::nerve_name`) and lands from its jump in `Land`.
+        Move::Roll if anim == "RollingEnd" => known("Rolling/UnRoll"),
+        Move::Roll if anim == "RollingLand" => known("Rolling/Land"),
         Move::Roll => known("Rolling/Rolling"),
         Move::RollEnd => known("Rolling/StandUp"),
         Move::RollJump => known("Rolling/Jump"),
         Move::Dive => known("HeadSliding/Dive"),
-        Move::Slide => guessed("HeadSliding/Dive"),
         Move::SlopeSlide => known("Slope/Slide"),
         Move::BurnJump => known("DamageFire/Jump"),
         Move::BurnBounce => guessed("DamageFire/Jump2nd"),
@@ -150,7 +150,6 @@ fn state_of_clip(anim: &str) -> Option<Move> {
         "JumpCapCatchCommon" => Move::CatchJump,
         "SpinJumpStart" | "SpinJumpLoop" => Move::SpinJump,
         "RollingStandUp" => Move::RollEnd,
-        "LandRolling" => Move::Slide,
         "FireRunStart" => Move::BurnJump,
         _ => return None,
     })

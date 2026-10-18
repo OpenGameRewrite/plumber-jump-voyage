@@ -533,11 +533,15 @@ impl Tracker {
                         None if once => Some(ONE_SHOT_LIMIT),
                         None => None,
                     };
-                    self.live.push(Live {
-                        key,
-                        owner,
-                        left: emitting.map(|e| e + timing.linger + REPORT_LAG),
-                    });
+                    // The effects a hit reaction starts (`Land`, `HipDropLand`)
+                    // never leave the player's list in any recording of up to
+                    // 190 frames; only starting the same effect again renews
+                    // them. The others end when their emitters and particles do.
+                    let left = match source {
+                        Source::Reaction => None,
+                        _ => emitting.map(|e| e + timing.linger + REPORT_LAG),
+                    };
+                    self.live.push(Live { key, owner, left });
                 }
                 // A stopped effect no longer emits at once; the particles it
                 // left only fade.

@@ -164,7 +164,6 @@ pub struct FxContext {
 /// starts it from that state's first step. The crouch has none.
 fn landing_reaction(mode: Move) -> Option<&'static str> {
     match mode {
-        Move::Roll => Some("RollLand"),
         Move::Walk
         | Move::Run
         | Move::Jump
@@ -173,9 +172,11 @@ fn landing_reaction(mode: Move) -> Option<&'static str> {
         | Move::LongJump
         | Move::Backflip
         | Move::Sideflip
-        | Move::PoundJump
-        | Move::RollJump => Some("LandRun"),
+        | Move::PoundJump => Some("LandRun"),
         Move::SquatBrake | Move::Crouch | Move::Crawl => None,
+        // Landing into the roll (`PlayerStateRolling::appear`) or from the
+        // roll's jump (`exeJump`) raises the plain landing reaction; the roll's
+        // own is `Fx::RollLand`.
         _ => Some("Land"),
     }
 }
@@ -204,6 +205,7 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
         Fx::RollSpin => vec![Cue::Play("Roll")],
         Fx::FallWhoosh { .. } => vec![Cue::Hold("FallWhoosh_loop")],
         Fx::Land { .. } => landing_reaction(context.mode).map_or(vec![], reaction),
+        Fx::RollLand => reaction("RollLand"),
         Fx::PoundLand => reaction("HipDropLand"),
         Fx::RollStart => {
             *boosts = 0;

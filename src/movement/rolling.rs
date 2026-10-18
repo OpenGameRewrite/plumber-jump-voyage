@@ -8,11 +8,14 @@
 //! movement. The pieces the recorded runs do not exercise (restarting, the
 //! slow-roll sub-states, slopes) follow the same code but are unverified.
 //!
-//! The nerves are `Start`, `Rolling`, `BoostStart`, `UnRoll` and `Land` here
-//! (`RollNerve`, mode `Move::Roll`), `StandUp` (`Move::RollEnd`) and `Jump`
-//! (`Move::RollJump`, a long jump). Like every nerve they are chosen in one
-//! step and run their first step in the next; what `appear` does (the speed the
-//! roll starts with) happens in the step that chooses the roll.
+//! The nerves are `Start`, `Rolling`, `BoostStart`, `UnRoll`, `Brake` and
+//! `Land` here (`RollNerve`, mode `Move::Roll`), `StandUp` (`Move::RollEnd`)
+//! and `Jump` (`Move::RollJump`, a long jump). Like every nerve they are chosen
+//! in one step and run their first step in the next; what `appear` does (the
+//! speed the roll starts with) happens in the step that chooses the roll. The
+//! sub-nerves belong to one actor nerve, `Rolling`, so its step counter runs on
+//! through all of them, the jump included. `EndSquat` is the state's last
+//! nerve: the actor leaves for the squat in the step that reaches it.
 use super::*;
 
 /// How a roll begins; the original's `appear` tells them apart by the action
@@ -27,8 +30,6 @@ pub(super) enum RollStart {
     /// Landing from a dive or a long jump while crouching fast (trigger 8):
     /// straight into the rolling loop, free to end at once.
     Landing,
-    /// Landing from the roll's own jump while crouching: the landing pose.
-    JumpLanding,
 }
 
 /// The nerves of the roll state that share `Move::Roll`.
@@ -39,7 +40,12 @@ pub(super) enum RollNerve {
     Rolling,
     BoostStart,
     UnRoll,
+    /// The winding down roll slides on until it is slow enough to crouch.
+    Brake,
     Land,
+    /// The roll's jump: its flight is `Move::RollJump`, the state's counters
+    /// still run.
+    Jump,
 }
 
 /// What the roll state keeps (fields `_90` to `_b0` of the original, and the
@@ -103,19 +109,25 @@ fn nerve_clip(nerve: RollNerve) -> &'static str {
     match nerve {
         RollNerve::Start => "RollingStart",
         RollNerve::Rolling | RollNerve::BoostStart => "Rolling",
-        RollNerve::UnRoll => "RollingEnd",
+        // The brake keeps the clip the unrolling started (it never restarts it).
+        RollNerve::UnRoll | RollNerve::Brake => "RollingEnd",
         RollNerve::Land => "RollingLand",
+        RollNerve::Jump => "JumpBroad",
     }
 }
 
 impl Player {
     /// The roll's dust effect is wanted (for the effect tables).
     pub fn roll_effect_on(&self) -> bool {
-        matches!(self.mode, Move::Roll | Move::RollEnd) && self.rolling.effect_on
+        matches!(self.mode, Move::Roll | Move::RollEnd | Move::RollJump) && self.rolling.effect_on
     }
     /// The roll called its effect's emit this step.
     pub fn roll_effect_called(&self) -> bool {
         self.roll_effect_on() && self.rolling.effect_called
+    }
+    /// The roll is in its brake nerve, which shares the unrolling clip.
+    pub(super) fn is_roll_brake(&self) -> bool {
+        self.mode == Move::Roll && self.rolling.nerve == RollNerve::Brake
     }
     /// The ground's unit normal (up on level ground and in the air).
     fn floor_up(&self) -> Vec3 {
@@ -150,13 +162,6 @@ impl Player {
                 t::ROLL_FRAMES_MIN,
                 t::ROLL_RESTART_CHARGE,
                 1,
-            ),
-            RollStart::JumpLanding => (
-                RollNerve::Land,
-                0.,
-                t::ROLL_FRAMES_MIN,
-                t::ROLL_RESTART_CHARGE,
-                0,
             ),
         };
         // The step that chooses the roll also runs the state's `control`, so
@@ -196,6 +201,10 @@ impl Player {
                 p.anim.frame = frame;
             }
         });
+        if nerve == RollNerve::Brake {
+            // `exeBrake` starts no clip: the unrolling clip plays on.
+            self.nerve.keep_clip();
+        }
     }
     /// What a nerve does on its first step besides starting its clip.
     fn roll_enter(&mut self, nerve: RollNerve) {
@@ -216,7 +225,12 @@ impl Player {
     /// Rebuild the roll's hidden state from a recorded row (lockstep): the
     /// nerve the clip names, counters from the steps the state has taken, and
     /// the nerve a choice in this row starts in the next step.
-    pub(super) fn resume_roll(&mut self, state_steps: u32, next_clip: Option<&'static str>) {
+    pub(super) fn resume_roll(
+        &mut self,
+        state_steps: u32,
+        next_clip: Option<&'static str>,
+        brake: bool,
+    ) {
         // A row on the ground reports the pull or the fall the floor already
         // took out of the velocity.
         if self.grounded {
@@ -224,6 +238,7 @@ impl Player {
         }
         let clip = next_clip.unwrap_or(self.anim.name);
         let nerve = match clip {
+            _ if brake => RollNerve::Brake,
             "RollingStart" => RollNerve::Start,
             "RollingEnd" => RollNerve::UnRoll,
             "RollingLand" => RollNerve::Land,
@@ -263,7 +278,10 @@ impl Player {
             RollNerve::Rolling => self.roll_rolling_step(o, pressed),
             RollNerve::BoostStart => self.roll_boost_step(o),
             RollNerve::UnRoll => self.roll_unroll_step(o, pressed),
+            RollNerve::Brake => self.roll_brake_step(o, pressed),
             RollNerve::Land => self.roll_land_step(o, pressed),
+            // The jump's flight runs as its own state (`roll_jump_step`).
+            RollNerve::Jump => {}
         }
         self.roll_control(pressed);
     }
@@ -305,8 +323,8 @@ impl Player {
             self.roll_to(RollNerve::UnRoll);
         }
     }
-    /// `exeUnRoll`: the slow roll winds down for a few steps into the landing
-    /// pose; everything that can interrupt a roll still can.
+    /// `exeUnRoll`: the slow roll winds down for a few steps into the brake;
+    /// everything that can interrupt a roll still can.
     fn roll_unroll_step(&mut self, o: &Orders, pressed: bool) {
         let rate = t::ROLL_BRAKE;
         self.inertia_slide(rate, 0., 0., 0.);
@@ -318,10 +336,32 @@ impl Player {
         } else if !o.crouch && self.rolling.frames >= t::ROLL_FRAMES_MIN {
             self.roll_stand_up();
         } else if self.rolling.steps > t::ROLL_UNROLL_FRAMES {
-            self.roll_to(RollNerve::Land);
+            self.roll_to(RollNerve::Brake);
         }
     }
-    /// `exeLand`: the landing pose of a slow roll.
+    /// `exeBrake`: the slow roll slides on with `SlopeRollingEndBrake` until
+    /// it is slow enough to crouch (`EndSquat`, which hands the actor over to
+    /// the squat whether or not crouch is still held). It can be interrupted
+    /// like the roll before it; leaving the ground ends the state.
+    fn roll_brake_step(&mut self, o: &Orders, pressed: bool) {
+        let slide = self.inertia_slide(t::ROLL_END_BRAKE, 0., 0., 0.);
+        self.roll_anim_rate();
+        self.rolling.effect_on = self.grounded;
+        self.rolling.effect_called = self.rolling.effect_on;
+        if pressed {
+            self.roll_restart();
+        } else if self.roll_jump_wanted() {
+            self.roll_jump(o);
+        } else if !self.grounded {
+            self.go(Move::Fall, "Fall");
+        } else if !o.crouch && self.rolling.frames >= t::ROLL_FRAMES_MIN {
+            self.roll_stand_up();
+        } else if slide.length() <= t::ROLL_END_BRAKE_END_SPEED {
+            self.rolling.effect_on = false;
+            self.start_squat();
+        }
+    }
+    /// `exeLand`: the landing pose after the roll's jump.
     fn roll_land_step(&mut self, o: &Orders, pressed: bool) {
         self.roll_move();
         if !o.crouch && self.rolling.frames >= t::ROLL_FRAMES_MIN {
@@ -350,7 +390,43 @@ impl Player {
     /// The roll's jump is a long jump (`exeJump`: the long jump's clip, take-off
     /// velocity and flight).
     fn roll_jump(&mut self, _o: &Orders) {
+        self.rolling.nerve = RollNerve::Jump;
+        self.rolling.steps = 0;
         self.long_jump_as(Move::RollJump);
+        // The jump is a nerve of the roll state: its steps keep counting.
+        self.nerve.keep_actor_steps();
+    }
+    /// One step of the roll's jump: the long jump's flight, then the state's
+    /// own `control` (the frame count and the restart force run on in the air;
+    /// the charge does not).
+    pub(super) fn roll_jump_step(&mut self, o: &Orders) {
+        self.rolling.steps += 1;
+        self.rolling.effect_called = false;
+        if self.rolling.steps == 1 {
+            // `exeJump`'s first step: the rolling effect stops, the charge empties.
+            self.rolling.effect_on = false;
+            self.rolling.charge = 0;
+        }
+        self.long_jump_air(o);
+        self.roll_control(false);
+    }
+    /// The roll's jump came down with crouch held on ground the roll can go
+    /// on over (`rs::isOnGroundRunAngle`). Guess: only the flat-ground end of
+    /// that test, whose angle limit depends on the speed, is ported.
+    pub(super) fn roll_goes_on_after_jump(&self, crouch: bool) -> bool {
+        crouch && self.ground_flatter_than(t::STAND_ANGLE_MIN)
+    }
+    /// The roll goes on in its landing nerve with the charge full and the
+    /// frame count at the restart interval (`exeJump`; the landing reaction is
+    /// raised there too). Called with the jump's last step already run.
+    pub(super) fn roll_land_from_jump(&mut self) {
+        self.roll_control(false);
+        // The step that chooses the nerve also runs `control` once more.
+        self.rolling.charge = t::ROLL_RESTART_CHARGE + 1;
+        self.rolling.frames = t::ROLL_RESTART_INTERVAL + 1;
+        self.rolling.ground_normal = self.floor_up();
+        self.rolling.dir_slide = self.slide_direction();
+        self.roll_to(RollNerve::Land);
     }
     /// `restartRolling`, then the start nerve again.
     fn roll_restart(&mut self) {
@@ -410,7 +486,8 @@ impl Player {
         if r.frames <= t::ROLL_FRAMES_MIN.max(t::ROLL_RESTART_INTERVAL) {
             r.frames += 1;
         }
-        if r.charge <= t::ROLL_RESTART_CHARGE {
+        // The charge fills outside the jump.
+        if r.charge <= t::ROLL_RESTART_CHARGE && r.nerve != RollNerve::Jump {
             r.charge += 1;
         }
         if pressed {
@@ -427,7 +504,7 @@ impl Player {
                 let landed = r.air_frames >= t::ROLL_LAND_AIR_FRAMES;
                 r.air_frames = 0;
                 if landed {
-                    self.events.push(Fx::Land { hard: false });
+                    self.events.push(Fx::RollLand);
                 }
             } else {
                 r.air_frames = converge_int(r.air_frames, t::ROLL_LAND_AIR_FRAMES, 1);

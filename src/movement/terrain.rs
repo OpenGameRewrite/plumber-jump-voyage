@@ -46,7 +46,6 @@ impl Player {
                 | Move::Crawl
                 | Move::Roll
                 | Move::RollEnd
-                | Move::Slide
         ) {
             Form::Mini
         } else {

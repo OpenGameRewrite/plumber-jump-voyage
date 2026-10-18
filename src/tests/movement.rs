@@ -424,15 +424,13 @@ fn dive_from_pound() {
     p.step(&Orders::default(), &floor);
     assert!(p.vel.x > 10. && p.vel.y > 0.);
     until_landed(&mut p, Orders::default(), &floor);
-    assert_eq!(chosen(&p), (Move::Slide, "LandRolling"));
-    // The state's first step starts the clip; it stands up once the clip is over.
-    frames(
-        &mut p,
-        Orders::default(),
-        &floor,
-        clip::LAND_ROLLING as usize + 1,
-    );
-    assert_eq!(p.mode, Move::Idle, "the landing roll stands up");
+    // Without the stick a dive lands like any jump: the wait state's landing
+    // clip, which stops the player (the recorded `dive-no-stick`).
+    assert_eq!(chosen(&p), (Move::Idle, "Land"));
+    assert_eq!(p.nerve_name().name, "Wait/Land");
+    // The state's first step starts the clip and stops the slide.
+    p.step(&Orders::default(), &floor);
+    assert!(p.speed_h() < 1e-3);
 }
 
 #[cfg_attr(test, test)]

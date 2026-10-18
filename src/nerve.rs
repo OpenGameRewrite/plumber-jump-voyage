@@ -94,6 +94,16 @@ impl Nerve {
         self.clip = Some(clip);
         self.work = Some(Box::new(work));
     }
+    /// The chosen sub-state starts no clip of its own: the one playing goes on.
+    pub fn keep_clip(&mut self) {
+        self.clip = None;
+    }
+    /// The state chosen belongs to the running actor nerve even though it was
+    /// chosen like a new one (a sub-nerve that sets up like a state): its step
+    /// counter keeps counting.
+    pub fn keep_actor_steps(&mut self) {
+        self.renewed = false;
+    }
     /// Ask for a clip on the next step.
     pub fn queue_clip(&mut self, clip: &'static str) {
         self.clip = Some(clip);
