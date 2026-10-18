@@ -322,7 +322,9 @@ pub fn orders_for(
     let stick = Vec2::new(span.stick.x, -span.stick.y).clamp_length_max(1.);
     let mut orders = Orders {
         stick,
-        direction: rotate(stick, camera_yaw),
+        // A half turn of the orbit yaw is a negation; spelling it so keeps a
+        // stick along an axis exactly on it (`sin(PI)` is not zero in `f32`).
+        direction: -rotate(stick, camera_yaw_deg.to_radians()),
         camera_yaw,
         ..default()
     };

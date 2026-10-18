@@ -349,7 +349,8 @@ pub mod clip {
             "Jump2" => Some(42),
             "Jump3" | "JumpBack" => Some(68),
             "JumpTurn" => Some(60),
-            "JumpBroad" => Some(38),
+            "JumpBroad" | "JumpBroad2" | "JumpBroad3" => Some(38),
+            "JumpHipDrop" => Some(46),
             _ => None,
         }
     }
@@ -918,6 +919,9 @@ pub struct Player {
     cycle: RunCycle,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
+    /// The spin throw's own ground control, which steers once the spin's
+    /// braking frames are over (`PlayerStateSpinCap::updateSpinGroundNerve`).
+    spin_ground_move: GroundMove,
     pivot: PivotTurn,
     /// Which nerve of the run state is executing.
     run_nerve: RunNerve,
@@ -1039,6 +1043,7 @@ impl Default for Player {
             touchdown_speed: 0.,
             cycle: RunCycle::default(),
             ground: GroundMove::default(),
+            spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
             run_nerve: RunNerve::Run,
             run_steps: 0,
@@ -2814,9 +2819,7 @@ impl Player {
         self.jump_with(mode, clip, power, gravity, |_| {});
     }
     fn ground_jump(&mut self, _o: &Orders) {
-        if self.mode == Move::PoundLand
-            && (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&self.frame)
-        {
+        if self.mode == Move::PoundLand && self.pound_jump_permitted() {
             self.jump_with(
                 Move::PoundJump,
                 "JumpHipDrop",
@@ -3161,14 +3164,19 @@ impl Player {
             self.v = Vec3::NEG_Y * t::HIP_DROP_SPEED;
         }
     }
+    /// `PlayerStateHipDrop::isEnableLandCancel`: the pound's landing nerve may
+    /// be cancelled into a jump (or a throw) from its fifth to its thirtieth
+    /// step. The actor reads the nerve's step after the landing nerve's own
+    /// update has counted the current frame, so the frame in progress counts.
+    fn pound_jump_permitted(&self) -> bool {
+        (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&(self.frame + 1))
+    }
     fn hip_drop_land(&mut self, o: &Orders) {
         // The landing keeps the ground pull of the walking states
         // (`rs::waitGround` with `GravityMove`).
         self.set_h(Vec3::ZERO);
         self.v.y = -air_move::tune::GRAVITY_MOVE;
-        if self.pre_jump > 0
-            && (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&self.frame)
-        {
+        if self.pre_jump > 0 && self.pound_jump_permitted() {
             self.ground_jump(o);
             return;
         }
@@ -3597,19 +3605,31 @@ impl Player {
     /// (`PlayerActorHakoniwa::exeSpinCap`).
     fn spin_ground(&mut self, o: &Orders, step: u32) {
         // `updateSpinGroundNerve`: the spin brakes the momentum for its first
-        // frames, then the ground control takes over; the floor pulls with
-        // the ground control's gravity throughout.
+        // frames; from then on the state's ground move control steers, from
+        // the speed the player has (and so moves off at once when the stick
+        // is held, a plain `max / frames` per frame, see `GroundMove::plain`).
+        // The floor pulls with the ground control's gravity throughout.
         if step < t::SPIN_BRAKE_FRAMES {
             let h = self.v.with_y(0.) * t::SPIN_BRAKE_RATE;
             self.set_h(h);
+        } else {
+            if step == t::SPIN_BRAKE_FRAMES {
+                self.spin_ground_move.reset(self.v, self.facing);
+            }
+            let steer = self.spin_ground_move.update(&SteerInput {
+                velocity: self.v,
+                front: self.facing,
+                stick: self.ground_stick(),
+                max_speed: t::NORMAL_MAX,
+                accel_frames: t::ACCEL_FRAMES as i32,
+            });
+            if steer.front.length_squared() > 0.5 {
+                self.facing = steer.front;
+            }
+            self.set_h(steer.velocity);
         }
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
-        // The state ends when its clip has, once the cap is away.
-        if self.anim_done(clip::throw(self.anim.name)) && !self.winding {
-            self.go(Move::Idle, "Wait");
-            return;
-        }
         // Once the cap is away the other actions may cancel the spin
         // (`isEnableCancelGround`): jump, crouch, then the run.
         if self.winding {
@@ -3621,6 +3641,9 @@ impl Player {
             self.start_squat();
         } else if self.tilt >= STICK_DEADZONE {
             self.go(Move::Walk, "Move");
+        } else if self.anim_done(clip::throw(self.anim.name)) {
+            // The state ends when its clip has, once the cap is away.
+            self.go(Move::Idle, "Wait");
         }
     }
     /// `PlayerStateSpinCap::exeSpinAir`: the small hang, the cap leaving on

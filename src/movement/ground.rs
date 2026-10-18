@@ -372,9 +372,18 @@ pub struct Steer {
     pub stopped: bool,
 }
 
-/// The ground move control of the run.
-#[derive(Clone, Debug, Default)]
+/// The ground move control of the run, or of another state that owns one.
+///
+/// Every state builds its own control object, and the run's constructor
+/// switches on two features the default one lacks (`PlayerStateRunHakoniwa`:
+/// the speed ramp of `calcAccelRate` and the sideways drift of
+/// `updateNormalMove`). The spin throw's control (`PlayerStateSpinCap`) keeps
+/// the plain defaults: a straight `max / frames` acceleration and a velocity
+/// that follows the facing at once.
+#[derive(Clone, Debug)]
 pub struct GroundMove {
+    ramp: bool,
+    drift: bool,
     pub turn: TurnControl,
     /// Frames the speed has been above the brake speed, up to the border:
     /// only a run that built up speed brakes into a skid.
@@ -382,7 +391,27 @@ pub struct GroundMove {
     /// The turn power smoothed over frames (`_c0`).
     turn_power: f32,
 }
+impl Default for GroundMove {
+    /// The run's control.
+    fn default() -> Self {
+        Self {
+            ramp: true,
+            drift: true,
+            turn: TurnControl::default(),
+            brake_counter: 0,
+            turn_power: 0.,
+        }
+    }
+}
 impl GroundMove {
+    /// The control of the spin throw's ground state: no ramp, no drift.
+    pub fn plain() -> Self {
+        Self {
+            ramp: false,
+            drift: false,
+            ..Self::default()
+        }
+    }
     /// `calcInitBrakeOnCounter` and the turn controller's reset, at the start
     /// of a run state.
     pub fn reset(&mut self, velocity: Vec3, front: Vec3) {
@@ -424,8 +453,11 @@ impl GroundMove {
     }
     /// `calcAccelRate`: the speed gained this frame. The ramp is a straight
     /// start plus a growing push, so it reaches the top speed in `frames`.
-    fn accel_rate(max: f32, frames: i32, speed: f32) -> f32 {
+    fn accel_rate(&self, max: f32, frames: i32, speed: f32) -> f32 {
         let n = frames.max(1) as f32;
+        if !self.ramp {
+            return max / n;
+        }
         if max > speed {
             let start = max / n * RUN_ACCEL_AVERAGE_SCALE;
             let left = max - start * n;
@@ -469,7 +501,7 @@ impl GroundMove {
             // Accelerate toward what the stick's tilt allows.
             let tilt = input.stick.length().min(1.);
             target = tilt * input.max_speed + (1. - tilt) * t::NORMAL_MIN;
-            let rate = Self::accel_rate(input.max_speed, input.accel_frames, speed);
+            let rate = self.accel_rate(input.max_speed, input.accel_frames, speed);
             speed = accel(speed, target, rate);
         }
         // Frames that speed above the brake speed have lasted.
@@ -522,7 +554,7 @@ impl GroundMove {
         // The velocity swings toward the facing only partly: a run keeps its
         // sideways drift, more of it the less the turn is under way.
         let mut velocity = wanted * speed;
-        if (heading.length() - 1.).abs() <= 0.001 {
+        if self.drift && (heading.length() - 1.).abs() <= 0.001 {
             let power = self.turn.power();
             let smooth = (power - self.turn_power).clamp(0., 1.);
             self.turn_power = lerp(self.turn_power, power, 0.15);
@@ -613,14 +645,15 @@ mod tests {
     #[test]
     fn the_speed_ramp_starts_gently_and_ends_on_time() {
         // The first frames of a run from a standstill: 0.18375, then 0.37646.
-        let first = GroundMove::accel_rate(14., 40, 0.);
+        let ground = GroundMove::default();
+        let first = ground.accel_rate(14., 40, 0.);
         assert!((first - 0.18375).abs() < 1.0e-5, "{first}");
-        let second = GroundMove::accel_rate(14., 40, first);
+        let second = ground.accel_rate(14., 40, first);
         assert!((first + second - 0.376458).abs() < 1.0e-4);
         let mut speed = 0.;
         let mut frames = 0;
         while speed < 14. && frames < 100 {
-            speed = accel(speed, 14., GroundMove::accel_rate(14., 40, speed));
+            speed = accel(speed, 14., ground.accel_rate(14., 40, speed));
             frames += 1;
         }
         assert_eq!(frames, 40);

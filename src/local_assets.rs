@@ -296,7 +296,6 @@ pub fn looping(name: &str) -> bool {
             | "Fall"
             | "Rolling"
             | "HeadSliding"
-            | "HipDrop"
             | "SquatWait"
             | "SquatWalk"
             | "WallSlideL"

@@ -204,6 +204,9 @@ Next to `game.csv` the probe writes `game.env.json` and `game.meta.json`. A run
 whose environment was not clean is refused (exit status 3, a banner) unless
 `--allow-contaminated` is given; then the frames it lists are left out of
 every column, and the position columns are left out after the first of them.
+Frames whose only reason is Cappy's `Trample`/`TrampleReturn` nerve (the player
+standing on his own thrown cap, the cap jump) are not contamination; any other
+actor, wall or floor change still is.
 
 `fidelity-report.py` replays every scenario that has a `game.csv` (with
 `--camera game.csv`), writes `rewrite.csv`, `diff.md` and `diff.json` beside

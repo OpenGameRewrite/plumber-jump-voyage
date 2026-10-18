@@ -159,34 +159,49 @@ def read_trace(path):
     return columns, by_frame
 
 
+# The probe flags Cappy's `Trample`/`TrampleReturn` nerves as "hit something". Those
+# nerves are the player standing on his own thrown cap (the cap jump), a contact
+# between the player and his own cap, not a foreign object: the run stays
+# comparable. Every other actor still shows up through its own reasons (cap
+# `Rebound`/`LockOn`/`Hack`, `hit-sensor contact <actor>`, wall and floor changes).
+OWN_CAP_REASON = re.compile(r"^Cappy (Trample|TrampleReturn) \(hit/captured something\)$")
+
+
 def read_environment(game_path):
     """What the probe recorded about the real run's surroundings.
 
     Returns (clean, contaminated frames {frame: [reasons]}, notes). A run with
     no environment files next to it is of unknown cleanliness, which is noted
-    and not refused (older runs have none).
+    and not refused (older runs have none). A frame whose only reasons are the
+    player's own cap being trampled is clean (`OWN_CAP_REASON`).
     """
     folder = os.path.dirname(os.path.abspath(game_path))
     clean, frames, notes, found = True, OrderedDict(), [], False
     env_path = os.path.join(folder, "game.env.json")
     meta_path = os.path.join(folder, "game.meta.json")
+    flagged, listed = False, 0
     if os.path.exists(env_path):
         found = True
         with open(env_path, encoding="utf-8") as f:
             env = json.load(f)
-        if env.get("clean") is False:
-            clean = False
+        flagged = env.get("clean") is False
         for item in env.get("contaminated", []):
-            frames[int(item["frame"])] = item.get("reasons", [])
+            listed += 1
+            reasons = [r for r in item.get("reasons", []) if not OWN_CAP_REASON.match(r)]
+            if reasons or not item.get("reasons"):
+                frames[int(item["frame"])] = reasons
     if os.path.exists(meta_path):
         found = True
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
-        if meta.get("env_clean") is False:
-            clean = False
+        flagged = flagged or meta.get("env_clean") is False
         count = meta.get("env_contaminated_frames")
-        if count and not frames:
+        if count and not listed:
             notes.append(f"game.meta.json counts {count} contaminated frames but game.env.json lists none")
+    # Flagged by the probe and no frame left once the player's own cap is
+    # discounted: clean. Flagged with no frame listed at all stays unclean.
+    if flagged and (frames or not listed):
+        clean = False
     if not found:
         notes.append("environment unknown: no game.env.json or game.meta.json next to the game trace")
     return clean, frames, notes, found
