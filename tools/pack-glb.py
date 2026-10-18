@@ -189,6 +189,66 @@ def pack(path,animations_from=None):
     output=path.with_suffix('.glb');output.write_bytes(struct.pack('<4sII',b'glTF',2,28+len(encoded)+len(data))+struct.pack('<II',len(encoded),0x4e4f534a)+encoded+struct.pack('<II',len(data),0x004e4942)+data)
     print(f'{output.name}: {len(model.get("meshes",[]))} meshes, {len(model.get("animations",[]))} animations, {len(model.get("images",[]))} embedded images')
     return output
+def read_glb(path):
+    """The JSON and binary chunks of a GLB 2.0 file."""
+    raw=Path(path).read_bytes()
+    magic,version,size=struct.unpack_from('<4sII',raw,0)
+    if magic!=b'glTF' or version!=2 or size!=len(raw):raise ValueError('Invalid GLB 2.0 header')
+    json_size,kind=struct.unpack_from('<II',raw,12)
+    if kind!=0x4e4f534a:raise ValueError('Missing GLB JSON chunk')
+    model=json.loads(raw[20:20+json_size])
+    bin_at=20+json_size;binary=b''
+    if bin_at<len(raw):
+        bin_size,kind=struct.unpack_from('<II',raw,bin_at)
+        if kind!=0x004e4942:raise ValueError('Missing GLB binary chunk')
+        binary=raw[bin_at+8:bin_at+8+bin_size]
+    return model,binary
+
+def write_glb(path,model,binary):
+    """Write a GLB next to `path` and replace it in one step."""
+    binary=bytes(binary)+b'\0'*(-len(binary)%4)
+    encoded=json.dumps(model,separators=(',',':')).encode();encoded+=b' '*(-len(encoded)%4)
+    data=struct.pack('<4sII',b'glTF',2,28+len(encoded)+len(binary))+struct.pack('<II',len(encoded),0x4e4f534a)+encoded+struct.pack('<II',len(binary),0x004e4942)+binary
+    path=Path(path);partial=path.with_name(path.name+'.partial')
+    partial.write_bytes(data);partial.replace(path)
+
+def add_animations(target,source,names=None):
+    """Append clips of the packed GLB `source` to the packed GLB `target`.
+
+    Both files must hold the same skeleton; channels are matched by bone name.
+    Everything the target already holds, clips included, keeps its place and
+    bytes (older builds read the file too), and a clip it already has is not
+    replaced. Returns the names of the clips added."""
+    model,data=read_glb(target);other,other_data=read_glb(source)
+    nodes={n.get('name'):i for i,n in enumerate(model['nodes']) if n.get('name')}
+    have={a['name'] for a in model.get('animations',[])}
+    data=bytearray(data);views=model.setdefault('bufferViews',[]);accessors=model.setdefault('accessors',[])
+    added=[]
+    for clip in other.get('animations',[]):
+        if clip['name'] in have or (names is not None and clip['name'] not in names):continue
+        copied={}
+        def accessor(index):
+            """Copy one accessor and the bytes it reads into the target."""
+            if index in copied:return copied[index]
+            item=dict(other['accessors'][index]);view=other['bufferViews'][item['bufferView']]
+            begin=view.get('byteOffset',0);raw=other_data[begin:begin+view['byteLength']]
+            while len(data)%4:data.append(0)
+            views.append({'buffer':0,'byteOffset':len(data),'byteLength':len(raw)});data.extend(raw)
+            item['bufferView']=len(views)-1;accessors.append(item);copied[index]=len(accessors)-1
+            return copied[index]
+        samplers=[{**s,'input':accessor(s['input']),'output':accessor(s['output'])} for s in clip['samplers']]
+        channels=[]
+        for c in clip['channels']:
+            bone=other['nodes'][c['target']['node']].get('name')
+            if bone not in nodes:raise ValueError(f"{clip['name']} animates {bone}, which the target skeleton lacks")
+            channels.append({'sampler':c['sampler'],'target':{**c['target'],'node':nodes[bone]}})
+        model.setdefault('animations',[]).append({'name':clip['name'],'samplers':samplers,'channels':channels})
+        added.append(clip['name'])
+    if added:
+        model['buffers']=[{'byteLength':len(data)}]
+        write_glb(target,model,data)
+    return added
+
 def self_check():
     with tempfile.TemporaryDirectory() as folder:
         path=Path(folder)/'sample.gltf'
@@ -231,6 +291,35 @@ def self_check():
         try:pack(path)
         except ValueError:pass
         else:raise AssertionError('External path escape accepted')
+        # Clips of another conversion join an existing file by bone name.
+        def clip_file(name,nodes,clip,keys):
+            file=Path(folder)/name;buffer=struct.pack('<%df'%(len(keys)*4),*[v for k in keys for v in (k,0.,0.,k)])
+            file.with_suffix('.bin').write_bytes(buffer)
+            clip_model={'asset':{'version':'2.0'},'scenes':[{'nodes':[0]}],'nodes':nodes,'meshes':[{'primitives':[{'attributes':{'JOINTS_0':0}}]}],
+                'buffers':[{'uri':file.stem+'.bin','byteLength':len(buffer)}],
+                'bufferViews':[{'buffer':0,'byteLength':len(buffer)}],
+                'accessors':[{'bufferView':0,'componentType':5123,'count':1,'type':'VEC4'}]+[{'bufferView':0,'componentType':5126,'count':len(keys),'type':'SCALAR'}],
+                'animations':[{'name':clip,'samplers':[{'input':1,'output':1}],'channels':[{'sampler':0,'target':{'node':1,'path':'translation'}}]}]}
+            file.write_text(json.dumps(clip_model),encoding='utf-8')
+            return file
+        nodes=[{'name':'rig','children':[1]},{'name':'bone'}]
+        first=pack(clip_file('first.gltf',nodes,'Wait',[0.,1.]))
+        old_model,old_data=read_glb(first)
+        second=pack(clip_file('second.gltf',[{'name':'rig','children':[1]},{'name':'bone'}],'Sleep',[0.,1.]))
+        assert add_animations(first,second)==['Sleep']
+        joined,joined_data=read_glb(first)
+        assert [a['name'] for a in joined['animations']]==['Wait','Sleep']
+        # What was there stays in place and unchanged.
+        assert joined_data.startswith(old_data) and len(joined_data)>len(old_data)
+        assert joined['animations'][0]==old_model['animations'][0]
+        assert joined['accessors'][:len(old_model['accessors'])]==old_model['accessors']
+        assert joined['animations'][1]['channels'][0]['target']['node']==1
+        # A clip the target has is left alone, and an unknown bone is refused.
+        assert add_animations(first,second)==[]
+        third=pack(clip_file('third.gltf',[{'name':'rig','children':[1]},{'name':'elbow'}],'Other',[0.,1.]))
+        try:add_animations(first,third)
+        except ValueError:pass
+        else:raise AssertionError('A clip for a missing bone was accepted')
     print('GLB packing checks passed')
 
 if __name__=='__main__':

@@ -50,6 +50,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 pub(super) fn run() {
     original_simulation_trace();
     state_changes_follow_the_nerve_machine();
+    idle_sequence();
     run_speed();
     variable_jump_height();
     chained_jumps();
@@ -140,6 +141,63 @@ fn state_changes_follow_the_nerve_machine() {
     );
     p.step(&crouch, &floor);
     assert_eq!((p.state_frames(), p.anim.name), (2, "SquatWait"));
+}
+
+/// The wait state's idle sequence on the steps the `idle-sleep` recording shows
+/// (its rows are these steps minus the ten the replay settles for): the relax
+/// after 180 steps of `Wait`, the clips that end, then 1200 steps of `WaitRelax`
+/// and 900 of `WaitSnooze`; any input ends the sequence and standing starts it over.
+#[cfg_attr(test, test)]
+fn idle_sequence() {
+    let floor = floor();
+    let idle = Orders::default();
+    let mut p = Player::default();
+    let mut chosen_at = Vec::new();
+    let mut last = p.phase_clip();
+    for step in 0..4500 {
+        p.step(&idle, &floor);
+        if p.phase_clip() != last {
+            last = p.phase_clip();
+            chosen_at.push((step, last));
+        }
+    }
+    assert_eq!(
+        chosen_at,
+        [
+            (180, "WaitRelaxStart"),
+            (331, "WaitRelax"),
+            (1532, "SnoozeStart"),
+            (2040, "Snooze"),
+            (2941, "SleepStart"),
+            (3550, "Sleep"),
+        ]
+    );
+    assert_eq!(p.nerve_name().name, "Wait/WaitSleep");
+    // Waking up: the stick runs, and standing again starts over with `Wait`.
+    frames(&mut p, fwd(Orders::default()), &floor, 30);
+    assert_eq!(p.mode, Move::Run);
+    let mut chosen_at = Vec::new();
+    let mut last = p.phase_clip();
+    for step in 0..400 {
+        p.step(&idle, &floor);
+        if p.phase_clip() != last {
+            last = p.phase_clip();
+            chosen_at.push((step, last));
+        }
+    }
+    let wait = chosen_at.iter().position(|(_, clip)| *clip == "Wait");
+    let relax = chosen_at
+        .iter()
+        .position(|(_, clip)| *clip == "WaitRelaxStart");
+    let (wait, relax) = (
+        wait.expect("standing starts with Wait"),
+        relax.expect("relaxes again"),
+    );
+    assert_eq!(
+        chosen_at[relax].0 - chosen_at[wait].0,
+        181,
+        "the relax comes 180 steps after Wait's first step"
+    );
 }
 
 #[cfg_attr(test, test)]

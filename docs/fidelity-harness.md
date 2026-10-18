@@ -90,7 +90,10 @@ Empty cells mean the rewrite has no equivalent:
   left (a clip that began this step reads 0); `vy` on the ground is -3, the pull
   the original keeps reporting (the controller cancels it inside the step), and
   in the step that reaches the ground it is the fall speed that moved the
-  player; standing is `Wait/Wait`. `state_step` counts the steps of the actor
+  player; standing is `Wait/Wait`, which relaxes into `Wait/WaitRelaxStart`
+  (clip `WaitRelaxStart`), `WaitRelax`, `WaitSnoozeStart` (clip `SnoozeStart`),
+  `WaitSnooze` (`Snooze`), `WaitSleepStart` (`SleepStart`) and `WaitSleep`
+  (`Sleep`) when left alone (`src/movement/wait.rs`). `state_step` counts the steps of the actor
   nerve (the part of `state` before the slash): 0 in the row where a state is
   chosen, 1 after its first step, and it keeps counting through the sub-states
   of one nerve (walking, braking and turning; landing and standing).

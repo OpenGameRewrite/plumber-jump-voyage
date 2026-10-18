@@ -66,6 +66,18 @@ python tools/convert-outfits.py --outfit Mario --outfit MarioAloha --outfit Mari
 The adapter and its copied dependencies stay under `local/converter/`. Converted
 GLBs and the outfit manifest go into `assets/local/`, which Git ignores.
 
+The conversion keeps the clips of the movement families and skips longer ones.
+To add clips afterwards (the idle sequence's `WaitRelax`, `SnoozeStart`,
+`Snooze`, `SleepStart` and `Sleep` are among them) without converting anything
+else, name them:
+
+```sh
+python tools/convert-outfits.py --add-clip WaitRelax --add-clip Sleep
+```
+
+This bakes only those clips and appends them to the installed `Mario.glb`;
+the clips already in the file, and the outfits that share them, stay as they are.
+
 ## Add movement sounds
 
 ```sh

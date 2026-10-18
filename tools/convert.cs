@@ -304,7 +304,10 @@ partial class ConvertOutfit {
             Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
             File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
             var prefixes=new[]{"Wait","Run","Dash","Fire","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
-            foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
+            // --clip=NAME (repeatable) bakes exactly those clips, whatever their
+            // length or name, to add them to an existing conversion.
+            var chosen=new HashSet<string>(args.Where(a=>a.StartsWith("--clip=")).Select(a=>a.Substring(7)));
+            foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>chosen.Count>0?chosen.Contains(a.Text):args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
                 var anim=new Assimp.Animation {Name=clip.Text,DurationInTicks=clip.FrameCount,TicksPerSecond=60.0};
                 var channels=new Dictionary<string,NodeAnimationChannel>();
                 foreach(var bone in model.Skeleton.bones) {var node=scene.RootNode.FindNode(bone.Text)??scene.RootNode.FindNode("Armature_"+bone.Text);if(node==null)continue;var ch=new NodeAnimationChannel {NodeName=node.Name};channels[bone.Text]=ch;anim.NodeAnimationChannels.Add(ch);}

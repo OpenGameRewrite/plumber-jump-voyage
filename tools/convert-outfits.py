@@ -80,6 +80,7 @@ def main():
     p.add_argument('--inspect',action='store_true')
     p.add_argument('--force',action='store_true',help='Regenerate existing local GLBs')
     p.add_argument('--repack',action='store_true',help='Repack existing conversions (needs --keep-intermediates on the earlier run)')
+    p.add_argument('--add-clip',action='append',help='Convert this Mario clip (repeatable) and append it to the installed Mario file; nothing else changes')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the converter working files (DAE, glTF, PNG)')
     p.add_argument('--self-check',action='store_true')
     a=p.parse_args()
@@ -114,9 +115,9 @@ def main():
         rot=info.get('LocalRotate') or {};trans=info.get('LocalTrans') or {}
         values=[rot.get(k,0.) for k in 'XYZ']+[trans.get(k,0.) for k in 'XYZ']
         return '|'+info['JointName']+''.join(f'|{float(v):g}' for v in values)
-    for name in names:
-        if name not in candidates:raise ValueError(f'No body outfit named {name}; use --list')
-        files=candidates[name];parts={}
+    def body_parts(name,files):
+        """The separate meshes (head, hands, hat) the body outfit is assembled from."""
+        parts={}
         head=name+'Head' if (objects/(name+'Head')).is_dir() else 'MarioHead'
         parts[head]=placement(files,'Head')
         for item in byml(files['InitSubActor.byml']).get('CreatorList',[]):
@@ -125,6 +126,33 @@ def main():
         # Texture-only archives are not independent meshes.
         for part in [name+'BodyTexture',head+'Texture']+[p.replace('HandL','HandTexture').replace('HandR','HandTexture') for p in parts if 'Hand' in p]:
             if (objects/part).is_dir():parts.setdefault(part,'')
+        return parts
+    def mario_animation():
+        """The converter arguments that bring in Mario's body, finger and facial clips."""
+        return [str(model('PlayerAnimation')),'--hand-l='+str(model('PlayerAnimationHandL')),'--hand-r='+str(model('PlayerAnimationHandR'))]+[
+            '--'+part.lower()+'='+str(model('PlayerAnimation'+part)) for part in ('Eye','Face','Head')]
+    if a.add_clip:
+        # Bake only the named clips and append them to the installed Mario file,
+        # leaving everything it holds as it is (older builds read the same file).
+        scratch=exports/'_clips';scratch.mkdir(exist_ok=True)
+        output=scratch/'Mario.glb'
+        files=candidates['Mario']
+        command=[str(a.adapter.resolve()),str(model('Mario')),str(output)]+mario_animation()
+        command+=['--clip='+clip for clip in a.add_clip]
+        command+=['--part='+str(model(part))+fix for part,fix in body_parts('Mario',files).items()]
+        with output.with_suffix('.log').open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
+        if result.returncode:raise ValueError(f'Clip conversion failed; details in {output.with_suffix(".log")}')
+        packed=packer.pack(output.with_suffix('.gltf'))
+        added=[]
+        for target in (exports/'Mario.glb',extract.ROOT/'assets/local/Mario.glb'):
+            if target.is_file():added=packer.add_animations(target,packed,set(a.add_clip))
+        print('Added clips: '+(', '.join(added) or 'none (all were already installed)'))
+        if not a.keep_intermediates:shutil.rmtree(scratch,ignore_errors=True)
+        return
+    for name in names:
+        if name not in candidates:raise ValueError(f'No body outfit named {name}; use --list')
+        files=candidates[name]
+        parts=body_parts(name,files)
         output=exports/(name+'.glb')
         base=exports/'Mario.glb'
         if output.is_file() and not a.force:
@@ -137,9 +165,9 @@ def main():
             continue
         # Mario carries the body, fingers and facial clips;
         # other outfits share them by bone name.
-        animation=['--geometry-only'] if name!='Mario' and base.is_file() else [str(model('PlayerAnimation')),
-            '--hand-l='+str(model('PlayerAnimationHandL')),'--hand-r='+str(model('PlayerAnimationHandR'))]
-        animation+=['--'+part.lower()+'='+str(model('PlayerAnimation'+part)) for part in ('Eye','Face','Head')]
+        animation=['--geometry-only'] if name!='Mario' and base.is_file() else mario_animation()
+        if animation[0]=='--geometry-only':
+            animation+=['--'+part.lower()+'='+str(model('PlayerAnimation'+part)) for part in ('Eye','Face','Head')]
         command=[str(a.adapter.resolve()),str(model(name)),str(output)]+animation+['--part='+str(model(part))+fix for part,fix in parts.items()]
         log=output.with_suffix('.log')
         with log.open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
