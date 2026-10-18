@@ -47,9 +47,10 @@ const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
 /// What `KCHitArrow` allows a hit to lie outside an edge by.
 const ARROW_EDGE_BAND: f32 = 0.01;
 /// `KCHitSphereForPlayer`: an edge or corner hit counts only when the sphere
-/// centre is within about 55 degrees of the face normal (`sin 45` in single
-/// precision).
-const EDGE_HIT_RATIO: f32 = 0.707_105_99;
+/// centre is within about 55 degrees of the face normal (the game's literal
+/// is 0.707106).
+#[allow(clippy::approx_constant)] // the game's own 0.707106, not exactly one over root two
+const EDGE_HIT_RATIO: f32 = 0.707_106;
 /// Results the keeper stores before it stops adding (`CollisionShapeKeeper(5,
 /// 0x40, 0x20)`).
 const MAX_RESULTS: usize = 64;
@@ -228,12 +229,7 @@ pub struct SphereHit {
 }
 
 /// `KCHitSphereForPlayer` plus `calcSphereHitPos`.
-fn sphere_hit(
-    t: &MeshTriangle,
-    center: Vec3,
-    radius: f32,
-    thickness: f32,
-) -> Option<SphereHit> {
+fn sphere_hit(t: &MeshTriangle, center: Vec3, radius: f32, thickness: f32) -> Option<SphereHit> {
     let from_first = center - t.corners[0];
     let height = from_first.dot(t.normal);
     // The centre is beyond the radius: no contact on any region.
@@ -322,8 +318,6 @@ fn nearest_on_triangle(t: &MeshTriangle, p: Vec3) -> (Vec3, Location) {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArrowHit {
-    /// Where along the arrow the surface is (0 at the start, 1 at the tip).
-    pub t: f32,
     /// The length of the arrow beyond the surface.
     pub depth: f32,
     pub position: Vec3,
@@ -358,7 +352,6 @@ fn arrow_hit(t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
     }
     let length = vector.length();
     Some(ArrowHit {
-        t: fraction,
         depth: (1. - fraction) * length,
         position: start + vector * fraction,
     })
@@ -388,9 +381,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
     let mut results = Results::default();
     for (index, shape) in keeper.shapes.iter().enumerate() {
         match shape {
-            Shape::Sphere {
-                center, radius, ..
-            } => {
+            Shape::Sphere { center, radius, .. } => {
                 let world = pose.pos + pose.rotate(*center);
                 for i in mesh.candidates(Aabb::around(world, *radius)) {
                     let t = &mesh.triangles[i as usize];
@@ -482,7 +473,6 @@ impl Sweep {
 /// contact, with what the game keeps of it (`HitInfo`).
 #[derive(Clone, Debug)]
 pub struct Contact {
-    pub depth: f32,
     pub normal: Vec3,
     pub position: Vec3,
     /// Index of the triangle in the mesh (its collision codes and KCL index
@@ -614,13 +604,7 @@ impl PlayerCollider {
 
     /// `PlayerCollider::collide`: moves the feet from `pos` by `velocity`,
     /// both cm, facing `yaw` radians about the up axis (0 faces +z).
-    pub fn collide(
-        &mut self,
-        mesh: &TriangleMesh,
-        pos: Vec3,
-        velocity: Vec3,
-        yaw: f32,
-    ) -> Outcome {
+    pub fn collide(&mut self, mesh: &TriangleMesh, pos: Vec3, velocity: Vec3, yaw: f32) -> Outcome {
         self.floor = None;
         self.wall = None;
         self.ceiling = None;
@@ -642,7 +626,14 @@ impl PlayerCollider {
         );
         // The frame's own move.
         let target = at + velocity;
-        collided |= self.move_collide(mesh, &pose, &mut at, target, velocity, range.min(LONGEST_STEP));
+        collided |= self.move_collide(
+            mesh,
+            &pose,
+            &mut at,
+            target,
+            velocity,
+            range.min(LONGEST_STEP),
+        );
         Outcome { pos: at, collided }
     }
 
@@ -867,7 +858,14 @@ impl PlayerCollider {
         let depth = (hit.depth - margin).max(0.);
         let push = -depth * direction.dot(self.ground_normal);
         fixes.add(self.ground_normal * push);
-        self.record(mesh, Class::Floor, hit.depth, result, hit.position, Location::Face);
+        self.record(
+            mesh,
+            Class::Floor,
+            hit.depth,
+            result,
+            hit.position,
+            Location::Face,
+        );
     }
 
     /// `calcResultVecSphere`.
@@ -907,9 +905,8 @@ impl PlayerCollider {
                 // its flank no higher than a small step above the ground
                 // plane the arrows found. Any other floor-like contact (the
                 // head's, or a step) can only push the body sideways.
-                let underneath = |range: f32| {
-                    across(hit.position - hit.center, Vec3::Y).length() < range
-                };
+                let underneath =
+                    |range: f32| across(hit.position - hit.center, Vec3::Y).length() < range;
                 let ground_like = support.is_some_and(|range| {
                     underneath(range)
                         || flags.arrow_floor
@@ -938,11 +935,7 @@ impl PlayerCollider {
                     by_normal
                 } else {
                     let fix = radial_or_normal(at_face, by_normal, radial());
-                    if at_face {
-                        fix
-                    } else {
-                        across(fix, Vec3::Y)
-                    }
+                    if at_face { fix } else { across(fix, Vec3::Y) }
                 }
             }
             Class::Ceiling => {
@@ -975,7 +968,6 @@ impl PlayerCollider {
         if self.best[slot] < depth {
             self.best[slot] = depth;
             *contact = Some(Contact {
-                depth,
                 normal: mesh.triangles[result.triangle as usize].normal,
                 position,
                 triangle: result.triangle,

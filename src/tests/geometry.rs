@@ -55,8 +55,12 @@ fn json_triangles_are_shifted_to_the_start() {
     let t = &mesh.triangles[0];
     assert_eq!(t.corners[0], Vec3::new(-100., 0., -100.));
     assert_eq!(t.kcl_index, 7);
+    assert_eq!(mesh.model_of(0), "CapWorldHomeGround000");
     let codes = mesh.codes_of(0);
-    assert_eq!((codes.floor.as_str(), codes.material.as_str()), ("Ground", "LawnCap"));
+    assert_eq!(
+        (codes.floor.as_str(), codes.material.as_str()),
+        ("Ground", "LawnCap")
+    );
     assert_eq!((codes.floor_index, codes.material_index), (8, 17));
     assert_eq!(mesh.floor_below(0., 0., 5., 0.3), Some(0.));
 }

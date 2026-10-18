@@ -61,12 +61,6 @@ impl Aabb {
             max: center + Vec3::splat(radius),
         }
     }
-    pub fn union(self, other: Self) -> Self {
-        Self {
-            min: self.min.min(other.min),
-            max: self.max.max(other.max),
-        }
-    }
 }
 
 /// How far a KCL prism extends below its face (`KCPrismHeader` thickness, 40
@@ -259,6 +253,12 @@ impl TriangleMesh {
         found
     }
 
+    /// The model the triangle's object was built from (`CapWorldHomeGround000`).
+    pub fn model_of(&self, triangle: u32) -> &str {
+        let object = self.triangles[triangle as usize].object as usize;
+        self.objects.get(object).map_or("", String::as_str)
+    }
+
     pub fn codes_of(&self, triangle: u32) -> &CollisionCodes {
         &self.codes[self.triangles[triangle as usize].attribute as usize % self.codes.len()]
     }
@@ -280,9 +280,9 @@ impl TriangleMesh {
             if !contains_xz(t, x, z) {
                 continue;
             }
-            let y = t.corners[0].y - ((x - t.corners[0].x) * t.normal.x
-                + (z - t.corners[0].z) * t.normal.z)
-                / t.normal.y;
+            let y = t.corners[0].y
+                - ((x - t.corners[0].x) * t.normal.x + (z - t.corners[0].z) * t.normal.z)
+                    / t.normal.y;
             if y <= y_max && best.is_none_or(|b| y > b) {
                 best = Some(y);
             }

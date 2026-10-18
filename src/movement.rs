@@ -6,9 +6,9 @@
 //! decompilation documents follow it; the rest are inferred from their tuning
 //! names and observed behaviour. No original code is reproduced here.
 use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
+use crate::cap::{CapEvent, CapWorld, Launch};
 use crate::collider::PlayerCollider;
 use crate::geometry::TriangleMesh;
-use crate::cap::{CapEvent, CapWorld, Launch};
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use crate::se_ctrl::SeCtrl;
@@ -253,10 +253,10 @@ mod rolling;
 mod run_cycle;
 #[path = "movement/sounds.rs"]
 mod sounds;
-#[path = "movement/terrain.rs"]
-mod terrain;
 #[path = "movement/squat.rs"]
 mod squat;
+#[path = "movement/terrain.rs"]
+mod terrain;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
 use rolling::{RollControl, RollStart};

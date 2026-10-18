@@ -15,8 +15,8 @@
 //! built exactly as the windowed game builds them from its default layout.
 use crate::{
     effect_data::Library,
-    input::{ACTIONS, Orders, Settings, bound, rotate},
     geometry::TriangleMesh,
+    input::{ACTIONS, Orders, Settings, bound, rotate},
     movement::{Course, Player, Solid},
     sound_table::Table,
     trace::{COLUMNS, FrameInfo, Recorder, TraceFile},
@@ -493,7 +493,8 @@ fn load_geometry(
         return Ok(None);
     };
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mesh = TriangleMesh::from_json(&text, script.start).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mesh = TriangleMesh::from_json(&text, script.start)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     eprintln!(
         "geometry: {} ({} triangles, origin {:.1} {:.1} {:.1})",
         path.display(),

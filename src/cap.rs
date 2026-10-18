@@ -171,7 +171,7 @@ pub struct CapWorld<'a> {
     pub mesh: Option<&'a TriangleMesh>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Cap {
     /// Metres.
     pub pos: Vec3,
@@ -495,6 +495,35 @@ impl Cap {
         let ease = ease_in((self.step as f32 / RETURN_EASE_FRAMES).min(1.));
         self.velocity = self.front * self.return_speed + across * (1. - ease);
         None
+    }
+}
+/// The cap's flight state, without the collider's bookkeeping: the simulation
+/// baseline (`original_simulation_trace`) hashes this text, and the collider
+/// only acts against a stage mesh.
+impl std::fmt::Debug for Cap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cap")
+            .field("pos", &self.pos)
+            .field("age", &self.age)
+            .field("returning", &self.returning)
+            .field("kind", &self.kind)
+            .field("air", &self.air)
+            .field("phase", &self.phase)
+            .field("nerve", &self.nerve)
+            .field("step", &self.step)
+            .field("frames", &self.frames)
+            .field("action", &self.action)
+            .field("action_frame", &self.action_frame)
+            .field("action_serial", &self.action_serial)
+            .field("left", &self.left)
+            .field("spot", &self.spot)
+            .field("velocity", &self.velocity)
+            .field("front", &self.front)
+            .field("speed", &self.speed)
+            .field("cruise_frames", &self.cruise_frames)
+            .field("brake_step", &self.brake_step)
+            .field("return_speed", &self.return_speed)
+            .finish()
     }
 }
 /// A throw this fast is the continuous one (the third in a row).

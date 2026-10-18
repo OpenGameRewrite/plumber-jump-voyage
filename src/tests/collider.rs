@@ -85,7 +85,10 @@ fn crouched_hop_still_reports_the_floor() {
     assert_eq!((pos.y, grounded), (10.5, true));
     // An upright jump leaves it at once.
     let mut up = PlayerCollider::new(Form::Normal);
-    assert_eq!(fall(&mut up, &mesh, 0., 17.), (Vec3::new(0., 17., 0.), false));
+    assert_eq!(
+        fall(&mut up, &mesh, 0., 17.),
+        (Vec3::new(0., 17., 0.), false)
+    );
 }
 
 /// A wall facing -x at x = 100 stops the body spheres (radius 55) with the
@@ -174,9 +177,18 @@ fn ceiling_stops_a_jump() {
 #[cfg_attr(test, test)]
 fn exact_arrival_depth_is_just_under_the_margin() {
     let t = TriangleMesh::from_corners(&square(0., 100.));
-    let hit = arrow_hit(&t.triangles[0], Vec3::new(0., 40., 0.), Vec3::new(0., -60., 0.))
-        .expect("the arrow crosses the floor");
+    let hit = arrow_hit(
+        &t.triangles[0],
+        Vec3::new(0., 40., 0.),
+        Vec3::new(0., -60., 0.),
+    )
+    .expect("the arrow crosses the floor");
     assert!(hit.depth < 20. && hit.depth > 19.999);
-    let hit = arrow_hit(&t.triangles[0], Vec3::new(0., 39.5, 0.), Vec3::new(0., -60., 0.)).unwrap();
+    let hit = arrow_hit(
+        &t.triangles[0],
+        Vec3::new(0., 39.5, 0.),
+        Vec3::new(0., -60., 0.),
+    )
+    .unwrap();
     assert!(hit.depth >= 20.);
 }

@@ -7,6 +7,7 @@ by frame. Nothing here needs game data; the optional sound table
 ```sh
 plumber-jump-voyage --replay run.input --trace rewrite.csv [--camera game.csv]
 plumber-jump-voyage --replay run.input --trace lockstep.csv --lockstep game.csv
+plumber-jump-voyage --replay run.input --trace rewrite.csv --geometry-dir <exports> [--camera game.csv]
 plumber-jump-voyage --replay run.input --shots runs/name   # rendered captures
 plumber-jump-voyage --replay --states        # the original state names used
 py tools/compare-traces.py game.csv rewrite.csv --out diff.md [--lockstep]
@@ -29,7 +30,8 @@ ZR crouch, R homing throw, L recenters, MINUS returns to the checkpoint.
 
 ## What a replay does
 
-The player is placed on a flat floor with nothing around it, idles for ten
+The player is placed on a flat floor with nothing around it (or in the real
+stage's collision, see below), idles for ten
 frames, then takes one `Player::step` per scripted frame. The start position
 only matters relative to itself on flat ground, so the run happens at the
 origin and positions are written in game units relative to `start`. The camera
@@ -37,6 +39,37 @@ yaw is the script's `camera`, else the start yaw; with `--camera game.csv` it
 follows that trace's `cam_yaw` column, so the world-space input matches the
 real run. No window, clock or random source is involved, so a run is
 byte-for-byte repeatable.
+
+## Replaying in the real stage's collision
+
+`--geometry <stage.json>` loads one local export of a stage's static collision
+(the triangles of the stage's KCL files with their collision attributes, in game
+units, written by the local export tool; nothing of it is in this repository).
+`--geometry-dir <dir>` picks `<stage>.json` from a folder of exports for the
+stage the script's `stage` line names, else the stage recorded in the
+`game.meta.json` beside the `--camera` or `--lockstep` trace; a stage without an
+export replays on the flat floor. The script's `start` is the origin of the
+traces, so the triangles are loaded relative to it (the floor under the start is
+at height 0) and the replay's positions stay comparable to the game's. The export
+covers a box around the start (25 m by default); a run that leaves it falls off
+the loaded area, so re-export with a larger `--half` for long runs.
+
+In geometry the player collides with the triangles the way the game's player
+collider does (`src/collider.rs`, written from the 1.0.0 executable): normal or
+crouched shapes, three ground arrows, the sweep in steps with a push-out per
+contact, the 70 degree rule for floor, wall and ceiling. Cappy collides with a
+sphere of its own (`PlayerColliderHackCap`) and turns along a wall it meets at
+an angle. The replay's `collision` column then also carries `ceiling`, `gmat`
+(the floor's material), `gcode` and `gcodeidx` (its floor code), taken from the
+triangle under the feet. Replays without geometry are unchanged.
+`py tools/fidelity-report.py <runs> --geometry <exports>` replays every
+scenario in its recorded stage.
+
+Not ported yet: the squeeze of `Press` collision, moving collision parts, the
+averaging of a push with the previous frame's (`calcResultVec`'s direction
+flags), thin-wall edge hits (`rs::calcExistCollisionBorder`), the ledge and
+pole contact on triangles, slope sliding on triangles and Cappy's head-on wall
+stop, floor and lock-on reactions.
 
 ## Trace columns
 
@@ -108,12 +141,12 @@ writes the keys it has an equivalent for under the game's names:
 | `quickturn` | quick-turn jump frames left; zero through every reverse and side somersault recorded | not written (the rewrite's own `quick_turn` window starts at a skid and is not the same counter) |
 | `capjump` | a cap bounce is still possible | `cap_jump_possible` as 0 or 1 |
 | `prejump` | frames left on the buffered jump press | `pre_jump` |
-| `collision`: `ground`, `wall`, `gn`, `wn` | contact flags and the ground and wall normals | `grounded`, whether a wall was touched, the ramp's normal, the wall's normal |
+| `collision`: `ground`, `wall`, `gn`, `wn` | contact flags and the ground and wall normals | `grounded`, whether a wall was touched, the ramp's normal, the wall's normal; in geometry also `ceiling`, `gmat`, `gcode`, `gcodeidx` |
 | `triggers` | raw flag words of the player trigger object | none; the rewrite writes `fx=` (its movement event names), which has no counterpart |
 
 Game keys with no equivalent are not written: `upperpunch`, `forcerun`,
-`limitheight`, `wallhist`, `ceiling`, `gmat` (the rewrite has no ceiling flag
-and no floor materials). The rewrite's own counters (`coyote`, `jump_count`,
+`limitheight`, `wallhist`, and without geometry `ceiling` and `gmat` (a flat
+floor has no codes). The rewrite's own counters (`coyote`, `jump_count`,
 `jump_timer`, `run_frames`, ...) follow the game's keys. The timer of
 `cjump` and `clong` means nothing while their count is zero, and the
 comparison ignores it then.

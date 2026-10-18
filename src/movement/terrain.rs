@@ -41,7 +41,12 @@ impl Player {
     fn collision_form(&self) -> Form {
         if matches!(
             self.mode,
-            Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd | Move::Slide
+            Move::SquatBrake
+                | Move::Crouch
+                | Move::Crawl
+                | Move::Roll
+                | Move::RollEnd
+                | Move::Slide
         ) {
             Form::Mini
         } else {
@@ -76,8 +81,14 @@ impl Player {
         let collider = &self.collider;
         self.touched = Touched {
             active: true,
-            floor: collider.floor.as_ref().map(|c| mesh.codes_of(c.triangle).clone()),
-            wall: collider.wall.as_ref().map(|c| mesh.codes_of(c.triangle).clone()),
+            floor: collider
+                .floor
+                .as_ref()
+                .map(|c| mesh.codes_of(c.triangle).clone()),
+            wall: collider
+                .wall
+                .as_ref()
+                .map(|c| mesh.codes_of(c.triangle).clone()),
             ceiling: collider
                 .ceiling
                 .as_ref()
@@ -92,7 +103,11 @@ impl Player {
             };
             self.mesh_ground = Some(normal);
             // Kept for the box-ramp states until they take the normal itself.
-            self.slope = if normal.y > 0. { -normal.x / normal.y } else { 0. };
+            self.slope = if normal.y > 0. {
+                -normal.x / normal.y
+            } else {
+                0.
+            };
             if self.v.y <= 0. {
                 self.landing_speed = self.landing_speed.min(self.v.y);
                 self.v.y = 0.;
