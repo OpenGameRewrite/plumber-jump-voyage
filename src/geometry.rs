@@ -78,6 +78,10 @@ pub struct TriangleMesh {
     /// Model name of every object the triangles come from.
     pub objects: Vec<String>,
     pub thickness: f32,
+    /// The replay's start in the stage's own (absolute) coordinates, cm. The
+    /// game keeps every position in single precision at that magnitude, whose
+    /// steps are far coarser than the replay's start-relative numbers.
+    origin: [f64; 3],
     cells: HashMap<(i32, i32), Vec<u32>>,
 }
 
@@ -148,6 +152,7 @@ impl TriangleMesh {
             codes,
             objects,
             thickness: PRISM_THICKNESS,
+            origin,
             ..Self::default()
         };
         for (i, row) in rows.iter().enumerate() {
@@ -160,12 +165,13 @@ impl TriangleMesh {
             if n.len() < 16 {
                 return Err(format!("geometry: triangle {i} has {} fields", n.len()));
             }
-            // Subtract in double precision: the stage's coordinates are large.
+            // The corners are single-precision absolute positions, as the stage
+            // file holds them; subtract in double precision, the numbers are large.
             let corner = |k: usize| {
                 Vec3::new(
-                    (n[3 * k] - origin[0]) as f32,
-                    (n[3 * k + 1] - origin[1]) as f32,
-                    (n[3 * k + 2] - origin[2]) as f32,
+                    (f64::from(n[3 * k] as f32) - origin[0]) as f32,
+                    (f64::from(n[3 * k + 1] as f32) - origin[1]) as f32,
+                    (f64::from(n[3 * k + 2] as f32) - origin[2]) as f32,
                 )
             };
             let corners = [corner(0), corner(1), corner(2)];
@@ -188,6 +194,20 @@ impl TriangleMesh {
             });
         }
         Ok(mesh)
+    }
+
+    /// A start-relative position (cm) as the game would hold it: rounded to
+    /// the single-precision value of its absolute position.
+    pub fn snap_to_game_precision(&self, relative: Vec3) -> Vec3 {
+        let snap = |value: f32, origin: f64| {
+            let absolute = (f64::from(value) + origin) as f32;
+            (f64::from(absolute) - origin) as f32
+        };
+        Vec3::new(
+            snap(relative.x, self.origin[0]),
+            snap(relative.y, self.origin[1]),
+            snap(relative.z, self.origin[2]),
+        )
     }
 
     fn add(&mut self, triangle: MeshTriangle) {

@@ -194,8 +194,8 @@ mod t {
     pub const SQUAT_BRAKE_RATE: f32 = 0.95;
     pub const SQUAT_WALK: f32 = 3.5;
 
+    /// `GravityWallSlide`.
     pub const WALL_SLIDE_GRAVITY: f32 = 0.5;
-    pub const WALL_SLIDE_MAX: f32 = 10.;
     pub const WALL_KEEP_FRAMES: u32 = 3;
     pub const WALL_JUMP_POWER: f32 = 23.;
     pub const WALL_JUMP_GRAVITY: f32 = 0.95;
@@ -273,12 +273,16 @@ mod squat;
 mod terrain;
 #[path = "movement/wait.rs"]
 mod wait;
+#[path = "movement/wall_air.rs"]
+mod wall_air;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
 use rolling::{RollControl, RollStart};
 pub use run_cycle::RunCycle;
 use squat::SquatControl;
 use wait::WaitControl;
+pub use wall_air::WallContact;
+use wall_air::{WallAirControl, WallHistory};
 
 /// How much of the way to its target direction the body swings in a frame
 /// (`SlerpQuatRate`, used by `rs::slerpUpFront`).
@@ -554,6 +558,7 @@ impl Move {
                 | Self::CapBounce
                 | Self::CatchJump
                 | Self::Fall
+                | Self::WallJump
         )
     }
     fn airborne_jump(self) -> bool {
@@ -925,6 +930,9 @@ pub struct Player {
     gravity: f32,
     jump_extend: bool,
     max_air_speed: f32,
+    /// The wall slide in progress and what the wall judge remembers of the last one.
+    wall_air: WallAirControl,
+    wall_history: WallHistory,
     /// The drop the long-fall judge measures (`PlayerColliderHakoniwa::updateFallDistanceCheck`).
     fall: FallDistance,
     /// The stick-circle detector the player's input holds
@@ -1067,6 +1075,8 @@ impl Default for Player {
             gravity: t::GRAVITY_AIR,
             jump_extend: false,
             max_air_speed: t::JUMP_MOVE_MIN,
+            wall_air: WallAirControl::default(),
+            wall_history: WallHistory::default(),
             fall: FallDistance::default(),
             spin_input: SpinInput::default(),
             spin_clockwise: false,
@@ -1533,6 +1543,9 @@ impl Player {
         if self.mode.uses_air_control() && !self.grounded {
             self.resume_air_control(s);
         }
+        if self.mode == Move::WallSlide {
+            self.resume_wall_slide(s);
+        }
         if let Some((name, frame)) = s.anim {
             if let Some(clockwise) = spin::clip_is_clockwise(name) {
                 self.spin_clockwise = clockwise;
@@ -1969,6 +1982,7 @@ impl Player {
         if !self.nerve.deferred {
             self.run_state(&o, scene);
             self.judge_fall();
+            self.judge_wall_keep(scene);
         }
         self.finish_catch();
         if matches!(self.mode, Move::Ledge | Move::Pole) {
@@ -2086,6 +2100,7 @@ impl Player {
             Move::LongJump => self.long_jump_air(o),
             Move::Backflip => self.back_jump_air(o),
             Move::Sideflip => self.turn_jump_air(o),
+            Move::WallJump => self.wall_jump(o),
             mode if mode.uses_air_control() => self.jump_air(o),
             Move::WallSlide => self.wall_slide(o),
             Move::Ledge => self.wall_catch(o, scene),
@@ -2804,7 +2819,13 @@ impl Player {
     }
     /// Put the air control into the middle of a recorded jump (lockstep).
     fn resume_air_control(&mut self, s: &Snapshot) {
-        let frames = s.state_frames.unwrap_or(0);
+        // The wall jump counts its steps from the sub-state, not the nerve's.
+        let frames = if self.mode == Move::WallJump {
+            s.sub_steps
+        } else {
+            s.state_frames
+        }
+        .unwrap_or(0);
         let (extend, gravity) = match self.mode {
             Move::DoubleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_2ND),
             Move::TripleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_3RD),
@@ -2812,10 +2833,13 @@ impl Player {
             Move::CapBounce => (0, t::TRAMPLE_HIGH_GRAVITY),
             Move::CatchJump => (0, t::CAP_CATCH_JUMP_GRAVITY),
             Move::SpinJump => (0, t::SPIN_JUMP_GRAVITY),
+            Move::WallJump => (0, t::WALL_JUMP_GRAVITY),
             _ => (0, t::JUMP_GRAVITY),
         };
         let takeoff = if self.mode == Move::Fall {
             fall_takeoff(self.v.y)
+        } else if self.mode == Move::WallJump {
+            wall_air::wall_jump_takeoff()
         } else {
             takeoff_of(self.mode, extend, self.v.y, gravity)
         };
@@ -3119,8 +3143,7 @@ impl Player {
         }
         let mut h = self.v.with_y(0.);
         let speed = h.length();
-        let locked = self.mode == Move::WallJump && self.frame < t::WALL_JUMP_NO_INPUT;
-        if self.tilt > 0.05 && !locked {
+        if self.tilt > 0.05 {
             let wish = self.stick;
             let dir = h.normalize_or(self.facing);
             let angle = wrap(yaw(wish) - yaw(dir)).abs().to_degrees();
@@ -3143,7 +3166,7 @@ impl Player {
             if !matches!(self.mode, Move::Backflip | Move::Sideflip) {
                 self.facing = turn(self.facing, wish, 0.1);
             }
-        } else if !locked {
+        } else {
             h *= t::FRICTION_AIR;
         }
         self.set_h(h);
@@ -3172,7 +3195,6 @@ impl Player {
             "JumpTurn" => Some(60),
             "RollingJump" => Some(28),
             "JumpHipDrop" => Some(46),
-            "WallJump" => Some(37),
             "JumpCapLeapFrog" => Some(clip::JUMP_CAP_LEAP_FROG),
             "JumpCapCatchCommon" => Some(27),
             n if n.starts_with("SpinCapAirStart") => Some(clip::throw(n)),
@@ -3324,35 +3346,6 @@ impl Player {
     }
 
     // ---- Walls, ledges, poles --------------------------------------------
-    fn wall_slide(&mut self, o: &Orders) {
-        if self.pre_jump > 0 {
-            self.facing = self.wall;
-            let away = self.wall;
-            self.jump_with(
-                Move::WallJump,
-                "WallJump",
-                t::WALL_JUMP_POWER,
-                t::WALL_JUMP_GRAVITY,
-                move |p| {
-                    p.set_h(away * t::WALL_JUMP_H);
-                    p.max_air_speed = t::WALL_JUMP_H;
-                    p.jump_extend = false;
-                    p.dive_possible = true;
-                },
-            );
-            return;
-        }
-        if o.crouch_pressed || self.wall == Vec3::ZERO {
-            self.pos += self.wall * 0.1;
-            self.go(Move::Fall, "Fall");
-            return;
-        }
-        if self.frame >= t::WALL_KEEP_FRAMES {
-            self.keep("WallSlideL");
-        }
-        self.set_h(-self.wall * 2.);
-        self.v.y = (self.v.y - t::WALL_SLIDE_GRAVITY).max(-t::WALL_SLIDE_MAX);
-    }
     /// Hanging from a ledge. The actor sits on the edge itself; the hang and
     /// climb clips carry the body below and up over it, as in the original.
     fn wall_catch(&mut self, o: &Orders, scene: &Course) {
@@ -3967,6 +3960,9 @@ impl Player {
 
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders) {
+        if self.mode == Move::WallSlide {
+            self.leave_wall_slide();
+        }
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
         if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
@@ -4120,6 +4116,7 @@ impl Player {
         self.grounded = false;
         self.landing_speed = 0.;
         self.wall = Vec3::ZERO;
+        self.touched.wall_contact = None;
         match &scene.mesh {
             Some(mesh) => self.collide_mesh(o, mesh, was_grounded),
             None => self.collide_solids(o, scene, was_grounded),
@@ -4240,6 +4237,14 @@ impl Player {
                         let into = -self.v[axis] * sign;
                         self.wall = Vec3::ZERO;
                         self.wall[axis] = sign;
+                        // (The toy course's box has a flat face and a plain
+                        // contact point; the keep-the-velocity rule of the
+                        // mesh path does not apply to it.)
+                        self.touched.wall_contact = Some(WallContact {
+                            normal: self.wall,
+                            position: (self.pos - self.wall * RADIUS) / UNIT,
+                            at_face: true,
+                        });
                         self.v[axis] = 0.;
                         if self.mode == Move::Roll && into > 12. {
                             // Rolling into a wall knocks the roll back out.
@@ -4285,12 +4290,6 @@ impl Player {
             self.ledge = Vec3::new(corner.x, top, corner.z);
             self.facing = -self.wall;
             self.v = Vec3::ZERO;
-        } else if self.mode != Move::WallSlide {
-            self.change(Move::WallSlide, "WallKeep", |p| {
-                p.events.push(Fx::WallSlide)
-            });
-            self.facing = self.wall;
-            self.v.y = self.v.y.max(-t::WALL_SLIDE_MAX * 0.5);
         }
     }
 }

@@ -357,6 +357,49 @@ fn arrow_hit(t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
     })
 }
 
+/// A face an arrow struck: the point, the face's normal and how far along.
+#[derive(Clone, Copy, Debug)]
+pub struct Strike {
+    pub position: Vec3,
+    pub normal: Vec3,
+    /// How far along the arrow (from its start) the face lies, in cm.
+    pub distance: f32,
+}
+
+/// Every face the arrow from `start` along `vector` strikes (cm, replay frame),
+/// in the mesh's order: `alCollisionUtil::checkStrikeArrow` asks whether there
+/// is one, `getHitPosAndNormalOnArrow` the nearest and `getLastPolyOnArrow` the
+/// farthest. `walls_only` is `al::TriangleFilterWallOnly`: only faces that are
+/// neither floor nor ceiling count.
+pub fn arrow_strikes(
+    mesh: &TriangleMesh,
+    start: Vec3,
+    vector: Vec3,
+    walls_only: bool,
+) -> Vec<Strike> {
+    let tip = start + vector;
+    let area = Aabb {
+        min: start.min(tip),
+        max: start.max(tip),
+    };
+    let length = vector.length();
+    mesh.candidates(area)
+        .into_iter()
+        .filter_map(|i| {
+            let t = &mesh.triangles[i as usize];
+            if walls_only && classify(t.normal) != Class::Wall {
+                return None;
+            }
+            let hit = arrow_hit(t, start, vector)?;
+            Some(Strike {
+                position: hit.position,
+                normal: t.normal,
+                distance: length - hit.depth,
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Hit {
     Sphere(SphereHit),

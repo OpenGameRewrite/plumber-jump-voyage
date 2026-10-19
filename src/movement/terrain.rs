@@ -19,6 +19,8 @@ pub struct Touched {
     pub floor: Option<CollisionCodes>,
     pub wall: Option<CollisionCodes>,
     pub ceiling: Option<CollisionCodes>,
+    /// The wall the body touched, where and how.
+    pub wall_contact: Option<WallContact>,
 }
 
 /// The player's position is kept in metres in single precision, so a fall
@@ -52,7 +54,7 @@ impl Player {
     /// Moves the player by this frame's velocity through the mesh.
     pub(super) fn collide_mesh(&mut self, o: &Orders, mesh: &TriangleMesh, was_grounded: bool) {
         self.collider.set_form(self.collision_form());
-        let start = to_cm(self.pos);
+        let start = mesh.snap_to_game_precision(to_cm(self.pos));
         // On the ground the controller keeps no downward speed of its own; the
         // game's velocity carries the pull (`units_per_frame`), and it is that
         // push into the floor that keeps the ground contact every frame.
@@ -90,6 +92,11 @@ impl Player {
                 .ceiling
                 .as_ref()
                 .map(|c| mesh.codes_of(c.triangle).clone()),
+            wall_contact: collider.wall.as_ref().map(|c| WallContact {
+                normal: c.normal,
+                position: c.position,
+                at_face: c.location == crate::collider::Location::Face,
+            }),
         };
         self.mesh_ground = None;
         if let Some(floor) = &collider.floor {
@@ -131,7 +138,10 @@ impl Player {
             if normal != Vec3::ZERO {
                 self.wall = normal;
                 let into = -self.v.dot(normal);
-                if into > 0. {
+                // The air states keep their velocity against a wall (the wall
+                // slide starts from it, and the jump's own control has nothing
+                // that takes it off); the collider's push alone holds the body.
+                if into > 0. && !self.keeps_velocity_at_walls() {
                     self.v += normal * into;
                 }
                 if self.mode == Move::Roll && into > 12. {
@@ -148,6 +158,12 @@ impl Player {
                 }
             }
         }
+    }
+
+    /// The states whose velocity a wall contact leaves alone: the jump family,
+    /// the fall and the wall states.
+    fn keeps_velocity_at_walls(&self) -> bool {
+        self.mode == Move::WallSlide || self.wall_keep_applies()
     }
 
     /// Height (metres) of the top of the wall touched at `contact`: the

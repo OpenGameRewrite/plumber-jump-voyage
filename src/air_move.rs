@@ -231,7 +231,7 @@ impl AirMove {
         let horizontal = flat(v);
         self.gravity = t.gravity;
         self.fall_max = t.fall_max;
-        self.input_lock = 0;
+        self.input_lock = t.input_lock.saturating_sub(frames);
         self.dir = horizontal
             .try_normalize()
             .or_else(|| flat(front).try_normalize())

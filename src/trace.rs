@@ -999,6 +999,13 @@ impl TraceFile {
                 counters.push((format!("pre_{name}"), value as i64));
             }
         }
+        // The steps the ground states have gone on without ground under them
+        // (`PlayerJudgeSpeedCheckFall`): the airborne rows before this one.
+        let mut lost = 0;
+        while lost < 5 && lost < row && self.cell(row - 1 - lost, "ground") == Some("0") {
+            lost += 1;
+        }
+        counters.push(("ground_lost".to_string(), lost as i64));
         Snapshot {
             mode,
             pos: Vec3::new(n("px"), n("py"), n("pz")) * UNIT,

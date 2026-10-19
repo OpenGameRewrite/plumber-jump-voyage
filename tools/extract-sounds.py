@@ -263,6 +263,32 @@ def self_check():
     assert bank_region(container([(b'INFO',body)],b'FBNK'),0,60,127)==(4,7,62,100/127,1.)
     print('Sound archive checks passed')
 
+def add_clips(a):
+    """Add the sound triggers of named Mario clips to the installed table: only
+    new clips are appended, nothing already installed changes. The sounds they
+    play must be installed already (a clip that names others needs a full run)."""
+    output=a.output or extract.ROOT/'assets/local/sounds'
+    path=output/'player.json'
+    table=json.loads(path.read_text(encoding='utf-8'))
+    db=outfits.archive(a.romfs/'SoundData'/'SeDataBase.szs')
+    mario=outfits.byml(db['Mario.byml'])
+    known=table['mario']['actions']
+    added,missing=[],set()
+    for item in mario.get('ActionInfoList',[]):
+        name=item['Name']
+        if name not in a.add_clip or name in known:continue
+        known[name]=[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
+            for x in item.get('PlayInfoInActionList',[])]
+        missing|={x['play'] for x in known[name] if x['play'] not in table['mario']['plays']}
+        added.append(name)
+    for name in a.add_clip:
+        if name not in added and name not in known:print(f'{name}: the game has no sound triggers for this clip')
+    if missing:print('Not installed yet (run the full extraction): '+', '.join(sorted(missing)))
+    new=path.with_name('player.json.new')
+    new.write_text(json.dumps(table,indent=1,ensure_ascii=False),encoding='utf-8')
+    new.replace(path)
+    print('Added sound triggers for: '+(', '.join(added) or 'nothing'))
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--romfs',type=Path,default=extract.ROOT/'local/romfs')
@@ -271,8 +297,10 @@ def main():
     p.add_argument('--self-check',action='store_true')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
     p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
+    p.add_argument('--add-clip',action='append',help='Add the sound triggers of this Mario clip (repeatable) to the installed table; nothing else changes')
     a=p.parse_args()
     if a.self_check:self_check();return
+    if a.add_clip:add_clips(a);return
     if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
     sound=a.romfs/'SoundData'
     sounds,wave_files=sound_index((sound/'SeData.bfsar').read_bytes())
