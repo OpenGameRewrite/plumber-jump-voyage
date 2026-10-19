@@ -65,11 +65,24 @@ triangle under the feet. Replays without geometry are unchanged.
 `py tools/fidelity-report.py <runs> --geometry <exports>` replays every
 scenario in its recorded stage.
 
+The collider and the mesh hold their numbers as the game does, in single
+precision at the stage's own coordinates (`TriangleMesh::snap_to_game_precision`),
+which matters wherever a body rests against a surface it is pressed into every frame.
+
+Ported on this collision: falling off a ledge (`PlayerJudgeSpeedCheckFall`), the
+long-fall landing (`PlayerJudgeLongFall`, `Wait/LandStiffen`), the wall slide
+and the wall jump (`PlayerJudgeWallKeep`, `PlayerStateNormalWallSlide`,
+`PlayerStateNormalWallJump`, with the wall history), and the air control's
+turning of the facing. A body that lands on a slope runs on without the
+slope terms of the original's ground control.
+
 Not ported yet: the squeeze of `Press` collision, moving collision parts, the
 averaging of a push with the previous frame's (`calcResultVec`'s direction
-flags), thin-wall edge hits (`rs::calcExistCollisionBorder`), the ledge and
-pole contact on triangles, slope sliding on triangles and Cappy's head-on wall
-stop, floor and lock-on reactions.
+flags), thin-wall edge hits in the collider (`rs::calcExistCollisionBorder`;
+the wall judge has its own), the ledge and pole contact on triangles, slope
+sliding on triangles, the wall hit scaling of a fall
+(`scaleVelocityInertiaWallHit`) and Cappy's head-on wall stop, floor and
+lock-on reactions.
 
 ## Trace columns
 
@@ -152,7 +165,7 @@ writes the keys it has an equivalent for under the game's names:
 
 Game keys with no equivalent are not written: `upperpunch`, `forcerun`,
 `limitheight`, `wallhist`, and without geometry `ceiling` and `gmat` (a flat
-floor has no codes). The rewrite's own counters (`coyote`, `jump_count`,
+floor has no codes). The rewrite's own counters (`ground_lost`, `jump_count`,
 `jump_timer`, `run_frames`, ...) follow the game's keys. The timer of
 `cjump` and `clong` means nothing while their count is zero, and the
 comparison ignores it then.

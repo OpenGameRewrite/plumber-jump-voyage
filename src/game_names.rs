@@ -12,7 +12,8 @@
 //!   `Jump/Jump` for the first, second and third jump, `Jump/JumpBack`,
 //!   `Jump/JumpTurn`, `LongJump/Jump`, `HipDrop/*`, `HeadSliding/Dive`,
 //!   `Squat/*`, `Rolling/*`, `SpinCap/SpinGround`, `Run/GroundSpin3D`,
-//!   `Jump/JumpSpinGround`, `Jump/JumpSpinGroundDownFall`). The braking and turning
+//!   `Jump/JumpSpinGround`, `Jump/JumpSpinGroundDownFall`, `Fall/Fall`,
+//!   `WallAir/Slide`, `WallAir/Jump`, `Wait/LandStiffen`). The braking and turning
 //!   clips play inside `Run/Run3D`, so the rewrite's skid and turn use that
 //!   name too.
 //! * symbol: the nerve exists in the 1.0.0 symbol list of the public
@@ -43,7 +44,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::SquatBrake => known("Squat/Brake"),
         Move::Crouch => known("Squat/Wait"),
         Move::Crawl => known("Squat/Walk"),
-        Move::Fall => guessed("Fall/Fall"),
+        Move::Fall => known("Fall/Fall"),
         Move::Jump => known("Jump/Jump"),
         // Consecutive and special jumps share the jump nerve; only the clip
         // and the jump counters differ in the game.

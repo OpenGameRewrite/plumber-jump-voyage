@@ -4298,8 +4298,11 @@ impl Player {
 mod checks;
 #[path = "tests/spin.rs"]
 mod spin_checks;
+#[path = "tests/wall_air.rs"]
+mod wall_air_checks;
 
 pub fn self_check() {
     checks::run();
     spin_checks::run();
+    wall_air_checks::run();
 }

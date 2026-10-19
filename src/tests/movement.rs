@@ -916,8 +916,13 @@ fn wall_slide_and_ledge() {
         grounded: false,
         v: Vec3::new(0., -2., -8.),
         mode: Move::Fall,
+        facing: Vec3::NEG_Z,
         ..default()
     };
+    // The step that reaches the wall flags the contact; the wall judge reads it
+    // in the next one, which chooses the slide.
+    p.step(&fwd(default()), &wall);
+    assert_eq!(p.mode, Move::Fall);
     p.step(&fwd(default()), &wall);
     assert_eq!(p.mode, Move::WallSlide);
     frames(&mut p, Orders::default(), &wall, 5);
@@ -1406,7 +1411,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xf58e1a0737b2cccc,
+        hash, 0xd4b3ead74887faff,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

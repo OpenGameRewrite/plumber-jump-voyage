@@ -95,8 +95,8 @@ pub(super) struct WallAirControl {
 /// just left.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct WallHistory {
-    jump: Option<(Vec3, Vec3)>,
-    leave: Option<(Vec3, Vec3)>,
+    pub(super) jump: Option<(Vec3, Vec3)>,
+    pub(super) leave: Option<(Vec3, Vec3)>,
 }
 
 /// A wall the body touched in the last step.
@@ -111,7 +111,7 @@ pub struct WallContact {
 }
 
 /// `al::converge`: `value` moves toward `target` by at most `step`.
-fn converge(value: f32, target: f32, step: f32) -> f32 {
+pub(super) fn converge(value: f32, target: f32, step: f32) -> f32 {
     if (target - value).abs() <= step {
         target
     } else {
@@ -121,7 +121,7 @@ fn converge(value: f32, target: f32, step: f32) -> f32 {
 
 /// The angle (degrees) between two vectors seen along `axis`
 /// (`al::calcAngleOnPlaneDegree`, which is signed; only its size is used).
-fn angle_on_plane(a: Vec3, b: Vec3, axis: Vec3) -> f32 {
+pub(super) fn angle_on_plane(a: Vec3, b: Vec3, axis: Vec3) -> f32 {
     let flatten = |v: Vec3| v - axis * v.dot(axis);
     let (a, b) = (flatten(a), flatten(b));
     a.cross(b).dot(axis).abs().atan2(a.dot(b)).to_degrees()
@@ -159,7 +159,7 @@ impl WallHistory {
     /// allows (a wall facing the same way rules out the whole stretch up to
     /// 750 away sideways, any other up to 1000, one facing the other way only
     /// what is beyond 1500).
-    fn enables(&self, trans: Vec3, normal: Vec3) -> bool {
+    pub(super) fn enables(&self, trans: Vec3, normal: Vec3) -> bool {
         if let Some((from, _)) = self.leave
             && (trans - from).y > -TALL
         {
