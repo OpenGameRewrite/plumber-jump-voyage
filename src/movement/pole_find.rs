@@ -510,25 +510,11 @@ pub(super) fn find_turn_pos(
         hit = first_poly(mesh, from, probe, Probe::PoleOnly)
             .or_else(|| first_poly(mesh, from - front * 2., probe, Probe::PoleOnly));
     }
-    if std::env::var("PJV_DBG").is_ok() {
-        eprintln!(
-            "turn: target {:?} front {:?} direct {} hit {:?} width {} slack {}",
-            target,
-            front,
-            direct,
-            hit.as_ref().map(|h| (h.triangle, h.position, h.normal)),
-            width,
-            slack
-        );
-    }
     let hit = hit?;
     if !is_climbable(mesh.codes_of(hit.triangle)) {
         return None;
     }
     let mut fit = fit_pole(mesh, hit.position, hit.normal, actor.up, width, reach)?;
-    if std::env::var("PJV_DBG").is_ok() {
-        eprintln!("turn fit {:?}", fit);
-    }
     if !is_parallel(turn.direction, fit.front) {
         // The face turned away from the way round: put the point where the
         // line along the old axis meets the one along the old front.

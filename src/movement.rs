@@ -986,6 +986,10 @@ pub struct Player {
     touchdown_speed: f32,
     /// The run cycle's animation control (the `Move` slot).
     cycle: RunCycle,
+    /// The dust the run state's first step started although the same step
+    /// chose another state (a jump pressed with the stick): the game logs it
+    /// for that frame only.
+    run_start_effect: Option<&'static str>,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1120,6 +1124,7 @@ impl Default for Player {
             landing_speed: 0.,
             touchdown_speed: 0.,
             cycle: RunCycle::default(),
+            run_start_effect: None,
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -1564,6 +1569,10 @@ impl Player {
             self.mesh_ground
                 .unwrap_or_else(|| Vec3::new(-self.slope, 1., 0.).normalize())
         })
+    }
+    /// The dust a one-step run state started (see `run_start_effect`).
+    pub fn run_start_effect(&self) -> Option<&'static str> {
+        self.run_start_effect
     }
     /// The run cycle's animation control, for the trace and the renderer.
     pub fn run_cycle(&self) -> &RunCycle {
@@ -2062,6 +2071,7 @@ impl Player {
     /// work only its first step does.
     fn begin_step(&mut self) {
         self.counter_restarted = false;
+        self.run_start_effect = None;
         self.roll_forget_effect_call();
         let first_step = self.nerve.step == 0;
         self.advance_clips();
@@ -2149,14 +2159,8 @@ impl Player {
         }
         self.change_from_surroundings(scene, &o);
         // A state chosen above leaves its own first step to the next frame.
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("S before run {:?} {:?}", self.pos / UNIT, self.facing);
-        }
         if !self.nerve.deferred {
             self.run_state(&o, scene);
-            if std::env::var("PJV_DBG").is_ok() {
-                eprintln!("S after run {:?} {:?}", self.pos / UNIT, self.facing);
-            }
             self.judge_fall();
             self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
@@ -2165,9 +2169,6 @@ impl Player {
         self.finish_catch();
         let moved = self.v;
         self.collide(&o, scene);
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("S after collide {:?}", self.pos / UNIT);
-        }
         self.fall.update(
             self.pos.y / UNIT,
             moved.y,
@@ -2487,6 +2488,9 @@ impl Player {
             self.cycle.reset(steer.speed, after_turn);
         }
         self.update_move_anim(steer.speed);
+        if step == 0 {
+            self.run_start_effect = self.cycle.effect;
+        }
         // A fast run asked to brake or reverse hands over to the brake nerve; a
         // slow one just stops and ends. A pull against the facing at a crawl
         // pivots. Speed spent with the stick released ends the run.

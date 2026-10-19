@@ -935,9 +935,6 @@ impl PlayerCollider {
             *at = sweep.pos();
             let mut remain = sweep.remaining();
             let fix = self.calc_result_vec(mesh, &pose.along(&sweep), &results);
-            if std::env::var("PJV_DBG").is_ok() {
-                eprintln!("ROUND at {:?} fix {:?} hits {} remain {:?}", *at, fix, results.collide.len(), remain);
-            }
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
@@ -1243,9 +1240,6 @@ impl PlayerCollider {
                 }
             }
         };
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("  fix {:?} {:?} tri {} depth {} fix {:?} center {:?} pos {:?}", class, hit.location, result.triangle, hit.depth, fix, hit.center, hit.position);
-        }
         fixes.add(fix);
         self.record(mesh, class, hit.depth, result, hit.position, hit.location);
     }

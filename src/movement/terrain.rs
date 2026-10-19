@@ -65,13 +65,7 @@ impl Player {
         // The hanging forms drop the push along the direction they face.
         self.collider.set_cut_direction(match form {
             Form::WallGrab => self.catch.front(),
-            Form::Pole => {
-                if std::env::var("PJV_V").unwrap_or_default().contains('B') {
-                    self.facing
-                } else {
-                    self.pole.front()
-                }
-            }
+            Form::Pole => self.pole.front(),
             _ => Vec3::ZERO,
         });
     }
@@ -139,10 +133,8 @@ impl Player {
         // collider runs; the collider carries itself from where it stood last
         // step to there.
         let holding = matches!(self.mode, Move::Ledge | Move::Pole);
-        let variant = std::env::var("PJV_V").unwrap_or_default();
         if let Some(stood) = self.catch_collider_at.take()
             && holding
-            && !(self.mode == Move::Pole && variant.contains('A'))
         {
             self.collider.carry_from(stood);
         }

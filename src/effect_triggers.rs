@@ -382,6 +382,9 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
         && matches!(p.anim.name, "Move" | "Brake" | "Turn" | "TurnPoint")
     {
         wanted.extend(p.run_cycle().effect);
+    } else if let Some(effect) = p.run_start_effect() {
+        // The run state's first step started its dust and chose the jump.
+        wanted.push(effect);
     }
     if p.roll_effect_on() {
         wanted.push("Rolling");
@@ -590,6 +593,13 @@ impl Tracker {
                 Change::Stop { key } => self.live.retain(|l| l.key != key),
                 Change::Again { key } => started.push(format!("{}@model", key.effect)),
             }
+        }
+        // The dust a one-step run state started is stopped with the state, in
+        // the same frame: it is logged as started but never listed as live.
+        if let Some(effect) = p.run_start_effect()
+            && !matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+        {
+            self.live.retain(|l| l.key.effect != effect);
         }
         self.live.retain_mut(|live| match &mut live.left {
             Some(0) => false,

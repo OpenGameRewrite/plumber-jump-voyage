@@ -372,8 +372,7 @@ impl Player {
     /// `rs::resetCollision`: the contacts of the last step are forgotten and
     /// the collider's own pose becomes the actor's.
     fn reset_collision(&mut self) {
-        self.collider
-            .invalidate(self.facing.x.atan2(self.facing.z));
+        self.collider.invalidate(self.facing.x.atan2(self.facing.z));
         self.touched.wall_contact = None;
         self.catch_collider_at = None;
     }
@@ -497,9 +496,6 @@ impl Player {
     /// collision).
     fn pole_follow(&mut self) -> bool {
         let fix = self.collider.fix_reaction();
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("follow fix {:?} actor {:?}", fix, self.pos / UNIT);
-        }
         let pose = self.pole.snap.follow(self.pos / UNIT, fix);
         self.pos = pose.pos * UNIT;
         self.facing = pose.front();
@@ -761,17 +757,6 @@ impl Player {
         if ask == StickAsk::Down {
             self.pole.ignore_down = false;
         }
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!(
-                "ask {:?} input {:?} raw {:?} cam {} facing {:?} reverse_x {}",
-                ask,
-                self.pole.move_input,
-                self.raw_stick,
-                self.camera_yaw,
-                self.facing,
-                self.pole.reverse_x
-            );
-        }
         if ask == StickAsk::None || (same != StickAsk::None && ask == same) {
             return (false, ask);
         }
@@ -853,17 +838,6 @@ impl Player {
             self.pole.depth = fit.width.clamp(CATCH_RANGE_MIN, CATCH_RANGE_MAX);
         }
         let yaw = self.facing.x.atan2(self.facing.z);
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!(
-                "move_to {:?} held {:?} prev {:?} pos {:?} -> {:?} frames {}",
-                nerve,
-                held,
-                self.pole.snap.previous,
-                self.pos / UNIT,
-                fit.pos,
-                frames
-            );
-        }
         self.pole
             .snap
             .move_to(yaw, fit.pos, fit.front, fit.axis, frames);

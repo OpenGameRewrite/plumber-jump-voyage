@@ -179,6 +179,9 @@ pub struct CameraTrack {
     /// How far the real stick direction is turned from the one `per_frame`
     /// gives, per frame (see `aim_correction`).
     aim: Vec<f32>,
+    /// The length the game gave the stick's world direction (a camera tilted
+    /// up or down shortens it), per frame.
+    gain: Vec<f32>,
     views: Vec<View>,
 }
 /// The real game's camera for one frame, in the rewrite's world (metres,
@@ -228,7 +231,7 @@ impl View {
 /// to the player, which swings while the player moves. The probe logs the
 /// world direction it got (`move_input`), so the stick is turned by that.
 /// Zero when the row has no stick or no such columns.
-fn aim_correction(game: &TraceFile, row: usize, yaw_deg: f32) -> f32 {
+fn aim_correction(game: &TraceFile, row: usize, yaw_deg: f32) -> (f32, f32) {
     let pair = |column: &str| -> Option<Vec2> {
         let mut parts = game
             .cell(row, column)?
@@ -237,19 +240,29 @@ fn aim_correction(game: &TraceFile, row: usize, yaw_deg: f32) -> f32 {
         Some(Vec2::new(parts.next()??, parts.next()??))
     };
     let (Some(stick), Some(aim)) = (pair("in_stick"), pair("move_input")) else {
-        return 0.;
+        return (0., 1.);
     };
     if stick.length() < 0.05 || aim.length() < 0.05 {
-        return 0.;
+        return (0., 1.);
     }
+    // The game's third number is the length of the world direction: the
+    // stick's own length, less what the camera's tilt takes off it.
+    let length = game
+        .cell(row, "move_input")
+        .and_then(|cell| cell.split('/').nth(2))
+        .and_then(|part| part.parse::<f32>().ok())
+        .filter(|length| *length > 0.)
+        .unwrap_or(1.);
+    let gain = length / stick.length().min(1.);
     // The same construction as `orders_for`.
     let ours = -rotate(Vec2::new(stick.x, -stick.y), yaw_deg.to_radians());
     let turn = aim.x.atan2(aim.y) - ours.x.atan2(ours.y);
     // The angle is a direction, so fold it into the half turn either way.
-    (turn + std::f32::consts::PI)
+    let degrees = (turn + std::f32::consts::PI)
         .rem_euclid(std::f32::consts::TAU)
         .to_degrees()
-        - 180.
+        - 180.;
+    (degrees, gain)
 }
 impl CameraTrack {
     pub fn new(script: &Script, game: Option<&TraceFile>) -> Result<Self, String> {
@@ -259,6 +272,7 @@ impl CameraTrack {
                 fixed,
                 per_frame: Vec::new(),
                 aim: Vec::new(),
+                gain: Vec::new(),
                 views: Vec::new(),
             });
         };
@@ -298,15 +312,16 @@ impl CameraTrack {
                 last
             })
             .collect();
-        let aim = per_frame
+        let (aim, gain) = per_frame
             .iter()
             .enumerate()
             .map(|(row, yaw)| aim_correction(game, row, *yaw))
-            .collect();
+            .unzip();
         Ok(Self {
             fixed,
             per_frame,
             aim,
+            gain,
             views,
         })
     }
@@ -331,6 +346,14 @@ impl CameraTrack {
             .copied()
             .unwrap_or(0.)
     }
+    /// The factor the game's world direction has over the stick's length.
+    pub fn aim_gain(&self, frame: usize) -> f32 {
+        self.gain
+            .get(frame)
+            .or(self.gain.last())
+            .copied()
+            .unwrap_or(1.)
+    }
 }
 
 /// The flat course a replay runs on: a floor whose top is at height zero.
@@ -353,6 +376,7 @@ pub fn orders_for(
     previous: &[&str],
     camera_yaw_deg: f32,
     aim_deg: f32,
+    aim_gain: f32,
     bindings: &[[String; 2]],
 ) -> (Orders, FrameInfo) {
     let mut held = [false; ACTIONS.len()];
@@ -373,7 +397,7 @@ pub fn orders_for(
         stick,
         // A half turn of the orbit yaw is a negation; spelling it so keeps a
         // stick along an axis exactly on it (`sin(PI)` is not zero in `f32`).
-        direction: -rotate(stick, (camera_yaw_deg + aim_deg).to_radians()),
+        direction: -rotate(stick, (camera_yaw_deg + aim_deg).to_radians()) * aim_gain,
         camera_yaw,
         ..default()
     };
@@ -454,6 +478,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &[],
             camera.yaw_deg(0),
             camera.aim_deg(0),
+            camera.aim_gain(0),
             &bindings,
         );
         player.step(&orders, &course);
@@ -491,6 +516,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     before,
                     camera.yaw_deg(last),
                     camera.aim_deg(last),
+                    camera.aim_gain(last),
                     &bindings,
                 );
                 let spin = player.spin_input();
@@ -504,6 +530,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &previous,
             camera.yaw_deg(frame),
             camera.aim_deg(frame),
+            camera.aim_gain(frame),
             &bindings,
         );
         player.step(&orders, &course);
