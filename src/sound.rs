@@ -245,6 +245,9 @@ fn play(
             ctx.action(true, p.anim.name, from, to, "anim", false, &[], &mut t);
         }
     }
+    if advance.loop_start {
+        ctx.action(false, p.anim.name, -1., 0., "anim", true, &[], &mut t);
+    }
     // Event sounds.
     let context = FxContext { mode: p.mode };
     let mut held = false;

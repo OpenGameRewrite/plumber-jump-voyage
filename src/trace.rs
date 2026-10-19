@@ -360,6 +360,15 @@ impl Recorder {
                 );
             }
         }
+        if advance.loop_start {
+            self.action(
+                (false, p.anim.name, -1., 0., true),
+                "",
+                speed,
+                &mut events,
+                &mut mix,
+            );
+        }
         // The cap's own clip: what it starts when it begins (its flying loop).
         match &p.cap {
             Some(cap) => {

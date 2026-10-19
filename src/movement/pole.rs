@@ -292,7 +292,8 @@ impl Player {
             self.facing
         };
         let up = Vec3::Y;
-        let standing_elsewhere = (self.grounded || self.collider.floor.is_some()) && ground.is_none();
+        let standing_elsewhere =
+            (self.grounded || self.collider.floor.is_some()) && ground.is_none();
         let (normal, pos, up) = if let Some(wall) = wall {
             if standing_elsewhere || toward.dot(wall.normal) >= 0. {
                 return None;
@@ -715,7 +716,8 @@ impl Player {
                     return false;
                 };
                 let trans = self.pos / UNIT;
-                let target = trans - actor.front * (self.pole.top_width * 0.5)
+                let target = trans
+                    - actor.front * (self.pole.top_width * 0.5)
                     - actor.up * TOP_END_UNDER_OFFSET_Y;
                 let Some(fit) =
                     find_from_top_pos(mesh, &actor, target, self.pole.depth, CATCH_RANGE_MAX)
@@ -761,7 +763,15 @@ impl Player {
             self.pole.ignore_down = false;
         }
         if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("ask {:?} input {:?} raw {:?} cam {} facing {:?} reverse_x {}", ask, self.pole.move_input, self.raw_stick, self.camera_yaw, self.facing, self.pole.reverse_x);
+            eprintln!(
+                "ask {:?} input {:?} raw {:?} cam {} facing {:?} reverse_x {}",
+                ask,
+                self.pole.move_input,
+                self.raw_stick,
+                self.camera_yaw,
+                self.facing,
+                self.pole.reverse_x
+            );
         }
         if ask == StickAsk::None || (same != StickAsk::None && ask == same) {
             return (false, ask);
@@ -801,7 +811,11 @@ impl Player {
             }
             StickAsk::Up | StickAsk::Down => {
                 let (speed, frames, nerve) = if ask == StickAsk::Up {
-                    let frames = if o.throw_held { UP_FRAME_FAST } else { UP_FRAME };
+                    let frames = if o.throw_held {
+                        UP_FRAME_FAST
+                    } else {
+                        UP_FRAME
+                    };
                     (UP_SPEED, frames, PoleNerve::Up)
                 } else {
                     let speed = if o.throw_held || o.crouch {
@@ -811,32 +825,25 @@ impl Player {
                     };
                     (-speed, DOWN_FRAME, PoleNerve::Down)
                 };
-                find_move_pos(
-                    mesh,
-                    &actor,
-                    held,
-                    speed,
-                    UP_MARGIN,
-                    depth,
-                    CATCH_RANGE_MAX,
-                )
-                .map(|moved| {
-                    if moved.top {
-                        // The pole ends: the body goes up onto its top, facing
-                        // as it did unless that runs along the pole.
-                        let mut fit = moved.fit;
-                        fit.front = if is_parallel(actor.front, fit.axis) {
-                            actor.up
+                find_move_pos(mesh, &actor, held, speed, UP_MARGIN, depth, CATCH_RANGE_MAX).map(
+                    |moved| {
+                        if moved.top {
+                            // The pole ends: the body goes up onto its top, facing
+                            // as it did unless that runs along the pole.
+                            let mut fit = moved.fit;
+                            fit.front = if is_parallel(actor.front, fit.axis) {
+                                actor.up
+                            } else {
+                                actor.front
+                            };
+                            self.pole.top_width = fit.width;
+                            fit.width = depth;
+                            (fit, TOP_START_FRAME as i32, PoleNerve::TopStart, false)
                         } else {
-                            actor.front
-                        };
-                        self.pole.top_width = fit.width;
-                        fit.width = depth;
-                        (fit, TOP_START_FRAME as i32, PoleNerve::TopStart, false)
-                    } else {
-                        (moved.fit, frames, nerve, true)
-                    }
-                })
+                            (moved.fit, frames, nerve, true)
+                        }
+                    },
+                )
             }
             StickAsk::None => None,
         };
@@ -848,7 +855,15 @@ impl Player {
         }
         let yaw = self.facing.x.atan2(self.facing.z);
         if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("move_to {:?} held {:?} prev {:?} pos {:?} -> {:?} frames {}", nerve, held, self.pole.snap.previous, self.pos / UNIT, fit.pos, frames);
+            eprintln!(
+                "move_to {:?} held {:?} prev {:?} pos {:?} -> {:?} frames {}",
+                nerve,
+                held,
+                self.pole.snap.previous,
+                self.pos / UNIT,
+                fit.pos,
+                frames
+            );
         }
         self.pole
             .snap
@@ -889,7 +904,8 @@ impl Player {
             if !top {
                 self.events.push(Fx::Jump(Move::WallJump));
             }
-            self.air.setup(&mut self.v, self.facing, &wall_jump_takeoff());
+            self.air
+                .setup(&mut self.v, self.facing, &wall_jump_takeoff());
             self.air_for = Some(self.mode);
             self.jump_power = t::WALL_JUMP_POWER;
         }

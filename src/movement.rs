@@ -239,7 +239,6 @@ mod t {
     pub const SWIM_BRAKE_H: f32 = 0.975;
     pub const SWIM_DIVE_SPEED: f32 = 26.5;
     pub const SWIM_DIVE_BRAKE: f32 = 0.875;
-
 }
 
 #[path = "movement/ground.rs"]
@@ -254,10 +253,10 @@ mod pole_find;
 mod rolling;
 #[path = "movement/run_cycle.rs"]
 mod run_cycle;
-#[path = "movement/sounds.rs"]
-mod sounds;
 #[path = "movement/snap.rs"]
 mod snap;
+#[path = "movement/sounds.rs"]
+mod sounds;
 #[path = "movement/spin.rs"]
 mod spin;
 #[path = "movement/squat.rs"]
@@ -402,6 +401,9 @@ pub mod clip {
     pub fn loop_slack(name: &str) -> f32 {
         match name {
             "WallCatchMoveL" | "WallCatchMoveR" => 2.,
+            // The pole's turning clips show their length for a row (50, then 1;
+            // 23, then 1) before they wrap.
+            "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" => 1.,
             _ => 0.,
         }
     }
@@ -1482,7 +1484,8 @@ impl Player {
     /// original keeps reporting it, as the ground-following velocity. In the
     /// step that lands, it still reports the fall speed that moved the player.
     pub fn units_per_frame(&self) -> Vec3 {
-        if self.grounded && (self.v.y == 0. || self.v.y == -self.pull) {
+        // (The pole's hold has no pull into the floor under it.)
+        if self.grounded && self.mode != Move::Pole && (self.v.y == 0. || self.v.y == -self.pull) {
             if self.landing_speed < 0. {
                 self.v.with_y(self.landing_speed)
             } else {
@@ -1575,10 +1578,12 @@ impl Player {
             self.anim.frame
         }
     }
-    /// The hanging body is on the ledge and stands there: the contact the
-    /// climbs make is no landing (only the climb jump's is).
+    /// The body hangs on a ledge or clings to a pole and touches ground there
+    /// (the top of the pole, the ledge the climb ends on): that contact is no
+    /// landing (only the climb jump's and the pole jump's are).
     fn stands_on_ledge(&self) -> bool {
-        self.mode == Move::Ledge && self.catch_nerve() != ledge::CatchNerve::Jump
+        (self.mode == Move::Ledge && self.catch_nerve() != ledge::CatchNerve::Jump)
+            || (self.mode == Move::Pole && !self.pole.is_pole_jump())
     }
     /// A sub-nerve was chosen again in this step: the row's `sub_step` is 0.
     pub fn sub_restarted(&self) -> bool {

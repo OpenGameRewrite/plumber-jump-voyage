@@ -226,9 +226,7 @@ pub(super) fn fit_pole(
     let quarter = catch * 0.25;
     let radius = quarter * 0.5;
     let base = contact - normal * quarter;
-    let first = fit_side(
-        mesh, contact, normal, across, axis, base, reach, radius, 1.,
-    );
+    let first = fit_side(mesh, contact, normal, across, axis, base, reach, radius, 1.);
     let second = fit_side(
         mesh, contact, normal, across, axis, base, reach, radius, -1.,
     );
@@ -438,7 +436,10 @@ pub(super) fn find_move_pos(
             target,
             false,
         )?;
-        return Some(Moved { fit: top, top: true });
+        return Some(Moved {
+            fit: top,
+            top: true,
+        });
     };
     if !is_climbable(mesh.codes_of(hit.triangle)) {
         return None;
@@ -455,16 +456,12 @@ pub(super) fn find_move_pos(
         return Some(Moved { fit, top: false });
     }
     match find_top(
-        mesh,
-        actor,
-        fit.front,
-        margin,
-        fit.width,
-        fit.axis,
-        fit.pos,
-        true,
+        mesh, actor, fit.front, margin, fit.width, fit.axis, fit.pos, true,
     ) {
-        Some(top) => Some(Moved { fit: top, top: true }),
+        Some(top) => Some(Moved {
+            fit: top,
+            top: true,
+        }),
         None => Some(Moved { fit, top: false }),
     }
 }
@@ -514,7 +511,15 @@ pub(super) fn find_turn_pos(
             .or_else(|| first_poly(mesh, from - front * 2., probe, Probe::PoleOnly));
     }
     if std::env::var("PJV_DBG").is_ok() {
-        eprintln!("turn: target {:?} front {:?} direct {} hit {:?} width {} slack {}", target, front, direct, hit.as_ref().map(|h| (h.triangle, h.position, h.normal)), width, slack);
+        eprintln!(
+            "turn: target {:?} front {:?} direct {} hit {:?} width {} slack {}",
+            target,
+            front,
+            direct,
+            hit.as_ref().map(|h| (h.triangle, h.position, h.normal)),
+            width,
+            slack
+        );
     }
     let hit = hit?;
     if !is_climbable(mesh.codes_of(hit.triangle)) {
@@ -542,9 +547,7 @@ pub(super) fn find_turn_pos(
     // Nothing but the pole may stand in the way, at the body's height or
     // 100 above it.
     let length = fit.width + 5.;
-    let blocked = |from: Vec3| {
-        first_poly(mesh, from, front * length, Probe::NotPole).is_some()
-    };
+    let blocked = |from: Vec3| first_poly(mesh, from, front * length, Probe::NotPole).is_some();
     if blocked(start) || blocked(start + actor.up * 100.) {
         return None;
     }

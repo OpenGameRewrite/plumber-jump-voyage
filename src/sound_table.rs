@@ -128,6 +128,8 @@ impl Group {
         triggers
             .iter()
             .filter(|trigger| !(replay && trigger.once))
+            // A level sound that is playing goes on through the clip's next pass.
+            .filter(|trigger| !(replay && self.plays.get(&trigger.play).is_some_and(|p| p.looping)))
             .filter(|trigger| {
                 // Unset or negative start frames play as the clip begins.
                 let at = trigger.frame.max(0.);
@@ -300,6 +302,10 @@ pub struct AnimAdvance {
     pub scan: Option<(f32, f32, bool)>,
     /// The clip has wrapped since it started: its one-time sounds are spent.
     pub replay: bool,
+    /// A looping clip whose counter shows its length for a row before it
+    /// wraps has reached that length: the loop's first frame sounds again
+    /// in this row (the pole's turn clips).
+    pub loop_start: bool,
 }
 impl AnimCursor {
     pub fn advance(
@@ -328,12 +334,17 @@ impl AnimCursor {
         } else {
             None
         };
+        let loop_start = looped
+            && crate::movement::clip::loop_slack(name) > 0.
+            && crate::movement::clip::loop_length(name)
+                .is_some_and(|length| frame >= length && self.frame < length);
         self.frame = frame;
         AnimAdvance {
             restarted,
             previous,
             scan,
-            replay: self.wrapped,
+            replay: self.wrapped || loop_start,
+            loop_start,
         }
     }
 }

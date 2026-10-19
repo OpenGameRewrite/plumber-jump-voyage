@@ -1042,7 +1042,11 @@ fn poles() {
     );
     frames(&mut p, Orders::default(), &pole, 10);
     assert_eq!(p.nerve_name().name, "PoleClimb/Jump");
-    assert!(p.pos.z > 0.5, "the jump goes away from the pole: {:?}", p.pos);
+    assert!(
+        p.pos.z > 0.5,
+        "the jump goes away from the pole: {:?}",
+        p.pos
+    );
     // Poles block running into them.
     p = Player::default();
     p.pos = Vec3::new(0., 0., 3.);
