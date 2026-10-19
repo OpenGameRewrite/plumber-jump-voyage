@@ -46,11 +46,11 @@ const SLOPE_LIMIT_DEGREES: f32 = 70.;
 const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
 /// What `KCHitArrow` allows a hit to lie outside an edge by.
 const ARROW_EDGE_BAND: f32 = 0.01;
-/// `KCHitSphereForPlayer`: an edge or corner hit counts only when the sphere
-/// centre is within about 55 degrees of the face normal (the game's literal
-/// is 0.707106).
+/// `KCHitSphereForPlayer`: a corner hit counts only when the offset from the
+/// corner is within this slope of the height above the face (the game's
+/// literal 0.707106).
 #[allow(clippy::approx_constant)] // the game's own 0.707106, not exactly one over root two
-const EDGE_HIT_RATIO: f32 = 0.707_106;
+const EDGE_HIT_RATIO: f32 = 0.707_105_99;
 /// Results the keeper stores before it stops adding (`CollisionShapeKeeper(5,
 /// 0x40, 0x20)`).
 const MAX_RESULTS: usize = 64;
@@ -246,14 +246,33 @@ pub struct SphereHit {
     pub center: Vec3,
 }
 
+/// Which of the prism's three edge planes a region is about.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Plane {
+    A,
+    B,
+    C,
+}
+impl Plane {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
 /// `KCHitSphereForPlayer` plus `calcSphereHitPos`.
+///
+/// The prism has three edge planes (normals in the face's plane); the signed
+/// distances of the centre to them (`d`, positive outside) pick the region the
+/// sphere touches. The plane the centre is furthest outside of leads: when
+/// the centre is inside all three it is the face; otherwise the second
+/// furthest decides between the leading edge alone (the centre is beside it)
+/// and the corner where the two meet. This is the original's decision tree,
+/// not the nearest point of the triangle: a thin triangle's corner is far away,
+/// so a centre beside its long edge is not in the corner's region. An edge
+/// only counts when the centre is no further outside it than above the face
+/// (45 degrees), a corner when its distance is within that slope of 0.7071.
 fn sphere_hit(t: &MeshTriangle, center: Vec3, radius: f32, thickness: f32) -> Option<SphereHit> {
     let from_first = center - t.corners[0];
-    let height = from_first.dot(t.normal);
-    // The centre is beyond the radius: no contact on any region.
-    if radius - height < 0. {
-        return None;
-    }
     let d = [
         from_first.dot(t.edges[0]),
         from_first.dot(t.edges[1]),
@@ -262,76 +281,108 @@ fn sphere_hit(t: &MeshTriangle, center: Vec3, radius: f32, thickness: f32) -> Op
     if d.iter().any(|v| *v >= radius) {
         return None;
     }
+    let height = from_first.dot(t.normal);
+    // The centre is beyond the radius: no contact on any region.
+    let face_depth = radius - height;
+    if face_depth < 0. {
+        return None;
+    }
     let projected = center - t.normal * height;
-    if d.iter().all(|v| *v <= 0.) {
-        // The face: the depth is the whole penetration, and a prism is only
-        // as thick as its header says.
-        let depth = radius - height;
-        if depth > thickness {
+    // The leading plane, with the original's order of comparisons.
+    let leading = if d[0] > d[1] {
+        if d[0] > d[2] { Plane::A } else { Plane::C }
+    } else if d[1] > d[2] {
+        Plane::B
+    } else {
+        Plane::C
+    };
+    let lead = d[leading.index()];
+    if lead <= 0. {
+        // The face: a prism is only as thick as its header says.
+        if thickness < face_depth {
             return None;
         }
         return Some(SphereHit {
-            depth,
+            depth: face_depth,
             location: Location::Face,
             position: projected,
             center,
         });
     }
-    let (nearest, location) = nearest_on_triangle(t, projected);
-    let lateral = (projected - nearest).length();
-    if lateral >= radius || lateral * EDGE_HIT_RATIO > height {
+    let second = match leading {
+        Plane::A => {
+            if d[1] <= d[2] {
+                Plane::C
+            } else {
+                Plane::B
+            }
+        }
+        Plane::B => {
+            if d[2] <= d[0] {
+                Plane::A
+            } else {
+                Plane::C
+            }
+        }
+        Plane::C => {
+            if d[0] > d[1] {
+                Plane::A
+            } else {
+                Plane::B
+            }
+        }
+    };
+    let cos = t.edges[leading.index()].dot(t.edges[second.index()]);
+    let radius_sq = radius * radius;
+    if lead * cos > d[second.index()] {
+        // Beside the leading edge alone.
+        if lead > height {
+            return None;
+        }
+        let depth = (radius_sq - lead * lead).max(0.).sqrt() - height;
+        if depth < 0. {
+            return None;
+        }
+        // The point of the edge's line nearest the centre.
+        let edge_normal = t.edges[leading.index()];
+        let on_plane = if leading == Plane::C {
+            t.corners[1]
+        } else {
+            t.corners[0]
+        };
+        let position = projected - edge_normal * edge_normal.dot(projected - on_plane);
+        return Some(SphereHit {
+            depth,
+            location: Location::Edge(leading.index() as u8 + 1),
+            position,
+            center,
+        });
+    }
+    // The corner where the two planes meet: the offset from it solves
+    // `offset . e_p = d_p` and `offset . e_q = d_q` in the face's plane.
+    let (p, q, corner) = match (leading, second) {
+        (Plane::A, Plane::B) | (Plane::B, Plane::A) => (Plane::A, Plane::B, 0),
+        (Plane::B, Plane::C) | (Plane::C, Plane::B) => (Plane::B, Plane::C, 1),
+        _ => (Plane::C, Plane::A, 2),
+    };
+    let (ep, eq) = (t.edges[p.index()], t.edges[q.index()]);
+    let c = ep.dot(eq);
+    let along = (d[q.index()] * c - d[p.index()]) / (c * c - 1.);
+    let offset = ep * along + eq * (d[q.index()] - c * along);
+    let distance = offset.length();
+    if distance >= radius || distance * EDGE_HIT_RATIO > height {
         return None;
     }
-    let depth = (radius * radius - lateral * lateral).max(0.).sqrt() - height;
-    (depth >= 0.).then_some(SphereHit {
+    let depth = (radius_sq - distance * distance).max(0.).sqrt() - height;
+    if depth < 0. {
+        return None;
+    }
+    Some(SphereHit {
         depth,
-        location,
-        position: nearest,
+        location: Location::Corner(corner as u8 + 1),
+        position: t.corners[corner],
         center,
     })
-}
-
-/// The point of the triangle nearest to `p` (which is in its plane) and the
-/// feature it lies on.
-fn nearest_on_triangle(t: &MeshTriangle, p: Vec3) -> (Vec3, Location) {
-    let [a, b, c] = t.corners;
-    let ab = b - a;
-    let ac = c - a;
-    let ap = p - a;
-    let d1 = ab.dot(ap);
-    let d2 = ac.dot(ap);
-    if d1 <= 0. && d2 <= 0. {
-        return (a, Location::Corner(1));
-    }
-    let bp = p - b;
-    let d3 = ab.dot(bp);
-    let d4 = ac.dot(bp);
-    if d3 >= 0. && d4 <= d3 {
-        return (b, Location::Corner(2));
-    }
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0. && d1 >= 0. && d3 <= 0. {
-        // First-to-second edge: the prism's edge 2.
-        return (a + ab * (d1 / (d1 - d3)), Location::Edge(2));
-    }
-    let cp = p - c;
-    let d5 = ab.dot(cp);
-    let d6 = ac.dot(cp);
-    if d6 >= 0. && d5 <= d6 {
-        return (c, Location::Corner(3));
-    }
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0. && d2 >= 0. && d6 <= 0. {
-        // First-to-third edge: the prism's edge 1.
-        return (a + ac * (d2 / (d2 - d6)), Location::Edge(1));
-    }
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0. && d4 - d3 >= 0. && d5 - d6 >= 0. {
-        // Second-to-third edge: the prism's edge 3.
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return (b + (c - b) * w, Location::Edge(3));
-    }
-    (p, Location::Face)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -459,6 +510,15 @@ pub fn arrow_strikes_filtered(
             })
         })
         .collect()
+}
+
+/// `rs::calcExistCollisionBorder`: is there a face right behind the one the
+/// arrow hit, turned the other way (the back of a thin wall)?
+pub fn border_behind(mesh: &TriangleMesh, position: Vec3, normal: Vec3) -> bool {
+    arrow_strikes(mesh, position - normal, normal * 2., false)
+        .into_iter()
+        .min_by(|a, b| a.distance.total_cmp(&b.distance))
+        .is_some_and(|hit| hit.normal.dot(normal) <= -(0.01f32).cos())
 }
 
 /// The face `getFirstPolyOnArrow` returns: the nearest to the arrow's start.
@@ -1070,6 +1130,16 @@ impl PlayerCollider {
             to_centre * (hit.depth * normal.dot(to_centre))
         };
         let class = classify(normal);
+        // A wall hit with a face right behind it (the back of a thin wall) is
+        // dropped: by every wall hit in the hanging forms, by those on an edge
+        // or corner in the others (`setWallBorderCheckTypeAll` / `NoFace`).
+        if class == Class::Wall
+            && self.keeper.has_arrow
+            && (!at_face || self.form_checks_faces())
+            && border_behind(mesh, hit.position, normal)
+        {
+            return;
+        }
         let fix = match class {
             Class::Floor if !self.keeper.has_arrow => {
                 // No arrows: the sphere itself is the floor contact.
@@ -1128,6 +1198,11 @@ impl PlayerCollider {
         };
         fixes.add(fix);
         self.record(mesh, class, hit.depth, result, hit.position, hit.location);
+    }
+
+    /// `setWallBorderCheckTypeAll`: the hanging forms check the faces' hits too.
+    fn form_checks_faces(&self) -> bool {
+        matches!(self.form, Form::WallGrab | Form::Pole)
     }
 
     /// Keeps the deepest contact of each class.

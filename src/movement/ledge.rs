@@ -29,9 +29,10 @@
 //! memory of the last push and the `WallCatchNoEntryArea` and
 //! `WallClimbBan` areas.
 use super::snap::Snap;
-use super::wall_air::collision_border_behind;
 use super::*;
-use crate::collider::{FaceFilter, Strike, arrow_strikes, arrow_strikes_filtered, first_strike};
+use crate::collider::{
+    FaceFilter, Strike, arrow_strikes, arrow_strikes_filtered, border_behind, first_strike,
+};
 use crate::geometry::{CollisionCodes, TriangleMesh};
 
 /// The single-precision degree factor the game multiplies by.
@@ -233,7 +234,7 @@ struct Search {
 /// `rs::calcExistCollisionBorderWallCatch`: is the ledge top a thin plate, or
 /// is there a wall right in front of it that turns the other way?
 fn border_exists(mesh: &TriangleMesh, pos: Vec3, top: Vec3, wall: Vec3) -> bool {
-    if collision_border_behind(mesh, pos, top) {
+    if border_behind(mesh, pos, top) {
         return true;
     }
     arrow_strikes(mesh, pos - wall * 5., wall * 65., false)

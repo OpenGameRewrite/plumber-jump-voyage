@@ -25,8 +25,8 @@
 //!   from the wall and 23 up through the shared air control, whose stick is
 //!   locked for 25 steps.
 use super::*;
-use crate::collider::arrow_strikes;
-use crate::geometry::{CollisionCodes, TriangleMesh};
+use crate::collider::{arrow_strikes, border_behind};
+use crate::geometry::CollisionCodes;
 
 /// `WallKeepDegree`: how squarely the player faces, and pushes toward, the
 /// wall for the judge.
@@ -125,15 +125,6 @@ pub(super) fn angle_on_plane(a: Vec3, b: Vec3, axis: Vec3) -> f32 {
     let flatten = |v: Vec3| v - axis * v.dot(axis);
     let (a, b) = (flatten(a), flatten(b));
     a.cross(b).dot(axis).abs().atan2(a.dot(b)).to_degrees()
-}
-
-/// `rs::calcExistCollisionBorder`: is there a face right behind the one the
-/// arrow hit, turned the other way (the back of a thin wall)?
-pub(super) fn collision_border_behind(mesh: &TriangleMesh, position: Vec3, normal: Vec3) -> bool {
-    arrow_strikes(mesh, position - normal, normal * 2., false)
-        .into_iter()
-        .min_by(|a, b| a.distance.total_cmp(&b.distance))
-        .is_some_and(|hit| hit.normal.dot(normal) <= -(0.01f32).cos())
 }
 
 /// What the wall jump asks of the air control (`PlayerActionAirMoveControl::setup`
@@ -326,7 +317,7 @@ impl Player {
             let Some(hit) = last else {
                 continue;
             };
-            if collision_border_behind(mesh, hit.position, hit.normal) {
+            if border_behind(mesh, hit.position, hit.normal) {
                 continue;
             }
             if angle_on_plane(hit.normal, normal, Vec3::NEG_Y) > WALL_FOLLOW_ANGLE_H

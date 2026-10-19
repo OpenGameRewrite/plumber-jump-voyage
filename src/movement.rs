@@ -2397,13 +2397,16 @@ impl Player {
     /// Standing: the stick starts the run (the start-run judge), which is a
     /// new nerve, chosen now and moving from its first step.
     fn stand(&mut self, o: &Orders) {
-        if self.ground_actions(o) {
-            return;
-        }
         if self.tilt >= STICK_DEADZONE {
+            // The state's own start-run judge comes before the actor's (jump,
+            // crouch, throw): a jump pressed with the stick is taken by the
+            // run state's first step (`pole-climb` rows 10-11).
             // The run state's appearance already pulls the player to the floor.
             self.pull = GRAVITY_MOVE;
             self.go(Move::Walk, "Move");
+            return;
+        }
+        if self.ground_actions(o) {
             return;
         }
         self.run_frames = 0;

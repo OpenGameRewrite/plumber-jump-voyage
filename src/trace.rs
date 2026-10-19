@@ -540,10 +540,12 @@ impl Recorder {
         let yaw = (p.facing.x + 0.).atan2(p.facing.z);
         // The game derives the quaternion from the pose matrix, taking the
         // largest of the trace and the diagonal: the scalar part for a turn of
-        // up to a quarter, the vertical axis for more, which keeps its
-        // component positive (a half turn reads `(0, 1, 0, 0)`).
+        // up to a quarter, the vertical axis for more (a quarter turn itself
+        // is a tie the vertical axis wins, as the recordings starting at
+        // yaw 270 show), which keeps its component positive (a half turn
+        // reads `(0, 1, 0, 0)`).
         let mut q = Quat::from_rotation_y(yaw);
-        if yaw.abs() > std::f32::consts::FRAC_PI_2 && q.y < 0. {
+        if yaw.abs() >= std::f32::consts::FRAC_PI_2 && q.y < 0. {
             q = -q;
         }
         let mut cells = Cells::default();
