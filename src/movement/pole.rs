@@ -68,11 +68,13 @@ const TOP_END_UNDER_OFFSET_Y: f32 = 60.;
 const COLLISION_RADIUS: f32 = 55.;
 const STICK_DEEP: f32 = 0.64;
 
-/// Lengths of the pole clips in steps (the game's own `anim_len`).
+/// Lengths of the pole clips in steps (the game's own `anim_len` where it
+/// was recorded, else the clip's duration in the converted model: the
+/// handstand's end was not recorded, 12 seconds of 60 per second there).
 const POLE_CATCH_CLIP: u32 = 8;
 const POLE_CLIMB_CLIP: f32 = 25.;
 const HAND_STAND_START_CLIP: u32 = 32;
-const HAND_STAND_END_CLIP: u32 = 32;
+const HAND_STAND_END_CLIP: u32 = 24;
 const HAND_STAND_JUMP_CLIP: u32 = 63;
 const WALL_JUMP_CLIP: u32 = 37;
 
@@ -329,8 +331,10 @@ impl Player {
     /// body goes to the pole's face, faces the pole and starts the catch clip,
     /// all in the step that found the pole.
     fn start_pole(&mut self, fit: Fit, o: &Orders) {
-        let mut pole = PoleControl::default();
-        pole.depth = fit.width.clamp(CATCH_RANGE_MIN, CATCH_RANGE_MAX);
+        let mut pole = PoleControl {
+            depth: fit.width.clamp(CATCH_RANGE_MIN, CATCH_RANGE_MAX),
+            ..PoleControl::default()
+        };
         pole.snap.setup(fit.pos, fit.front, fit.axis);
         // `PlayerActionCollisionSnap::start`: the actor goes to the point and
         // turns to face, standing still, with the collision forgotten.

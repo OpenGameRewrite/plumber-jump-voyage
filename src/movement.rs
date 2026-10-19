@@ -389,6 +389,8 @@ pub mod clip {
             "PoleTurn" => Some(50.),
             "PoleHandStandWait" => Some(120.),
             "PoleHandStandTurn" => Some(23.),
+            // (Not recorded: the converted model's length.)
+            "PoleWait" => Some(180.),
             "StartSpinJumpL" | "StartSpinJumpR" | "RestartSpinJumpL" | "RestartSpinJumpR" => {
                 Some(8.)
             }
@@ -403,7 +405,7 @@ pub mod clip {
             "WallCatchMoveL" | "WallCatchMoveR" => 2.,
             // The pole's turning clips show their length for a row (50, then 1;
             // 23, then 1) before they wrap.
-            "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" => 1.,
+            "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             _ => 0.,
         }
     }

@@ -189,7 +189,7 @@ fn fit_side(
     let (triangle, mut face_at) = best?;
     let mut face_normal = mesh.triangles[triangle as usize].normal;
     // A cap (a face along the axis): read the side face from the inside.
-    if axis.dot(face_normal) > 0.984_807_73 {
+    if axis.dot(face_normal) > 0.984_807_7 {
         let from = face_at - face_normal * 10. + across * (reach * sign);
         let vector = across * (-(reach + 10.) * sign);
         if let Some(strike) = first_poly(mesh, from, vector, Probe::PoleOnly) {

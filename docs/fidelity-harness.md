@@ -86,10 +86,23 @@ wall's direction cut), and carries itself from where it stood the step before
 to the pose the snap puts the actor in. A body that lands on a slope runs on
 without the slope terms of the original's ground control.
 
+The pole climb (`PlayerJudgePoleClimb`, `PlayerStatePoleClimb`,
+`src/movement/pole.rs`, the finders of `rs::findPoleClimb*` in
+`src/movement/pole_find.rs`) reads a pole off its collision triangles: the
+codes `Pole`, `Pole10`, `Pole20` and `Pole30Plus`, the touched face, its width
+and its axis. The catch, the climb up and down, the turn round the pole, the
+top (start, wait, turn, end), the jump off and the top jump run on the same
+snap as the ledge hang (`src/movement/snap.rs`) with the pole collider form
+(`changeCollisionPoleClimb`). The collider sweeps turn the body from the facing
+it had the step before to the one it has now, as the game's pose interpolator
+does, and drop the wall hits with a face right behind them
+(`rs::calcExistCollisionBorder`). The toy course's poles are hexagonal prisms of
+the Cap Kingdom pole's size. Not ported: the swing of motion controls, the
+joints of the arms and legs, the slanted codes' angle offset, moving poles.
+
 Not ported yet: the squeeze of `Press` collision, moving collision parts, the
-averaging of a push with the previous frame's (`calcResultVec`'s direction
-flags), thin-wall edge hits in the collider (`rs::calcExistCollisionBorder`;
-the wall judge has its own), the pole contact on triangles, slope
+averaging of a push with the previous round's (`calcResultVec`'s direction
+flags; a body that is pushed in more than one round of a sweep), slope
 sliding on triangles, the ledge hang on a moving platform or a tilted top,
 the ground nerves' ledge judge (`PlayerJudgeWallCatchInputDir`) and Cappy's
 head-on wall stop, floor and lock-on reactions.

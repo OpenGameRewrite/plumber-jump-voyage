@@ -50,7 +50,7 @@ const ARROW_EDGE_BAND: f32 = 0.01;
 /// corner is within this slope of the height above the face (the game's
 /// literal 0.707106).
 #[allow(clippy::approx_constant)] // the game's own 0.707106, not exactly one over root two
-const EDGE_HIT_RATIO: f32 = 0.707_105_99;
+const EDGE_HIT_RATIO: f32 = 0.707_106;
 /// Results the keeper stores before it stops adding (`CollisionShapeKeeper(5,
 /// 0x40, 0x20)`).
 const MAX_RESULTS: usize = 64;
