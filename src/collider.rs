@@ -464,6 +464,20 @@ pub fn first_strike(
         .min_by(|a, b| a.distance.total_cmp(&b.distance))
 }
 
+/// Every face a sphere at `center` touches (`alCollisionUtil::checkStrikeSphere`,
+/// the same prism test the player's own spheres use): the face's index in the
+/// mesh and the touched point on it.
+pub fn sphere_strikes(mesh: &TriangleMesh, center: Vec3, radius: f32) -> Vec<(u32, Vec3)> {
+    mesh.candidates(Aabb::around(center, radius))
+        .into_iter()
+        .filter_map(|i| {
+            let t = &mesh.triangles[i as usize];
+            let hit = sphere_hit(t, center, radius, mesh.thickness)?;
+            Some((i, hit.position))
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Hit {
     Sphere(SphereHit),

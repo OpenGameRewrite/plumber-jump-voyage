@@ -28,6 +28,7 @@
 //! pose keeps only the facing), the ceiling-check object, the collider's
 //! memory of the last push and the `WallCatchNoEntryArea` and
 //! `WallClimbBan` areas.
+use super::snap::Snap;
 use super::wall_air::collision_border_behind;
 use super::*;
 use crate::collider::{FaceFilter, Strike, arrow_strikes, arrow_strikes_filtered, first_strike};
@@ -88,106 +89,6 @@ pub(super) const LET_GO_INPUT_LOCK: u32 = 8;
 const RECATCH_LOCK_STEPS: u32 = 15;
 
 const DOWN: Vec3 = Vec3::NEG_Y;
-
-/// `al::easeOut`.
-fn ease_out(t: f32) -> f32 {
-    (-0.5 * t * t + 1.5) * t
-}
-
-/// An upright pose: where the body is and which way it faces (the yaw). The
-/// game's snap holds full matrices; the controller keeps the facing only.
-#[derive(Clone, Copy, Debug, Default)]
-struct Pose {
-    pos: Vec3,
-    yaw: f32,
-}
-impl Pose {
-    /// `al::blendMtx`: the position blends linearly, the orientation by
-    /// spherical interpolation of the quaternions.
-    fn blend(from: Pose, to: Pose, rate: f32) -> Pose {
-        let turn = Quat::from_rotation_y(from.yaw).slerp(Quat::from_rotation_y(to.yaw), rate);
-        let front = turn * Vec3::Z;
-        Pose {
-            pos: from.pos * (1. - rate) + to.pos * rate,
-            yaw: front.x.atan2(front.z),
-        }
-    }
-}
-
-/// What the judge found: the catch point on the ledge and the wall's normal
-/// (the ledge top's normal is checked for being level; the pose keeps only
-/// the facing).
-#[derive(Clone, Copy, Debug)]
-pub(super) struct CatchTarget {
-    pos: Vec3,
-    wall_normal: Vec3,
-}
-
-/// `PlayerActionCollisionSnap`, for a static ledge: the pose the body holds
-/// (position, the direction it faces into the wall and the ledge top's normal)
-/// and the move between two catch points.
-#[derive(Clone, Debug, Default)]
-struct Snap {
-    pos: Vec3,
-    front: Vec3,
-    /// Where the body stood when the last follow began (`_3c`): a move starts
-    /// from there.
-    previous: Vec3,
-    /// The pose the actor was put in by the last follow (`_48`).
-    held: Vec3,
-    start: Pose,
-    target: Pose,
-    current: Pose,
-    /// Steps of the move and steps taken (`_98`, `_9c`).
-    frames: i32,
-    at: i32,
-}
-impl Snap {
-    /// The pose of the catch point: the ledge point, facing the wall.
-    fn snap_pose(&self) -> Pose {
-        let front = self.front.with_y(0.).normalize_or(Vec3::Z);
-        Pose {
-            pos: self.pos,
-            yaw: front.x.atan2(front.z),
-        }
-    }
-    /// `PlayerActionCollisionSnap::setup`.
-    fn setup(&mut self, pos: Vec3, front: Vec3) {
-        self.pos = pos;
-        self.front = front;
-        self.target = self.snap_pose();
-        self.start = self.target;
-        self.current = self.target;
-        self.frames = 0;
-        self.at = 0;
-    }
-    /// `moveSnapPos`: a move to another catch point over `frames` steps, from
-    /// where the body stood and the way it faced.
-    fn move_to(&mut self, facing_yaw: f32, pos: Vec3, front: Vec3, frames: i32) {
-        self.pos = pos;
-        self.front = front;
-        self.start = Pose {
-            pos: self.previous,
-            yaw: facing_yaw,
-        };
-        self.target = self.snap_pose();
-        self.current = self.start;
-        self.frames = frames;
-        self.at = 0;
-    }
-    /// `updateMove`: one step of the move, eased out.
-    fn update_move(&mut self) {
-        if self.at >= self.frames {
-            return;
-        }
-        self.at += 1;
-        let rate = (self.at as f32 / self.frames as f32).clamp(0., 1.);
-        self.current = Pose::blend(self.start, self.target, ease_out(rate));
-    }
-    fn moving(&self) -> bool {
-        self.frames != self.at
-    }
-}
 
 /// The nerves of `PlayerStateWallCatch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -650,7 +551,7 @@ impl Player {
     fn start_wall_catch(&mut self, target: CatchTarget) {
         let front = -target.wall_normal;
         let mut catch = WallCatchControl::default();
-        catch.snap.setup(target.pos, front);
+        catch.snap.setup(target.pos, front, Vec3::Y);
         // `startWallCatch`: put the actor on the point, turned to the wall,
         // standing still.
         catch.snap.previous = target.pos;
@@ -724,12 +625,9 @@ impl Player {
     /// `PlayerActionCollisionSnap::followCollision` for static collision: the
     /// actor is put on the snap's pose.
     fn follow_snap(&mut self) {
-        let snap = &mut self.catch.snap;
-        snap.previous = self.pos / UNIT;
-        let pose = snap.current;
-        snap.held = pose.pos;
+        let pose = self.catch.snap.follow(self.pos / UNIT, Vec3::ZERO);
         self.pos = pose.pos * UNIT;
-        self.facing = Vec3::new(pose.yaw.sin(), 0., pose.yaw.cos());
+        self.facing = pose.front();
     }
 
     /// `PlayerStateWallCatch::followCollision`: false when the hold is lost.
@@ -886,7 +784,7 @@ impl Player {
         let yaw = self.facing.x.atan2(self.facing.z);
         self.catch
             .snap
-            .move_to(yaw, target.pos, -target.wall_normal, MOVE_FRAMES);
+            .move_to(yaw, target.pos, -target.wall_normal, Vec3::Y, MOVE_FRAMES);
         let nerve = if ask == StickAsk::Left {
             CatchNerve::MoveLeft
         } else {

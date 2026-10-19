@@ -259,6 +259,8 @@ mod rolling;
 mod run_cycle;
 #[path = "movement/sounds.rs"]
 mod sounds;
+#[path = "movement/snap.rs"]
+mod snap;
 #[path = "movement/spin.rs"]
 mod spin;
 #[path = "movement/squat.rs"]
