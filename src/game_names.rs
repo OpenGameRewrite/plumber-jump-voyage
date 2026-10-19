@@ -116,7 +116,14 @@ fn pole(anim: &str) -> Nerve {
     match anim {
         "PoleCatch" => known("PoleClimb/Start"),
         "PoleClimb" => known("PoleClimb/Up"),
-        "PoleFall" => guessed("PoleClimb/Down"),
+        "PoleFall" => known("PoleClimb/Down"),
+        "PoleTurn" => known("PoleClimb/Turn"),
+        "PoleHandStandStart" => known("PoleClimb/TopStart"),
+        "PoleHandStandWait" => known("PoleClimb/TopWait"),
+        "PoleHandStandTurn" => known("PoleClimb/TopTurn"),
+        "PoleHandStandJump" => known("PoleClimb/TopJump"),
+        "PoleHandStandEnd" => guessed("PoleClimb/TopEnd"),
+        "WallJump" => known("PoleClimb/Jump"),
         _ => known("PoleClimb/Wait"),
     }
 }
