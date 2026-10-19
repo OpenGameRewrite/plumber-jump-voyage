@@ -1457,10 +1457,13 @@ impl Player {
             self.frame = frames;
             self.nerve.step = frames;
         }
-        // The pound's landing counts its own steps (the cancel window is read
-        // from them), not the actor nerve's.
-        if self.mode == Move::PoundLand
-            && let Some(steps) = s.sub_steps
+        // The pound's landing, the ground spin and the spin drop count their own
+        // steps (the cancel window, the spin's ninety, the drop's minimum are
+        // read from them), not the actor nerve's.
+        if matches!(
+            self.mode,
+            Move::PoundLand | Move::GroundSpin | Move::SpinDrop
+        ) && let Some(steps) = s.sub_steps
         {
             self.frame = steps;
         }

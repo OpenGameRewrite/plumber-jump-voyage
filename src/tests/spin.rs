@@ -85,7 +85,10 @@ fn a_stick_circle_starts_the_ground_spin() {
     assert_eq!(p.state_frames(), before + 1, "the run's step count goes on");
     assert_eq!(p.v.y, 0.);
     assert_eq!(p.pull, 0., "no push into the floor in the chosen step");
-    assert_ne!(p.anim.name, "SpinGroundL", "the clip starts with the first step");
+    assert_ne!(
+        p.anim.name, "SpinGroundL",
+        "the clip starts with the first step"
+    );
     assert!(p.events.iter().all(|e| !matches!(e, Fx::Land { .. })));
     // Row 41: the first step starts the left clip (counter-clockwise) and
     // faces the way the velocity points.

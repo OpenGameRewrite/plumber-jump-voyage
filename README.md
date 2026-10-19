@@ -92,7 +92,7 @@ button (A on an Xbox pad). Everything can be rebound in **Rebind controls**.
 | Cap throw (hold to keep it out) | Left click | Y or X |
 | Homing throw | Right click | R |
 | Up / down throw | E / Q | D-pad up / down |
-| Spin throw | C | Left stick press, or circle the stick and throw |
+| Spin throw | C | Left stick press, or throw during a ground spin |
 | Recenter camera | R | L |
 | Return to checkpoint | Backspace | - |
 | Pause | Escape | + |
@@ -101,7 +101,9 @@ button (A on an Xbox pad). Everything can be rebound in **Rebind controls**.
 
 - Land and jump again for a double, then a triple jump.
 - Crouch + jump: long jump while running, backflip while standing.
-- Reverse at speed, then jump: side somersault. Circle the stick, then jump: spin jump.
+- Reverse at speed, then jump: side somersault.
+- Circle the stick for about two turns, standing or running: ground spin. Jump during the
+  spin for a spin jump, and crouch in the air for the spin drop.
 - Crouch in the air to ground pound; jump on landing to go higher, or throw
   during the pound to dive.
 - Crouch + throw to roll; throw in rhythm to boost; release crouch to stand.

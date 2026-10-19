@@ -78,16 +78,28 @@ pub fn apply(
             *smoke_last = now;
             return;
         }
-        if script == "spin" {
-            // Circle the stick into a ground spin, then throw while still circling.
+        if script == "spin" || script == "spinjump" {
+            // Circle the stick into a ground spin (it takes about a second:
+            // the detector wants nearly two turns). "spin" throws while still
+            // circling; "spinjump" jumps during the spin and drops from it.
             let now = time.elapsed_secs() - delay;
+            let circling = started && now < 2.6;
+            let c = Vec2::new((now * 14.).cos(), (now * 14.).sin());
+            let crossed = |at: f32| *smoke_last < at && now >= at;
+            let jumping = script == "spinjump";
             *orders = Orders {
-                direction: if started && now < 2.6 {
-                    Vec2::new((now * 14.).cos(), (now * 14.).sin())
+                direction: if circling { c } else { Vec2::ZERO },
+                // The stick as the controller reports it: y down the screen.
+                stick: if circling {
+                    Vec2::new(c.x, -c.y)
                 } else {
                     Vec2::ZERO
                 },
-                throw_pressed: *smoke_last < 1.2 && now >= 1.2,
+                throw_pressed: !jumping && crossed(1.2),
+                jump: jumping && crossed(1.5),
+                jump_held: jumping && (1.5..1.7).contains(&now),
+                crouch: jumping && now >= 2.1,
+                crouch_pressed: jumping && crossed(2.1),
                 ..default()
             };
             *smoke_last = now;

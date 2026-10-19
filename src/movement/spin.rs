@@ -61,6 +61,16 @@ impl Player {
         self.spin_input.update(Vec2::new(o.stick.x, -o.stick.y));
     }
 
+    /// The stick-circle detector's history, which a lockstep replay keeps
+    /// out of the extra step it takes to choose a state again (the game's
+    /// input is updated once a frame).
+    pub fn spin_input(&self) -> SpinInput {
+        self.spin_input.clone()
+    }
+    pub fn set_spin_input(&mut self, input: SpinInput) {
+        self.spin_input = input;
+    }
+
     /// The clip for the spin's direction.
     fn spin_clip(&self, left: &'static str, right: &'static str) -> &'static str {
         if self.spin_clockwise { right } else { left }

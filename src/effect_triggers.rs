@@ -149,10 +149,11 @@ impl Triggers {
                 // the clip ends (the brake's sparks); an emitter that never
                 // ends by itself still stops with the clip (the ground spin's
                 // dust, recorded stopping as the next clip starts).
-                let endless = trigger
-                    .resources
-                    .iter()
-                    .any(|r| library.timing(Some(r)).is_some_and(|t| t.emitting.is_none()));
+                let endless = trigger.resources.iter().any(|r| {
+                    library
+                        .timing(Some(r))
+                        .is_some_and(|t| t.emitting.is_none())
+                });
                 for action in &trigger.actions {
                     let table = if trigger.table == "Cap" {
                         &mut triggers.cap

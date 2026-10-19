@@ -432,7 +432,9 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     &[]
                 };
                 let (orders, _) = orders_for(spans[last], before, camera.yaw_deg(last), &bindings);
+                let spin = player.spin_input();
                 player.step(&orders, &course);
+                player.set_spin_input(spin);
                 player.events.clear();
             }
         }
