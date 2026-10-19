@@ -372,9 +372,8 @@ impl Player {
     /// `rs::resetCollision`: the contacts of the last step are forgotten and
     /// the collider's own pose becomes the actor's.
     fn reset_collision(&mut self) {
-        self.collider.floor = None;
-        self.collider.wall = None;
-        self.collider.ceiling = None;
+        self.collider
+            .invalidate(self.facing.x.atan2(self.facing.z));
         self.touched.wall_contact = None;
         self.catch_collider_at = None;
     }

@@ -211,17 +211,29 @@ struct Pose {
     pos: Vec3,
     sin: f32,
     cos: f32,
+    /// The facing the body had when the collider last ran, and the one it has
+    /// now: a sweep turns from one to the other (`SpherePoseInterpolator`
+    /// interpolates the orientation along with the position).
+    from_yaw: f32,
+    yaw: f32,
 }
 impl Pose {
+    /// The pose `sweep` has reached: its position and the interpolated facing.
+    fn along(&self, sweep: &Sweep) -> Self {
+        let (sin, cos) = sweep.yaw(self.from_yaw, self.yaw).sin_cos();
+        Self {
+            pos: sweep.pos(),
+            sin,
+            cos,
+            ..*self
+        }
+    }
     fn rotate(&self, local: Vec3) -> Vec3 {
         Vec3::new(
             local.x * self.cos + local.z * self.sin,
             local.y,
             -local.x * self.sin + local.z * self.cos,
         )
-    }
-    fn at(&self, pos: Vec3) -> Self {
-        Self { pos, ..*self }
     }
 }
 
@@ -651,6 +663,14 @@ impl Sweep {
     fn pos(&self) -> Vec3 {
         self.start + self.motion * self.current
     }
+    /// The facing along the sweep: the orientation interpolates from `from` to
+    /// `to` (a spherical interpolation of two turns about the up axis takes
+    /// the shorter way round).
+    fn yaw(&self, from: f32, to: f32) -> f32 {
+        let turn = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        from + turn * self.current
+    }
     fn remaining(&self) -> Vec3 {
         self.motion * (1. - self.current)
     }
@@ -696,6 +716,9 @@ pub struct PlayerCollider {
     carry_from: Option<Vec3>,
     /// The last `collide`'s fix reaction (`Outcome::fix`).
     fix_reaction: Vec3,
+    /// The facing at the end of the last `collide` (the collider keeps the
+    /// actor's matrix of that time): the next sweeps turn from it.
+    last_yaw: Option<f32>,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -790,6 +813,7 @@ impl PlayerCollider {
             cut_direction: Vec3::ZERO,
             carry_from: None,
             fix_reaction: Vec3::ZERO,
+            last_yaw: None,
         }
     }
 
@@ -817,6 +841,18 @@ impl PlayerCollider {
         self.floor.is_some()
     }
 
+    /// `rs::resetCollision` (`PlayerCollider::onInvalidate`): the contacts are
+    /// forgotten and the collider takes the actor's pose as the one it stood
+    /// in.
+    pub fn invalidate(&mut self, yaw: f32) {
+        self.floor = None;
+        self.wall = None;
+        self.ceiling = None;
+        self.best = [NO_CONTACT; 3];
+        self.carry_from = None;
+        self.last_yaw = Some(yaw);
+    }
+
     /// `rs::getCollidedFixReaction`: how far the last `collide` moved the feet
     /// from where the actor's position plus the move would have put them (the
     /// carry from where the collider stood is not part of it).
@@ -832,7 +868,14 @@ impl PlayerCollider {
         self.ceiling = None;
         self.best = [NO_CONTACT; 3];
         let (sin, cos) = yaw.sin_cos();
-        let pose = Pose { pos, sin, cos };
+        let pose = Pose {
+            pos,
+            sin,
+            cos,
+            from_yaw: self.last_yaw.unwrap_or(yaw),
+            yaw,
+        };
+        self.last_yaw = Some(yaw);
         let range = self.keeper.check_step;
         // The carry: from where the collider was to where the actor is. The
         // replay hands the collider the actor's own position, so the move is
@@ -891,7 +934,10 @@ impl PlayerCollider {
         loop {
             *at = sweep.pos();
             let mut remain = sweep.remaining();
-            let fix = self.calc_result_vec(mesh, pose, &results);
+            let fix = self.calc_result_vec(mesh, &pose.along(&sweep), &results);
+            if std::env::var("PJV_DBG").is_ok() {
+                eprintln!("ROUND at {:?} fix {:?} hits {} remain {:?}", *at, fix, results.collide.len(), remain);
+            }
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
@@ -945,7 +991,7 @@ impl PlayerCollider {
             if sweep.finished() {
                 return false;
             }
-            *results = check(mesh, &self.keeper, &pose.at(sweep.pos()));
+            *results = check(mesh, &self.keeper, &pose.along(sweep));
             if !results.collide.is_empty() {
                 return true;
             }
@@ -1197,6 +1243,9 @@ impl PlayerCollider {
                 }
             }
         };
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("  fix {:?} {:?} tri {} depth {} fix {:?} center {:?} pos {:?}", class, hit.location, result.triangle, hit.depth, fix, hit.center, hit.position);
+        }
         fixes.add(fix);
         self.record(mesh, class, hit.depth, result, hit.position, hit.location);
     }
