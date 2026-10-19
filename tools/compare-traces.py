@@ -20,10 +20,12 @@ Column kinds:
                no `coyote` counter), never a FAIL.
 
 Environment: next to the game CSV, `game.env.json` / `game.meta.json` say whether
-the real-game run saw only flat, empty ground. A contaminated run is refused
-(exit status 3) unless --allow-contaminated is given; then its listed frames
-are left out of every column, and the position columns are left out after the
-first contaminated frame, where drift from the contact is expected.
+the real-game run saw only flat, empty ground. The rule in tools/environment_rule.py
+judges every listed frame: eye overlaps, harmless actor overlaps and static map
+geometry (replayed with --geometry) are accepted and listed in the report; any
+other contamination refuses the run (exit status 3) unless --allow-contaminated is
+given. Then the refused frames are left out of every column, and the position
+columns are left out after the first of them, where drift from the contact is expected.
 
 Probe-only columns (game_frame, tick, cam_real_*, late_sample, other_events,
 anim_slots, floor_y, cap_step, cap_hidden) and event kinds that only log the
@@ -43,6 +45,8 @@ import sys
 from collections import Counter, OrderedDict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from environment_rule import judge_run, ranges  # noqa: E402
+from environment_rule import self_check as environment_self_check  # noqa: E402
 from reaction_names import english as reaction_name  # noqa: E402
 
 # Default numeric tolerances, in the trace's units (cm, cm/frame, degrees, ...).
@@ -98,7 +102,7 @@ PROBE_EVENT_KINDS = {"anim", "parts", "subanim", "upper", "endsub", "effect_stop
 # Probe-only columns the rewrite has no counterpart for.
 PROBE_ONLY = [
     "game_frame", "tick", "cam_real_yaw", "cam_real_pitch", "late_sample", "other_events",
-    "anim_slots", "floor_y", "cap_step", "cap_hidden",
+    "anim_slots", "floor_y", "cap_step", "cap_hidden", "contacts", "hit_hosts",
 ]
 # Position columns: a contact changes them for good, so they are left out after it.
 DRIFT = {"px", "py", "pz", "cap_px", "cap_py", "cap_pz"}
@@ -205,6 +209,15 @@ def read_environment(game_path):
     if not found:
         notes.append("environment unknown: no game.env.json or game.meta.json next to the game trace")
     return clean, frames, notes, found
+
+
+class EnvironmentRefused(Exception):
+    """The real-game run is contaminated in a way the environment rule does not accept."""
+
+    def __init__(self, summary, banner):
+        super().__init__(banner)
+        self.summary = summary
+        self.banner = banner
 
 
 def as_float(text):
@@ -439,6 +452,8 @@ class Report:
         self.env_known = False
         self.excluded = []  # contaminated frames left out
         self.first_contaminated = None
+        self.env_lines = []  # what the environment rule accepted and refused, one line each
+        self.env_accepted_frames = 0  # frames whose listed contamination was judged harmless
         self.lockstep = False
         self.ignored_probe_columns = []
 
@@ -461,14 +476,14 @@ class Report:
         return {
             "game": self.game_path, "rewrite": self.rewrite_path, "verdict": self.verdict(),
             "frames_compared": len(self.frames), "excluded_frames": self.excluded,
-            "env_clean": self.env_clean, "env_known": self.env_known, "notes": self.notes,
+            "env_clean": self.env_clean, "env_known": self.env_known, "env_rule": self.env_lines, "notes": self.notes,
             "columns": [r.as_dict() for r in self.results],
         }
 
 
 def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), lockstep=False,
             allow_contaminated=False):
-    """Compare two trace files. Exits with status 3 for a contaminated run unless allowed."""
+    """Compare two trace files. Raises EnvironmentRefused for a contaminated run unless allowed."""
     report = Report()
     report.game_path, report.rewrite_path, report.lockstep = game_path, rewrite_path, lockstep
     tolerances = dict(NUMERIC)
@@ -479,18 +494,45 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
     tolerances.update(tol_overrides or {})
     ignore = set(PROBE_EVENT_KINDS) | set(ignore_events)
 
-    clean, contaminated, env_notes, known = read_environment(game_path)
-    report.env_clean, report.env_known = clean, known
+    clean, listed, env_notes, known = read_environment(game_path)
+    report.env_known = known
     report.notes.extend(env_notes)
-    if not clean and not allow_contaminated:
+    gcols, game = read_trace(game_path)
+    rcols, rew = read_trace(rewrite_path)
+    frames = [f for f in game if f in rew]
+    if not frames:
+        sys.exit("no frame numbers in common")
+
+    # The environment rule: contamination the probe listed is judged frame by frame; a log that names
+    # its contacts is judged even when nothing was listed (a handled message is contamination too).
+    contaminated = OrderedDict()  # refused frames -> reasons
+    verdict = None
+    flagged_without_frames = not clean and not listed
+    if (not clean and listed) or any(r.get("hit_hosts") or r.get("contacts") for r in game.values()):
+        verdict = judge_run(game, rew, listed)
+        for f, reasons in listed.items():
+            if not reasons:
+                verdict.refuse(f, "listed by the probe without a reason")
+        in_range = set(frames)
+        contaminated = OrderedDict((f, r) for f, r in sorted(verdict.refused.items()) if f in in_range)
+        report.env_lines = verdict.lines()
+        report.env_accepted_frames = len({f for e in verdict.accepted.values() for f in e["frames"]})
+        for f in sorted(set(verdict.refused) - in_range):
+            report.notes.append(f"contamination on frame {f}, outside the frames both traces have, is not needed")
+        clean = not contaminated
+    report.env_clean = clean and not flagged_without_frames
+    if not report.env_clean and not allow_contaminated:
+        n = len(contaminated)
+        reasons = sorted({r for rs in contaminated.values() for r in rs})
+        summary = (f"CONTAMINATED ({n} frames; {'; '.join(reasons)[:120]})" if n
+                   else "CONTAMINATED (flagged unclean, no frame listed)")
         banner = (
-            "REFUSED: the real-game run is contaminated (it touched walls, ceilings, slopes, other "
-            f"actors or changed floor): {len(contaminated)} frames listed in game.env.json.\n"
-            "A diff against it would show geometry, not behaviour. Re-place the scenario "
+            "REFUSED: the real-game run is contaminated beyond what the environment rule accepts "
+            f"({n} frames)." + "\n".join("  " + line for line in [""] + [l for l in report.env_lines if l.startswith("REFUSED")])
+            + "\nA diff against it would show geometry or another actor, not behaviour. Re-place the scenario "
             "on clean ground, or pass --allow-contaminated to compare only its clean frames."
         )
-        print(banner, file=sys.stderr)
-        sys.exit(3)
+        raise EnvironmentRefused(summary, banner)
     if contaminated:
         first = min(contaminated)
         report.first_contaminated = first
@@ -498,14 +540,14 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
             f"CONTAMINATED ENVIRONMENT: {len(contaminated)} frames left out of every column "
             f"(first {first}); the position columns are also left out after frame {first}"
         )
-    elif not clean:
+    elif not report.env_clean:
         report.notes.append("CONTAMINATED ENVIRONMENT: the run is flagged unclean but lists no frames")
+    if verdict is not None and report.env_accepted_frames:
+        report.notes.append(
+            f"ENVIRONMENT RULE: {report.env_accepted_frames} frames with listed contamination were accepted "
+            "as harmless (see the Environment section)"
+        )
 
-    gcols, game = read_trace(game_path)
-    rcols, rew = read_trace(rewrite_path)
-    frames = [f for f in game if f in rew]
-    if not frames:
-        sys.exit("no frame numbers in common")
     report.frames = frames
     report.excluded = sorted(f for f in contaminated if f in rew and f in game)
     for label, trace in (("game", game), ("rewrite", rew)):
@@ -688,6 +730,13 @@ def render(report, lockstep_detail=True):
           f"{len(report.frames)} ({report.frames[0]}-{report.frames[-1]})\n")
     for note in report.notes:
         write(f"- note: {note}\n")
+    if report.env_lines:
+        write("\n## Environment\n")
+        write("The probe listed contamination in this real-game run; the environment rule "
+              "(tools/environment_rule.py) judged it as follows.\n")
+        for line in report.env_lines:
+            write(f"- {line}")
+        write("")
     failing, passing, nc = report.failing(), report.passing(), report.not_comparable()
     write(f"\n**Overall: {report.verdict()}** ({len(failing)} failing, {len(passing)} passing, "
           f"{len(nc)} not comparable)\n")
@@ -797,8 +846,8 @@ def self_check():
         try:
             compare(game, rewrite)
             raise AssertionError("a contaminated run must be refused")
-        except SystemExit as stop:
-            assert stop.code == 3
+        except EnvironmentRefused as refused:
+            assert "wall contact" in refused.banner and refused.summary.startswith("CONTAMINATED"), refused.banner
         report = compare(game, rewrite, allow_contaminated=True)
         assert report.excluded == [2] and report.result("counters.prejump").status == "PASS"
         assert any(n.startswith("CONTAMINATED") for n in report.notes)
@@ -806,6 +855,7 @@ def self_check():
     jp, en = "reaction:着地[走り];se:Land", "se:Land;reaction:LandRun"
     assert compare_set(jp, en, ";", set())[1] == [], compare_set(jp, en, ";", set())
     assert compare_set("reaction:着地", "reaction:LandRun", ";", set())[1] != []
+    environment_self_check()
     print("compare-traces checks passed.")
 
 
@@ -836,7 +886,11 @@ def main():
         except ValueError:
             sys.exit(f"bad --tol {item!r}")
     ignore = [k for k in args.ignore_events.split(",") if k]
-    report = compare(args.game, args.rewrite, overrides, ignore, args.lockstep, args.allow_contaminated)
+    try:
+        report = compare(args.game, args.rewrite, overrides, ignore, args.lockstep, args.allow_contaminated)
+    except EnvironmentRefused as refused:
+        print(refused.banner, file=sys.stderr)
+        sys.exit(3)
     text = render(report)
     if report.env_known and not report.env_clean:
         text = "> **CONTAMINATED ENVIRONMENT** (compared with --allow-contaminated): see the notes.\n\n" + text

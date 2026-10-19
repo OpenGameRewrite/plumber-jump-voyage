@@ -18,8 +18,11 @@
 The input script is found as `<scenario>/<name>.input`, else the scenario file
 named in `game.meta.json`, else `<name>.input`, in `--scenarios` (default: the
 `scenarios` folder beside the runs dir). Folders without a game trace or a
-script are listed as skipped. A contaminated real-game run is reported as
-refused, as compare-traces.py does, unless --allow-contaminated is given.
+script are listed as skipped. A real-game run whose contamination the environment
+rule (tools/environment_rule.py) does not accept is reported as refused, as
+compare-traces.py does, unless --allow-contaminated is given; the rule needs the
+replay (it asks whether the stage's triangles were replayed), so every run is
+replayed first.
 --geometry names a folder of the local stage-collision exports (<stage>.json):
 each replay then runs in the stage its run recorded (game.meta.json) instead of
 on the flat floor, when the folder has that stage.
@@ -93,14 +96,17 @@ def replay(exe, script, game, out, geometry=None):
     return None
 
 
-def environment_text(compare, game):
-    clean, frames, notes, known = compare.read_environment(game)
-    if not known:
-        return "unknown (no env files)", clean, frames
-    if clean:
-        return "clean", clean, frames
-    reasons = sorted({r for rs in frames.values() for r in rs})
-    return f"CONTAMINATED ({len(frames)} frames; {'; '.join(reasons)[:120]})", clean, frames
+def environment_text(report):
+    """The environment column of a compared run: clean, clean after the rule accepted listed frames, or contaminated."""
+    if not report.env_known:
+        return "unknown (no env files)"
+    if report.excluded:
+        reasons = sorted({r for line in report.env_lines if line.startswith("REFUSED")
+                          for r in [line.split(": ", 1)[1]]})
+        return f"CONTAMINATED ({len(report.excluded)} frames; {'; '.join(reasons)[:120]})"
+    if report.env_accepted_frames:
+        return f"clean by the environment rule ({report.env_accepted_frames} listed frames accepted)"
+    return "clean"
 
 
 def worst_columns(report, count=3):
@@ -213,17 +219,18 @@ def main():
         if script is None:
             skipped.append((name, "no input script (looked beside the trace and in the scenarios folder)"))
             continue
-        env_text, clean, _ = environment_text(compare, game)
-        if not clean and not args.allow_contaminated:
-            skipped.append((name, f"REFUSED, the real-game run is contaminated: {env_text}"))
-            table.append((name, env_text, "REFUSED", "", ""))
-            continue
         rewrite = os.path.join(folder, "rewrite.csv")
         error = replay(exe, script, game, rewrite, geometry)
         if error:
             skipped.append((name, f"the replay failed: {error}"))
             continue
-        report = compare.compare(game, rewrite, allow_contaminated=args.allow_contaminated)
+        try:
+            report = compare.compare(game, rewrite, allow_contaminated=args.allow_contaminated)
+        except compare.EnvironmentRefused as refused:
+            skipped.append((name, f"REFUSED, the real-game run is contaminated: {refused.summary}"))
+            table.append((name, refused.summary, "REFUSED", "", ""))
+            continue
+        env_text = environment_text(report)
         with open(os.path.join(folder, "diff.md"), "w", encoding="utf-8") as f:
             f.write(compare.render(report))
         with open(os.path.join(folder, "diff.json"), "w", encoding="utf-8") as f:

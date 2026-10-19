@@ -195,19 +195,66 @@ py tools/fidelity-report.py <runs dir> [--only idle jump ...]   # SUMMARY.md for
 key that only one side ever writes is listed under "Not comparable" and does
 not fail. The probe-only columns (`game_frame`, `tick`, `cam_real_*`,
 `late_sample`, `other_events`, `anim_slots`, `floor_y`, `cap_step`,
-`cap_hidden`) and the probe's own event kinds (`anim:`, `parts:`, `subanim:`,
+`cap_hidden`, `contacts`, `hit_hosts`) and the probe's own event kinds (`anim:`, `parts:`, `subanim:`,
 `upper:`, `endsub:`, `effect_stop:`, `contact:`) are ignored. Sound mixes
 (`sounds`) compare names only: the game logs the request's parameter where the
 rewrite logs the mixed gain. The cap columns are compared on the frames where
 both sides have the cap out; `cap_out` shows who has it out when.
 
-Next to `game.csv` the probe writes `game.env.json` and `game.meta.json`. A run
-whose environment was not clean is refused (exit status 3, a banner) unless
-`--allow-contaminated` is given; then the frames it lists are left out of
-every column, and the position columns are left out after the first of them.
-Frames whose only reason is Cappy's `Trample`/`TrampleReturn` nerve (the player
-standing on his own thrown cap, the cap jump) are not contamination; any other
-actor, wall or floor change still is.
+Next to `game.csv` the probe writes `game.env.json` and `game.meta.json`, which
+list every frame in which the run touched something besides flat, empty ground.
+That list is not a verdict: most entries are harmless. `tools/environment_rule.py`
+judges each listed frame and the report's "Environment" section says which contacts
+were accepted and why. Any other contamination refuses the run (exit status 3, a
+banner naming the frames and reasons) unless `--allow-contaminated` is given; then
+the refused frames are left out of every column, and the position columns are left
+out after the first of them. A refusal needs the replay too (it asks whether the
+rewrite replayed the stage's triangles), so `fidelity-report.py` replays every run
+before it decides. Frames whose only reason is Cappy's `Trample`/`TrampleReturn`
+nerve (the player standing on his own thrown cap, the cap jump) are not
+contamination.
+
+### Environment rule
+
+A reason is contamination only if it can change Mario or makes the world differ from
+what the rewrite replays.
+
+* **Eye overlaps are accepted.** Mario owns an eye sensor of radius 800 cm. The engine
+  calls his attack path once for every actor sensor inside it, but that path only
+  records look-at targets and sends queries. Nearly every `contact:` an older log
+  lists is such an overlap. The probe now logs both sensors of every pair (`contacts`
+  column: own and other sensor name and type, the host and its class, the message
+  class Mario received and his answer), so an eye overlap is told apart from a
+  physical one and never listed.
+* **Harmless physical overlaps are accepted on frames without a consequence marker**:
+  the cap ships and hangers, the cap door and cap flowers (their handlers have no
+  reaction to a player-sent message), and reaction objects (which react to a
+  trample, hip drop or kick, so the next frame is checked too). Markers are an
+  `attack`, `receive` or `collision` trigger, a state the scenario does not script
+  (bind, hack, damage, demo, shine get, press, sand sink, abyss), and a displacement
+  that differs from the velocity by more than 0.05 cm in the air or 1 cm on flat
+  ground outside a wall, a pole, a hang, a state change or a jump frame.
+* **Refused**: NPCs, items, coins, enemies, bushes, dig points and any host or class
+  not listed above when one of Mario's non-eye sensors overlaps it; a message Mario
+  handles (bind, hack, hit, damage, blow, push, jump requests, enemy fire and so on)
+  or an unresolved one he answered; every contact of Cappy.
+* **Map geometry is accepted** (`wall contact`, `ceiling contact`, `floor normal`,
+  `floor material changed`, a displacement explained by a slope, wall, pole or
+  transition) only when the rewrite replayed the same stage's triangles (`--geometry`;
+  its `collision` column then carries `gcode`) and the surfaces' hosts are static
+  collision parts (`hit_hosts` column: the host of the floor, wall and ceiling
+  contact, its `isHostMoved` flags and its position). Without the geometry replay
+  these runs stay refused. A log from an older probe has no hosts; its entries are
+  accepted by the replay alone and the report says the hosts were not verified.
+* **`floor height changed`** is accepted on the frame a fall lands (the previous floor
+  sample is older than the previous frame: the intended drop), refused when the floor
+  under a stationary player changes height on a flat floor (a moving floor), and
+  otherwise judged like map geometry.
+
+Old probe logs (no `contacts` / `hit_hosts` columns) carry only the host's display
+name (cut at 48 bytes) in `hit-sensor contact <name>` reasons. Those are judged as
+physical overlaps by name, so a run that touches an NPC or an item stays refused
+until it is recorded again with the current probe.
 
 `fidelity-report.py` replays every scenario that has a `game.csv` (with
 `--camera game.csv`), writes `rewrite.csv`, `diff.md` and `diff.json` beside
