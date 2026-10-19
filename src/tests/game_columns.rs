@@ -43,8 +43,8 @@ fn jump_combo_counters() {
     p.set_counter("long_jump_timer", 14);
     assert_eq!(item(&counters_cell(&p), "clong"), "1/14");
     // Internal counters keep their own names after the game's.
-    p.set_counter("coyote", 2);
-    assert_eq!(item(&counters_cell(&p), "coyote"), "2");
+    p.set_counter("ground_lost", 2);
+    assert_eq!(item(&counters_cell(&p), "ground_lost"), "2");
     assert_eq!(item(&counters_cell(&p), "pre_jump"), "<missing>");
 }
 

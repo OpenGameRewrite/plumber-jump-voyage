@@ -376,9 +376,9 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     let mut wanted = vec![];
     // The run cycle's control picks the dust for the pose it plays.
     // The dust starts with the run state's first step and lasts as long as the
-    // state, through its brake and turn.
-    if p.grounded
-        && matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+    // state, through its brake and turn and through the steps a run goes on
+    // in the air before it falls (recorded: it stops with the state).
+    if matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         && matches!(p.anim.name, "Move" | "Brake" | "Turn" | "TurnPoint")
     {
         wanted.extend(p.run_cycle().effect);
@@ -752,7 +752,10 @@ pub fn self_check() {
         p.step(&forward, &floor);
     }
     assert_eq!(code_driven(&p), ["Run"]);
+    // The dust outlives the ground under a run that has not yet fallen.
     p.grounded = false;
+    assert_eq!(code_driven(&p), ["Run"]);
+    p.mode = Move::Fall;
     assert!(code_driven(&p).is_empty());
     // Reaction names share the sound rules and add the effect-only ones.
     let context = FxContext { mode: Move::Run };

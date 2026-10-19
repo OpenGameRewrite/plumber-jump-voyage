@@ -316,7 +316,6 @@ pub fn looping(name: &str) -> bool {
             | "WaitRelax"
             | "Snooze"
             | "Sleep"
-            | "Fall"
             | "Rolling"
             | "HeadSliding"
             | "SquatWait"

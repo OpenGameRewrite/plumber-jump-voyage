@@ -893,7 +893,9 @@ pub struct Player {
     land_frames: u32,
     pre_jump: u32,
     pre_throw: u32,
-    coyote: u32,
+    /// `PlayerJudgeSpeedCheckFall`: steps the player has gone without ground
+    /// under him, counted up to one more than the judge needs.
+    ground_lost: u32,
     /// The combo of consecutive jumps and the long-jump count, as the
     /// original's `PlayerContinuousJump` and `PlayerContinuousLongJump`.
     combo: ContinuousJump,
@@ -1041,7 +1043,7 @@ impl Default for Player {
             land_frames: 300,
             pre_jump: 0,
             pre_throw: 0,
-            coyote: 0,
+            ground_lost: 0,
             combo: ContinuousJump::default(),
             long_combo: ContinuousLongJump::default(),
             air: AirMove::default(),
@@ -1162,6 +1164,10 @@ impl Course {
             .max_by(f32::total_cmp)
     }
 }
+
+/// Steps without ground a ground nerve tolerates before it falls
+/// (`PlayerJudgeSpeedCheckFall`: more than four).
+const GROUND_LOST_FRAMES: u32 = 4;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Course>()
@@ -1385,7 +1391,7 @@ impl Player {
         vec![
             ("pre_jump", self.pre_jump as i64),
             ("pre_throw", self.pre_throw as i64),
-            ("coyote", self.coyote as i64),
+            ("ground_lost", self.ground_lost as i64),
             ("jump_count", self.combo.count as i64),
             ("jump_timer", self.combo.timer as i64),
             ("long_jump_count", self.long_combo.count as i64),
@@ -1407,7 +1413,7 @@ impl Player {
         match name {
             "pre_jump" => self.pre_jump = frames,
             "pre_throw" => self.pre_throw = frames,
-            "coyote" => self.coyote = frames,
+            "ground_lost" => self.ground_lost = frames,
             "jump_count" => self.combo.count = frames,
             "jump_timer" => self.combo.timer = frames,
             "long_jump_count" => self.long_combo.count = frames,
@@ -1921,6 +1927,7 @@ impl Player {
         // A state chosen above leaves its own first step to the next frame.
         if !self.nerve.deferred {
             self.run_state(&o, scene);
+            self.judge_fall();
         }
         self.finish_catch();
         if matches!(self.mode, Move::Ledge | Move::Pole) {
@@ -1948,31 +1955,11 @@ impl Player {
         }
         if hot {
             self.burn();
-        } else if !self.grounded
-            && was_grounded
-            && self.v.y <= 0.
-            && !(self.mode == Move::GroundSpin && self.nerve.deferred)
-            && matches!(
-                self.mode,
-                Move::Idle
-                    | Move::Walk
-                    | Move::Run
-                    | Move::Skid
-                    | Move::Turn
-                    | Move::SquatBrake
-                    | Move::Crouch
-                    | Move::Crawl
-                    | Move::GroundSpin
-                    | Move::Throw
-            )
-        {
-            // Walked off an edge: likewise, the fall is chosen next step.
-            self.nerve.liftoff = true;
         }
         self.finish_frame(scene);
     }
     /// Changes of state the surroundings force, decided before the state runs:
-    /// water, the ground reached or lost last step.
+    /// water, the ground reached last step.
     fn change_from_surroundings(&mut self, scene: &Course, o: &Orders) {
         let wet = scene.wet(self.pos + Vec3::Y * 0.8);
         if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
@@ -1987,8 +1974,44 @@ impl Player {
             self.go(Move::Fall, "Fall");
         } else if std::mem::take(&mut self.nerve.touchdown) {
             self.land(o);
-        } else if std::mem::take(&mut self.nerve.liftoff) {
-            self.coyote = 3;
+        }
+    }
+    /// `PlayerJudgeSpeedCheckFall::update`, once a step before the nerve runs
+    /// (it reads the contact the last step ended with): the steps without
+    /// ground under the player count up to five, any ground resets them. Only
+    /// the ground contact is read; the original also asks that the floor be
+    /// within the run angle (`rs::isCollidedGroundRunAngle`), which a steeper
+    /// floor than the stages' flat ground would change (not ported).
+    fn update_ground_lost(&mut self) {
+        self.ground_lost = if self.grounded {
+            0
+        } else {
+            (self.ground_lost + 1).min(GROUND_LOST_FRAMES + 1)
+        };
+    }
+    /// The actor's fall judge (`PlayerJudgeSpeedCheckFall::judge`), asked by
+    /// the standing, running and squatting nerves after their own step and
+    /// after the jump they allow: a ground nerve that has run on without
+    /// ground for more than four steps hands over to the fall. Only the run
+    /// is recorded (walking and running off a terrace); the other ground
+    /// states are assumed to ask the same judge.
+    fn judge_fall(&mut self) {
+        if self.ground_lost > GROUND_LOST_FRAMES
+            && !self.nerve.deferred
+            && matches!(
+                self.mode,
+                Move::Idle
+                    | Move::Walk
+                    | Move::Run
+                    | Move::Skid
+                    | Move::Turn
+                    | Move::SquatBrake
+                    | Move::Crouch
+                    | Move::Crawl
+                    | Move::GroundSpin
+                    | Move::Throw
+            )
+        {
             self.go(Move::Fall, "Fall");
         }
     }
@@ -2050,7 +2073,7 @@ impl Player {
         self.after_turn = self.after_turn.saturating_sub(1);
         self.quick_turn = self.quick_turn.saturating_sub(1);
         self.throwing.run = self.throwing.run.saturating_sub(1);
-        self.coyote = self.coyote.saturating_sub(1);
+        self.update_ground_lost();
         if self.grounded {
             self.land_frames = self.land_frames.saturating_add(1);
         }
@@ -2530,7 +2553,6 @@ impl Player {
         self.v = h + Vec3::Y * power;
         self.fire.extend = extend;
         self.grounded = false;
-        self.coyote = 0;
         self.cap_jump_possible = true;
     }
     /// The bounce after the leap: a second, lower hop without the float.
@@ -2704,7 +2726,6 @@ impl Player {
         self.jump_extend = true;
         self.max_air_speed = self.speed_h().clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
         self.grounded = false;
-        self.coyote = 0;
         self.pre_jump = 0;
         self.events.push(Fx::Jump(mode));
     }
@@ -3126,11 +3147,6 @@ impl Player {
     }
     /// Airborne transitions shared by every free-flight state.
     fn air_actions(&mut self, o: &Orders) -> bool {
-        if self.coyote > 0 && self.pre_jump > 0 {
-            self.coyote = 0;
-            self.ground_jump(o);
-            return true;
-        }
         if (self.pre_throw > 0 || o.throw_pressed) && o.crouch && self.dive_possible {
             self.pre_throw = 0;
             self.dive();

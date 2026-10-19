@@ -40,8 +40,6 @@ pub struct Nerve {
     pub renewed: bool,
     /// The ground was reached last step; the next step decides what happens.
     pub touchdown: bool,
-    /// The ground was left last step.
-    pub liftoff: bool,
 }
 impl Default for Nerve {
     fn default() -> Self {
@@ -54,7 +52,6 @@ impl Default for Nerve {
             deferred: false,
             renewed: false,
             touchdown: false,
-            liftoff: false,
         }
     }
 }
@@ -68,7 +65,6 @@ impl fmt::Debug for Nerve {
             .field("deferred", &self.deferred)
             .field("renewed", &self.renewed)
             .field("touchdown", &self.touchdown)
-            .field("liftoff", &self.liftoff)
             .finish()
     }
 }
@@ -124,6 +120,5 @@ impl Nerve {
         self.deferred = false;
         self.renewed = false;
         self.touchdown = false;
-        self.liftoff = false;
     }
 }
