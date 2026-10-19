@@ -3108,18 +3108,7 @@ impl Player {
         };
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
-        if self.tilt > 0.05 {
-            // A stick more than `JumpTurnAngleFast` from the facing swings it
-            // by up to `JumpTurnAngleFastLimit` a frame (the recorded air
-            // throw with the stick pulled back turned exactly 25 degrees).
-            let apart = wrap(yaw(self.stick) - yaw(self.facing)).abs().to_degrees();
-            let limit = if apart > t::JUMP_TURN_FAST_DEG {
-                t::JUMP_TURN_FAST_LIMIT_DEG.to_radians()
-            } else {
-                0.1
-            };
-            self.facing = turn(self.facing, self.stick, limit);
-        }
+        self.facing = self.air.turn_facing(self.facing, push);
         self.air_actions(o);
     }
     /// Free flight of the states that keep the older approximation of the
@@ -3990,6 +3979,7 @@ impl Player {
             let push = self.push();
             self.air.update(&mut v, push, o.jump_held, &steer);
             self.set_h(v);
+            self.facing = self.air.turn_facing(self.facing, push);
         }
         if self.actor_name() == "Jump" {
             self.count_jump_combo();

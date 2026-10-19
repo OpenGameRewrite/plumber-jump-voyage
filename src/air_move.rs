@@ -94,6 +94,40 @@ pub mod tune {
     pub const SLERP_QUAT_GRAV: f32 = 0.4;
     /// `HipDropHeight`: the pound needs this much room above the ground.
     pub const HIP_DROP_HEIGHT: f32 = 40.;
+    /// The air control's turning of the facing (`PlayerActionTurnControl`, set
+    /// up from the `JumpTurn*` values): degrees a frame, angle the slow turn
+    /// starts at, angle beyond which the fast one takes over, their speed
+    /// limits and the frames each takes to build up, and to brake.
+    pub const TURN_ANGLE_START: f32 = 1.;
+    pub const TURN_ANGLE_LIMIT: f32 = 6.;
+    pub const TURN_ANGLE_FAST: f32 = 135.;
+    pub const TURN_ANGLE_FAST_LIMIT: f32 = 25.;
+    pub const TURN_ACCEL_FRAMES: f32 = 20.;
+    pub const TURN_ACCEL_FRAMES_FAST: f32 = 1.;
+    pub const TURN_BRAKE_FRAMES: f32 = 10.;
+}
+
+/// `PlayerActionFunction::accel`: `value` moves toward `target` by `step`,
+/// never past it, and is left alone when already above it.
+fn accel(value: f32, target: f32, step: f32) -> f32 {
+    if value > target {
+        value
+    } else {
+        (value + step).min(target)
+    }
+}
+/// `PlayerActionFunction::brake`: `value` falls toward zero by `limit` over
+/// `frames` frames.
+fn brake(value: f32, frames: f32, limit: f32) -> f32 {
+    if value == 0. {
+        return 0.;
+    }
+    let step = limit / frames;
+    if value > 0. {
+        (value - step).max(0.)
+    } else {
+        (value + step).min(0.)
+    }
 }
 
 /// What the take-off of one jump asks of the air control
@@ -140,6 +174,11 @@ pub struct AirMove {
     /// The button has been held every frame of the extend window so far.
     holding: bool,
     input_lock: u32,
+    /// The stick steered the velocity in the last update (it is ignored in the
+    /// frames the take-off locks it), which the turning of the facing follows.
+    steered: bool,
+    /// Degrees the facing turns by in a frame (`PlayerActionTurnControl::_8`).
+    turn_speed: f32,
 }
 impl Default for AirMove {
     fn default() -> Self {
@@ -153,6 +192,8 @@ impl Default for AirMove {
             frames: 0,
             holding: false,
             input_lock: 0,
+            steered: false,
+            turn_speed: 0.,
         }
     }
 }
@@ -180,6 +221,8 @@ impl AirMove {
         self.holding = t.extend_frames > 0;
         self.extend_frames = t.extend_frames;
         self.frames = 0;
+        self.steered = false;
+        self.turn_speed = 0.;
     }
     /// Pick a jump up in the middle (a recorded state being replayed): the
     /// direction and cap are those the take-off would have left, `frames` of
@@ -198,6 +241,8 @@ impl AirMove {
         self.extend_frames = t.extend_frames;
         self.frames = frames.min(t.extend_frames + 1);
         self.holding = held && frames < t.extend_frames;
+        self.steered = false;
+        self.turn_speed = 0.;
     }
     /// Stop extending the jump (a ceiling was hit).
     pub fn cancel_extend(&mut self) {
@@ -218,6 +263,7 @@ impl AirMove {
         } else {
             v.y -= self.gravity;
         }
+        self.steered = self.input_lock == 0;
         if self.input_lock == 0 {
             // The direction follows the velocity, whichever way it points. A
             // jump with no horizontal speed has none: it takes the stick's
@@ -246,6 +292,60 @@ impl AirMove {
             limit_along(v, DOWN, self.fall_max);
         }
         self.input_lock = self.input_lock.saturating_sub(1);
+    }
+    /// The facing after this frame's turn (`PlayerActionTurnControl::update`,
+    /// which the air control runs after its steering): the stick's direction
+    /// is the target, the speed of the turn builds up toward the slow limit
+    /// (a fraction of it for a light stick) over 20 frames, jumps to the fast
+    /// limit at once when the target is more than 135 degrees away, and
+    /// brakes by a tenth of the fast limit a frame while it is above what the
+    /// angle allows. Without a stick (or while the take-off locks it) the
+    /// facing stays and the speed brakes. Not ported: the turn direction memory
+    /// that keeps a swing from reversing (`_18`, `_30`) and the pose tilt.
+    pub fn turn_facing(&mut self, front: Vec3, input: Vec3) -> Vec3 {
+        let input = if self.steered {
+            flat(input)
+        } else {
+            Vec3::ZERO
+        };
+        let Some(target) = input.try_normalize() else {
+            self.turn_speed = brake(
+                self.turn_speed,
+                tune::TURN_BRAKE_FRAMES,
+                tune::TURN_ANGLE_LIMIT,
+            );
+            return front;
+        };
+        let front = flat(front).try_normalize().unwrap_or(target);
+        let angle = front.dot(target).clamp(-1., 1.).acos().to_degrees();
+        let light_stick = (input.length() / 0.8).clamp(0.25, 1.);
+        let slow = tune::TURN_ANGLE_LIMIT * light_stick;
+        let speed = self.turn_speed;
+        self.turn_speed = if angle < tune::TURN_ANGLE_START {
+            brake(speed, tune::TURN_BRAKE_FRAMES, tune::TURN_ANGLE_LIMIT)
+        } else if angle >= tune::TURN_ANGLE_FAST {
+            let step = tune::TURN_ANGLE_FAST_LIMIT / tune::TURN_ACCEL_FRAMES_FAST;
+            accel(speed, tune::TURN_ANGLE_FAST_LIMIT, step)
+        } else if speed >= slow {
+            brake(speed, tune::TURN_BRAKE_FRAMES, tune::TURN_ANGLE_FAST_LIMIT)
+        } else {
+            accel(speed, slow, slow / tune::TURN_ACCEL_FRAMES)
+        };
+        // Rotate toward the target by the speed, never past it.
+        let from = front.x.atan2(front.z);
+        // A target straight behind has no side to turn to: the swing goes
+        // about the downward axis, which lowers the yaw (the original takes the
+        // side of the last swing when there was one; not ported).
+        let mut delta = if front.dot(target) <= -(0.01f32).cos() {
+            -std::f32::consts::PI
+        } else {
+            let diff = target.x.atan2(target.z) - from;
+            (diff + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+        };
+        let step = self.turn_speed.to_radians();
+        delta = delta.clamp(-step, step);
+        let yaw = from + delta;
+        Vec3::new(yaw.sin(), 0., yaw.cos())
     }
 }
 

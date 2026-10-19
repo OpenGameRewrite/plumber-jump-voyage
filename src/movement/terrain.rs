@@ -106,9 +106,11 @@ impl Player {
                 0.
             };
             if self.v.y <= 0. {
-                // Only a contact reached from the air is a landing; the pull a
-                // ground state keeps is reported as the ground-following velocity.
-                if !was_grounded {
+                // A contact reached from the air is a landing, and a ground
+                // state that keeps a downward speed of its own (the pound's
+                // landing) reports it; the plain pull of the ground states is
+                // reported as the ground-following velocity.
+                if !was_grounded || self.v.y != -self.pull {
                     self.landing_speed = self.landing_speed.min(self.v.y);
                 }
                 self.v.y = 0.;
