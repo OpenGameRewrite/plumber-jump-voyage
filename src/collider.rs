@@ -86,6 +86,8 @@ pub enum Form {
     Mini,
     /// `changeCollisionWallGrab`: the body hanging from a ledge.
     WallGrab,
+    /// `changeCollisionPoleClimb`: the body clinging to a pole.
+    Pole,
 }
 
 #[derive(Clone, Debug)]
@@ -138,8 +140,9 @@ impl Keeper {
             ignore_ground,
         };
         // Where the three arrows hang from the feet: the ledge form puts them
-        // 140 below and 50 behind (`PlayerColliderHakoniwa::init`, the keeper
-        // `changeCollisionWallGrab` installs).
+        // 140 below and 50 behind, the pole form 35 below and 50 behind
+        // (`PlayerColliderHakoniwa::init`, the keepers `changeCollisionWallGrab`
+        // and `changeCollisionPoleClimb` install).
         let mut arrows_at = Vec3::ZERO;
         match form {
             Form::Normal => {
@@ -152,6 +155,12 @@ impl Keeper {
                 shapes.push(sphere(Vec3::new(0., -75., -50.), None, true));
                 shapes.push(sphere(Vec3::new(0., -35., -50.), None, true));
                 arrows_at = Vec3::new(0., -140., -50.);
+            }
+            Form::Pole => {
+                // Two spheres behind the body that floors do not push.
+                shapes.push(sphere(Vec3::new(0., 30., -50.), None, true));
+                shapes.push(sphere(Vec3::new(0., 60., -50.), None, true));
+                arrows_at = Vec3::new(0., -35., -50.);
             }
         }
         // Three arrows (the helper called right after each keeper is made):
@@ -625,6 +634,8 @@ pub struct PlayerCollider {
     /// put somewhere else since (the ledge hold sets the pose by hand): the
     /// next `collide` first carries it from there to the actor.
     carry_from: Option<Vec3>,
+    /// The last `collide`'s fix reaction (`Outcome::fix`).
+    fix_reaction: Vec3,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -718,6 +729,7 @@ impl PlayerCollider {
             best: [NO_CONTACT; 3],
             cut_direction: Vec3::ZERO,
             carry_from: None,
+            fix_reaction: Vec3::ZERO,
         }
     }
 
@@ -745,6 +757,12 @@ impl PlayerCollider {
         self.floor.is_some()
     }
 
+    /// `rs::getCollidedFixReaction`: how far the last `collide` moved the feet
+    /// from where the move alone would have put them.
+    pub fn fix_reaction(&self) -> Vec3 {
+        self.fix_reaction
+    }
+
     /// `PlayerCollider::collide`: moves the feet from `pos` by `velocity`,
     /// both cm, facing `yaw` radians about the up axis (0 faces +z).
     pub fn collide(&mut self, mesh: &TriangleMesh, pos: Vec3, velocity: Vec3, yaw: f32) -> Outcome {
@@ -759,7 +777,8 @@ impl PlayerCollider {
         // replay hands the collider the actor's own position, so the move is
         // empty (it still resolves an overlap the body starts in), except
         // for the states that put the actor on a pose by hand.
-        let mut at = self.carry_from.take().unwrap_or(pose.pos);
+        let begin = self.carry_from.take().unwrap_or(pose.pos);
+        let mut at = begin;
         let mut collided = self.move_collide(
             mesh,
             &pose,
@@ -785,6 +804,8 @@ impl PlayerCollider {
             let cut = self.cut_direction;
             at = pose.pos + across(moved, cut) + cut * velocity.dot(cut);
         }
+        let fix = at - (begin + velocity);
+        self.fix_reaction = fix;
         Outcome { pos: at, collided }
     }
 

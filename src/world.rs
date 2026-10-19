@@ -609,7 +609,7 @@ fn setup(
             height: 6.,
         });
         commands.spawn((
-            Mesh3d(meshes.add(Cylinder::new(0.18, 6.))),
+            Mesh3d(meshes.add(Cylinder::new(crate::movement::POLE_CIRCUMRADIUS * 0.01, 6.))),
             MeshMaterial3d(dark.clone()),
             Transform::from_translation(c + Vec3::Y * 3.),
         ));

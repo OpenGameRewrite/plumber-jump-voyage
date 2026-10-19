@@ -37,7 +37,7 @@ use super::pole_find::{
 use super::snap::Snap;
 use super::wall_air::wall_jump_takeoff;
 use super::*;
-use crate::geometry::TriangleMesh;
+use crate::geometry::{CollisionCodes, TriangleMesh};
 
 /// The single-precision degree factor the game multiplies by.
 const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
@@ -69,7 +69,7 @@ const COLLISION_RADIUS: f32 = 55.;
 const STICK_DEEP: f32 = 0.64;
 
 /// Lengths of the pole clips in steps (the game's own `anim_len`).
-pub(super) const POLE_CATCH_CLIP: u32 = 8;
+const POLE_CATCH_CLIP: u32 = 8;
 const POLE_CLIMB_CLIP: f32 = 25.;
 const HAND_STAND_START_CLIP: u32 = 32;
 const HAND_STAND_END_CLIP: u32 = 32;
@@ -249,7 +249,7 @@ impl Player {
         let Some(mesh) = scene.catch_mesh() else {
             return;
         };
-        let Some(touch) = self.pole_touch(&mesh) else {
+        let Some(touch) = self.pole_touch() else {
             return;
         };
         let Some(fit) = find_start_pos(&mesh, &touch, CATCH_RANGE, CATCH_RANGE_MAX, UP_MARGIN)
@@ -261,11 +261,23 @@ impl Player {
 
     /// `PlayerJudgePoleClimb::update` up to the finder: which surface the body
     /// touched, and whether it is moving toward it.
-    fn pole_touch(&self, mesh: &TriangleMesh) -> Option<Touch> {
-        let climbable = |c: &crate::collider::Contact| is_climbable(mesh.codes_of(c.triangle));
-        let wall = self.collider.wall.as_ref().filter(|c| climbable(c));
-        let ceiling = self.collider.ceiling.as_ref().filter(|c| climbable(c));
-        let ground = self.collider.floor.as_ref().filter(|c| climbable(c));
+    fn pole_touch(&self) -> Option<Touch> {
+        let climbable = |codes: &Option<CollisionCodes>| codes.as_ref().is_some_and(is_climbable);
+        let wall = self
+            .collider
+            .wall
+            .as_ref()
+            .filter(|_| climbable(&self.touched.wall));
+        let ceiling = self
+            .collider
+            .ceiling
+            .as_ref()
+            .filter(|_| climbable(&self.touched.ceiling));
+        let ground = self
+            .collider
+            .floor
+            .as_ref()
+            .filter(|_| climbable(&self.touched.floor));
         if wall.is_none() && ceiling.is_none() && ground.is_none() {
             return None;
         }
@@ -280,7 +292,7 @@ impl Player {
             self.facing
         };
         let up = Vec3::Y;
-        let standing_elsewhere = self.collider.floor.is_some() && ground.is_none();
+        let standing_elsewhere = (self.grounded || self.collider.floor.is_some()) && ground.is_none();
         let (normal, pos, up) = if let Some(wall) = wall {
             if standing_elsewhere || toward.dot(wall.normal) >= 0. {
                 return None;
@@ -363,7 +375,7 @@ impl Player {
         self.collider.wall = None;
         self.collider.ceiling = None;
         self.touched.wall_contact = None;
-        self.snap_collider_at = None;
+        self.catch_collider_at = None;
     }
 
     // ---- The stick -----------------------------------------------------------
@@ -483,7 +495,7 @@ impl Player {
     /// snap's pose. False when the snap's parts are gone (never, for static
     /// collision).
     fn pole_follow(&mut self) -> bool {
-        let fix = self.fix_reaction;
+        let fix = self.collider.fix_reaction();
         let pose = self.pole.snap.follow(self.pos / UNIT, fix);
         self.pos = pose.pos * UNIT;
         self.facing = pose.front();
@@ -511,7 +523,7 @@ impl Player {
             self.reset_collision();
         }
         self.pole.killed = true;
-        self.leave_hold_to_ground();
+        self.hold_to_ground();
     }
 
     fn exe_pole_start(&mut self, o: &Orders, mesh: Option<&TriangleMesh>) {

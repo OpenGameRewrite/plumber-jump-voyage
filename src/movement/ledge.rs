@@ -90,6 +90,15 @@ const RECATCH_LOCK_STEPS: u32 = 15;
 
 const DOWN: Vec3 = Vec3::NEG_Y;
 
+/// What the judge found: the catch point on the ledge and the wall's normal
+/// (the ledge top's normal is checked for being level; the pose keeps only
+/// the facing).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CatchTarget {
+    pos: Vec3,
+    wall_normal: Vec3,
+}
+
 /// The nerves of `PlayerStateWallCatch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum CatchNerve {
@@ -955,7 +964,7 @@ impl Player {
     /// ground takes over (`setNerveOnGround`).
     fn end_climb(&mut self) {
         self.catch.killed = true;
-        self.ledge_to_ground();
+        self.hold_to_ground();
     }
 
     /// The first step of `Jump` sets the climb jump off; the nerve is the
@@ -1013,9 +1022,9 @@ impl Player {
         self.interpolation_cleared = true;
     }
 
-    /// `setNerveOnGround` for a body that stands on the ledge: the run when the
+    /// `setNerveOnGround` for a body that stands where a hold (ledge or pole) ended: the run when the
     /// stick pushes, else the standing state; a jump pressed goes on.
-    fn ledge_to_ground(&mut self) {
+    pub(super) fn hold_to_ground(&mut self) {
         self.dive_possible = true;
         self.air_throw_used = false;
         self.gravity = t::GRAVITY_AIR;

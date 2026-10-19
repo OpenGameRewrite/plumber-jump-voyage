@@ -45,6 +45,9 @@ impl Player {
         if self.mode == Move::Ledge && self.catch.is_hanging() {
             return Form::WallGrab;
         }
+        if self.mode == Move::Pole && self.pole.is_form() {
+            return Form::Pole;
+        }
         if matches!(
             self.mode,
             Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd
@@ -55,15 +58,68 @@ impl Player {
         }
     }
 
-    /// Moves the player by this frame's velocity through the mesh.
-    pub(super) fn collide_mesh(&mut self, mesh: &TriangleMesh, was_grounded: bool) {
+    /// The collider's form and cut direction for the actor's state.
+    fn prepare_collider(&mut self) {
         let form = self.collision_form();
         self.collider.set_form(form);
-        self.collider.set_cut_direction(if form == Form::WallGrab {
-            self.catch.front()
-        } else {
-            Vec3::ZERO
+        // The hanging forms drop the push along the direction they face.
+        self.collider.set_cut_direction(match form {
+            Form::WallGrab => self.catch.front(),
+            Form::Pole => self.pole.front(),
+            _ => Vec3::ZERO,
         });
+    }
+
+    /// The toy course's poles (the box solids are resolved by the demo's own
+    /// code): the player collides with their triangles like with a stage's
+    /// and the contact is recorded for the pole judge.
+    pub(super) fn collide_toy_poles(&mut self, scene: &Course) {
+        if scene.poles.is_empty() {
+            return;
+        }
+        let mesh = scene.toy_pole_mesh();
+        self.prepare_collider();
+        let start = to_cm(self.pos);
+        let holding = matches!(self.mode, Move::Ledge | Move::Pole);
+        if let Some(stood) = self.catch_collider_at.take()
+            && holding
+        {
+            self.collider.carry_from(stood);
+        }
+        let yaw = self.facing.x.atan2(self.facing.z);
+        let outcome = self.collider.collide(&mesh, start, Vec3::ZERO, yaw);
+        if holding {
+            self.catch_collider_at = Some(outcome.pos);
+        }
+        self.pos += (outcome.pos - start) * UNIT;
+        let collider = &self.collider;
+        if let Some(wall) = &collider.wall {
+            self.touched.active = true;
+            self.touched.wall = Some(mesh.codes_of(wall.triangle).clone());
+            self.touched.wall_contact = Some(WallContact {
+                normal: wall.normal,
+                position: wall.position,
+                at_face: wall.location == crate::collider::Location::Face,
+            });
+            self.wall = wall.normal.with_y(0.).normalize_or_zero();
+        }
+        if let Some(ceiling) = &collider.ceiling {
+            self.touched.active = true;
+            self.touched.ceiling = Some(mesh.codes_of(ceiling.triangle).clone());
+        }
+        if let Some(floor) = &collider.floor {
+            self.touched.active = true;
+            self.touched.floor = Some(mesh.codes_of(floor.triangle).clone());
+            if self.v.y <= 0. {
+                self.v.y = 0.;
+                self.grounded = true;
+            }
+        }
+    }
+
+    /// Moves the player by this frame's velocity through the mesh.
+    pub(super) fn collide_mesh(&mut self, mesh: &TriangleMesh, was_grounded: bool) {
+        self.prepare_collider();
         let start = mesh.snap_to_game_precision(to_cm(self.pos));
         // On the ground the controller keeps no downward speed of its own; the
         // game's velocity carries the pull (`units_per_frame`), and it is that
@@ -73,15 +129,17 @@ impl Player {
             velocity = self.ground_following();
         }
         let yaw = self.facing.x.atan2(self.facing.z);
-        // The ledge hold puts the actor on its pose before the collider runs;
-        // the collider carries itself from where it stood last step to there.
+        // The ledge and pole holds put the actor on their pose before the
+        // collider runs; the collider carries itself from where it stood last
+        // step to there.
+        let holding = matches!(self.mode, Move::Ledge | Move::Pole);
         if let Some(stood) = self.catch_collider_at.take()
-            && self.mode == Move::Ledge
+            && holding
         {
             self.collider.carry_from(stood);
         }
         let outcome = self.collider.collide(mesh, start, velocity, yaw);
-        if self.mode == Move::Ledge {
+        if holding {
             self.catch_collider_at = Some(outcome.pos);
         }
         // The plain end of the move keeps the controller's own arithmetic;

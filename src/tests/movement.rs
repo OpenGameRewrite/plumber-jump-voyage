@@ -999,49 +999,56 @@ fn swimming() {
 #[cfg_attr(test, test)]
 fn poles() {
     let floor = floor();
-    // Poles.
+    // Poles: hexagonal prisms of the stage's size, which a body falling against
+    // one takes hold of (`PlayerJudgePoleClimb`).
     let mut pole = floor.clone();
     pole.poles.push(Pole {
         center: Vec3::ZERO,
         height: 8.,
     });
     let mut p = Player {
-        pos: Vec3::new(0., 2., 0.3),
+        pos: Vec3::new(0., 2., 0.9),
         grounded: false,
         mode: Move::Fall,
+        v: Vec3::new(0., -1., -3.),
         ..default()
     };
-    p.step(&Orders::default(), &pole);
+    frames(&mut p, Orders::default(), &pole, 12);
     assert_eq!(p.mode, Move::Pole);
     assert!(
-        p.pos.x.abs() < 1e-4 && p.pos.z.abs() < 1e-4,
-        "held on the pole's axis"
+        p.pos.x.abs() < 0.01 && p.pos.z > 0. && p.pos.z < 0.5,
+        "held at the pole's face: {:?}",
+        p.pos
     );
-    frames(&mut p, Orders::default(), &pole, 10);
+    // The stick up the pole climbs, down slides, and the jump leaves it.
+    frames(&mut p, Orders::default(), &pole, 12);
+    let y = p.pos.y;
+    let up = Orders {
+        stick: Vec2::NEG_Y,
+        direction: Vec2::NEG_Y,
+        ..default()
+    };
+    frames(&mut p, up, &pole, 30);
+    assert_eq!(p.mode, Move::Pole);
+    assert!(p.pos.y > y + 0.5, "climbed from {y} to {}", p.pos.y);
     frames(
         &mut p,
         Orders {
-            direction: Vec2::X,
+            jump: true,
             ..default()
         },
         &pole,
-        30,
+        3,
     );
-    assert_eq!(p.mode, Move::Pole);
-    assert!(
-        p.pos.x.abs() < 1e-4 && p.pos.z.abs() < 1e-4,
-        "circling stays on the pole"
-    );
-    assert!(p.facing.x.abs() > 0.3, "circling turns round the pole");
-    let y = p.pos.y;
-    frames(&mut p, fwd(default()), &pole, 5);
-    assert!(p.pos.y > y);
+    frames(&mut p, Orders::default(), &pole, 10);
+    assert_eq!(p.nerve_name().name, "PoleClimb/Jump");
+    assert!(p.pos.z > 0.5, "the jump goes away from the pole: {:?}", p.pos);
     // Poles block running into them.
     p = Player::default();
     p.pos = Vec3::new(0., 0., 3.);
     frames(&mut p, fwd(default()), &pole, 120);
     assert!(
-        p.pos.with_y(0.).length() >= POLE_RADIUS + RADIUS - 0.01,
+        p.pos.with_y(0.).length() >= (POLE_CIRCUMRADIUS * 0.866 + 55.) * UNIT - 0.01,
         "{:?}",
         p.pos
     );

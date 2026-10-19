@@ -74,7 +74,7 @@ pub(super) fn try_normalize(v: Vec3) -> Option<Vec3> {
     (v.length_squared() >= 1e-6).then(|| v.normalize())
 }
 /// `al::verticalizeVec`: `vec` without its part along `vertical`.
-fn verticalize(vertical: Vec3, vec: Vec3) -> Vec3 {
+pub(super) fn verticalize(vertical: Vec3, vec: Vec3) -> Vec3 {
     vec - vertical * vertical.dot(vec)
 }
 /// `al::parallelizeVec`: the part of `vec` along `dir`.

@@ -229,13 +229,20 @@ impl TriangleMesh {
     /// Builds a mesh from triangles given directly (tests and the flat
     /// floor): `corners` counter-clockwise from the normal side.
     pub fn from_corners(list: &[[Vec3; 3]]) -> Self {
+        let coded: Vec<([Vec3; 3], u16)> = list.iter().map(|corners| (*corners, 0)).collect();
+        Self::from_coded_corners(&coded, vec![CollisionCodes::default()])
+    }
+
+    /// The same with an attribute (an index into `codes`) for every triangle:
+    /// the toy course's poles carry the pole codes.
+    pub fn from_coded_corners(list: &[([Vec3; 3], u16)], codes: Vec<CollisionCodes>) -> Self {
         let mut mesh = Self {
-            codes: vec![CollisionCodes::default()],
+            codes,
             objects: vec![String::new()],
             thickness: PRISM_THICKNESS,
             ..Self::default()
         };
-        for (i, corners) in list.iter().enumerate() {
+        for (i, (corners, attribute)) in list.iter().enumerate() {
             let [a, b, c] = *corners;
             let normal = (b - a).cross(c - a).normalize_or_zero();
             mesh.add(MeshTriangle {
@@ -246,7 +253,7 @@ impl TriangleMesh {
                     outward(a, b, c, normal),
                     outward(b, c, a, normal),
                 ],
-                attribute: 0,
+                attribute: *attribute,
                 object: 0,
                 kcl_index: i as u32,
             });

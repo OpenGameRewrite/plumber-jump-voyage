@@ -8,7 +8,7 @@
 use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
 use crate::cap::{CapEvent, CapWorld, Launch};
 use crate::collider::PlayerCollider;
-use crate::geometry::TriangleMesh;
+use crate::geometry::{CollisionCodes, TriangleMesh};
 use crate::input::Orders;
 use crate::nerve::Nerve;
 use crate::se_ctrl::SeCtrl;
@@ -30,8 +30,9 @@ pub const RADIUS: f32 = 0.45;
 /// touches on arrival (the roll's hop). Positions are single-precision metres,
 /// so "exactly" is within this much (`terrain.rs` takes the same grid).
 const SURFACE_GRID: f32 = 1e-5;
-/// Radius of the course's climbable poles.
-pub const POLE_RADIUS: f32 = 0.18;
+/// Circumradius (cm) of the hexagonal poles the toy course places, the size
+/// of the Cap Kingdom's climbable pole (`pole-climb` recording).
+pub const POLE_CIRCUMRADIUS: f32 = 25.;
 pub const HEIGHT: f32 = 1.6;
 const SQUAT_HEIGHT: f32 = 0.9;
 pub const SPAWN: Vec3 = Vec3::new(0.0, 0.0, 5.0);
@@ -239,20 +240,16 @@ mod t {
     pub const SWIM_DIVE_SPEED: f32 = 26.5;
     pub const SWIM_DIVE_BRAKE: f32 = 0.875;
 
-    pub const POLE_UP_DIST: f32 = 100.;
-    pub const POLE_UP_FRAMES: u32 = 25;
-    pub const POLE_DOWN_SPEED: f32 = 10.;
-    pub const POLE_DOWN_SPEED_FAST: f32 = 15.;
-    pub const POLE_CATCH_RANGE: f32 = 50.;
-    pub const POLE_TURN_DIST: f32 = 40.;
-    pub const POLE_TURN_FRAMES: f32 = 15.;
-    pub const POLE_UP_MARGIN: f32 = 40.;
 }
 
 #[path = "movement/ground.rs"]
 mod ground;
 #[path = "movement/ledge.rs"]
 mod ledge;
+#[path = "movement/pole.rs"]
+mod pole;
+#[path = "movement/pole_find.rs"]
+mod pole_find;
 #[path = "movement/rolling.rs"]
 mod rolling;
 #[path = "movement/run_cycle.rs"]
@@ -274,6 +271,7 @@ mod wall_air;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
 use ledge::WallCatchControl;
+use pole::PoleControl;
 use rolling::{RollControl, RollStart};
 pub use run_cycle::RunCycle;
 use squat::SquatControl;
@@ -406,7 +404,6 @@ pub mod clip {
     pub const LAND_JUMP3: u32 = 70;
     pub const SQUAT_END: u32 = 13;
     pub const TURN: u32 = 12;
-    pub const POLE_CATCH: u32 = 8;
     pub const RUN_START: u32 = 30;
     pub const BRAKE: u32 = 5;
     pub const JUMP_CAP_LEAP_FROG: u32 = 36;
@@ -803,14 +800,6 @@ struct SubClip {
     active: bool,
 }
 
-#[derive(Debug, Default)]
-struct ClimbControl {
-    base: Vec3,
-    height: f32,
-    frame: u32,
-    cooldown: u32,
-}
-
 #[derive(Debug)]
 struct FireControl {
     frames: u32,
@@ -834,7 +823,8 @@ pub struct Player {
     /// State changes decided last step, waiting for their first step.
     nerve: Nerve,
     fire: FireControl,
-    climbing: ClimbControl,
+    /// The pole climb in progress (`PlayerStatePoleClimb`).
+    pole: PoleControl,
     rolling: RollControl,
     squat: SquatControl,
     /// The standing state's idle sequence (`PlayerStateWait`).
@@ -1029,7 +1019,7 @@ impl Default for Player {
         Self {
             nerve,
             fire: FireControl::default(),
-            climbing: ClimbControl::default(),
+            pole: PoleControl::default(),
             rolling: RollControl::default(),
             squat: SquatControl::default(),
             wait: WaitControl::default(),
@@ -1154,7 +1144,7 @@ impl Solid {
 }
 /// The boxes as a triangle mesh in centimetres (a sloped box rises along x by
 /// its slope), each face wound counter-clockwise seen from outside.
-fn boxes_to_mesh(solids: &[Solid]) -> TriangleMesh {
+fn boxes_to_faces(solids: &[Solid]) -> Vec<([Vec3; 3], u16)> {
     let mut faces: Vec<[Vec3; 3]> = Vec::new();
     for b in solids {
         let (lo, hi) = (b.center - b.half, b.center + b.half);
@@ -1190,7 +1180,47 @@ fn boxes_to_mesh(solids: &[Solid]) -> TriangleMesh {
         quad([0, 3, 7, 4]);
         quad([1, 2, 6, 5]);
     }
-    TriangleMesh::from_corners(&faces)
+    faces.into_iter().map(|corners| (corners, 0)).collect()
+}
+/// The poles as hexagonal prisms in centimetres, each side face and both caps
+/// facing away from the middle, coded as a climbable `Pole` floor.
+fn poles_to_faces(poles: &[Pole]) -> Vec<([Vec3; 3], u16)> {
+    let mut faces = Vec::new();
+    for pole in poles {
+        let base = pole.center / UNIT;
+        let up = Vec3::Y * (pole.height / UNIT);
+        let ring = |k: usize| {
+            let angle = (k % 6) as f32 * std::f32::consts::FRAC_PI_3;
+            Vec3::new(angle.cos(), 0., angle.sin()) * POLE_CIRCUMRADIUS
+        };
+        let middle = base + up / 2.;
+        let mut face = |a: Vec3, b: Vec3, c: Vec3| {
+            let outward = (a + b + c) / 3. - middle;
+            if (b - a).cross(c - a).dot(outward) >= 0. {
+                faces.push(([a, b, c], 1));
+            } else {
+                faces.push(([a, c, b], 1));
+            }
+        };
+        for k in 0..6 {
+            let (a, b) = (base + ring(k), base + ring(k + 1));
+            face(a, b, b + up);
+            face(a, b + up, a + up);
+            face(base, a, b);
+            face(base + up, a + up, b + up);
+        }
+    }
+    faces
+}
+/// The toy course as one triangle mesh: its boxes and its poles.
+fn toy_mesh(solids: &[Solid], poles: &[Pole]) -> TriangleMesh {
+    let mut faces = boxes_to_faces(solids);
+    faces.extend(poles_to_faces(poles));
+    let pole_codes = CollisionCodes {
+        floor: "Pole".into(),
+        ..default()
+    };
+    TriangleMesh::from_coded_corners(&faces, vec![default(), pole_codes])
 }
 
 #[derive(Clone)]
@@ -1211,9 +1241,11 @@ pub struct Course {
     /// The real game's stage collision, when a replay loads one. It takes the
     /// place of the solids for the player's contact.
     pub mesh: Option<Arc<TriangleMesh>>,
-    /// The solids as triangles, built when the ledge judge first asks (it
-    /// shoots arrows at triangles).
+    /// The solids and poles as triangles, built when the ledge or pole judge
+    /// first asks (they shoot arrows at triangles).
     pub solid_mesh: std::sync::OnceLock<Arc<TriangleMesh>>,
+    /// The toy course's poles alone, for the player's contact with them.
+    pub pole_mesh: std::sync::OnceLock<Arc<TriangleMesh>>,
 }
 impl Course {
     /// The triangles the ledge judge shoots at: the stage's own, or the
@@ -1222,14 +1254,29 @@ impl Course {
         if let Some(mesh) = &self.mesh {
             return Some(mesh.clone());
         }
-        if self.solids.is_empty() {
+        if self.solids.is_empty() && self.poles.is_empty() {
             return None;
         }
         Some(
             self.solid_mesh
-                .get_or_init(|| Arc::new(boxes_to_mesh(&self.solids)))
+                .get_or_init(|| Arc::new(toy_mesh(&self.solids, &self.poles)))
                 .clone(),
         )
+    }
+    /// The toy course's poles as triangles.
+    fn toy_pole_mesh(&self) -> Arc<TriangleMesh> {
+        self.pole_mesh
+            .get_or_init(|| {
+                let codes = CollisionCodes {
+                    floor: "Pole".into(),
+                    ..default()
+                };
+                Arc::new(TriangleMesh::from_coded_corners(
+                    &poles_to_faces(&self.poles),
+                    vec![default(), codes],
+                ))
+            })
+            .clone()
     }
     pub fn wet(&self, pos: Vec3) -> bool {
         self.water.is_some_and(|(c, h)| {
@@ -1886,6 +1933,9 @@ impl Player {
         if self.mode == Move::Ledge {
             return crate::game_names::known(self.catch_nerve().name());
         }
+        if self.mode == Move::Pole {
+            return crate::game_names::known(self.pole_nerve().name());
+        }
         crate::game_names::nerve(self.mode, self.clip())
     }
     /// The actor nerve of that state (the part before the sub-state).
@@ -2090,19 +2140,11 @@ impl Player {
         if !self.nerve.deferred {
             self.run_state(&o, scene);
             self.judge_fall();
+            self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
             self.judge_wall_keep(scene);
         }
         self.finish_catch();
-        if self.mode == Move::Pole {
-            self.finish_frame(scene);
-            return;
-        }
-        self.grab_pole(scene);
-        if self.mode == Move::Pole {
-            self.finish_frame(scene);
-            return;
-        }
         let moved = self.v;
         self.collide(&o, scene);
         self.fall.update(
@@ -2250,7 +2292,6 @@ impl Player {
         };
         self.read_spin_input(o);
         self.catch_window = self.catch_window.saturating_sub(1);
-        self.climbing.cooldown = self.climbing.cooldown.saturating_sub(1);
         self.after_turn = self.after_turn.saturating_sub(1);
         self.quick_turn = self.quick_turn.saturating_sub(1);
         self.throwing.run = self.throwing.run.saturating_sub(1);
@@ -3468,135 +3509,6 @@ impl Player {
         self.facing = facing;
     }
 
-    // ---- Poles ------------------------------------------------------------
-    fn grab_pole(&mut self, scene: &Course) {
-        if self.grounded
-            || self.climbing.cooldown > 0
-            || matches!(
-                self.mode,
-                Move::Pole
-                    | Move::Ledge
-                    | Move::GroundPound
-                    | Move::Dive
-                    | Move::Swim
-                    | Move::SwimDash
-            )
-        {
-            return;
-        }
-        for pole in &scene.poles {
-            let d = (self.pos - pole.center).with_y(0.);
-            let top = pole.center.y + pole.height - t::POLE_UP_MARGIN * UNIT;
-            if d.length() < POLE_RADIUS + t::POLE_CATCH_RANGE * UNIT
-                && (pole.center.y..top).contains(&self.pos.y)
-            {
-                // Holding on is physical and immediate; the catch clip and its
-                // sound are the state's first step.
-                self.change(Move::Pole, "PoleCatch", |p| p.events.push(Fx::Pole));
-                self.climbing.base = pole.center;
-                self.climbing.height = pole.height;
-                self.climbing.frame = 0;
-                self.facing = (-d).normalize_or(self.facing);
-                // The actor sits on the pole's axis; the clips hang the body behind it.
-                self.pos = Vec3::new(pole.center.x, self.pos.y, pole.center.z);
-                self.v = Vec3::ZERO;
-                return;
-            }
-        }
-    }
-    fn pole_climb(&mut self, o: &Orders, scene: &Course) {
-        self.v = Vec3::ZERO;
-        let axis = Vec3::new(self.climbing.base.x, self.pos.y, self.climbing.base.z);
-        // Climbing stops below the top margin, or under anything the pole passes through.
-        let ceiling = scene
-            .solids
-            .iter()
-            .filter(|b| {
-                (axis.x - b.center.x).abs() < b.half.x + 0.3
-                    && (axis.z - b.center.z).abs() < b.half.z + 0.3
-                    && b.center.y - b.half.y > self.pos.y
-            })
-            .map(|b| b.center.y - b.half.y - 0.8)
-            .fold(f32::MAX, f32::min);
-        let (bottom, top) = (
-            self.climbing.base.y,
-            (self.climbing.base.y + self.climbing.height - t::POLE_UP_MARGIN * UNIT - 0.3)
-                .min(ceiling),
-        );
-        let clear = POLE_RADIUS + RADIUS + 0.05;
-        if self.pre_jump > 0 {
-            // Kick off away from the pole.
-            let away = -self.facing;
-            self.facing = away;
-            self.pos = axis + away * clear;
-            self.climbing.cooldown = 20;
-            self.jump_with(
-                Move::Jump,
-                "Jump",
-                t::WALL_JUMP_POWER,
-                t::WALL_JUMP_GRAVITY,
-                move |p| {
-                    p.set_h(away * t::WALL_JUMP_H);
-                    p.jump_extend = false;
-                },
-            );
-            return;
-        }
-        if o.crouch_pressed {
-            self.pos = axis - self.facing * clear;
-            self.climbing.cooldown = 20;
-            self.go(Move::Fall, "Fall");
-            return;
-        }
-        if self.clip() == "PoleCatch" && !self.anim_done(clip::POLE_CATCH) {
-            return;
-        }
-        // Screen up climbs, down slides, left and right swing round the pole.
-        let (stick, yaw) = if o.stick == Vec2::ZERO {
-            (o.direction, 0.)
-        } else {
-            (o.stick, o.camera_yaw)
-        };
-        let toward = -stick.y;
-        let right = crate::input::rotate(Vec2::new(stick.x, 0.), yaw);
-        let side = Vec3::new(right.x, 0., right.y);
-        if self.climbing.frame > 0 || toward > 0.5 && self.pos.y < top && toward > stick.x.abs() {
-            if self.climbing.frame == 0 {
-                self.climbing.frame = t::POLE_UP_FRAMES;
-                self.play("PoleClimb");
-            }
-            self.climbing.frame -= 1;
-            self.pos.y += t::POLE_UP_DIST / t::POLE_UP_FRAMES as f32 * UNIT;
-            if self.pos.y >= top {
-                self.pos.y = top;
-                self.climbing.frame = 0;
-            }
-        } else if toward < -0.5 && -toward > stick.x.abs() {
-            if self.pos.y <= bottom + 0.01 {
-                self.pos = axis - self.facing * clear;
-                self.climbing.cooldown = 20;
-                self.grounded = true;
-                self.go(Move::Idle, "Wait");
-                return;
-            }
-            let speed = if o.crouch {
-                t::POLE_DOWN_SPEED_FAST
-            } else {
-                t::POLE_DOWN_SPEED
-            };
-            self.keep("PoleFall");
-            self.pos.y = (self.pos.y - speed * UNIT).max(bottom);
-        } else if side.length() > 0.5 {
-            // Swing round the pole toward the stick, the hands' arc at the original rate.
-            let hands = -self.facing * 0.3;
-            let moved = hands + side.normalize() * t::POLE_TURN_DIST / t::POLE_TURN_FRAMES * UNIT;
-            self.facing = (-moved).with_y(0.).normalize_or(self.facing);
-            self.keep("PoleWait");
-        } else {
-            self.keep("PoleWait");
-        }
-    }
-
     // ---- Swimming ---------------------------------------------------------
     fn swim(&mut self, o: &Orders) {
         if self.pre_throw > 0 || o.throw_pressed {
@@ -4187,21 +4099,13 @@ impl Player {
         self.grounded = false;
         self.landing_speed = 0.;
         self.wall = Vec3::ZERO;
-        self.touched.wall_contact = None;
+        self.touched = terrain::Touched::default();
         match &scene.mesh {
             Some(mesh) => self.collide_mesh(mesh, was_grounded),
             None => self.collide_solids(o, scene),
         }
-        // Poles are solid when not held.
-        for pole in &scene.poles {
-            let d = (self.pos - pole.center).with_y(0.);
-            let min = POLE_RADIUS + RADIUS;
-            if d.length() < min
-                && self.pos.y < pole.center.y + pole.height
-                && self.pos.y + HEIGHT > pole.center.y
-            {
-                self.pos += d.normalize_or(-self.facing) * (min - d.length());
-            }
+        if scene.mesh.is_none() {
+            self.collide_toy_poles(scene);
         }
         if self.mode == Move::WallSlide
             && (self.wall == Vec3::ZERO || self.grounded)
