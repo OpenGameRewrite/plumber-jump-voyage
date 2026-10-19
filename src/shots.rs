@@ -158,6 +158,7 @@ fn feed(mut driver: ResMut<Driver>, mut orders: ResMut<Orders>) {
         &span,
         &driver.previous,
         driver.camera.yaw_deg(frame),
+        driver.camera.aim_deg(frame),
         &driver.bindings,
     );
     *orders = next;

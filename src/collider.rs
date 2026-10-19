@@ -84,6 +84,8 @@ pub enum Form {
     Normal,
     /// `changeCollisionMini`: the squat, the slope slide and the roll.
     Mini,
+    /// `changeCollisionWallGrab`: the body hanging from a ledge.
+    WallGrab,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +96,8 @@ enum Shape {
         center: Vec3,
         radius: f32,
         support: Option<f32>,
+        /// `createShapeSphereIgnoreGround`: floor faces do not push it.
+        ignore_ground: bool,
     },
     /// Local start and vector, the margin below which a hit only supports
     /// (`CollisionShapeInfoArrow`'s `_54`) and the index among the arrows.
@@ -127,31 +131,35 @@ impl Keeper {
     pub fn new(form: Form) -> Self {
         let mut shapes = Vec::new();
         let support = Some(14.5);
+        let sphere = |center: Vec3, support: Option<f32>, ignore_ground: bool| Shape::Sphere {
+            center,
+            radius: 55.,
+            support,
+            ignore_ground,
+        };
+        // Where the three arrows hang from the feet: the ledge form puts them
+        // 140 below and 50 behind (`PlayerColliderHakoniwa::init`, the keeper
+        // `changeCollisionWallGrab` installs).
+        let mut arrows_at = Vec3::ZERO;
         match form {
             Form::Normal => {
-                shapes.push(Shape::Sphere {
-                    center: Vec3::new(0., 65., 0.),
-                    radius: 55.,
-                    support,
-                });
-                shapes.push(Shape::Sphere {
-                    center: Vec3::new(0., 105., 0.),
-                    radius: 55.,
-                    support: None,
-                });
+                shapes.push(sphere(Vec3::new(0., 65., 0.), support, false));
+                shapes.push(sphere(Vec3::new(0., 105., 0.), None, false));
             }
-            Form::Mini => shapes.push(Shape::Sphere {
-                center: Vec3::new(0., 55., 0.),
-                radius: 55.,
-                support,
-            }),
+            Form::Mini => shapes.push(sphere(Vec3::new(0., 55., 0.), support, false)),
+            Form::WallGrab => {
+                // Body and head hang below and out from the wall, and ignore floors.
+                shapes.push(sphere(Vec3::new(0., -75., -50.), None, true));
+                shapes.push(sphere(Vec3::new(0., -35., -50.), None, true));
+                arrows_at = Vec3::new(0., -140., -50.);
+            }
         }
         // Three arrows (the helper called right after each keeper is made):
         // ring point at 120 degrees apart, 30 out, 40 up, pointing 60 down.
         for index in 0..3 {
             let angle = (index as f32 * 120.).to_radians();
             shapes.push(Shape::Arrow {
-                start: Vec3::new(30. * angle.sin(), 40., 30. * angle.cos()),
+                start: Vec3::new(30. * angle.sin(), 40., 30. * angle.cos()) + arrows_at,
                 vector: Vec3::new(0., -60., 0.),
                 margin: 20.,
                 index,
@@ -177,6 +185,7 @@ impl Keeper {
             center: Vec3::new(0., 10., 0.),
             radius: 60.,
             support: None,
+            ignore_ground: false,
         }];
         Self {
             check_step: 60.,
@@ -364,11 +373,38 @@ pub struct Strike {
     pub normal: Vec3,
     /// How far along the arrow (from its start) the face lies, in cm.
     pub distance: f32,
+    /// The face's index in the mesh (its collision codes are `codes_of`).
+    pub triangle: u32,
+}
+
+/// The game's triangle filters for arrows (`al::TriangleFilterWallOnly`,
+/// `TriangleFilterGroundOnly`, `TriangleFilterIgnoreGround`): which faces an
+/// arrow may strike, by their class against gravity (straight down here).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FaceFilter {
+    /// Every face.
+    Any,
+    /// Only walls (`isWallPolygon`).
+    WallsOnly,
+    /// Only floors (`isFloorPolygon`).
+    FloorsOnly,
+    /// Everything but floors.
+    NotFloors,
+}
+impl FaceFilter {
+    fn allows(self, normal: Vec3) -> bool {
+        match self {
+            Self::Any => true,
+            Self::WallsOnly => classify(normal) == Class::Wall,
+            Self::FloorsOnly => classify(normal) == Class::Floor,
+            Self::NotFloors => classify(normal) != Class::Floor,
+        }
+    }
 }
 
 /// Every face the arrow from `start` along `vector` strikes (cm, replay frame),
 /// in the mesh's order: `alCollisionUtil::checkStrikeArrow` asks whether there
-/// is one, `getHitPosAndNormalOnArrow` the nearest and `getLastPolyOnArrow` the
+/// is one, `getFirstPolyOnArrow` the nearest and `getLastPolyOnArrow` the
 /// farthest. `walls_only` is `al::TriangleFilterWallOnly`: only faces that are
 /// neither floor nor ceiling count.
 pub fn arrow_strikes(
@@ -376,6 +412,21 @@ pub fn arrow_strikes(
     start: Vec3,
     vector: Vec3,
     walls_only: bool,
+) -> Vec<Strike> {
+    let filter = if walls_only {
+        FaceFilter::WallsOnly
+    } else {
+        FaceFilter::Any
+    };
+    arrow_strikes_filtered(mesh, start, vector, filter)
+}
+
+/// [`arrow_strikes`] with any of the game's triangle filters.
+pub fn arrow_strikes_filtered(
+    mesh: &TriangleMesh,
+    start: Vec3,
+    vector: Vec3,
+    filter: FaceFilter,
 ) -> Vec<Strike> {
     let tip = start + vector;
     let area = Aabb {
@@ -387,7 +438,7 @@ pub fn arrow_strikes(
         .into_iter()
         .filter_map(|i| {
             let t = &mesh.triangles[i as usize];
-            if walls_only && classify(t.normal) != Class::Wall {
+            if !filter.allows(t.normal) {
                 return None;
             }
             let hit = arrow_hit(t, start, vector)?;
@@ -395,9 +446,22 @@ pub fn arrow_strikes(
                 position: hit.position,
                 normal: t.normal,
                 distance: length - hit.depth,
+                triangle: i,
             })
         })
         .collect()
+}
+
+/// The face `getFirstPolyOnArrow` returns: the nearest to the arrow's start.
+pub fn first_strike(
+    mesh: &TriangleMesh,
+    start: Vec3,
+    vector: Vec3,
+    filter: FaceFilter,
+) -> Option<Strike> {
+    arrow_strikes_filtered(mesh, start, vector, filter)
+        .into_iter()
+        .min_by(|a, b| a.distance.total_cmp(&b.distance))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -539,6 +603,10 @@ pub struct PlayerCollider {
     has_ground_normal: bool,
     has_ground_position: bool,
     best: [f32; 3],
+    /// `onCutCollideAffectDir`: the collision's push along this direction (the
+    /// hanging body's, into the wall) is dropped; what the move itself had
+    /// along it stays. Zero when off.
+    cut_direction: Vec3,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -630,6 +698,7 @@ impl PlayerCollider {
             has_ground_normal: false,
             has_ground_position: false,
             best: [NO_CONTACT; 3],
+            cut_direction: Vec3::ZERO,
         }
     }
 
@@ -639,6 +708,12 @@ impl PlayerCollider {
             self.form = form;
             self.keeper = Keeper::new(form);
         }
+    }
+
+    /// `onCutCollideAffectDir` / `offCutCollideAffectDir` (the ledge form
+    /// turns it on along the direction the body faces, the other forms off).
+    pub fn set_cut_direction(&mut self, direction: Vec3) {
+        self.cut_direction = direction;
     }
 
     pub fn grounded(&self) -> bool {
@@ -677,6 +752,13 @@ impl PlayerCollider {
             velocity,
             range.min(LONGEST_STEP),
         );
+        // `onCutCollideAffectDir`: along the cut direction the move keeps what
+        // it asked for, whatever the contacts pushed.
+        if self.cut_direction != Vec3::ZERO {
+            let moved = at - pose.pos;
+            let cut = self.cut_direction;
+            at = pose.pos + across(moved, cut) + cut * velocity.dot(cut);
+        }
         Outcome { pos: at, collided }
     }
 
@@ -921,11 +1003,19 @@ impl PlayerCollider {
         flags: &Flags,
         fixes: &mut Fixes,
     ) {
-        let Shape::Sphere { support, .. } = self.keeper.shapes[result.shape] else {
+        let Shape::Sphere {
+            support,
+            ignore_ground,
+            ..
+        } = self.keeper.shapes[result.shape]
+        else {
             return;
         };
         let normal = triangle.normal;
         let at_face = hit.location == Location::Face;
+        if ignore_ground && classify(normal) == Class::Floor {
+            return;
+        }
         // The push along the face normal, and the radial one for an edge.
         let by_normal = normal * hit.depth;
         let radial = || {

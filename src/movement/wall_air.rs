@@ -129,7 +129,7 @@ pub(super) fn angle_on_plane(a: Vec3, b: Vec3, axis: Vec3) -> f32 {
 
 /// `rs::calcExistCollisionBorder`: is there a face right behind the one the
 /// arrow hit, turned the other way (the back of a thin wall)?
-fn collision_border_behind(mesh: &TriangleMesh, position: Vec3, normal: Vec3) -> bool {
+pub(super) fn collision_border_behind(mesh: &TriangleMesh, position: Vec3, normal: Vec3) -> bool {
     arrow_strikes(mesh, position - normal, normal * 2., false)
         .into_iter()
         .min_by(|a, b| a.distance.total_cmp(&b.distance))
@@ -189,6 +189,41 @@ impl WallHistory {
 }
 
 impl Player {
+    /// `rs::scaleVelocityInertiaWallHit`, asked at the start of the air control
+    /// by the jump nerve (scale 0.25, floor 1) and by the fall (0.5, 0), both
+    /// with `NormalMaxSpeed` as the cap: a body that flew into the wall it
+    /// touched last step, within 60 degrees of its normal, keeps only a share
+    /// of its horizontal speed. The new speed is the share (`scale` times the
+    /// speed) unless that falls under the lesser of the speed and `floor`,
+    /// and never more than the cap. (A moving wall adds its own speed to this;
+    /// the stage's static collision has none.)
+    pub(super) fn scale_velocity_at_wall(&mut self) {
+        let (scale, floor) = match self.mode {
+            Move::Jump | Move::DoubleJump | Move::TripleJump | Move::SpinJump => (0.25, 1.),
+            Move::Fall => (t::FALL_WALL_SCALE_VELOCITY, 0.),
+            _ => return,
+        };
+        let Some(contact) = &self.touched.wall_contact else {
+            return;
+        };
+        let normal = contact.normal.with_y(0.).normalize_or_zero();
+        let flat = self.v.with_y(0.);
+        let direction = flat.normalize_or_zero();
+        if normal == Vec3::ZERO || direction.dot(normal) >= -0.5 {
+            return;
+        }
+        let speed = flat.length();
+        let kept = speed.min(floor);
+        let share = speed * scale;
+        let target = if share < kept {
+            kept
+        } else {
+            share.min(t::NORMAL_MAX)
+        };
+        let flat = direction * target;
+        self.v = Vec3::new(flat.x, self.v.y, flat.z);
+    }
+
     /// The states that ask `PlayerJudgeWallKeep` after their step: the jump
     /// nerve's (all the jumps and flips), the fall, and the wall jump itself.
     pub(super) fn wall_keep_applies(&self) -> bool {

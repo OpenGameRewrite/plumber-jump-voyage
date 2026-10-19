@@ -197,15 +197,12 @@ mod t {
     /// `GravityWallSlide`.
     pub const WALL_SLIDE_GRAVITY: f32 = 0.5;
     pub const WALL_KEEP_FRAMES: u32 = 3;
+    /// `FallWallScaleVelocity`.
+    pub const FALL_WALL_SCALE_VELOCITY: f32 = 0.5;
     pub const WALL_JUMP_POWER: f32 = 23.;
     pub const WALL_JUMP_GRAVITY: f32 = 0.95;
     pub const WALL_JUMP_H: f32 = 8.6;
     pub const WALL_JUMP_NO_INPUT: u32 = 25;
-    pub const WALL_CATCH_EDGE_TOP: f32 = 120.;
-    pub const WALL_CATCH_BOTTOM: f32 = 150.;
-    pub const WALL_CLIMB_JUMP_V: f32 = 20.;
-    pub const WALL_CLIMB_JUMP_H: f32 = 3.;
-    pub const WALL_CLIMB_JUMP_GRAVITY: f32 = 1.5;
 
     /// The jump off a trampled cap (`PlayerStateJump::appear`, request 11):
     /// `TrampleHighJumpPower` and `TrampleHighGravity`.
@@ -250,15 +247,12 @@ mod t {
     pub const POLE_TURN_DIST: f32 = 40.;
     pub const POLE_TURN_FRAMES: f32 = 15.;
     pub const POLE_UP_MARGIN: f32 = 40.;
-    /// The ledge-hang clips hang the body 141 below the actor, which sits on the edge.
-    pub const WALL_CATCH_HANG: f32 = 141.;
-    pub const WALL_CATCH_INSET: f32 = 8.;
-    pub const WALL_CATCH_MOVE: f32 = 70.;
-    pub const WALL_CATCH_MOVE_FRAMES: f32 = 20.;
 }
 
 #[path = "movement/ground.rs"]
 mod ground;
+#[path = "movement/ledge.rs"]
+mod ledge;
 #[path = "movement/rolling.rs"]
 mod rolling;
 #[path = "movement/run_cycle.rs"]
@@ -277,6 +271,7 @@ mod wait;
 mod wall_air;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
+use ledge::WallCatchControl;
 use rolling::{RollControl, RollStart};
 pub use run_cycle::RunCycle;
 use squat::SquatControl;
@@ -303,6 +298,9 @@ enum RunNerve {
 const RUN_BLEND_FLOOR: f32 = 6.;
 /// A stick pushed beyond this much counts as held deep.
 const DEEP_STICK: f32 = 0.8;
+/// The toy course's boxes let the player walk up steps this high (metres);
+/// the stage collision has its own rules.
+const WALKABLE_STEP: f32 = 0.24;
 
 /// The clip a throw starts with (`PlayerSpinCapAttack`'s clip name builder
 /// for a throw without motion controls): the plain throw, the second and
@@ -395,8 +393,6 @@ pub mod clip {
     pub const LAND_JUMP3: u32 = 70;
     pub const SQUAT_END: u32 = 13;
     pub const TURN: u32 = 12;
-    pub const WALL_CATCH_START: u32 = 55;
-    pub const WALL_CATCH_END: u32 = 46;
     pub const POLE_CATCH: u32 = 8;
     pub const RUN_START: u32 = 30;
     pub const BRAKE: u32 = 5;
@@ -943,9 +939,16 @@ pub struct Player {
     spin_clockwise: bool,
     stick: Vec3,
     tilt: f32,
+    /// The stick as the pad reports it (y up), for the states that read it
+    /// without the camera.
+    raw_stick: Vec2,
     slope: f32,
     slick: bool,
-    ledge: Vec3,
+    /// The ledge hang in progress (`PlayerStateWallCatch`).
+    catch: WallCatchControl,
+    /// A state chose its own sub-nerve again in this step (the trace's
+    /// `sub_step` starts over although the name is the same).
+    sub_restarted: bool,
     /// Pole axis base, its height, the climb cycle in progress and a re-grab delay.
     /// Frames since the burn's bounce landed (run and falls together).
     /// Burn leap: horizontal direction its air control works along.
@@ -1082,9 +1085,11 @@ impl Default for Player {
             spin_clockwise: false,
             stick: Vec3::ZERO,
             tilt: 0.,
+            raw_stick: Vec2::ZERO,
             slope: 0.,
             slick: false,
-            ledge: Vec3::ZERO,
+            catch: WallCatchControl::default(),
+            sub_restarted: false,
             swim_rise: 0,
             step_phase: 0.,
             landing_speed: 0.,
@@ -1121,6 +1126,47 @@ impl Solid {
         self.center.y + self.half.y + (x - self.center.x) * self.slope
     }
 }
+/// The boxes as a triangle mesh in centimetres (a sloped box rises along x by
+/// its slope), each face wound counter-clockwise seen from outside.
+fn boxes_to_mesh(solids: &[Solid]) -> TriangleMesh {
+    let mut faces: Vec<[Vec3; 3]> = Vec::new();
+    for b in solids {
+        let (lo, hi) = (b.center - b.half, b.center + b.half);
+        let corner = |x: f32, y: f32, z: f32| Vec3::new(x, y, z) / UNIT;
+        let top = |x: f32| b.top(x);
+        let c = [
+            corner(lo.x, lo.y, lo.z),
+            corner(hi.x, lo.y, lo.z),
+            corner(hi.x, top(hi.x), lo.z),
+            corner(lo.x, top(lo.x), lo.z),
+            corner(lo.x, lo.y, hi.z),
+            corner(hi.x, lo.y, hi.z),
+            corner(hi.x, top(hi.x), hi.z),
+            corner(lo.x, top(lo.x), hi.z),
+        ];
+        let center = (c[0] + c[6]) / 2.;
+        // A quad of four corners, as two triangles facing away from the middle.
+        let mut quad = |q: [usize; 4]| {
+            let (a, b, d) = (c[q[0]], c[q[1]], c[q[2]]);
+            let outward = (a + b + d + c[q[3]]) / 4. - center;
+            let order = if (b - a).cross(d - a).dot(outward) >= 0. {
+                [q[0], q[1], q[2], q[3]]
+            } else {
+                [q[0], q[3], q[2], q[1]]
+            };
+            faces.push([c[order[0]], c[order[1]], c[order[2]]]);
+            faces.push([c[order[0]], c[order[2]], c[order[3]]]);
+        };
+        quad([0, 1, 2, 3]);
+        quad([4, 5, 6, 7]);
+        quad([0, 1, 5, 4]);
+        quad([3, 2, 6, 7]);
+        quad([0, 3, 7, 4]);
+        quad([1, 2, 6, 5]);
+    }
+    TriangleMesh::from_corners(&faces)
+}
+
 #[derive(Clone)]
 pub struct Pole {
     pub center: Vec3,
@@ -1139,8 +1185,26 @@ pub struct Course {
     /// The real game's stage collision, when a replay loads one. It takes the
     /// place of the solids for the player's contact.
     pub mesh: Option<Arc<TriangleMesh>>,
+    /// The solids as triangles, built when the ledge judge first asks (it
+    /// shoots arrows at triangles).
+    pub solid_mesh: std::sync::OnceLock<Arc<TriangleMesh>>,
 }
 impl Course {
+    /// The triangles the ledge judge shoots at: the stage's own, or the
+    /// toy course's boxes turned into faces.
+    pub fn catch_mesh(&self) -> Option<Arc<TriangleMesh>> {
+        if let Some(mesh) = &self.mesh {
+            return Some(mesh.clone());
+        }
+        if self.solids.is_empty() {
+            return None;
+        }
+        Some(
+            self.solid_mesh
+                .get_or_init(|| Arc::new(boxes_to_mesh(&self.solids)))
+                .clone(),
+        )
+    }
     pub fn wet(&self, pos: Vec3) -> bool {
         self.water.is_some_and(|(c, h)| {
             (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && pos.y < c.y
@@ -1430,6 +1494,15 @@ impl Player {
         } else {
             self.anim.frame
         }
+    }
+    /// The hanging body is on the ledge and stands there: the contact the
+    /// climbs make is no landing (only the climb jump's is).
+    fn stands_on_ledge(&self) -> bool {
+        self.mode == Move::Ledge && self.catch_nerve() != ledge::CatchNerve::Jump
+    }
+    /// A sub-nerve was chosen again in this step: the row's `sub_step` is 0.
+    pub fn sub_restarted(&self) -> bool {
+        self.sub_restarted
     }
     /// Steps the actor nerve has executed, as the game's `state_step` counts
     /// them: 0 in the frame a nerve is chosen, 1 after its first step.
@@ -1780,6 +1853,9 @@ impl Player {
         if self.is_roll_brake() {
             return crate::game_names::known("Rolling/Brake");
         }
+        if self.mode == Move::Ledge {
+            return crate::game_names::known(self.catch_nerve().name());
+        }
         crate::game_names::nerve(self.mode, self.clip())
     }
     /// The actor nerve of that state (the part before the sub-state).
@@ -1965,6 +2041,7 @@ impl Player {
         self.nerve.deferred = false;
         self.nerve.renewed = false;
         self.sensor_restart = false;
+        self.sub_restarted = false;
         let was_grounded = self.grounded;
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
@@ -1982,10 +2059,11 @@ impl Player {
         if !self.nerve.deferred {
             self.run_state(&o, scene);
             self.judge_fall();
+            self.judge_wall_catch(scene);
             self.judge_wall_keep(scene);
         }
         self.finish_catch();
-        if matches!(self.mode, Move::Ledge | Move::Pole) {
+        if self.mode == Move::Pole {
             self.finish_frame(scene);
             return;
         }
@@ -2008,7 +2086,12 @@ impl Player {
         if quench {
             self.events.push(Fx::Quenched);
             self.end_burn();
-        } else if self.grounded && !was_grounded && !hot && self.mode != Move::GroundSpin {
+        } else if self.grounded
+            && !was_grounded
+            && !hot
+            && self.mode != Move::GroundSpin
+            && !self.stands_on_ledge()
+        {
             // The contact is flagged now; the next step decides what it means.
             // (The ground spin only regains the floor it let go of when it was
             // chosen; no state looks at that as a landing.)
@@ -2115,6 +2198,7 @@ impl Player {
         let stick = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
         self.tilt = stick.length();
         self.stick = stick.normalize_or_zero();
+        self.raw_stick = Vec2::new(o.stick.x, -o.stick.y);
         self.pre_jump = if o.jump {
             t::PRE_INPUT_JUMP
         } else {
@@ -3125,6 +3209,7 @@ impl Player {
         if self.air_for != Some(self.mode) {
             self.arm_fall_control();
         }
+        self.scale_velocity_at_wall();
         let steer = air_move::Steering {
             front: t::JUMP_ACCEL_FRONT,
             back: t::JUMP_ACCEL_BACK,
@@ -3345,70 +3430,18 @@ impl Player {
         self.facing = facing;
     }
 
-    // ---- Walls, ledges, poles --------------------------------------------
-    /// Hanging from a ledge. The actor sits on the edge itself; the hang and
-    /// climb clips carry the body below and up over it, as in the original.
-    fn wall_catch(&mut self, o: &Orders, scene: &Course) {
-        self.v = Vec3::ZERO;
-        self.pos = self.ledge;
-        let toward = self.stick.dot(-self.wall) * self.tilt;
-        let right = self.facing.cross(Vec3::Y);
-        let along = self.stick.dot(right) * self.tilt;
-        if self.clip() == "WallCatchStart" && self.anim_done(clip::WALL_CATCH_START) {
-            self.play("WallCatch");
-        }
-        if self.clip() == "WallCatchEnd" {
-            if self.anim_done(clip::WALL_CATCH_END) {
-                self.grounded = true;
-                self.go(Move::Idle, "Wait");
-            }
-            return;
-        }
-        let hang_out = self.wall * (RADIUS + 0.05 + t::WALL_CATCH_INSET * UNIT);
-        if o.crouch_pressed || toward < -0.4 {
-            self.pos = self.ledge + hang_out - Vec3::Y * t::WALL_CATCH_HANG * UNIT;
-            self.go(Move::Fall, "Fall");
-        } else if self.frame > 8 && self.pre_jump > 0 {
-            let back = -self.wall;
-            self.jump_with(
-                Move::Jump,
-                "WallCatchEndJump",
-                t::WALL_CLIMB_JUMP_V,
-                t::WALL_CLIMB_JUMP_GRAVITY,
-                move |p| {
-                    p.set_h(back * t::WALL_CLIMB_JUMP_H);
-                    p.jump_extend = false;
-                },
-            );
-        } else if self.frame > 8 && toward > 0.5 {
-            self.play("WallCatchEnd");
-        } else if self.frame > 8 && along.abs() > 0.5 {
-            // Shimmy along the edge while it continues.
-            let step =
-                right * along.signum() * t::WALL_CATCH_MOVE / t::WALL_CATCH_MOVE_FRAMES * UNIT;
-            let next = self.ledge + step;
-            if scene
-                .ground(next + Vec3::Y * 0.02)
-                .is_some_and(|g| (g - self.ledge.y).abs() < 0.05)
-            {
-                self.ledge = next;
-                self.pos = next;
-                self.keep(if along > 0. {
-                    "WallCatchMoveR"
-                } else {
-                    "WallCatchMoveL"
-                });
-            }
-        } else if self.anim.name.starts_with("WallCatchMove") {
-            self.play("WallCatch");
-        }
-    }
+    // ---- Poles ------------------------------------------------------------
     fn grab_pole(&mut self, scene: &Course) {
         if self.grounded
             || self.climbing.cooldown > 0
             || matches!(
                 self.mode,
-                Move::Pole | Move::GroundPound | Move::Dive | Move::Swim | Move::SwimDash
+                Move::Pole
+                    | Move::Ledge
+                    | Move::GroundPound
+                    | Move::Dive
+                    | Move::Swim
+                    | Move::SwimDash
             )
         {
             return;
@@ -4118,15 +4151,8 @@ impl Player {
         self.wall = Vec3::ZERO;
         self.touched.wall_contact = None;
         match &scene.mesh {
-            Some(mesh) => self.collide_mesh(o, mesh, was_grounded),
-            None => self.collide_solids(o, scene, was_grounded),
-        }
-        if self.mode == Move::Ledge {
-            // Just caught an edge: the actor moves onto it.
-            self.pos = self.ledge;
-            self.grounded = false;
-            self.v = Vec3::ZERO;
-            return;
+            Some(mesh) => self.collide_mesh(mesh, was_grounded),
+            None => self.collide_solids(o, scene),
         }
         // Poles are solid when not held.
         for pole in &scene.poles {
@@ -4161,7 +4187,7 @@ impl Player {
         self.distance += (self.pos - old).with_y(0.).length();
     }
     /// The player's contact with the course's box solids (the windowed demo).
-    fn collide_solids(&mut self, o: &Orders, scene: &Course, was_grounded: bool) {
+    fn collide_solids(&mut self, o: &Orders, scene: &Course) {
         let crouched = matches!(
             self.mode,
             Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd | Move::Dive
@@ -4219,7 +4245,7 @@ impl Player {
                         }
                     } else if self.pos.y + 0.12 < top && self.pos.y + height > lo.y + 0.05 {
                         // Short steps are walkable.
-                        if before.y >= top - t::WALL_CATCH_EDGE_TOP * UNIT * 0.2
+                        if before.y >= top - WALKABLE_STEP
                             && self.v.y <= 0.
                             && !matches!(self.mode, Move::GroundPound | Move::Dive)
                         {
@@ -4255,41 +4281,9 @@ impl Player {
                             self.set(Move::RollEnd);
                             self.play("RollingStandUp");
                         }
-                        if !was_grounded && self.v.y < 0. && into > 0.1 {
-                            self.touch_wall(top, o);
-                        }
                     }
                 }
             }
-        }
-    }
-    fn touch_wall(&mut self, top: f32, o: &Orders) {
-        if matches!(
-            self.mode,
-            Move::Dive
-                | Move::GroundPound
-                | Move::LongJump
-                | Move::RollJump
-                | Move::Roll
-                | Move::WallSlide
-                | Move::Throw
-                | Move::SpinDrop
-        ) {
-            return;
-        }
-        let reach = top - self.pos.y;
-        if reach * 100. < t::WALL_CATCH_BOTTOM
-            && reach * 100. > t::WALL_CATCH_EDGE_TOP * 0.6
-            && o.direction.length() > 0.1
-        {
-            // Holding the edge is physical and immediate; the catch clip and its
-            // sound are the state's first step.
-            self.change(Move::Ledge, "WallCatchStart", |p| p.events.push(Fx::Ledge));
-            // The edge point, just inside the top, straight ahead of the body.
-            let corner = self.pos - self.wall * (RADIUS + t::WALL_CATCH_INSET * UNIT);
-            self.ledge = Vec3::new(corner.x, top, corner.z);
-            self.facing = -self.wall;
-            self.v = Vec3::ZERO;
         }
     }
 }

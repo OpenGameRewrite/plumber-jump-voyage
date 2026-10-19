@@ -176,6 +176,9 @@ fn parse_buttons(text: &str) -> Result<Vec<&'static str>, String> {
 pub struct CameraTrack {
     fixed: f32,
     per_frame: Vec<f32>,
+    /// How far the real stick direction is turned from the one `per_frame`
+    /// gives, per frame (see `aim_correction`).
+    aim: Vec<f32>,
     views: Vec<View>,
 }
 /// The real game's camera for one frame, in the rewrite's world (metres,
@@ -219,6 +222,35 @@ impl View {
         })
     }
 }
+/// How far (degrees) the direction the game's camera really gave the stick in
+/// `row` is turned from the one `yaw_deg` gives: the `cam_yaw` column is the
+/// locked orbit angle, but the game turns the stick by the line from its camera
+/// to the player, which swings while the player moves. The probe logs the
+/// world direction it got (`move_input`), so the stick is turned by that.
+/// Zero when the row has no stick or no such columns.
+fn aim_correction(game: &TraceFile, row: usize, yaw_deg: f32) -> f32 {
+    let pair = |column: &str| -> Option<Vec2> {
+        let mut parts = game
+            .cell(row, column)?
+            .split('/')
+            .map(|p| p.parse::<f32>().ok());
+        Some(Vec2::new(parts.next()??, parts.next()??))
+    };
+    let (Some(stick), Some(aim)) = (pair("in_stick"), pair("move_input")) else {
+        return 0.;
+    };
+    if stick.length() < 0.05 || aim.length() < 0.05 {
+        return 0.;
+    }
+    // The same construction as `orders_for`.
+    let ours = -rotate(Vec2::new(stick.x, -stick.y), yaw_deg.to_radians());
+    let turn = aim.x.atan2(aim.y) - ours.x.atan2(ours.y);
+    // The angle is a direction, so fold it into the half turn either way.
+    (turn + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
+        .to_degrees()
+        - 180.
+}
 impl CameraTrack {
     pub fn new(script: &Script, game: Option<&TraceFile>) -> Result<Self, String> {
         let fixed = script.camera_yaw_deg.unwrap_or(script.start_yaw_deg);
@@ -226,6 +258,7 @@ impl CameraTrack {
             return Ok(Self {
                 fixed,
                 per_frame: Vec::new(),
+                aim: Vec::new(),
                 views: Vec::new(),
             });
         };
@@ -258,16 +291,22 @@ impl CameraTrack {
             .copied()
             .ok_or("the camera trace has no cam_yaw values")?;
         let mut last = first;
-        let per_frame = recorded
+        let per_frame: Vec<f32> = recorded
             .into_iter()
             .map(|yaw| {
                 last = yaw.unwrap_or(last);
                 last
             })
             .collect();
+        let aim = per_frame
+            .iter()
+            .enumerate()
+            .map(|(row, yaw)| aim_correction(game, row, *yaw))
+            .collect();
         Ok(Self {
             fixed,
             per_frame,
+            aim,
             views,
         })
     }
@@ -282,6 +321,15 @@ impl CameraTrack {
             .or(self.per_frame.last())
             .copied()
             .unwrap_or(self.fixed)
+    }
+    /// The turn (degrees) the stick's world direction gets on top of the
+    /// camera yaw, from the game's logged direction; zero without one.
+    pub fn aim_deg(&self, frame: usize) -> f32 {
+        self.aim
+            .get(frame)
+            .or(self.aim.last())
+            .copied()
+            .unwrap_or(0.)
     }
 }
 
@@ -304,6 +352,7 @@ pub fn orders_for(
     span: &Span,
     previous: &[&str],
     camera_yaw_deg: f32,
+    aim_deg: f32,
     bindings: &[[String; 2]],
 ) -> (Orders, FrameInfo) {
     let mut held = [false; ACTIONS.len()];
@@ -324,7 +373,7 @@ pub fn orders_for(
         stick,
         // A half turn of the orbit yaw is a negation; spelling it so keeps a
         // stick along an axis exactly on it (`sin(PI)` is not zero in `f32`).
-        direction: -rotate(stick, camera_yaw_deg.to_radians()),
+        direction: -rotate(stick, (camera_yaw_deg + aim_deg).to_radians()),
         camera_yaw,
         ..default()
     };
@@ -400,7 +449,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     // Teleported and idle; the recorder watches so its animation state is
     // warm when frame 0 starts, but nothing is written.
     for i in 0..SETTLE_FRAMES {
-        let (orders, mut info) = orders_for(&settle, &[], camera.yaw_deg(0), &bindings);
+        let (orders, mut info) = orders_for(&settle, &[], camera.yaw_deg(0), camera.aim_deg(0), &bindings);
         player.step(&orders, &course);
         info.game_frame = i as i64;
         recorder.record(&info, &mut player);
@@ -431,14 +480,26 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 } else {
                     &[]
                 };
-                let (orders, _) = orders_for(spans[last], before, camera.yaw_deg(last), &bindings);
+                let (orders, _) = orders_for(
+                    spans[last],
+                    before,
+                    camera.yaw_deg(last),
+                    camera.aim_deg(last),
+                    &bindings,
+                );
                 let spin = player.spin_input();
                 player.step(&orders, &course);
                 player.set_spin_input(spin);
                 player.events.clear();
             }
         }
-        let (orders, mut info) = orders_for(span, &previous, camera.yaw_deg(frame), &bindings);
+        let (orders, mut info) = orders_for(
+            span,
+            &previous,
+            camera.yaw_deg(frame),
+            camera.aim_deg(frame),
+            &bindings,
+        );
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (SETTLE_FRAMES + frame) as i64;

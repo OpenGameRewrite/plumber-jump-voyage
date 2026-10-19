@@ -614,7 +614,11 @@ impl Recorder {
         let label = p.nerve_name().name;
         self.sub_steps = match self.last_state {
             None => p.state_frames(),
-            Some((last, steps)) if last == label && steps < p.state_frames() => self.sub_steps + 1,
+            Some((last, steps))
+                if last == label && steps < p.state_frames() && !p.sub_restarted() =>
+            {
+                self.sub_steps + 1
+            }
             // A hit sensor restarted the nerve and its first step ran already.
             Some(_) if p.restarted_by_sensor() => p.state_frames(),
             Some(_) => 0,

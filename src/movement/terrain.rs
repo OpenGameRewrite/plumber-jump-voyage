@@ -39,8 +39,12 @@ fn to_cm(metres: Vec3) -> Vec3 {
 impl Player {
     /// The collision form `PlayerFormSensorCollisionArranger::syncForm` picks
     /// for the actor's nerve: the mini one for the squat, the slope slide and
-    /// the roll, the normal one otherwise (a dive included).
+    /// the roll, the hanging one while a ledge is held, the normal one
+    /// otherwise (a dive included).
     fn collision_form(&self) -> Form {
+        if self.mode == Move::Ledge && self.catch.is_hanging() {
+            return Form::WallGrab;
+        }
         if matches!(
             self.mode,
             Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd
@@ -52,8 +56,14 @@ impl Player {
     }
 
     /// Moves the player by this frame's velocity through the mesh.
-    pub(super) fn collide_mesh(&mut self, o: &Orders, mesh: &TriangleMesh, was_grounded: bool) {
-        self.collider.set_form(self.collision_form());
+    pub(super) fn collide_mesh(&mut self, mesh: &TriangleMesh, was_grounded: bool) {
+        let form = self.collision_form();
+        self.collider.set_form(form);
+        self.collider.set_cut_direction(if form == Form::WallGrab {
+            self.catch.front()
+        } else {
+            Vec3::ZERO
+        });
         let start = mesh.snap_to_game_precision(to_cm(self.pos));
         // On the ground the controller keeps no downward speed of its own; the
         // game's velocity carries the pull (`units_per_frame`), and it is that
@@ -152,10 +162,6 @@ impl Player {
                     self.set(Move::RollEnd);
                     self.play("RollingStandUp");
                 }
-                if !was_grounded && self.v.y < 0. && into > 0.1 {
-                    let top = self.wall_top(mesh, wall.position, normal);
-                    self.touch_wall(top, o);
-                }
             }
         }
     }
@@ -164,18 +170,5 @@ impl Player {
     /// the fall and the wall states.
     fn keeps_velocity_at_walls(&self) -> bool {
         self.mode == Move::WallSlide || self.wall_keep_applies()
-    }
-
-    /// Height (metres) of the top of the wall touched at `contact`: the
-    /// highest floor-like surface just behind it, or well out of reach.
-    fn wall_top(&self, mesh: &TriangleMesh, contact: Vec3, normal: Vec3) -> f32 {
-        let behind = contact - normal * 5.;
-        mesh.floor_below(
-            behind.x,
-            behind.z,
-            self.pos.y / UNIT + 300.,
-            crate::collider::walkable_normal_y(),
-        )
-        .map_or(self.pos.y + 10., |y| y * UNIT)
     }
 }
