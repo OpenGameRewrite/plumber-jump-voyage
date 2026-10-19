@@ -449,7 +449,13 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     // Teleported and idle; the recorder watches so its animation state is
     // warm when frame 0 starts, but nothing is written.
     for i in 0..SETTLE_FRAMES {
-        let (orders, mut info) = orders_for(&settle, &[], camera.yaw_deg(0), camera.aim_deg(0), &bindings);
+        let (orders, mut info) = orders_for(
+            &settle,
+            &[],
+            camera.yaw_deg(0),
+            camera.aim_deg(0),
+            &bindings,
+        );
         player.step(&orders, &course);
         info.game_frame = i as i64;
         recorder.record(&info, &mut player);

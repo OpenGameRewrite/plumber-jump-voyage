@@ -4325,10 +4325,10 @@ impl Player {
     }
 }
 
-#[path = "tests/ledge.rs"]
-mod ledge_checks;
 #[path = "tests/movement.rs"]
 mod checks;
+#[path = "tests/ledge.rs"]
+mod ledge_checks;
 #[path = "tests/spin.rs"]
 mod spin_checks;
 #[path = "tests/wall_air.rs"]

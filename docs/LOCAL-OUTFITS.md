@@ -93,11 +93,17 @@ reproduced.
 
 To add the sound triggers of clips the table lacks (the wall slide's
 `WallKeepReverse` and `WallSlideR`, for example) without touching what is
-installed, name them; the sounds they play must be installed already:
+installed, name them:
 
 ```sh
 python tools/extract-sounds.py --add-clip WallKeepReverse --add-clip WallSlideR
 ```
+
+Sounds such a clip plays that are not installed yet (the ledge hang's
+`WallCatchEndFast`, `WallCatchMoveL` and `WallCatchMoveR` play three) are
+decoded and added next to the installed ones when you also pass your
+`--vgmstream` executable; the files and table entries already there stay as
+they are.
 
 ## Add the original particle effects
 

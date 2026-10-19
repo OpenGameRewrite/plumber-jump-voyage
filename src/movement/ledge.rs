@@ -498,7 +498,12 @@ fn find_move_wall(
     let (pos, normal, rise) = if let Some(near) = hit_at(base + DOWN * 5.) {
         let rise = (height_range + 5.).max(10.);
         // A lower arrow that strikes much nearer: the wall bulges out below.
-        match first_strike(mesh, base + DOWN * height_range, toward, FaceFilter::NotFloors) {
+        match first_strike(
+            mesh,
+            base + DOWN * height_range,
+            toward,
+            FaceFilter::NotFloors,
+        ) {
             Some(low) => {
                 let along = toward.normalize_or_zero();
                 let gap = (near.position - base).dot(along) - (low.position - base).dot(along);
@@ -791,7 +796,11 @@ impl Player {
             self.catch.axes = Vec2::new(side.dot(push), front.dot(push));
             self.catch.raw = raw;
         } else {
-            let same = self.catch.raw.normalize_or_zero().dot(raw.normalize_or_zero())
+            let same = self
+                .catch
+                .raw
+                .normalize_or_zero()
+                .dot(raw.normalize_or_zero())
                 >= (INPUT_REPEAT_ANGLE * DEGREES_TO_RADIANS).cos();
             if !same {
                 self.catch.axes = Vec2::ZERO;

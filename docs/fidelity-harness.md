@@ -36,8 +36,11 @@ frames, then takes one `Player::step` per scripted frame. The start position
 only matters relative to itself on flat ground, so the run happens at the
 origin and positions are written in game units relative to `start`. The camera
 yaw is the script's `camera`, else the start yaw; with `--camera game.csv` it
-follows that trace's `cam_yaw` column, so the world-space input matches the
-real run. No window, clock or random source is involved, so a run is
+follows that trace's `cam_yaw` column, and the stick's world direction is turned
+on top of it to the one the trace logged (`move_input`: the game turns the stick
+by the line from its camera to the player, which swings while the player moves
+although the locked yaw does not), so the world-space input matches the real
+run. No window, clock or random source is involved, so a run is
 byte-for-byte repeatable.
 
 ## Replaying in the real stage's collision
@@ -72,17 +75,24 @@ which matters wherever a body rests against a surface it is pressed into every f
 Ported on this collision: falling off a ledge (`PlayerJudgeSpeedCheckFall`), the
 long-fall landing (`PlayerJudgeLongFall`, `Wait/LandStiffen`), the wall slide
 and the wall jump (`PlayerJudgeWallKeep`, `PlayerStateNormalWallSlide`,
-`PlayerStateNormalWallJump`, with the wall history), and the air control's
-turning of the facing. A body that lands on a slope runs on without the
-slope terms of the original's ground control.
+`PlayerStateNormalWallJump`, with the wall history), the wall hit scaling of
+a jump and a fall (`scaleVelocityInertiaWallHit`), the air control's turning
+of the facing and the ledge hang (`PlayerJudgeWallCatch`,
+`PlayerStateWallCatch` with its snap, `src/movement/ledge.rs`): the catch, the
+shimmy along a ledge, the climbs, the climb jump and letting go. While the body
+hangs the collider uses the hanging form (`changeCollisionWallGrab`: two
+spheres hanging out from the wall that ignore floors, and the push along the
+wall's direction cut), and carries itself from where it stood the step before
+to the pose the snap puts the actor in. A body that lands on a slope runs on
+without the slope terms of the original's ground control.
 
 Not ported yet: the squeeze of `Press` collision, moving collision parts, the
 averaging of a push with the previous frame's (`calcResultVec`'s direction
 flags), thin-wall edge hits in the collider (`rs::calcExistCollisionBorder`;
-the wall judge has its own), the ledge and pole contact on triangles, slope
-sliding on triangles, the wall hit scaling of a fall
-(`scaleVelocityInertiaWallHit`) and Cappy's head-on wall stop, floor and
-lock-on reactions.
+the wall judge has its own), the pole contact on triangles, slope
+sliding on triangles, the ledge hang on a moving platform or a tilted top,
+the ground nerves' ledge judge (`PlayerJudgeWallCatchInputDir`) and Cappy's
+head-on wall stop, floor and lock-on reactions.
 
 ## Trace columns
 
