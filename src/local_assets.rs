@@ -239,6 +239,11 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
         "SpinJumpDownFall" => 4.,
         "SwimWalk" => 7.,
         "PoleWait" => 8.,
+        // Recorded on the pole (`pole-climb`, `pole-top`): the turn round the
+        // pole after the slide, and the handstand's start and wait.
+        "PoleTurn" => 2.,
+        "PoleHandStandStart" => 3.,
+        "PoleHandStandWait" => 4.,
         _ => 0.,
     }
 }
