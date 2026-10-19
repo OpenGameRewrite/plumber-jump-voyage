@@ -383,6 +383,13 @@ pub mod clip {
             // The spin family's clips cycle: the ground spin and the drop
             // are 10 frames long, the spin jump's body 8.
             "SpinGroundL" | "SpinGroundR" | "SpinJumpDownFallL" | "SpinJumpDownFallR" => Some(10.),
+            // The pole's clips (recorded `anim_len`): the climb, the slide
+            // down, the turn round it and the handstand's wait and turn.
+            "PoleClimb" => Some(25.),
+            "PoleFall" => Some(21.),
+            "PoleTurn" => Some(50.),
+            "PoleHandStandWait" => Some(120.),
+            "PoleHandStandTurn" => Some(23.),
             "StartSpinJumpL" | "StartSpinJumpR" | "RestartSpinJumpL" | "RestartSpinJumpR" => {
                 Some(8.)
             }
