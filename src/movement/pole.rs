@@ -414,8 +414,9 @@ impl Player {
     /// `PlayerInput::isPoleMoveInputReverseX`: the body faces toward the
     /// camera, so the sides swap.
     fn pole_input_reversed(&self, actor: &Actor) -> bool {
-        // The camera looks along its yaw; its back is the opposite.
-        let back = -Vec3::new(self.camera_yaw.sin(), 0., self.camera_yaw.cos());
+        // The orbit yaw is the way round from the game's: the camera looks
+        // along minus sine, minus cosine, so its back is plus sine, plus cosine.
+        let back = Vec3::new(self.camera_yaw.sin(), 0., self.camera_yaw.cos());
         let along_front = actor.front.dot(back);
         let along_side = actor.side.dot(back);
         along_front > 0. && along_front.abs() > along_side.abs()
@@ -496,6 +497,9 @@ impl Player {
     /// collision).
     fn pole_follow(&mut self) -> bool {
         let fix = self.collider.fix_reaction();
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("follow fix {:?} actor {:?}", fix, self.pos / UNIT);
+        }
         let pose = self.pole.snap.follow(self.pos / UNIT, fix);
         self.pos = pose.pos * UNIT;
         self.facing = pose.front();
@@ -756,6 +760,9 @@ impl Player {
         if ask == StickAsk::Down {
             self.pole.ignore_down = false;
         }
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("ask {:?} input {:?} raw {:?} cam {} facing {:?} reverse_x {}", ask, self.pole.move_input, self.raw_stick, self.camera_yaw, self.facing, self.pole.reverse_x);
+        }
         if ask == StickAsk::None || (same != StickAsk::None && ask == same) {
             return (false, ask);
         }
@@ -840,6 +847,9 @@ impl Player {
             self.pole.depth = fit.width.clamp(CATCH_RANGE_MIN, CATCH_RANGE_MAX);
         }
         let yaw = self.facing.x.atan2(self.facing.z);
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("move_to {:?} held {:?} prev {:?} pos {:?} -> {:?} frames {}", nerve, held, self.pole.snap.previous, self.pos / UNIT, fit.pos, frames);
+        }
         self.pole
             .snap
             .move_to(yaw, fit.pos, fit.front, fit.axis, frames);

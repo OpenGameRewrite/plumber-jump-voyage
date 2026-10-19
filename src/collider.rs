@@ -818,7 +818,8 @@ impl PlayerCollider {
     }
 
     /// `rs::getCollidedFixReaction`: how far the last `collide` moved the feet
-    /// from where the move alone would have put them.
+    /// from where the actor's position plus the move would have put them (the
+    /// carry from where the collider stood is not part of it).
     pub fn fix_reaction(&self) -> Vec3 {
         self.fix_reaction
     }
@@ -864,7 +865,7 @@ impl PlayerCollider {
             let cut = self.cut_direction;
             at = pose.pos + across(moved, cut) + cut * velocity.dot(cut);
         }
-        let fix = at - (begin + velocity);
+        let fix = at - (pose.pos + velocity);
         self.fix_reaction = fix;
         Outcome { pos: at, collided }
     }

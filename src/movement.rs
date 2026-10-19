@@ -2137,8 +2137,14 @@ impl Player {
         }
         self.change_from_surroundings(scene, &o);
         // A state chosen above leaves its own first step to the next frame.
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("S before run {:?} {:?}", self.pos / UNIT, self.facing);
+        }
         if !self.nerve.deferred {
             self.run_state(&o, scene);
+            if std::env::var("PJV_DBG").is_ok() {
+                eprintln!("S after run {:?} {:?}", self.pos / UNIT, self.facing);
+            }
             self.judge_fall();
             self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
@@ -2147,6 +2153,9 @@ impl Player {
         self.finish_catch();
         let moved = self.v;
         self.collide(&o, scene);
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("S after collide {:?}", self.pos / UNIT);
+        }
         self.fall.update(
             self.pos.y / UNIT,
             moved.y,
