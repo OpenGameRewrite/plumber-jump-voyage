@@ -213,7 +213,10 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
         Fx::FootLift { left } => vec![Cue::Rated(if left { "RunUpL" } else { "RunUpR" })],
         Fx::RollSpin => vec![Cue::Play("Roll")],
         Fx::FallWhoosh { .. } => vec![Cue::Hold("FallWhoosh_loop")],
-        Fx::Land { .. } => landing_reaction(context.mode).map_or(vec![], reaction),
+        // The landing after a long fall raises only the high-fall reaction
+        // (`PlayerStateWait::exeLandStiffen`); its sounds are the clip's.
+        Fx::Land { hard: true } => reaction("LandFall"),
+        Fx::Land { hard: false } => landing_reaction(context.mode).map_or(vec![], reaction),
         Fx::RollLand => reaction("RollLand"),
         Fx::PoundLand => reaction("HipDropLand"),
         Fx::RollStart => {

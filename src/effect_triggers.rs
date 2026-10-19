@@ -413,7 +413,6 @@ pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Raised>
         .collect();
     let on_player = |name| Raised { cap: false, name };
     match fx {
-        Fx::Land { hard: true } => raised.push(on_player("LandFall")),
         Fx::Quenched => raised.push(on_player("SootWash")),
         Fx::Splash => raised.push(on_player("WaterDive")),
         _ => {}
@@ -763,7 +762,7 @@ pub fn self_check() {
     let names = |raised: Vec<Raised>| raised.iter().map(|r| r.name).collect::<Vec<_>>();
     assert_eq!(
         names(reactions_of(Fx::Land { hard: true }, context, &mut boosts)),
-        ["LandRun", "LandFall"]
+        ["LandFall"]
     );
     assert_eq!(
         names(reactions_of(Fx::PoundLand, context, &mut boosts)),

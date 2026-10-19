@@ -4089,8 +4089,15 @@ impl Player {
             }
             _ => {
                 if self.hard_land {
-                    self.set_h(Vec3::ZERO);
-                    self.go(Move::Idle, "LandStiffen");
+                    // `PlayerStateWait::appear` with the force-land judge true
+                    // keeps the velocity along the floor and raises no landing
+                    // reaction; the `LandStiffen` nerve's first step stops the
+                    // player and raises the high-fall one.
+                    self.change(Move::Idle, "LandStiffen", |p| {
+                        p.set_h(Vec3::ZERO);
+                        p.events.push(Fx::Land { hard: true });
+                    });
+                    return;
                 } else if o.crouch {
                     self.start_squat();
                 } else if self.pre_jump > 0 {
