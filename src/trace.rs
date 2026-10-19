@@ -579,7 +579,9 @@ impl Recorder {
         for c in [q.x, q.y, q.z, q.w, 0., 1., 0.] {
             cells.num(c);
         }
-        cells.num(speed);
+        // The horizontal speed of the velocity the row shows, which on a tilted
+        // floor includes the horizontal part of the pull into it.
+        cells.num(v.x.hypot(v.z));
         cells.text(&layers.join("|"));
         // Only the run cycle's length is known (its 60-frame phase).
         if p.anim.name == "Move" {

@@ -91,6 +91,14 @@ bank and writes `assets/local/sounds/player.json`. Adjust **Sound volume** in th
 pause menu. Surface materials, 3D positioning and the game's mixer are not
 reproduced.
 
+To add the sound triggers of clips the table lacks (the wall slide's
+`WallKeepReverse` and `WallSlideR`, for example) without touching what is
+installed, name them; the sounds they play must be installed already:
+
+```sh
+python tools/extract-sounds.py --add-clip WallKeepReverse --add-clip WallSlideR
+```
+
 ## Add the original particle effects
 
 ```sh
