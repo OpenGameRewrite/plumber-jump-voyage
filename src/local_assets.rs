@@ -322,6 +322,8 @@ pub fn looping(name: &str) -> bool {
             | "SquatWalk"
             | "WallSlideL"
             | "WallCatch"
+            | "WallCatchMoveL"
+            | "WallCatchMoveR"
             | "PoleWait"
             | "PoleClimb"
             | "PoleFall"

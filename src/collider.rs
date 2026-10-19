@@ -607,6 +607,10 @@ pub struct PlayerCollider {
     /// hanging body's, into the wall) is dropped; what the move itself had
     /// along it stays. Zero when off.
     cut_direction: Vec3,
+    /// Where the collider stood after its last move, when the actor has been
+    /// put somewhere else since (the ledge hold sets the pose by hand): the
+    /// next `collide` first carries it from there to the actor.
+    carry_from: Option<Vec3>,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -699,6 +703,7 @@ impl PlayerCollider {
             has_ground_position: false,
             best: [NO_CONTACT; 3],
             cut_direction: Vec3::ZERO,
+            carry_from: None,
         }
     }
 
@@ -714,6 +719,12 @@ impl PlayerCollider {
     /// turns it on along the direction the body faces, the other forms off).
     pub fn set_cut_direction(&mut self, direction: Vec3) {
         self.cut_direction = direction;
+    }
+
+    /// The collider stood at `pos` (cm) after its last move; the actor has
+    /// been moved since, and the next `collide` carries the collider to it.
+    pub fn carry_from(&mut self, pos: Vec3) {
+        self.carry_from = Some(pos);
     }
 
     pub fn grounded(&self) -> bool {
@@ -732,8 +743,9 @@ impl PlayerCollider {
         let range = self.keeper.check_step;
         // The carry: from where the collider was to where the actor is. The
         // replay hands the collider the actor's own position, so the move is
-        // empty; it still resolves an overlap the body starts in.
-        let mut at = pose.pos;
+        // empty (it still resolves an overlap the body starts in), except
+        // for the states that put the actor on a pose by hand.
+        let mut at = self.carry_from.take().unwrap_or(pose.pos);
         let mut collided = self.move_collide(
             mesh,
             &pose,

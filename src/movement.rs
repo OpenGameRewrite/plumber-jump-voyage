@@ -378,6 +378,8 @@ pub mod clip {
             "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
+            // The ledge side moves: 20 frames, run once over each move.
+            "WallCatchMoveL" | "WallCatchMoveR" => Some(20.),
             // The spin family's clips cycle: the ground spin and the drop
             // are 10 frames long, the spin jump's body 8.
             "SpinGroundL" | "SpinGroundR" | "SpinJumpDownFallL" | "SpinJumpDownFallR" => Some(10.),
@@ -385,6 +387,15 @@ pub mod clip {
                 Some(8.)
             }
             _ => None,
+        }
+    }
+    /// How far past its length a looping clip's counter runs before it wraps
+    /// (the layer's own frame wraps at the length): the side moves' counter
+    /// reads 21.03 in the step after the clip loops and 2.08 in the next.
+    pub fn loop_slack(name: &str) -> f32 {
+        match name {
+            "WallCatchMoveL" | "WallCatchMoveR" => 2.,
+            _ => 0.,
         }
     }
     pub const LAND: u32 = 26;
@@ -944,11 +955,21 @@ pub struct Player {
     raw_stick: Vec2,
     slope: f32,
     slick: bool,
-    /// The ledge hang in progress (`PlayerStateWallCatch`).
+    /// The ledge hang in progress (`PlayerStateWallCatch`), and where the
+    /// collider stood (cm) after the last step of it.
     catch: WallCatchControl,
+    catch_collider_at: Option<Vec3>,
+    /// The fall that follows letting go of a ledge (`EActionTrigger 0x20` when
+    /// `PlayerStateFallHakoniwa` appears): the air control ignores the stick
+    /// for the first steps, and the ledge cannot be caught again for 15 steps
+    /// unless the body turned away from the way it faced then.
+    fall_after_ledge: Option<Vec3>,
     /// A state chose its own sub-nerve again in this step (the trace's
     /// `sub_step` starts over although the name is the same).
     sub_restarted: bool,
+    /// The clip started in this step does not fade in from the one before it
+    /// (`PlayerAnimator::clearInterpolation`).
+    interpolation_cleared: bool,
     /// Pole axis base, its height, the climb cycle in progress and a re-grab delay.
     /// Frames since the burn's bounce landed (run and falls together).
     /// Burn leap: horizontal direction its air control works along.
@@ -1089,7 +1110,10 @@ impl Default for Player {
             slope: 0.,
             slick: false,
             catch: WallCatchControl::default(),
+            catch_collider_at: None,
+            fall_after_ledge: None,
             sub_restarted: false,
+            interpolation_cleared: false,
             swim_rise: 0,
             step_phase: 0.,
             landing_speed: 0.,
@@ -1503,6 +1527,10 @@ impl Player {
     /// A sub-nerve was chosen again in this step: the row's `sub_step` is 0.
     pub fn sub_restarted(&self) -> bool {
         self.sub_restarted
+    }
+    /// The clip this step started does not blend in from the previous one.
+    pub fn interpolation_cleared(&self) -> bool {
+        self.interpolation_cleared
     }
     /// Steps the actor nerve has executed, as the game's `state_step` counts
     /// them: 0 in the frame a nerve is chosen, 1 after its first step.
@@ -1924,7 +1952,7 @@ impl Player {
                 self.anim.frame -= clip::FIRE_RUN;
             }
             if let Some(length) = clip::loop_length(self.anim.name)
-                && self.anim.frame >= length
+                && self.anim.frame >= length + clip::loop_slack(self.anim.name)
             {
                 self.anim.frame -= length;
                 self.clip_wrapped = true;
@@ -2042,6 +2070,7 @@ impl Player {
         self.nerve.renewed = false;
         self.sensor_restart = false;
         self.sub_restarted = false;
+        self.interpolation_cleared = false;
         let was_grounded = self.grounded;
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
@@ -2091,10 +2120,13 @@ impl Player {
             && !hot
             && self.mode != Move::GroundSpin
             && !self.stands_on_ledge()
+            && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
             // The contact is flagged now; the next step decides what it means.
             // (The ground spin only regains the floor it let go of when it was
-            // chosen; no state looks at that as a landing.)
+            // chosen, and the run nerve runs on over a short drop: it judges
+            // the fall only after five steps without ground; neither looks at
+            // the contact as a landing.)
             self.nerve.touchdown = true;
             self.touchdown_speed = self.landing_speed;
         }
@@ -2233,6 +2265,7 @@ impl Player {
         // reached by a sub-state that belongs to another one.
         if self.mode != Move::Fall {
             self.spin_fall = false;
+            self.fall_after_ledge = None;
         }
         let actor = self.actor_name();
         if self.nerve.renewed || actor != self.nerve.actor {
@@ -2897,7 +2930,10 @@ impl Player {
     /// A state flown by the air control that no take-off armed (a fall, or a
     /// recorded state being replayed): set it up from the velocity it has.
     fn arm_fall_control(&mut self) {
-        let takeoff = fall_takeoff(self.v.y);
+        let mut takeoff = fall_takeoff(self.v.y);
+        if self.fall_after_ledge.is_some() {
+            takeoff.input_lock = ledge::LET_GO_INPUT_LOCK;
+        }
         self.air.setup(&mut self.v, self.facing, &takeoff);
         self.air_for = Some(self.mode);
     }
@@ -4264,11 +4300,12 @@ impl Player {
                         self.wall = Vec3::ZERO;
                         self.wall[axis] = sign;
                         // (The toy course's box has a flat face and a plain
-                        // contact point; the keep-the-velocity rule of the
+                        // contact point, at the height of the body sphere like
+                        // the collider's; the keep-the-velocity rule of the
                         // mesh path does not apply to it.)
                         self.touched.wall_contact = Some(WallContact {
                             normal: self.wall,
-                            position: (self.pos - self.wall * RADIUS) / UNIT,
+                            position: (self.pos - self.wall * RADIUS + Vec3::Y * 0.65) / UNIT,
                             at_face: true,
                         });
                         self.v[axis] = 0.;
@@ -4288,6 +4325,8 @@ impl Player {
     }
 }
 
+#[path = "tests/ledge.rs"]
+mod ledge_checks;
 #[path = "tests/movement.rs"]
 mod checks;
 #[path = "tests/spin.rs"]
@@ -4299,4 +4338,5 @@ pub fn self_check() {
     checks::run();
     spin_checks::run();
     wall_air_checks::run();
+    ledge_checks::run();
 }

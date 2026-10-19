@@ -263,107 +263,47 @@ def self_check():
     assert bank_region(container([(b'INFO',body)],b'FBNK'),0,60,127)==(4,7,62,100/127,1.)
     print('Sound archive checks passed')
 
-def add_clips(a):
-    """Add the sound triggers of named Mario clips to the installed table: only
-    new clips are appended, nothing already installed changes. The sounds they
-    play must be installed already (a clip that names others needs a full run)."""
-    output=a.output or extract.ROOT/'assets/local/sounds'
-    path=output/'player.json'
-    table=json.loads(path.read_text(encoding='utf-8'))
-    db=outfits.archive(a.romfs/'SoundData'/'SeDataBase.szs')
-    mario=outfits.byml(db['Mario.byml'])
-    known=table['mario']['actions']
-    added,missing=[],set()
-    for item in mario.get('ActionInfoList',[]):
-        name=item['Name']
-        if name not in a.add_clip or name in known:continue
-        known[name]=[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
-            for x in item.get('PlayInfoInActionList',[])]
-        missing|={x['play'] for x in known[name] if x['play'] not in table['mario']['plays']}
-        added.append(name)
-    for name in a.add_clip:
-        if name not in added and name not in known:print(f'{name}: the game has no sound triggers for this clip')
-    if missing:print('Not installed yet (run the full extraction): '+', '.join(sorted(missing)))
-    new=path.with_name('player.json.new')
-    new.write_text(json.dumps(table,indent=1,ensure_ascii=False),encoding='utf-8')
-    new.replace(path)
-    print('Added sound triggers for: '+(', '.join(added) or 'nothing'))
-
-def main():
-    p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--romfs',type=Path,default=extract.ROOT/'local/romfs')
-    p.add_argument('--vgmstream',type=Path)
-    p.add_argument('--list',action='store_true')
-    p.add_argument('--self-check',action='store_true')
-    p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
-    p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
-    p.add_argument('--add-clip',action='append',help='Add the sound triggers of this Mario clip (repeatable) to the installed table; nothing else changes')
-    a=p.parse_args()
-    if a.self_check:self_check();return
-    if a.add_clip:add_clips(a);return
-    if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
+def read_game(a):
+    """The sound archive's index, the resource files and the sound tables."""
     sound=a.romfs/'SoundData'
     sounds,wave_files=sound_index((sound/'SeData.bfsar').read_bytes())
-    if a.list:
-        print('\n'.join(name for name in sounds if name.startswith(('WsP','SeP','RcSeP'))));return
     files={}
     for archive in sound.glob('SeResource*.aras'):
         for name,data in extract.sarc(archive.read_bytes()):
             if data[:4]==b'FGRP':files.update(group_files(data))
     db=outfits.archive(sound/'SeDataBase.szs')
-    load=lambda name:outfits.byml(db[name]) if name in db else {}
-    def plays(*names):
-        found={}
-        for name in names:
-            for item in load(name).get('PlayInfoList',[]):found.setdefault(item['Name'],item)
-        return found
-    mario=load('Mario.byml');cap=load('PossessCap.byml')
-    mario_plays=plays('Mario.byml','MarioFoot.byml','MarioVoice.byml','MarioShakeNoise.byml','PlayerHakoniwaShakeNoise.byml')
-    cap_plays=plays('PossessCap.byml','PossessCapVoice.byml')
-    def actions(table,wanted):
-        return {item['Name']:[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
-            for x in item.get('PlayInfoInActionList',[])] for item in table.get('ActionInfoList',[]) if item['Name'] in wanted}
-    def reactions(table,wanted):
-        return {wanted[item['Name']]:[x['Name'] for x in item.get('PlayInfoList',[])]
-            for item in table.get('HitReactionInfoList',[]) if item['Name'] in wanted}
-    out={'mario':{'actions':actions(mario,CLIPS),'reactions':reactions(mario,MARIO_REACTIONS),'plays':{}},
-        'cap':{'actions':actions(cap,CAP_ACTIONS),'reactions':reactions(cap,CAP_REACTIONS),'plays':{}},
-        'footwear':FOOTWEAR,'resources':{}}
-    wanted_foot=FOOT+[prefix+n for prefix in set(FOOTWEAR.values()) for n in ('RunL','RunR','RunMatL','RunMatR','RunUpL','RunUpR','Jump','JumpMat','Land','LandMat','FootBrake')]
-    wanted_foot+=['RunMetalL','RunMetalR','JumpMetalHeavy','LandMetalHeavy']
-    for group,table in (('mario',mario_plays),('cap',cap_plays)):
-        g=out[group];names={x['play'] for v in g['actions'].values() for x in v}|{x for v in g['reactions'].values() for x in v}
-        if group=='mario':names|=set(wanted_foot)
-        for name in sorted(names):
-            item=table.get(name)
-            if not item:continue
-            layers=[]
-            for r in item.get('ResourceInfoList',[]):
-                if r.get('Name') not in sounds:continue
-                layer={'resource':r['Name']}
-                for key,field in (('DirectVolume','volume'),('DirectPitch','pitch'),('RandPitch','random_pitch'),
-                        ('RandVolume','random_volume'),('DelayFrame','delay')):
-                    if key in r:layer[field]=r[key]
-                for key in ('Volume','Pitch'):
-                    curve=r.get(key)
-                    if curve and not curve.get('RtpcSource'):
-                        layer[key.lower()+'_curve']=[curve['InMin'],curve['InMax'],curve['OutMin'],curve['OutMax']]
-                layers.append(layer)
-            # A play without sound is still a request the game logs: the material
-            # variants (`JumpMat`, `RunMatL`) wait for the floor to name their sound.
-            g['plays'][name]={'random':item.get('IsModeRandom',False),'loop':item.get('IsLevel',False),'layers':layers}
-    output=a.output or extract.ROOT/'assets/local/sounds'
-    temp=output/'_decode' if a.output else extract.ROOT/'local/audio'
-    temp.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True,exist_ok=True)
-    for old in output.glob('*.wav'):old.unlink()
+    return sounds,wave_files,files,db
+
+def play_entry(item,sounds):
+    """The installed form of one play: its layers (the sounds it starts with
+    their volume, pitch and delay), whether it is random or a level sound."""
+    layers=[]
+    for r in item.get('ResourceInfoList',[]):
+        if r.get('Name') not in sounds:continue
+        layer={'resource':r['Name']}
+        for key,field in (('DirectVolume','volume'),('DirectPitch','pitch'),('RandPitch','random_pitch'),
+                ('RandVolume','random_volume'),('DelayFrame','delay')):
+            if key in r:layer[field]=r[key]
+        for key in ('Volume','Pitch'):
+            curve=r.get(key)
+            if curve and not curve.get('RtpcSource'):
+                layer[key.lower()+'_curve']=[curve['InMin'],curve['InMax'],curve['OutMin'],curve['OutMax']]
+        layers.append(layer)
+    # A play without sound is still a request the game logs: the material
+    # variants (`JumpMat`, `RunMatL`) wait for the floor to name their sound.
+    return {'random':item.get('IsModeRandom',False),'loop':item.get('IsLevel',False),'layers':layers}
+
+def install_resources(names,a,game,output,temp):
+    """Decode (or render) the named sounds into `output`; returns their table
+    entries and the sequences this tool cannot render."""
+    sounds,wave_files,files,_=game
     def decode(raw,stem):
         src=temp/(stem+'.bfwav');src.write_bytes(raw);dst=temp/(stem+'.wav')
         result=subprocess.run([str(a.vgmstream.resolve()),'-i','-o',str(dst),str(src)],capture_output=True)
         if result.returncode:raise ValueError(f'vgmstream could not decode {stem}')
         return dst
-    needed=sorted({l['resource'] for g in ('mario','cap') for p in out[g]['plays'].values() for l in p['layers']})
-    skipped=[]
-    for name in needed:
+    resources,skipped={},[]
+    for name in names:
         info=sounds[name];entry={'files':[],'volume':round(info['volume'],4)}
         if info['kind']=='wave':
             dst=output/(name+'.wav')
@@ -395,7 +335,103 @@ def main():
         for f in entry['files']:
             with wave.open(str(output/Path(f).name),'rb') as audio:
                 if audio.getnframes()==0:raise ValueError('Decoded audio is empty')
-        out['resources'][name]=entry
+        resources[name]=entry
+    return resources,skipped
+
+def add_clips(a):
+    """Add the sound triggers of named Mario clips to the installed table: only
+    new clips are appended, nothing already installed changes. The sounds they
+    play are installed too when `--vgmstream` is given and they are missing
+    (their files are added next to the installed ones, which stay as they are)."""
+    output=a.output or extract.ROOT/'assets/local/sounds'
+    path=output/'player.json'
+    table=json.loads(path.read_text(encoding='utf-8'))
+    db=outfits.archive(a.romfs/'SoundData'/'SeDataBase.szs')
+    mario=outfits.byml(db['Mario.byml'])
+    known=table['mario']['actions']
+    added,missing=[],set()
+    for item in mario.get('ActionInfoList',[]):
+        name=item['Name']
+        if name not in a.add_clip or name in known:continue
+        known[name]=[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
+            for x in item.get('PlayInfoInActionList',[])]
+        missing|={x['play'] for x in known[name] if x['play'] not in table['mario']['plays']}
+        added.append(name)
+    for name in a.add_clip:
+        if name not in added and name not in known:print(f'{name}: the game has no sound triggers for this clip')
+    if missing and a.vgmstream:
+        load=lambda n:outfits.byml(db[n]) if n in db else {}
+        plays={}
+        for n in ('Mario.byml','MarioFoot.byml','MarioVoice.byml','MarioShakeNoise.byml','PlayerHakoniwaShakeNoise.byml'):
+            for item in load(n).get('PlayInfoList',[]):plays.setdefault(item['Name'],item)
+        game=read_game(a)
+        sounds=game[0]
+        new={name:play_entry(plays[name],sounds) for name in sorted(missing) if name in plays}
+        needed=sorted({l['resource'] for p in new.values() for l in p['layers']}-set(table['resources']))
+        temp=extract.ROOT/'local/audio'
+        temp.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True,exist_ok=True)
+        resources,skipped=install_resources(needed,a,game,output,temp)
+        table['mario']['plays'].update(new);table['resources'].update(resources)
+        for f in list(temp.glob('*.bfwav'))+list(temp.glob('*.wav')):f.unlink()
+        if skipped:print('Skipped sequences this tool cannot render: '+', '.join(skipped))
+        print('Added sounds for: '+', '.join(sorted(new)))
+        missing-=set(new)
+    if missing:print('Not installed yet (pass --vgmstream to install them, or run the full extraction): '+', '.join(sorted(missing)))
+    new=path.with_name('player.json.new')
+    new.write_text(json.dumps(table,indent=1,ensure_ascii=False),encoding='utf-8')
+    new.replace(path)
+    print('Added sound triggers for: '+(', '.join(added) or 'nothing'))
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--romfs',type=Path,default=extract.ROOT/'local/romfs')
+    p.add_argument('--vgmstream',type=Path)
+    p.add_argument('--list',action='store_true')
+    p.add_argument('--self-check',action='store_true')
+    p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
+    p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
+    p.add_argument('--add-clip',action='append',help='Add the sound triggers of this Mario clip (repeatable) to the installed table, and with --vgmstream the sounds it plays that are missing; nothing else changes')
+    a=p.parse_args()
+    if a.self_check:self_check();return
+    if a.add_clip:add_clips(a);return
+    if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
+    game=read_game(a)
+    sounds,wave_files,files,db=game
+    if a.list:
+        print('\n'.join(name for name in sounds if name.startswith(('WsP','SeP','RcSeP'))));return
+    load=lambda name:outfits.byml(db[name]) if name in db else {}
+    def plays(*names):
+        found={}
+        for name in names:
+            for item in load(name).get('PlayInfoList',[]):found.setdefault(item['Name'],item)
+        return found
+    mario=load('Mario.byml');cap=load('PossessCap.byml')
+    mario_plays=plays('Mario.byml','MarioFoot.byml','MarioVoice.byml','MarioShakeNoise.byml','PlayerHakoniwaShakeNoise.byml')
+    cap_plays=plays('PossessCap.byml','PossessCapVoice.byml')
+    def actions(table,wanted):
+        return {item['Name']:[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
+            for x in item.get('PlayInfoInActionList',[])] for item in table.get('ActionInfoList',[]) if item['Name'] in wanted}
+    def reactions(table,wanted):
+        return {wanted[item['Name']]:[x['Name'] for x in item.get('PlayInfoList',[])]
+            for item in table.get('HitReactionInfoList',[]) if item['Name'] in wanted}
+    out={'mario':{'actions':actions(mario,CLIPS),'reactions':reactions(mario,MARIO_REACTIONS),'plays':{}},
+        'cap':{'actions':actions(cap,CAP_ACTIONS),'reactions':reactions(cap,CAP_REACTIONS),'plays':{}},
+        'footwear':FOOTWEAR,'resources':{}}
+    wanted_foot=FOOT+[prefix+n for prefix in set(FOOTWEAR.values()) for n in ('RunL','RunR','RunMatL','RunMatR','RunUpL','RunUpR','Jump','JumpMat','Land','LandMat','FootBrake')]
+    wanted_foot+=['RunMetalL','RunMetalR','JumpMetalHeavy','LandMetalHeavy']
+    for group,table in (('mario',mario_plays),('cap',cap_plays)):
+        g=out[group];names={x['play'] for v in g['actions'].values() for x in v}|{x for v in g['reactions'].values() for x in v}
+        if group=='mario':names|=set(wanted_foot)
+        for name in sorted(names):
+            item=table.get(name)
+            if not item:continue
+            g['plays'][name]=play_entry(item,sounds)
+    output=a.output or extract.ROOT/'assets/local/sounds'
+    temp=output/'_decode' if a.output else extract.ROOT/'local/audio'
+    temp.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True,exist_ok=True)
+    for old in output.glob('*.wav'):old.unlink()
+    needed=sorted({l['resource'] for g in ('mario','cap') for p in out[g]['plays'].values() for l in p['layers']})
+    out['resources'],skipped=install_resources(needed,a,game,output,temp)
     # Replace the table in one step: running games read it at start-up.
     table=output/'player.json.new'
     table.write_text(json.dumps(out,indent=1,ensure_ascii=False),encoding='utf-8')

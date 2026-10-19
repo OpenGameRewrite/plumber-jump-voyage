@@ -142,6 +142,9 @@ impl Pose {
                         name => p.model_frame().unwrap_or_else(|| {
                             clip::held_length(name)
                                 .map_or(a.frame, |length| a.frame.min(length as f32))
+                                - clip::loop_length(name)
+                                    .filter(|length| a.frame >= *length)
+                                    .unwrap_or(0.)
                         }),
                     },
                     rate: a.rate,
@@ -434,6 +437,9 @@ impl Recorder {
         if covering.is_none() {
             self.blend
                 .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
+            if p.interpolation_cleared() {
+                self.blend.old.clear();
+            }
         }
         let pose = &self.blend.current;
         let kept = self.blend.kept();

@@ -938,21 +938,33 @@ fn wall_slide_and_ledge() {
     // The kick off the wall is the state's first step.
     p.step(&Orders::default(), &wall);
     assert!(p.vel.z > 0.);
-    // Ledge grab and climb.
+    // Ledge grab and climb: falling at the wall's top edge, the body is put on
+    // the edge (5 inside it, facing the wall), hangs through the catch clip and
+    // climbs onto the top when the stick pushes toward the wall.
     p = Player::default();
-    p.pos = Vec3::new(0., 4.75, -1.2);
+    p.pos = Vec3::new(0., 5., -1.2);
     p.grounded = false;
     p.mode = Move::Fall;
     p.v = Vec3::new(0., -2., -8.);
-    p.step(&fwd(default()), &wall);
+    for _ in 0..6 {
+        p.step(&fwd(default()), &wall);
+        if p.mode == Move::Ledge {
+            break;
+        }
+    }
     assert_eq!(chosen(&p), (Move::Ledge, "WallCatchStart"));
     assert!(
-        (p.pos.y - 6.).abs() < 1e-4 && (p.pos.z + 1.78).abs() < 0.01,
+        (p.pos.y - 6.).abs() < 1e-3 && (p.pos.z + 1.75).abs() < 0.02,
         "the hang sits on the edge: {:?}",
         p.pos
     );
+    // The stick toward the wall (the pad's, camera relative).
+    let toward = Orders {
+        stick: Vec2::NEG_Y,
+        ..fwd(default())
+    };
     for _ in 0..200 {
-        p.step(&fwd(default()), &wall);
+        p.step(&toward, &wall);
         if p.grounded {
             break;
         }

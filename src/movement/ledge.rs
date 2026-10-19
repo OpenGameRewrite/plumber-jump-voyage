@@ -80,6 +80,13 @@ const MOVE_CLIP_FRAMES: f32 = 20.;
 /// (`CollisionRadius` + 10 out, `Tall` down).
 const FALL_OUT: f32 = COLLISION_RADIUS + 10.;
 
+/// Steps the fall after a let-go ignores the stick (the literal
+/// `PlayerStateFallHakoniwa::appear` stores when the let-go trigger is on).
+pub(super) const LET_GO_INPUT_LOCK: u32 = 8;
+/// Steps after a let-go the ledge cannot be caught again unless the body has
+/// turned from the way it faced (45 degrees).
+const RECATCH_LOCK_STEPS: u32 = 15;
+
 const DOWN: Vec3 = Vec3::NEG_Y;
 
 /// `al::easeOut`.
@@ -581,6 +588,12 @@ impl Player {
     /// The states that ask `PlayerJudgeWallCatchInputDir` after their step: the
     /// jump nerve's, the fall, the long jump, the air throw and the wall states.
     fn wall_catch_applies(&self) -> bool {
+        if let (Move::Fall, Some(front)) = (self.mode, self.fall_after_ledge)
+            && self.state_frames() <= RECATCH_LOCK_STEPS
+            && self.facing.dot(front) >= std::f32::consts::FRAC_1_SQRT_2
+        {
+            return false;
+        }
         self.wall_keep_applies()
             || matches!(self.mode, Move::LongJump | Move::WallSlide)
             || (self.mode == Move::Throw && !self.grounded)
@@ -642,6 +655,7 @@ impl Player {
         self.v = Vec3::ZERO;
         self.grounded = false;
         self.catch = catch;
+        self.catch_collider_at = None;
         let ignore = self.input_kind_at_catch();
         self.catch.ignore_let_go = ignore;
         self.air_for = None;
@@ -1086,8 +1100,10 @@ impl Player {
         self.grounded = false;
         self.catch.nerve = CatchNerve::EndFall;
         self.catch.killed = true;
+        self.fall_after_ledge = Some(self.facing);
         self.go(Move::Fall, "Fall");
         self.start_clip("Fall");
+        self.interpolation_cleared = true;
     }
 
     /// `setNerveOnGround` for a body that stands on the ledge: the run when the

@@ -266,13 +266,16 @@ impl AirMove {
         self.steered = self.input_lock == 0;
         if self.input_lock == 0 {
             // The direction follows the velocity, whichever way it points. A
-            // jump with no horizontal speed has none: it takes the stick's
-            // (the recorded air throw out of a standing jump with the stick
-            // pulled back gains 0.5 along the stick, not the braking 1).
+            // jump with no horizontal speed keeps the axis it was set up with
+            // (the facing) and points it the way the stick pushes: the
+            // recorded air throw out of a standing jump with the stick pulled
+            // back gains 0.5 along the stick, not the braking 1, and the fall
+            // after letting go of a ledge, with the stick pulled back and a
+            // little to one side, gains 0.5 along the axis plus a side part of
+            // 0.3 of what the stick has across it.
             if flat(*v).length_squared() < 1e-8 {
-                if let Some(dir) = flat(input).try_normalize() {
-                    self.dir = dir;
-                    self.side = dir.cross(DOWN).normalize_or_zero();
+                if input.dot(self.dir) < 0. {
+                    self.dir = -self.dir;
                 }
             } else if v.dot(self.dir) < 0. {
                 self.dir = -self.dir;

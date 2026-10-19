@@ -73,7 +73,17 @@ impl Player {
             velocity = self.ground_following();
         }
         let yaw = self.facing.x.atan2(self.facing.z);
+        // The ledge hold puts the actor on its pose before the collider runs;
+        // the collider carries itself from where it stood last step to there.
+        if let Some(stood) = self.catch_collider_at.take()
+            && self.mode == Move::Ledge
+        {
+            self.collider.carry_from(stood);
+        }
         let outcome = self.collider.collide(mesh, start, velocity, yaw);
+        if self.mode == Move::Ledge {
+            self.catch_collider_at = Some(outcome.pos);
+        }
         // The plain end of the move keeps the controller's own arithmetic;
         // only what the contacts changed is taken from the collider.
         // (On the ground that includes the horizontal part of the pull along a
