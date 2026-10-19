@@ -58,13 +58,15 @@ impl Player {
         // push into the floor that keeps the ground contact every frame.
         let mut velocity = self.v;
         if was_grounded && (self.v.y == 0. || self.v.y == -self.pull) {
-            velocity.y = -self.pull;
+            velocity = self.ground_following();
         }
         let yaw = self.facing.x.atan2(self.facing.z);
         let outcome = self.collider.collide(mesh, start, velocity, yaw);
         // The plain end of the move keeps the controller's own arithmetic;
         // only what the contacts changed is taken from the collider.
-        self.pos += self.v * UNIT;
+        // (On the ground that includes the horizontal part of the pull along a
+        // tilted floor's normal, which the push out of the floor takes back.)
+        self.pos += Vec3::new(velocity.x, self.v.y, velocity.z) * UNIT;
         if outcome.collided {
             let correction = outcome.pos - (start + velocity);
             self.pos.x += correction.x * UNIT;
@@ -104,7 +106,11 @@ impl Player {
                 0.
             };
             if self.v.y <= 0. {
-                self.landing_speed = self.landing_speed.min(self.v.y);
+                // Only a contact reached from the air is a landing; the pull a
+                // ground state keeps is reported as the ground-following velocity.
+                if !was_grounded {
+                    self.landing_speed = self.landing_speed.min(self.v.y);
+                }
                 self.v.y = 0.;
                 self.grounded = true;
             } else {

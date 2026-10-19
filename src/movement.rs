@@ -386,6 +386,8 @@ pub mod clip {
         }
     }
     pub const LAND: u32 = 26;
+    /// The landing after a long fall (`PlayerStateWait`'s `LandStiffen` nerve).
+    pub const LAND_STIFFEN: u32 = 120;
     pub const LAND_JUMP3: u32 = 70;
     pub const SQUAT_END: u32 = 13;
     pub const TURN: u32 = 12;
@@ -923,7 +925,8 @@ pub struct Player {
     gravity: f32,
     jump_extend: bool,
     max_air_speed: f32,
-    peak: f32,
+    /// The drop the long-fall judge measures (`PlayerColliderHakoniwa::updateFallDistanceCheck`).
+    fall: FallDistance,
     /// The stick-circle detector the player's input holds
     /// (`al::SpinInputAnalyzer`), fed every frame.
     spin_input: SpinInput,
@@ -1064,7 +1067,7 @@ impl Default for Player {
             gravity: t::GRAVITY_AIR,
             jump_extend: false,
             max_air_speed: t::JUMP_MOVE_MIN,
-            peak: SPAWN.y,
+            fall: FallDistance::default(),
             spin_input: SpinInput::default(),
             spin_clockwise: false,
             stick: Vec3::ZERO,
@@ -1162,6 +1165,31 @@ impl Course {
             .map(|b| b.top(pos.x))
             .filter(|top| *top <= pos.y + 0.05)
             .max_by(f32::total_cmp)
+    }
+}
+
+/// `PlayerColliderHakoniwa::updateFallDistanceCheck`, which feeds
+/// `PlayerJudgeLongFall`: the drop since the player first fell at the terminal
+/// speed (`FallSpeedMax`), counted again from nothing whenever he stands on
+/// the ground (the step that lands still counts) or falls slower.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct FallDistance {
+    /// Height (centimetres) where the terminal speed was first reached.
+    start: Option<f32>,
+    /// The drop since then, in centimetres.
+    distance: f32,
+}
+impl FallDistance {
+    /// Called once per step after the collision with the height (cm) the
+    /// player ended at, the vertical velocity he moved with, whether he is on
+    /// the ground and whether he reached it in this step.
+    fn update(&mut self, height: f32, vy: f32, on_ground: bool, just_landed: bool) {
+        if (on_ground && !just_landed) || -vy < t::FALL_MAX {
+            *self = Self::default();
+            return;
+        }
+        let start = *self.start.get_or_insert(height);
+        self.distance = (start - height).max(0.);
     }
 }
 
@@ -1289,7 +1317,7 @@ impl Player {
             pos,
             prev: pos,
             shown: pos,
-            peak: pos.y,
+            fall: FallDistance::default(),
             checkpoint: pos,
             facing: facing.with_y(0.).normalize_or(Vec3::NEG_Z),
             ..Self::default()
@@ -1297,19 +1325,31 @@ impl Player {
     }
     /// Velocity in original units per frame, after the last step. On the
     /// ground the controller cancels the downward push inside the step; the
-    /// original keeps reporting it, so it is shown as the gravity pull. In the
+    /// original keeps reporting it, as the ground-following velocity. In the
     /// step that lands, it still reports the fall speed that moved the player.
     pub fn units_per_frame(&self) -> Vec3 {
         if self.grounded && (self.v.y == 0. || self.v.y == -self.pull) {
-            let down = if self.landing_speed < 0. {
-                self.landing_speed
+            if self.landing_speed < 0. {
+                self.v.with_y(self.landing_speed)
             } else {
-                -self.pull
-            };
-            self.v.with_y(down)
+                self.ground_following()
+            }
         } else {
             self.v
         }
+    }
+    /// The velocity a ground state moves with: its horizontal speed laid onto
+    /// the floor under it (`al::alongVectorNormalH`) and the pull into the
+    /// floor along the floor's normal, which is straight down on level ground
+    /// (recorded standing and running on a floor tilted by half a degree:
+    /// `-pull * normal` at rest).
+    fn ground_following(&self) -> Vec3 {
+        let normal = self.mesh_ground.unwrap_or(Vec3::Y);
+        let mut along = self.v.with_y(0.);
+        if normal.y > 0. {
+            along.y = -along.dot(normal) / normal.y;
+        }
+        along - normal * self.pull
     }
     /// The clip frame animation triggers (sounds, effects) are scanned up to.
     /// While a sub animation plays the same clip, the model's own action
@@ -1564,11 +1604,12 @@ impl Player {
         for (name, value) in &s.counters {
             self.set_counter(name, *value);
         }
-        self.peak = if self.grounded {
-            self.pos.y
-        } else {
-            self.peak.max(self.pos.y)
-        };
+        // How far the recorded fall had gone is not in the trace; one that is
+        // already at the terminal speed counts from here.
+        self.fall = FallDistance::default();
+        if !self.grounded && self.v.y <= -t::FALL_MAX {
+            self.fall.start = Some(self.pos.y);
+        }
     }
     /// The cap and the spin throw as a recorded row shows them.
     fn resume_cap(&mut self, s: &Snapshot) {
@@ -1633,7 +1674,6 @@ impl Player {
         let checkpoint = self.checkpoint;
         *self = Self::default();
         self.pos = checkpoint;
-        self.peak = checkpoint.y;
         self.checkpoint = checkpoint;
     }
     /// Move to another state of the same actor nerve and act in it right
@@ -1750,7 +1790,8 @@ impl Player {
     /// the landings are the first sub-state of the wait nerve.
     fn standing_clip_playing(&self) -> bool {
         let frames = match self.clip() {
-            "Land" | "LandTurn" | "LandStiffen" | "LandDownFall" => clip::LAND,
+            "Land" | "LandTurn" | "LandDownFall" => clip::LAND,
+            "LandStiffen" => clip::LAND_STIFFEN,
             "LandRolling" => clip::LAND_ROLLING,
             "LandJump3" => clip::LAND_JUMP3,
             "SquatEnd" => clip::SQUAT_END,
@@ -1939,7 +1980,14 @@ impl Player {
             self.finish_frame(scene);
             return;
         }
+        let moved = self.v;
         self.collide(&o, scene);
+        self.fall.update(
+            self.pos.y / UNIT,
+            moved.y,
+            self.grounded,
+            self.grounded && !was_grounded,
+        );
         // Hot ground takes over any landing; shallow water puts a burn out.
         let hot = self.grounded && scene.hot(self.pos);
         let quench = self.grounded && !hot && self.burning() && scene.puddle(self.pos);
@@ -2102,12 +2150,12 @@ impl Player {
         self.update_sounds();
         self.timer = self.frame as f32 / FPS;
         self.since_land = self.land_frames as f32 / FPS;
-        if self.grounded {
-            self.peak = self.pos.y;
-        } else {
-            self.peak = self.peak.max(self.pos.y);
-        }
-        if self.pos.y < -18. || !self.pos.is_finite() || !self.v.is_finite() {
+        // The toy course has nothing below it: falling out of it brings the
+        // player back to the checkpoint. (The game has its own abyss handling,
+        // the `Abyss` nerve and the recovery point, which is not ported; a
+        // stage's collision is left to itself.)
+        let out_of_course = scene.mesh.is_none() && self.pos.y < -18.;
+        if out_of_course || !self.pos.is_finite() || !self.v.is_finite() {
             self.reset();
         }
     }
@@ -3930,7 +3978,6 @@ impl Player {
 
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders) {
-        let fall = (self.peak - self.pos.y) / UNIT;
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
         if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
@@ -3975,7 +4022,7 @@ impl Player {
         self.dive_possible = true;
         self.air_throw_used = false;
         self.gravity = t::GRAVITY_AIR;
-        self.hard_land = fall > t::LONG_FALL
+        self.hard_land = self.fall.distance >= t::LONG_FALL
             && !matches!(
                 self.mode,
                 Move::GroundPound | Move::Dive | Move::BurnJump | Move::BurnBounce | Move::FireRun
