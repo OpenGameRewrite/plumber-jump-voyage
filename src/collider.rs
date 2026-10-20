@@ -5,10 +5,13 @@
 //! in here; the places where the original does something this port leaves out
 //! are named in the comments, with the function that does it.
 //!
-//! Units are the game's (cm), in the replay's start-relative frame; the
-//! caller converts. Everything is single precision on purpose: whether a fall
-//! that ends exactly on a surface touches it depends on how the arrow test
-//! rounds (see `arrow_hit`).
+//! Units are the game's (cm). The caller hands in start-relative positions;
+//! inside, the collider works in the stage's own absolute coordinates, like the
+//! game, where every sum rounds at the stage's magnitude (4.9e-4 cm steps at
+//! 5000 cm): whether a body that was pushed out of a wall touches it again
+//! next frame is decided by that rounding. Everything is single precision on
+//! purpose: whether a fall that ends exactly on a surface touches it depends
+//! on how the arrow test rounds (see `arrow_hit`).
 //!
 //! # What the player is made of
 //!
@@ -36,6 +39,7 @@
 //! vector (`calcResultVec`), removes the part of the remaining move that goes
 //! into the surface and goes on, up to 100 rounds.
 use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
+use crate::prism::{PartFrame, Point, rotate_vector, transform_point};
 use bevy::prelude::{Quat, Vec3};
 
 /// `PlayerCollider::_1b0`, the slope limit in degrees: a face whose normal is
@@ -218,9 +222,8 @@ impl Keeper {
 /// about the up axis; the game's pose is the actor's full orientation).
 #[derive(Clone, Copy, Debug)]
 struct Pose {
+    /// Where the feet are, in the stage's absolute coordinates.
     pos: Vec3,
-    sin: f32,
-    cos: f32,
     /// The facing the body had when the collider last ran, and the one it has
     /// now: a sweep turns from one to the other (`SpherePoseInterpolator`
     /// interpolates the orientation along with the position).
@@ -230,15 +233,56 @@ struct Pose {
     /// off the vertical (a run up a slope): the shapes hang from the whole
     /// pose, not only its facing.
     tilt: Option<Tilt>,
+    /// The rotation of the pose the sweep has reached, row-major 3x3, built
+    /// from its quaternion the way `PlayerCollider::findCollidePos` builds the
+    /// matrix the shapes hang from.
+    rotation: [f32; 9],
 }
-/// The orientations a sweep turns between, and the one it has reached.
+/// The orientations a sweep turns between.
 #[derive(Clone, Copy, Debug)]
 struct Tilt {
     from: Quat,
     to: Quat,
-    now: Quat,
+}
+/// The rotation matrix `findCollidePos` makes from a unit quaternion (the
+/// products `2*q*q` first, then sums and differences: for a turn about the
+/// vertical alone the up column is exactly (0, 1, 0)).
+fn rotation_of(q: Quat) -> [f32; 9] {
+    let (x2, y2, z2, w2) = (q.x + q.x, q.y + q.y, q.z + q.z, q.w + q.w);
+    let xy = q.y * x2;
+    let yy = q.y * y2;
+    let zz = q.z * z2;
+    let xx = q.x * x2;
+    let xz = q.z * x2;
+    let yz = y2 * q.z;
+    let zw = q.z * w2;
+    let xw = q.x * w2;
+    let yw = q.y * w2;
+    let one_minus_yy = 1. - yy;
+    let one_minus_xx = 1. - xx;
+    [
+        one_minus_yy - zz, // m00
+        xy - zw,           // m01
+        xz + yw,           // m02
+        xy + zw,           // m10
+        one_minus_xx - zz, // m11
+        yz - xw,           // m12
+        xz - yw,           // m20
+        yz + xw,           // m21
+        one_minus_xx - yy, // m22
+    ]
 }
 impl Pose {
+    fn new(pos: Vec3, from_yaw: f32, yaw: f32, tilt: Option<Tilt>) -> Self {
+        let q = tilt.map_or_else(|| Quat::from_rotation_y(from_yaw), |t| t.from);
+        Self {
+            pos,
+            from_yaw,
+            yaw,
+            tilt,
+            rotation: rotation_of(q),
+        }
+    }
     /// The pose `sweep` has reached: its position and the interpolated facing.
     fn along(&self, sweep: &Sweep) -> Self {
         if let Some(tilt) = self.tilt {
@@ -247,27 +291,31 @@ impl Pose {
             let now = crate::movement::plane::slerp(tilt.from, tilt.to, sweep.current).normalize();
             return Self {
                 pos: sweep.pos(),
-                tilt: Some(Tilt { now, ..tilt }),
+                rotation: rotation_of(now),
                 ..*self
             };
         }
-        let (sin, cos) = sweep.yaw(self.from_yaw, self.yaw).sin_cos();
+        let yaw = sweep.yaw(self.from_yaw, self.yaw);
         Self {
             pos: sweep.pos(),
-            sin,
-            cos,
+            rotation: rotation_of(Quat::from_rotation_y(yaw)),
             ..*self
         }
     }
+    /// `v` turned by the pose (`CollisionShapeInfo*::calcWorldShapeInfo`): each
+    /// component `(x*m0 + y*m1) + z*m2`.
     fn rotate(&self, local: Vec3) -> Vec3 {
-        if let Some(tilt) = self.tilt {
-            return tilt.now * local;
-        }
+        let m = &self.rotation;
         Vec3::new(
-            local.x * self.cos + local.z * self.sin,
-            local.y,
-            -local.x * self.sin + local.z * self.cos,
+            (local.x * m[0] + local.y * m[1]) + local.z * m[2],
+            (local.x * m[3] + local.y * m[4]) + local.z * m[5],
+            (local.x * m[6] + local.y * m[7]) + local.z * m[8],
         )
+    }
+    /// A point of the body in the stage's coordinates: the rotated offset added to the
+    /// position, the last step of `calcWorldShapeInfo`.
+    fn world_point(&self, local: Vec3) -> Vec3 {
+        self.pos + self.rotate(local)
     }
 }
 
@@ -287,7 +335,7 @@ pub struct SphereHit {
     /// How far the centre must move along the face normal to just touch.
     pub depth: f32,
     pub location: Location,
-    /// The touched point of the triangle.
+    /// The touched point of the triangle (stage coordinates).
     pub position: Vec3,
     pub center: Vec3,
 }
@@ -305,7 +353,47 @@ impl Plane {
     }
 }
 
-/// `KCHitSphereForPlayer` plus `calcSphereHitPos`.
+/// `KCHitSphereForPlayer` plus `calcSphereHitPos` for a triangle of the mesh: in the part's own
+/// frame on the raw prism when the export has it (see `prism.rs`), otherwise on the world
+/// triangle (`sphere_hit_world`).
+fn sphere_hit(
+    mesh: &TriangleMesh,
+    t: &MeshTriangle,
+    center: Vec3,
+    radius: f32,
+) -> Option<SphereHit> {
+    let Some(local) = &t.local else {
+        // A world-space triangle lives in the replay's frame.
+        let hit = sphere_hit_world(t, mesh.from_game_vec(center), radius, mesh.thickness)?;
+        return Some(SphereHit {
+            position: mesh.to_game_vec(hit.position),
+            center,
+            ..hit
+        });
+    };
+    let frame = &mesh.parts[local.part as usize];
+    // `CollisionMultiShape::callbackFromServer`: the centre and the radius are carried into the
+    // part's frame, the depth and the touched point back out.
+    let center_local = transform_point(&frame.inverse, center.to_array());
+    let (depth, region) = local.prism.sphere_test(
+        center_local,
+        radius * frame.inverse_scale,
+        frame.inverse_scale,
+    )?;
+    let position = local.prism.sphere_hit_position(center_local, region);
+    Some(SphereHit {
+        depth: frame.world_per_local() * depth,
+        location: match region {
+            1 => Location::Face,
+            2..=4 => Location::Edge(region - 1),
+            _ => Location::Corner(region - 4),
+        },
+        position: Vec3::from_array(transform_point(&frame.base, position)),
+        center,
+    })
+}
+
+/// The same on a world-space triangle (older exports, the toy course and the tests).
 ///
 /// The prism has three edge planes (normals in the face's plane); the signed
 /// distances of the centre to them (`d`, positive outside) pick the region the
@@ -317,7 +405,12 @@ impl Plane {
 /// so a centre beside its long edge is not in the corner's region. An edge
 /// only counts when the centre is no further outside it than above the face
 /// (45 degrees), a corner when its distance is within that slope of 0.7071.
-fn sphere_hit(t: &MeshTriangle, center: Vec3, radius: f32, thickness: f32) -> Option<SphereHit> {
+fn sphere_hit_world(
+    t: &MeshTriangle,
+    center: Vec3,
+    radius: f32,
+    thickness: f32,
+) -> Option<SphereHit> {
     let from_first = center - t.corners[0];
     let d = [
         from_first.dot(t.edges[0]),
@@ -435,7 +528,92 @@ fn sphere_hit(t: &MeshTriangle, center: Vec3, radius: f32, thickness: f32) -> Op
 pub struct ArrowHit {
     /// The length of the arrow beyond the surface.
     pub depth: f32,
+    /// Where it crosses the surface (stage coordinates).
     pub position: Vec3,
+    /// How far along the arrow, from its start, the surface lies.
+    pub distance: f32,
+}
+
+/// `KCHitArrow` for a triangle of the mesh as the player's own arrows run it
+/// (`CollisionMultiShape::callbackFromServer`): in the part's frame on the raw prism when the
+/// export has it, otherwise on the world triangle. The arrow's vector is carried by the
+/// inverse's rotation alone, its start by the whole inverse.
+fn arrow_hit(mesh: &TriangleMesh, t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
+    let Some(local) = &t.local else {
+        return arrow_hit_world_game(mesh, t, start, vector);
+    };
+    let frame = &mesh.parts[local.part as usize];
+    let start_local = transform_point(&frame.inverse, start.to_array());
+    let vector_local = rotate_vector(&frame.inverse, vector.to_array());
+    let fraction = local.prism.arrow_test(start_local, vector_local)?;
+    Some(arrow_result(
+        mesh,
+        frame,
+        start_local,
+        vector_local,
+        fraction,
+        vector.length(),
+    ))
+}
+
+/// `al::CollisionParts::checkStrikeArrow`, the query `alCollisionUtil` asks (ledge and pole
+/// probes, border checks): the same prism test, but the vector is carried as the difference of
+/// the carried end and start points.
+fn strike_hit(mesh: &TriangleMesh, t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
+    let Some(local) = &t.local else {
+        return arrow_hit_world_game(mesh, t, start, vector);
+    };
+    let frame = &mesh.parts[local.part as usize];
+    let end = start + vector;
+    let start_local = transform_point(&frame.inverse, start.to_array());
+    let end_local = transform_point(&frame.inverse, end.to_array());
+    let vector_local = [
+        end_local[0] - start_local[0],
+        end_local[1] - start_local[1],
+        end_local[2] - start_local[2],
+    ];
+    let fraction = local.prism.arrow_test(start_local, vector_local)?;
+    Some(arrow_result(
+        mesh,
+        frame,
+        start_local,
+        vector_local,
+        fraction,
+        vector.length(),
+    ))
+}
+
+/// A world-space triangle's arrow test with the stage-coordinate start converted to and the
+/// result back from the replay's frame.
+fn arrow_hit_world_game(
+    mesh: &TriangleMesh,
+    t: &MeshTriangle,
+    start: Vec3,
+    vector: Vec3,
+) -> Option<ArrowHit> {
+    let hit = arrow_hit_world(t, mesh.from_game_vec(start), vector)?;
+    Some(ArrowHit {
+        position: mesh.to_game_vec(hit.position),
+        ..hit
+    })
+}
+
+/// The crossing found at `fraction` of an arrow of world length `length`: how far beyond the
+/// surface the arrow reaches, how far along it lies and where (stage coordinates).
+fn arrow_result(
+    _mesh: &TriangleMesh,
+    frame: &PartFrame,
+    start_local: Point,
+    vector_local: Point,
+    fraction: f32,
+    length: f32,
+) -> ArrowHit {
+    let at_local = [0, 1, 2].map(|i| start_local[i] + fraction * vector_local[i]);
+    ArrowHit {
+        depth: (1. - fraction) * length,
+        position: Vec3::from_array(transform_point(&frame.base, at_local)),
+        distance: length * fraction,
+    }
 }
 
 /// `KCHitArrow`: the arrow starts in front of the face, ends behind it, and
@@ -446,7 +624,7 @@ pub struct ArrowHit {
 /// `t = 40 / 60`, which in single precision is a hair above two thirds, so
 /// the depth comes out a hair under the margin 20 and the surface only
 /// supports. A fall has to go below the surface to collide.
-fn arrow_hit(t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
+fn arrow_hit_world(t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
     let p = start - t.corners[0];
     let height = p.dot(t.normal);
     if height <= 0. {
@@ -466,9 +644,11 @@ fn arrow_hit(t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
         return None;
     }
     let length = vector.length();
+    let depth = (1. - fraction) * length;
     Some(ArrowHit {
-        depth: (1. - fraction) * length,
+        depth,
         position: start + vector * fraction,
+        distance: length - depth,
     })
 }
 
@@ -534,12 +714,26 @@ pub fn arrow_strikes_filtered(
     vector: Vec3,
     filter: FaceFilter,
 ) -> Vec<Strike> {
+    let mut strikes = arrow_strikes_game(mesh, mesh.to_game_vec(start), vector, filter);
+    for strike in &mut strikes {
+        strike.position = mesh.from_game_vec(strike.position);
+    }
+    strikes
+}
+
+/// [`arrow_strikes_filtered`] for a start in the stage's coordinates; the strikes' positions
+/// are in the stage's coordinates too.
+fn arrow_strikes_game(
+    mesh: &TriangleMesh,
+    start: Vec3,
+    vector: Vec3,
+    filter: FaceFilter,
+) -> Vec<Strike> {
     let tip = start + vector;
     let area = Aabb {
-        min: start.min(tip),
-        max: start.max(tip),
+        min: mesh.from_game_vec(start.min(tip)),
+        max: mesh.from_game_vec(start.max(tip)),
     };
-    let length = vector.length();
     mesh.candidates(area)
         .into_iter()
         .filter_map(|i| {
@@ -547,11 +741,11 @@ pub fn arrow_strikes_filtered(
             if !filter.allows(t.normal) {
                 return None;
             }
-            let hit = arrow_hit(t, start, vector)?;
+            let hit = strike_hit(mesh, t, start, vector)?;
             Some(Strike {
                 position: hit.position,
                 normal: t.normal,
-                distance: length - hit.depth,
+                distance: hit.distance,
                 triangle: i,
             })
         })
@@ -561,7 +755,12 @@ pub fn arrow_strikes_filtered(
 /// `rs::calcExistCollisionBorder`: is there a face right behind the one the
 /// arrow hit, turned the other way (the back of a thin wall)?
 pub fn border_behind(mesh: &TriangleMesh, position: Vec3, normal: Vec3) -> bool {
-    arrow_strikes(mesh, position - normal, normal * 2., false)
+    border_behind_game(mesh, mesh.to_game_vec(position), normal)
+}
+
+/// [`border_behind`] for a position in the stage's coordinates.
+fn border_behind_game(mesh: &TriangleMesh, position: Vec3, normal: Vec3) -> bool {
+    arrow_strikes_game(mesh, position - normal, normal * 2., FaceFilter::Any)
         .into_iter()
         .min_by(|a, b| a.distance.total_cmp(&b.distance))
         .is_some_and(|hit| hit.normal.dot(normal) <= -(0.01f32).cos())
@@ -583,12 +782,13 @@ pub fn first_strike(
 /// the same prism test the player's own spheres use): the face's index in the
 /// mesh and the touched point on it.
 pub fn sphere_strikes(mesh: &TriangleMesh, center: Vec3, radius: f32) -> Vec<(u32, Vec3)> {
+    let center_game = mesh.to_game_vec(center);
     mesh.candidates(Aabb::around(center, radius))
         .into_iter()
         .filter_map(|i| {
             let t = &mesh.triangles[i as usize];
-            let hit = sphere_hit(t, center, radius, mesh.thickness)?;
-            Some((i, hit.position))
+            let hit = sphere_hit(mesh, t, center_game, radius)?;
+            Some((i, mesh.from_game_vec(hit.position)))
         })
         .collect()
 }
@@ -618,12 +818,15 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
     for (index, shape) in keeper.shapes.iter().enumerate() {
         match shape {
             Shape::Sphere { center, radius, .. } => {
-                let world = pose.pos + pose.rotate(*center);
-                for i in mesh.candidates(Aabb::around(world, *radius)) {
+                // The centre as the game sums it: the position plus the rotated offset.
+                let world = pose.world_point(*center);
+                let world_rel = mesh.from_game_vec(world);
+                for i in mesh.candidates(Aabb::around(world_rel, *radius)) {
                     let t = &mesh.triangles[i as usize];
-                    if let Some(hit) = sphere_hit(t, world, *radius, mesh.thickness)
-                        && results.collide.len() < MAX_RESULTS
-                    {
+                    let Some(hit) = sphere_hit(mesh, t, world, *radius) else {
+                        continue;
+                    };
+                    if results.collide.len() < MAX_RESULTS {
                         results.collide.push(ShapeResult {
                             shape: index,
                             triangle: i,
@@ -639,21 +842,20 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
                 ..
             } => {
                 // The start of the arrow is a world position that the game holds
-                // in single precision at the stage's magnitude. A tilt of a few
-                // millionths of a radian moves it by far less than that step, so
-                // a body standing flush on the floor keeps the exact height 40
-                // above it; the depth then falls a hair under the margin and the
-                // arrow only supports.
-                let from = mesh.snap_to_game_precision(pose.pos + pose.rotate(*start));
+                // in single precision at the stage's magnitude: a body standing
+                // flush on the floor keeps the exact height 40 above it; the
+                // depth then falls a hair under the margin and the arrow only
+                // supports.
+                let from = pose.world_point(*start);
                 let vec = pose.rotate(*vector);
                 let tip = from + vec;
                 let area = Aabb {
-                    min: from.min(tip),
-                    max: from.max(tip),
+                    min: mesh.from_game_vec(from.min(tip)),
+                    max: mesh.from_game_vec(from.max(tip)),
                 };
                 for i in mesh.candidates(area) {
                     let t = &mesh.triangles[i as usize];
-                    let Some(hit) = arrow_hit(t, from, vec) else {
+                    let Some(hit) = arrow_hit(mesh, t, from, vec) else {
                         continue;
                     };
                     let result = ShapeResult {
@@ -1011,7 +1213,6 @@ impl PlayerCollider {
         self.wall = None;
         self.ceiling = None;
         self.best = [NO_CONTACT; 3];
-        let (sin, cos) = yaw.sin_cos();
         let from_yaw = self.last_yaw.unwrap_or(yaw);
         let orientation = |yaw: f32, tilt: Option<Quat>| tilt.unwrap_or(Quat::from_rotation_y(yaw));
         let tilted = if tilt.is_some() || self.last_tilt.is_some() {
@@ -1019,19 +1220,17 @@ impl PlayerCollider {
             Some(Tilt {
                 from,
                 to: orientation(yaw, tilt),
-                now: from,
             })
         } else {
             None
         };
-        let pose = Pose {
-            pos,
-            sin,
-            cos,
-            from_yaw,
-            yaw,
-            tilt: tilted,
-        };
+        // Inside, positions are the game's own absolute ones.
+        let pos = mesh.to_game_vec(pos);
+        let debug = std::env::var("PJV_DBG").is_ok();
+        if debug {
+            eprintln!("DBG collide pos {pos:?} velocity {velocity:?} yaw {yaw}");
+        }
+        let pose = Pose::new(pos, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);
         self.last_tilt = tilt;
         // `collide` forgets the last frame's push directions and the deepest
@@ -1044,7 +1243,10 @@ impl PlayerCollider {
         // empty, except for the states that put the actor on a pose by hand.
         // An empty carry is not swept at all; the move's own sweep then also
         // checks the pose it starts from.
-        let begin = self.carry_from.take().unwrap_or(pose.pos);
+        let begin = self
+            .carry_from
+            .take()
+            .map_or(pose.pos, |from| mesh.to_game_vec(from));
         let mut at = begin;
         let carry = pose.pos - begin;
         let carried = carry.length_squared() >= NEAR_ZERO * NEAR_ZERO;
@@ -1080,7 +1282,20 @@ impl PlayerCollider {
         }
         let fix = at - (pose.pos + velocity);
         self.fix_reaction = fix;
-        Outcome { pos: at, collided }
+        // The contacts' points go back to the replay's frame for the caller.
+        for contact in [&mut self.floor, &mut self.wall, &mut self.ceiling]
+            .into_iter()
+            .flatten()
+        {
+            contact.position = mesh.from_game_vec(contact.position);
+        }
+        if debug {
+            eprintln!("DBG   -> {at:?} collided {collided}");
+        }
+        Outcome {
+            pos: mesh.from_game_vec(at),
+            collided,
+        }
     }
 
     /// `PlayerCollider::moveCollide`. `skip_start` is its last argument: the
@@ -1114,6 +1329,10 @@ impl PlayerCollider {
             let mut remain = sweep.remaining();
             let (fix, unaveraged) =
                 self.calc_result_vec(mesh, &pose.along(&sweep), &results, previous);
+            if std::env::var("PJV_DBG").is_ok() {
+                eprintln!("DBG   round at {:?} t {} fix {:?} results {:?}", *at, sweep.current, fix,
+                    results.collide.iter().map(|r| match r.hit { Hit::Sphere(h) => ('S', r.shape, r.triangle, h.depth), Hit::Arrow(h) => ('A', r.shape, r.triangle, h.depth) }).collect::<Vec<_>>());
+            }
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
@@ -1175,6 +1394,12 @@ impl PlayerCollider {
                 return false;
             }
             *results = check(mesh, &self.keeper, &pose.along(sweep));
+            if sweep.current == 0. && std::env::var("PJV_SKIP0").is_ok() {
+                results.collide.retain(|r| match r.hit {
+                    Hit::Sphere(h) => h.depth > 3e-4,
+                    _ => true,
+                });
+            }
             if !results.collide.is_empty() {
                 return true;
             }
@@ -1374,7 +1599,7 @@ impl PlayerCollider {
         if class == Class::Wall
             && self.keeper.has_arrow
             && (!at_face || self.form_checks_faces())
-            && border_behind(mesh, hit.position, normal)
+            && border_behind_game(mesh, hit.position, normal)
         {
             return;
         }

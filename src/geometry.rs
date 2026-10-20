@@ -16,6 +16,14 @@
 //! against them). Edge 1 is the edge from the first corner to the third, edge
 //! 2 from the first to the second and edge 3 from the second to the third,
 //! the way `kcl.py` builds the corners from a prism.
+//!
+//! A newer export also carries what the game itself tests against: every
+//! placed object's base matrix and the raw prisms of its KCL (`prism.rs`).
+//! Triangles with such a prism are tested in their part's own single
+//! precision frame; their world corners, normals and edge normals are
+//! derived the way `Triangle::fillData` derives them. Older exports (world
+//! triangles only) keep working through the world-space tests.
+use crate::prism::{PartFrame, Point, Prism};
 use bevy::prelude::Vec3;
 use std::collections::HashMap;
 
@@ -46,6 +54,16 @@ pub struct MeshTriangle {
     pub object: u16,
     /// The prism's own triangle index in its KCL (what the game reports for a hit).
     pub kcl_index: u32,
+    /// The raw prism and the part it lives in, when the export has them.
+    pub local: Option<LocalPrism>,
+}
+
+/// A triangle's raw KCL prism and the index (into `TriangleMesh::parts`) of the part whose
+/// frame it is expressed in.
+#[derive(Clone, Copy, Debug)]
+pub struct LocalPrism {
+    pub part: u32,
+    pub prism: Prism,
 }
 
 /// Axis-aligned box in cm.
@@ -78,11 +96,26 @@ pub struct TriangleMesh {
     /// Model name of every object the triangles come from.
     pub objects: Vec<String>,
     pub thickness: f32,
+    /// The collision parts of the objects the local prisms belong to.
+    pub parts: Vec<PartFrame>,
     /// The replay's start in the stage's own (absolute) coordinates, cm. The
     /// game keeps every position in single precision at that magnitude, whose
     /// steps are far coarser than the replay's start-relative numbers.
     origin: [f64; 3],
     cells: HashMap<(i32, i32), Vec<u32>>,
+}
+
+/// `N` floats from a JSON array (`None` when absent, short or not numbers).
+fn floats<const N: usize>(value: Option<&serde_json::Value>) -> Option<[f32; N]> {
+    let list = value?.as_array()?;
+    let mut out = [0.; N];
+    if list.len() < N {
+        return None;
+    }
+    for (slot, item) in out.iter_mut().zip(list) {
+        *slot = item.as_f64()? as f32;
+    }
+    Some(out)
 }
 
 fn cell_of(v: f32) -> i32 {
@@ -155,6 +188,41 @@ impl TriangleMesh {
             origin,
             ..Self::default()
         };
+        // Per object: the part frame of its base matrix (newer exports only).
+        let mut object_part: Vec<Option<u32>> = Vec::new();
+        for (i, object) in root["objects"].as_array().into_iter().flatten().enumerate() {
+            let Some(base) = floats::<12>(object.get("matrix")) else {
+                object_part.push(None);
+                continue;
+            };
+            let frame = PartFrame::new(base)
+                .ok_or_else(|| format!("geometry: object {i} has a singular matrix"))?;
+            // The exporter writes the inverse it computed with the same arithmetic:
+            // a difference means the two implementations disagree.
+            if let Some(exported) = floats::<12>(object.get("inverse"))
+                && exported != frame.inverse
+            {
+                return Err(format!("geometry: object {i}: the exported inverse matrix differs from the computed one"));
+            }
+            object_part.push(Some(mesh.parts.len() as u32));
+            mesh.parts.push(frame);
+        }
+        // The raw prisms, by "<object model>#<sub-model>": thickness and rows of
+        // length, first corner, face normal, edge normals 1 to 3.
+        let models = root.get("models").and_then(|m| m.as_object());
+        let prism_of = |model: &str, sub: usize, slot: usize| -> Option<Prism> {
+            let entry = models?.get(&format!("{model}#{sub}"))?;
+            let row = floats::<16>(entry["prisms"].get(slot))?;
+            let thickness = entry["thickness"].as_f64()? as f32;
+            let at = |k: usize| [row[k], row[k + 1], row[k + 2]];
+            Some(Prism {
+                length: row[0],
+                origin: at(1),
+                face: at(4),
+                edges: [at(7), at(10), at(13)],
+                thickness,
+            })
+        };
         for (i, row) in rows.iter().enumerate() {
             let n: Vec<f64> = row
                 .as_array()
@@ -165,35 +233,91 @@ impl TriangleMesh {
             if n.len() < 16 {
                 return Err(format!("geometry: triangle {i} has {} fields", n.len()));
             }
-            // The corners are single-precision absolute positions, as the stage
-            // file holds them; subtract in double precision, the numbers are large.
-            let corner = |k: usize| {
-                Vec3::new(
-                    (f64::from(n[3 * k] as f32) - origin[0]) as f32,
-                    (f64::from(n[3 * k + 1] as f32) - origin[1]) as f32,
-                    (f64::from(n[3 * k + 2] as f32) - origin[2]) as f32,
+            let object = n[13] as usize;
+            let local = match (object_part.get(object).copied().flatten(), n.get(17)) {
+                (Some(part), Some(slot)) => {
+                    let model = mesh.objects.get(object).map_or("", String::as_str);
+                    let prism = prism_of(model, n[16] as usize, *slot as usize)
+                        .ok_or_else(|| format!("geometry: triangle {i}: no prism {model}#{} {slot}", n[16]))?;
+                    Some(LocalPrism { part, prism })
+                }
+                _ => None,
+            };
+            let (corners, normal, edges) = if let Some(local) = &local {
+                // The game's own derivation of the triangle (`Triangle::fillData`).
+                let world = local.prism.to_world(&mesh.parts[local.part as usize]);
+                (
+                    world.corners.map(|c| mesh.from_game(c)),
+                    Vec3::from_array(world.normal),
+                    world.edges.map(Vec3::from_array),
+                )
+            } else {
+                // The corners are single-precision absolute positions, as the stage
+                // file holds them; subtract in double precision, the numbers are large.
+                let corner = |k: usize| {
+                    Vec3::new(
+                        (f64::from(n[3 * k] as f32) - origin[0]) as f32,
+                        (f64::from(n[3 * k + 1] as f32) - origin[1]) as f32,
+                        (f64::from(n[3 * k + 2] as f32) - origin[2]) as f32,
+                    )
+                };
+                let corners = [corner(0), corner(1), corner(2)];
+                let normal =
+                    Vec3::new(n[9] as f32, n[10] as f32, n[11] as f32).normalize_or_zero();
+                let [a, b, c] = corners;
+                (
+                    corners,
+                    normal,
+                    [
+                        outward(a, c, b, normal),
+                        outward(a, b, c, normal),
+                        outward(b, c, a, normal),
+                    ],
                 )
             };
-            let corners = [corner(0), corner(1), corner(2)];
-            let normal = Vec3::new(n[9] as f32, n[10] as f32, n[11] as f32).normalize_or_zero();
             if normal == Vec3::ZERO {
                 continue;
             }
-            let [a, b, c] = corners;
             mesh.add(MeshTriangle {
                 corners,
                 normal,
-                edges: [
-                    outward(a, c, b, normal),
-                    outward(a, b, c, normal),
-                    outward(b, c, a, normal),
-                ],
+                edges,
                 attribute: n[12] as u16,
                 object: n[13] as u16,
                 kcl_index: n[14] as u32,
+                local,
             });
         }
         Ok(mesh)
+    }
+
+    /// A start-relative position as the game holds it: the single-precision
+    /// absolute stage position nearest to it.
+    pub fn to_game(&self, relative: Vec3) -> Point {
+        [
+            (f64::from(relative.x) + self.origin[0]) as f32,
+            (f64::from(relative.y) + self.origin[1]) as f32,
+            (f64::from(relative.z) + self.origin[2]) as f32,
+        ]
+    }
+
+    /// [`Self::to_game`] as a vector (the collider works in the game's own coordinates).
+    pub fn to_game_vec(&self, relative: Vec3) -> Vec3 {
+        Vec3::from_array(self.to_game(relative))
+    }
+
+    /// [`Self::from_game`] for a vector.
+    pub fn from_game_vec(&self, absolute: Vec3) -> Vec3 {
+        self.from_game(absolute.to_array())
+    }
+
+    /// The start-relative position of an absolute single-precision one.
+    pub fn from_game(&self, absolute: Point) -> Vec3 {
+        Vec3::new(
+            (f64::from(absolute[0]) - self.origin[0]) as f32,
+            (f64::from(absolute[1]) - self.origin[1]) as f32,
+            (f64::from(absolute[2]) - self.origin[2]) as f32,
+        )
     }
 
     /// A start-relative position (cm) as the game would hold it: rounded to
@@ -256,6 +380,7 @@ impl TriangleMesh {
                 attribute: *attribute,
                 object: 0,
                 kcl_index: i as u32,
+                local: None,
             });
         }
         mesh

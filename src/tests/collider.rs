@@ -178,6 +178,7 @@ fn ceiling_stops_a_jump() {
 fn exact_arrival_depth_is_just_under_the_margin() {
     let t = TriangleMesh::from_corners(&square(0., 100.));
     let hit = arrow_hit(
+        &t,
         &t.triangles[0],
         Vec3::new(0., 40., 0.),
         Vec3::new(0., -60., 0.),
@@ -185,6 +186,7 @@ fn exact_arrival_depth_is_just_under_the_margin() {
     .expect("the arrow crosses the floor");
     assert!(hit.depth < 20. && hit.depth > 19.999);
     let hit = arrow_hit(
+        &t,
         &t.triangles[0],
         Vec3::new(0., 39.5, 0.),
         Vec3::new(0., -60., 0.),

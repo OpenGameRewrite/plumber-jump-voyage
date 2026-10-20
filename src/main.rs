@@ -27,6 +27,7 @@ mod local_assets;
 mod look;
 mod movement;
 mod nerve;
+mod prism;
 mod replay;
 mod scripted_input;
 mod se_ctrl;

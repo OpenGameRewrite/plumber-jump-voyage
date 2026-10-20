@@ -160,14 +160,21 @@ impl Player {
         } else {
             self.v.y
         };
-        self.pos += Vec3::new(velocity.x, drop, velocity.z) * UNIT;
-        if outcome.collided {
-            let correction = outcome.pos - (start + velocity);
-            self.pos.x += correction.x * UNIT;
-            self.pos.z += correction.z * UNIT;
-            if correction.y != 0. {
-                self.pos.y = outcome.pos.y * UNIT;
+        if mesh.parts.is_empty() {
+            self.pos += Vec3::new(velocity.x, drop, velocity.z) * UNIT;
+            if outcome.collided {
+                let correction = outcome.pos - (start + velocity);
+                self.pos.x += correction.x * UNIT;
+                self.pos.z += correction.z * UNIT;
+                if correction.y != 0. {
+                    self.pos.y = outcome.pos.y * UNIT;
+                }
             }
+        } else {
+            // A stage's own geometry: the actor takes the collider's result, which the
+            // collider computed on the game's own grid (single precision at the stage's
+            // magnitude, 4.9e-4 cm steps), not the metres arithmetic of the controller.
+            self.pos = outcome.pos * UNIT;
         }
         let collider = &self.collider;
         self.touched = Touched {
