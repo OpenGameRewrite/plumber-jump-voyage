@@ -2489,6 +2489,10 @@ impl Player {
         };
         along_vector_normal_h(plane::lift(self.v, from), from, up)
     }
+    /// The run's velocity is laid in the plane of the floor it was steered on.
+    fn run_follows_floor(&self) -> bool {
+        matches!(self.run_up, Some((h, _)) if h == Vec2::new(self.v.x, self.v.z))
+    }
     /// The stick in the plane of the floor with the normal `up`
     /// (`PlayerInput::calcMoveInput`): the camera's forward axis is tipped
     /// along the slope as the camera sees it, the side axis is across that.
@@ -2502,12 +2506,25 @@ impl Player {
         } else {
             self.forward
         };
+        if std::env::var("PJV_X3").is_ok() {
+            let proj = plane::normalized_or_zero(plane::verticalize(up, forward));
+            let side = plane::normalized_or_zero(proj.cross(up));
+            return side * stick.dot(forward.cross(Vec3::Y)) + proj * stick.dot(forward);
+        }
+        if std::env::var("PJV_DBG2").is_ok() {
+            eprintln!("PS forward {:?} stick {:?}", forward, stick);
+        }
         let right = forward.cross(Vec3::Y);
         let seen = plane::normalized_or_zero(plane::verticalize(right, up));
         let seen = if seen == Vec3::ZERO { up } else { seen };
         let ahead = plane::normalized_or_zero(along_vector_normal_h(forward, Vec3::Y, seen));
         let across = plane::normalized_or_zero(ahead.cross(up));
-        across * stick.dot(right) + ahead * stick.dot(forward)
+        let out = across * stick.dot(right) + ahead * stick.dot(forward);
+        if let Ok(v) = std::env::var("PJV_BIAS") {
+            let deg: f32 = v.parse().unwrap();
+            return Quat::from_axis_angle(up, deg.to_radians()) * out;
+        }
+        out
     }
     /// `PlayerActionGroundMoveControl::appear` for a run that starts on
     /// sloped ground: the velocity the body had is laid into the plane of
@@ -2574,7 +2591,11 @@ impl Player {
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
         let in_plane = self.velocity_in_plane(up);
         let (pose_up, pose_front) = self.pose_axes();
-        let front = along_vector_normal_h(pose_front, pose_up, up);
+        let front = if std::env::var("PJV_X2").is_ok() {
+            plane::verticalize(up, pose_front)
+        } else {
+            along_vector_normal_h(pose_front, pose_up, up)
+        };
         if step == 0 {
             self.ground.reset(in_plane, front);
         }

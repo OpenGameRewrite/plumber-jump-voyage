@@ -161,7 +161,14 @@ impl Player {
         // only what the contacts changed is taken from the collider.
         // (On the ground that includes the horizontal part of the pull along a
         // tilted floor's normal, which the push out of the floor takes back.)
-        self.pos += velocity * UNIT;
+        // (Up and down a slope the floor-following velocity has a vertical
+        // part of its own.)
+        let drop = if self.run_follows_floor() {
+            velocity.y
+        } else {
+            self.v.y
+        };
+        self.pos += Vec3::new(velocity.x, drop, velocity.z) * UNIT;
         if outcome.collided {
             let correction = outcome.pos - (start + velocity);
             self.pos.x += correction.x * UNIT;
@@ -234,7 +241,7 @@ impl Player {
                 // The air states keep their velocity against a wall (the wall
                 // slide starts from it, and the jump's own control has nothing
                 // that takes it off); the collider's push alone holds the body.
-                if into > 0. && !self.keeps_velocity_at_walls() {
+                if into > 0. && !self.keeps_velocity_at_walls() && !self.run_follows_floor() {
                     self.v += normal * into;
                 }
                 if self.mode == Move::Roll && into > 12. {

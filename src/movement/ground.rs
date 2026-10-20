@@ -252,7 +252,11 @@ impl TurnControl {
         let last = if is_zero(self.last_direction) {
             Vec3::ZERO
         } else {
-            unit_or_zero(along_vector_normal_h(self.last_direction, self.last_up, up))
+            if std::env::var("PJV_X1").is_ok() {
+                unit_or_zero(self.last_direction)
+            } else {
+                unit_or_zero(along_vector_normal_h(self.last_direction, self.last_up, up))
+            }
         };
         let have_both = has_input && !is_zero(last);
         let skip_tracking = is_zero(last) || !has_input;
@@ -369,6 +373,9 @@ impl TurnControl {
             self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
         }
         self.direction = out;
+        if std::env::var("PJV_DBG2").is_ok() {
+            eprintln!("TC front {:?} stick {:?} last {:?} up {:?} rate {} out {:?} axis {:?}", front, new, last, up, self.rate, out, self.last_axis);
+        }
     }
 }
 
@@ -642,6 +649,9 @@ impl GroundMove {
         } else {
             1
         };
+        if std::env::var("PJV_DBG2").is_ok() {
+            eprintln!("GM measured {measured} speed {speed} target {target} along {along} frames {brake_frames} wall {:?} hill {} up {:?} heading {:?} wanted {:?}", input.wall, self.hill, up, heading, wanted);
+        }
         if speed > target {
             speed = brake(speed, brake_frames, input.max_speed).max(target);
         }
@@ -801,6 +811,8 @@ mod tests {
         for frame in 1..=3 {
             let steer = control.update(&SteerInput {
                 velocity,
+                up: Vec3::Y,
+                wall: None,
                 front: Vec3::Z,
                 stick: Vec3::Z,
                 max_speed: 14.,
@@ -821,8 +833,8 @@ mod tests {
             fast_limit: 8.5,
             ..default()
         };
-        turn.update(Vec3::Z, Vec3::Z);
-        turn.update(Vec3::Z, Vec3::NEG_Z);
+        turn.update(Vec3::Z, Vec3::Z, Vec3::Y);
+        turn.update(Vec3::Z, Vec3::NEG_Z, Vec3::Y);
         assert!(turn.reverse);
         assert_eq!(turn.direction, Vec3::Z);
     }
