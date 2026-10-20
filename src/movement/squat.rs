@@ -163,8 +163,14 @@ impl Player {
             BRAKE_SIDE_RATE,
             BRAKE_SIDE_MAX_RATE,
         );
+        // `rs::slerpUp`: the pose's up follows the floor's normal.
+        let (_, front) = self.pose_axes();
+        self.steer_pose(self.mesh_ground.unwrap_or(Vec3::Y), front);
         if slide.length() <= t::SQUAT_BRAKE_END {
-            self.set_h(Vec3::ZERO);
+            // `al::setVelocityZeroH`: of the pull along the floor's normal only
+            // its vertical part is left (all of it on level ground).
+            let normal = self.mesh_ground.unwrap_or(Vec3::Y);
+            self.v = Vec3::new(0., -t::GRAVITY * normal.y, 0.);
             self.defer(Move::Crouch, "SquatWait", |_| {});
         } else if !o.crouch {
             self.stand_up_squat();
@@ -173,6 +179,7 @@ impl Player {
     /// `exeWait`: crouch in place.
     fn squat_wait(&mut self, o: &Orders) {
         self.v.y = -t::GRAVITY;
+        self.wait_pose();
         if !o.crouch {
             self.stand_up_squat();
         } else if self.is_move() {

@@ -48,10 +48,15 @@ impl Player {
         if self.mode == Move::Pole && self.pole.is_form() {
             return Form::Pole;
         }
-        if matches!(
-            self.mode,
-            Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd
-        ) {
+        // The whole squat state keeps the mini form (the actor's nerve is
+        // `Squat` through its stand-up, whose clip is `SquatEnd`).
+        let standing_up = self.mode == Move::Idle && self.clip() == "SquatEnd";
+        if standing_up
+            || matches!(
+                self.mode,
+                Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd
+            )
+        {
             Form::Mini
         } else {
             Form::Normal
