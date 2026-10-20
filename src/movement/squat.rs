@@ -217,7 +217,10 @@ impl Player {
     /// What the actor decides once the squat state has run: slide down a steep
     /// slope, roll (crouch held and the cap button pressed), or jump.
     fn squat_judges(&mut self, o: &Orders) {
-        if o.crouch && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
+        // (On a stage's collision the squat does not slide down a steep floor
+        // although crouch is held: the recordings on the Cap Kingdom's dome stay
+        // in the squat. Only the toy course's boxes have that rule.)
+        if o.crouch && self.mesh_ground.is_none() && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
             self.start_slope_slide();
             return;
         }

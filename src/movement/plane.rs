@@ -11,6 +11,10 @@
 //! and `al::calcFrontDir` read them.
 use bevy::prelude::*;
 
+/// The components of the cross product two directions may have and still be
+/// parallel in `isParallelDirection(.., 0.01)`.
+pub const PARALLEL_LIMIT: f32 = 0.01;
+
 /// `al::isNearZero(vec, 0.001)` on a vector: its length is within the epsilon.
 pub const NEAR_ZERO: f32 = 0.001;
 

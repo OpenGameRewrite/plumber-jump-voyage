@@ -58,6 +58,9 @@ mod t {
     /// `getSlerpQuatRate` and `getHillPoseDegreeMax`: how fast the pose's up
     /// follows the floor's normal, and how far from vertical it may tilt.
     pub const SLERP_QUAT_RATE: f32 = 0.15;
+    /// `getSlerpQuatRateWait` and `getWaitPoseDegreeMax`: the standing pose's.
+    pub const SLERP_QUAT_RATE_WAIT: f32 = 0.15;
+    pub const WAIT_POSE_DEGREE_MAX: f32 = 45.;
     pub const HILL_POSE_DEGREE_MAX: f32 = 45.;
     pub const RUN_SPEED_CONTINUOUS_THROW: f32 = 16.;
     pub const RUN_TIME_CONTINUOUS_THROW: u32 = 20;
@@ -2401,7 +2404,7 @@ impl Player {
             self.ground_jump(o);
             return true;
         }
-        if o.crouch && self.steep(t::SLOPE_SLIDE_ANGLE_START) {
+        if o.crouch && self.slope_slide_judge() {
             self.start_slope_slide();
             return true;
         }
@@ -2447,6 +2450,9 @@ impl Player {
     /// The standing or running state (the original's wait and run nerves).
     fn run(&mut self, o: &Orders) {
         if self.mode == Move::Idle {
+            // Every nerve of the standing state settles the pose first; the
+            // judges that leave it (the run, the jump) come after.
+            self.wait_pose();
             self.stand(o);
         } else {
             self.run_step(o);
@@ -2552,6 +2558,37 @@ impl Player {
             .filter(|tilt| tilt.facing == self.facing)
             .map(|tilt| tilt.pose)
     }
+    /// `rs::waitGround`'s pose (every nerve of the standing state): the pose's
+    /// up follows the floor's normal (at most 45 degrees from vertical) by the
+    /// slerp rate; its front is the one it has.
+    fn wait_pose(&mut self) {
+        let up = self.mesh_ground.unwrap_or(Vec3::Y);
+        if up == Vec3::Y && self.pose_quat().is_none() {
+            return;
+        }
+        let (pose_up, pose_front) = self.pose_axes();
+        let target_up = plane::turn_vec_to_vec_degree(Vec3::Y, up, t::WAIT_POSE_DEGREE_MAX);
+        let parallel = target_up.cross(pose_front).abs().max_element() <= plane::PARALLEL_LIMIT;
+        let front = if parallel { pose_up } else { pose_front };
+        let target = plane::quat_up_front(target_up, front);
+        let current = self
+            .pose_quat()
+            .unwrap_or_else(|| plane::quat_up_front(Vec3::Y, self.facing));
+        let pose = plane::slerp(current, target, t::SLERP_QUAT_RATE_WAIT).normalize();
+        self.set_pose(pose);
+    }
+    /// The actor takes the orientation `pose`; its facing is the front's
+    /// horizontal direction.
+    fn set_pose(&mut self, pose: Quat) {
+        let facing = plane::quat_front(pose).with_y(0.).normalize_or_zero();
+        if facing != Vec3::ZERO {
+            self.facing = facing;
+        }
+        self.pose_tilt = Some(PoseTilt {
+            pose,
+            facing: self.facing,
+        });
+    }
     /// `updatePoseUpFront` at the end of a run step: the pose follows the
     /// floor's normal, its front is the way the player means to go.
     fn steer_pose(&mut self, up: Vec3, front: Vec3) {
@@ -2571,14 +2608,7 @@ impl Player {
             t::SLERP_QUAT_RATE,
             t::HILL_POSE_DEGREE_MAX,
         );
-        let facing = plane::quat_front(pose).with_y(0.).normalize_or_zero();
-        if facing != Vec3::ZERO {
-            self.facing = facing;
-        }
-        self.pose_tilt = Some(PoseTilt {
-            pose,
-            facing: self.facing,
-        });
+        self.set_pose(pose);
     }
     /// One step of the run nerve (`PlayerStateRunHakoniwa::exeRun`): the
     /// ground move control steers, the run cycle animates, then the nerve
@@ -2808,7 +2838,33 @@ impl Player {
     // ---- Squat, roll, slides --------------------------------------------
     /// Ground at least this many degrees steep.
     fn steep(&self, degrees: f32) -> bool {
+        if let (true, Some(normal)) = (self.grounded, self.mesh_ground) {
+            return normal.y <= degrees.to_radians().cos();
+        }
         self.grounded && self.slope.abs().atan().to_degrees() >= degrees
+    }
+    /// `PlayerJudgeSlopeSlideRun::update` without the forced-slide floor code:
+    /// the crouch button held, a floor steeper than the slide's start angle
+    /// (`rs::isOnGroundSlopeSlideStart`: the velocity may not leave it), and a
+    /// horizontal velocity that does not head uphill. The velocity is the
+    /// actor's own, the pull into the floor included: a run up the slope's
+    /// side, or down it slowly, still has a horizontal part against the
+    /// slide's direction and no slide starts (the dome of `slope-slide`).
+    fn slope_slide_judge(&self) -> bool {
+        let Some(normal) = self.mesh_ground else {
+            return self.steep(t::SLOPE_SLIDE_ANGLE_START);
+        };
+        if !self.grounded || !self.steep(t::SLOPE_SLIDE_ANGLE_START) {
+            return false;
+        }
+        let velocity = self.units_per_frame();
+        let leaving = plane::normalized_or_zero(velocity).dot(normal);
+        if leaving > 0. && leaving.abs() >= 0.001 {
+            return false;
+        }
+        let heading = plane::normalized_or_zero(velocity.with_y(0.));
+        let downhill = plane::normalized_or_zero(normal.with_y(0.));
+        heading != Vec3::ZERO && downhill != Vec3::ZERO && heading.dot(downhill) >= 0.
     }
     fn start_slope_slide(&mut self) {
         self.change(Move::SlopeSlide, "Slide", |p| {
