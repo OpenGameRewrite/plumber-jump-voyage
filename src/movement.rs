@@ -254,6 +254,8 @@ mod ground;
 mod ledge;
 #[path = "movement/plane.rs"]
 pub mod plane;
+#[path = "movement/wall_along.rs"]
+mod wall_along;
 #[path = "movement/pole.rs"]
 mod pole;
 #[path = "movement/pole_find.rs"]
@@ -1020,6 +1022,8 @@ pub struct Player {
     /// The world direction a stick held forward walks along (the camera's
     /// heading).
     forward: Vec3,
+    /// The wall the stick is bent along after a contact.
+    wall_along: wall_along::WallAlong,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1158,6 +1162,7 @@ impl Default for Player {
             run_up: None,
             pose_tilt: None,
             forward: Vec3::ZERO,
+            wall_along: wall_along::WallAlong::default(),
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -2336,6 +2341,14 @@ impl Player {
         self.tilt = stick.length();
         self.stick = stick.normalize_or_zero();
         self.raw_stick = Vec2::new(o.stick.x, -o.stick.y);
+        self.wall_along.update(
+            self.touched
+                .wall_contact
+                .as_ref()
+                .filter(|wall| wall.at_face)
+                .map(|wall| wall.normal),
+            self.raw_stick,
+        );
         self.pre_jump = if o.jump {
             t::PRE_INPUT_JUMP
         } else {
@@ -2504,33 +2517,22 @@ impl Player {
     /// along the slope as the camera sees it, the side axis is across that.
     fn plane_stick(&self, up: Vec3) -> Vec3 {
         let stick = self.ground_stick();
-        if up == Vec3::Y {
-            return stick;
-        }
-        let forward = if self.forward == Vec3::ZERO {
-            stick.normalize_or_zero()
+        let input = if up == Vec3::Y {
+            stick
         } else {
-            self.forward
+            let forward = if self.forward == Vec3::ZERO {
+                stick.normalize_or_zero()
+            } else {
+                self.forward
+            };
+            let right = forward.cross(Vec3::Y);
+            let seen = plane::normalized_or_zero(plane::verticalize(right, up));
+            let seen = if seen == Vec3::ZERO { up } else { seen };
+            let ahead = plane::normalized_or_zero(along_vector_normal_h(forward, Vec3::Y, seen));
+            let across = plane::normalized_or_zero(ahead.cross(up));
+            across * stick.dot(right) + ahead * stick.dot(forward)
         };
-        if std::env::var("PJV_X3").is_ok() {
-            let proj = plane::normalized_or_zero(plane::verticalize(up, forward));
-            let side = plane::normalized_or_zero(proj.cross(up));
-            return side * stick.dot(forward.cross(Vec3::Y)) + proj * stick.dot(forward);
-        }
-        if std::env::var("PJV_DBG2").is_ok() {
-            eprintln!("PS forward {:?} stick {:?}", forward, stick);
-        }
-        let right = forward.cross(Vec3::Y);
-        let seen = plane::normalized_or_zero(plane::verticalize(right, up));
-        let seen = if seen == Vec3::ZERO { up } else { seen };
-        let ahead = plane::normalized_or_zero(along_vector_normal_h(forward, Vec3::Y, seen));
-        let across = plane::normalized_or_zero(ahead.cross(up));
-        let out = across * stick.dot(right) + ahead * stick.dot(forward);
-        if let Ok(v) = std::env::var("PJV_BIAS") {
-            let deg: f32 = v.parse().unwrap();
-            return Quat::from_axis_angle(up, deg.to_radians()) * out;
-        }
-        out
+        self.wall_along.snap(input, up)
     }
     /// `PlayerActionGroundMoveControl::appear` for a run that starts on
     /// sloped ground: the velocity the body had is laid into the plane of
