@@ -72,6 +72,20 @@ The collider and the mesh hold their numbers as the game does, in single
 precision at the stage's own coordinates (`TriangleMesh::snap_to_game_precision`),
 which matters wherever a body rests against a surface it is pressed into every frame.
 
+A newer export also carries what the game itself tests against: every placed object's
+base matrix (with its inverse) and the raw prisms of its KCL files (`models`, with the
+triangle rows pointing at their prism). The game does not test a body against world
+triangles. It carries the body's spheres and arrows into the part's own frame with the
+inverse matrix, runs `KCHitSphereForPlayer` and `KCHitArrow` on the raw prism, and carries
+the results back (`src/prism.rs`, checked bit for bit against the executable's functions;
+`PJV_PRISM_CASES=<local cases file> cargo test prism` repeats that check). Which side of a
+surface a body is on is decided at the 1e-4 cm level, so every operation is the
+executable's single precision operation in its order. Older exports (world triangles only)
+still load and are tested in world space. After `rs::resetCollisionExpandCheck` (the wall
+slide and the ledge catch call it when they appear) the collider grows its shapes from a
+bounding radius of 20 to full size before the frame's own move, and that move starts at
+its second pose (`PlayerCollider::reset_expand_check` in `src/collider.rs`).
+
 Ported on this collision: falling off a ledge (`PlayerJudgeSpeedCheckFall`), the
 long-fall landing (`PlayerJudgeLongFall`, `Wait/LandStiffen`), the wall slide
 and the wall jump (`PlayerJudgeWallKeep`, `PlayerStateNormalWallSlide`,
