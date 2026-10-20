@@ -357,6 +357,12 @@ impl Player {
         };
         self.facing = (-normal).with_y(0.).normalize_or(self.facing);
         self.v = -normal * WALL_PRESS;
+        // `rs::resetCollisionExpandCheck`: the collider takes the new pose as the one it stood
+        // in and the shapes grow back to full size in the next `collide`, whose own move then
+        // starts at its second pose.
+        self.collider
+            .reset_expand_check(self.facing.x.atan2(self.facing.z));
+        let stood = self.pos;
         let mut trans = self.pos / UNIT;
         if !contact.at_face {
             // A corner or an edge: slide along the wall until the contact is
@@ -367,6 +373,10 @@ impl Player {
         let distance = (trans - contact.position).dot(normal);
         trans -= normal * (distance - COLLISION_RADIUS).max(0.);
         self.pos = trans * UNIT;
+        if self.pos != stood {
+            // The move up to the wall is a carry from where the collider stood.
+            self.collider.carry_from(stood / UNIT);
+        }
         self.wall_air.side_to_camera = self.side_faces_camera();
         let clip = if self.wall_air.side_to_camera {
             "WallKeep"

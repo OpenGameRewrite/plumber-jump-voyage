@@ -69,6 +69,9 @@ const LONGEST_STEP: f32 = 35.;
 const CARRY_STEP_SCALE: f32 = 0.99;
 /// `al::isNearZero(vec, 0.001)`: a vector shorter than this is no direction.
 const NEAR_ZERO: f32 = 0.001;
+/// `rs::resetCollisionExpandCheck`: the bounding radius the shapes start growing from after a
+/// reset (the literal 20 in the function).
+const EXPAND_START_RADIUS: f32 = 20.;
 /// The direction bits `calcResultVec` leaves in the collider's flags word
 /// (`0x4338f0`): which way a round's pushes pointed on each axis.
 const PUSH_POS_X: u32 = 0x80;
@@ -125,6 +128,14 @@ enum Shape {
     },
 }
 impl Shape {
+    /// `getBoundingCenter` and `getBoundingRadius`: a sphere's own centre and radius, an arrow's
+    /// midpoint and half length (`CollisionShapeInfoArrow` constructor).
+    fn bounding(&self) -> (Vec3, f32) {
+        match self {
+            Self::Sphere { center, radius, .. } => (*center, *radius),
+            Self::Arrow { start, vector, .. } => (*start + *vector * 0.5, vector.length() * 0.5),
+        }
+    }
     /// `getCheckStepRange`: an arrow's half length, a sphere's radius.
     fn check_range(&self) -> f32 {
         match self {
@@ -139,6 +150,9 @@ impl Shape {
 pub struct Keeper {
     shapes: Vec<Shape>,
     check_step: f32,
+    /// `CollisionShapeKeeper::_c`, the radius of the sphere around all the shapes
+    /// (`updateShape`): what the shape scale is measured against.
+    bounding_radius: f32,
     /// Whether the keeper has arrows (`CollisionShapeKeeper::mHasShapeArrow`):
     /// the player's has, Cappy's does not, and the floor rules differ.
     has_arrow: bool,
@@ -195,6 +209,7 @@ impl Keeper {
             .map(Shape::check_range)
             .fold(f32::MAX, f32::min);
         Self {
+            bounding_radius: enclosing_radius(&shapes),
             shapes,
             check_step,
             has_arrow: true,
@@ -212,10 +227,41 @@ impl Keeper {
         }];
         Self {
             check_step: 60.,
+            bounding_radius: enclosing_radius(&shapes),
             shapes,
             has_arrow: false,
         }
     }
+}
+
+/// `CollisionShapeKeeper::updateShape`: the radius of the sphere that grows around the shapes
+/// one at a time. A shape inside the sphere changes nothing; one that sticks out replaces it by
+/// the sphere spanning the far end of the old sphere and the far end of the shape along the line
+/// between their centres.
+fn enclosing_radius(shapes: &[Shape]) -> f32 {
+    let mut shapes = shapes.iter().map(Shape::bounding);
+    let Some((mut center, mut radius)) = shapes.next() else {
+        return 0.;
+    };
+    for (other, other_radius) in shapes {
+        let offset = other - center;
+        let distance = ((offset.x * offset.x + offset.y * offset.y) + offset.z * offset.z).sqrt();
+        if distance.abs() < NEAR_ZERO {
+            radius = radius.max(other_radius);
+            continue;
+        }
+        if other_radius + distance <= radius {
+            continue;
+        }
+        let toward = crate::prism::normalize(offset.to_array());
+        let toward = Vec3::from_array(toward);
+        let far_new = other + toward * other_radius;
+        let far_old = center - toward * radius;
+        let span = far_new - far_old;
+        center = far_old + span * 0.5;
+        radius = ((span.x * span.x + span.y * span.y) + span.z * span.z).sqrt() * 0.5;
+    }
+    radius
 }
 
 /// The body's pose: where its feet are and which way it faces (a rotation
@@ -813,17 +859,21 @@ struct Results {
 /// `CollisionMultiShape::check`: every shape of the keeper against the
 /// triangles near it. An arrow whose depth is under its margin only supports
 /// (its own list); everything else is a collision.
-fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
+fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Results {
     let mut results = Results::default();
     for (index, shape) in keeper.shapes.iter().enumerate() {
         match shape {
             Shape::Sphere { center, radius, .. } => {
+                // The scale shrinks the offset from the feet and the radius alike
+                // (`calcWorldShapeInfo`).
+                let center = *center * scale;
+                let radius = *radius * scale;
                 // The centre as the game sums it: the position plus the rotated offset.
-                let world = pose.world_point(*center);
+                let world = pose.world_point(center);
                 let world_rel = mesh.from_game_vec(world);
-                for i in mesh.candidates(Aabb::around(world_rel, *radius)) {
+                for i in mesh.candidates(Aabb::around(world_rel, radius)) {
                     let t = &mesh.triangles[i as usize];
-                    let Some(hit) = sphere_hit(mesh, t, world, *radius) else {
+                    let Some(hit) = sphere_hit(mesh, t, world, radius) else {
                         continue;
                     };
                     if results.collide.len() < MAX_RESULTS {
@@ -846,8 +896,8 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
                 // flush on the floor keeps the exact height 40 above it; the
                 // depth then falls a hair under the margin and the arrow only
                 // supports.
-                let from = pose.world_point(*start);
-                let vec = pose.rotate(*vector);
+                let from = pose.world_point(*start * scale);
+                let vec = pose.rotate(*vector * scale);
                 let tip = from + vec;
                 let area = Aabb {
                     min: mesh.from_game_vec(from.min(tip)),
@@ -877,26 +927,49 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
     results
 }
 
-/// `al::SpherePoseInterpolator` reduced to the position: the move from
-/// `start` by `motion` in equal steps of at most `max_step`.
+/// `al::SpherePoseInterpolator` reduced to the position and the shape scale: the move from
+/// `start` by `motion` in equal steps of at most `max_step`, while the bounding radius of the
+/// shapes grows from `radius_from` to `radius_to` (the shapes are scaled by the fraction of
+/// the final radius reached; a body that was just reset starts small, see
+/// `PlayerCollider::reset_expand_check`). The steps measure the length of the move plus the
+/// growth of the radius.
 struct Sweep {
     start: Vec3,
     motion: Vec3,
     step: f32,
     current: f32,
     previous: f32,
+    radius_from: f32,
+    radius_to: f32,
 }
 impl Sweep {
-    fn new(start: Vec3, end: Vec3, max_step: f32) -> Self {
+    fn new(start: Vec3, end: Vec3, max_step: f32, radius_from: f32, radius_to: f32) -> Self {
         let motion = end - start;
-        let length = motion.length();
+        let span = (motion.length() + radius_to) - radius_from;
         Self {
             start,
             motion,
-            step: if length <= 0. { 1. } else { max_step / length },
+            step: if span <= 0. { 1. } else { max_step / span },
             current: 0.,
             previous: 0.,
+            radius_from,
+            radius_to,
         }
+    }
+    /// The bounding radius the sweep has reached (`calcInterp`).
+    fn radius(&self) -> f32 {
+        self.radius_from + (self.radius_to - self.radius_from) * self.current
+    }
+    /// The scale the shapes are checked with: the fraction of the final radius reached
+    /// (`calcRadiusBaseScale`, `al::calcRate01(radius, 0, radius_to)`), times the collider's own.
+    fn shape_scale(&self, own: f32) -> f32 {
+        let span = self.radius_to;
+        let rate = if span.abs() < NEAR_ZERO {
+            1.
+        } else {
+            (self.radius() / span).clamp(0., 1.)
+        };
+        rate * own
     }
     fn advance(&mut self) {
         self.previous = self.current;
@@ -968,6 +1041,13 @@ pub struct PlayerCollider {
     last_yaw: Option<f32>,
     /// The same orientation when it was tilted.
     last_tilt: Option<Quat>,
+    /// The collider's own shape scale (`+0xf8`, `setCollisionShapeScale`), 1 unless a reset
+    /// has it shrunk for a moment.
+    shape_scale: f32,
+    /// The bounding radius the shapes had at the end of the last `collide` (`+0x34`). When it
+    /// differs from the current one (after a reset, or a change of form), the next `collide`
+    /// first sweeps the shapes' growth from the old radius to the new one in place.
+    last_radius: f32,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -1128,6 +1208,7 @@ impl PlayerCollider {
     }
 
     fn with_keeper(form: Form, keeper: Keeper) -> Self {
+        let last_radius = keeper.bounding_radius;
         Self {
             form,
             keeper,
@@ -1146,6 +1227,8 @@ impl PlayerCollider {
             arrow_slots: [None; 3],
             last_yaw: None,
             last_tilt: None,
+            shape_scale: 1.,
+            last_radius,
         }
     }
 
@@ -1154,6 +1237,7 @@ impl PlayerCollider {
         if form != self.form {
             self.form = form;
             self.keeper = Keeper::new(form);
+            self.last_radius = self.keeper.bounding_radius * self.shape_scale;
         }
     }
 
@@ -1184,6 +1268,36 @@ impl PlayerCollider {
         self.carry_from = None;
         self.last_yaw = Some(yaw);
         self.last_tilt = None;
+        self.last_radius = self.keeper.bounding_radius * self.shape_scale;
+    }
+
+    /// `rs::resetCollisionExpandCheck`: [`Self::invalidate`] in a way that makes the next
+    /// `collide` grow the shapes in place. The shapes are shrunk to a bounding radius of 20 (or
+    /// left alone when they are smaller), the reset records that size as the radius the
+    /// collider last had, and the scale goes back; the next `collide` finds the radius changed
+    /// and sweeps the growth from 20 to full size before the frame's own move, which then
+    /// starts from its second pose.
+    pub fn reset_expand_check(&mut self, yaw: f32) {
+        let radius = self.keeper.bounding_radius * self.shape_scale;
+        if radius.abs() < NEAR_ZERO || self.shape_scale.abs() < NEAR_ZERO {
+            self.invalidate(yaw);
+            return;
+        }
+        let ratio = radius / self.shape_scale;
+        let shrunk = (ratio.min(EXPAND_START_RADIUS) / ratio).clamp(0., 1.);
+        let own = self.shape_scale;
+        self.set_shape_scale(shrunk);
+        self.invalidate(yaw);
+        self.set_shape_scale(own);
+    }
+
+    /// `PlayerCollider::setCollisionShapeScale`: the radius the collider last had can only
+    /// shrink to the one the old scale gave.
+    fn set_shape_scale(&mut self, scale: f32) {
+        self.last_radius = self
+            .last_radius
+            .min(self.keeper.bounding_radius * self.shape_scale);
+        self.shape_scale = scale;
     }
 
     /// `rs::getCollidedFixReaction`: how far the last `collide` moved the feet
@@ -1249,13 +1363,19 @@ impl PlayerCollider {
             .map_or(pose.pos, |from| mesh.to_game_vec(from));
         let mut at = begin;
         let carry = pose.pos - begin;
-        let carried = carry.length_squared() >= NEAR_ZERO * NEAR_ZERO;
+        // The bounding radius now, and the one the collider last had: when either the position
+        // or the radius differs, the carry sweeps from the old state to the new.
+        let radius_now = self.keeper.bounding_radius * self.shape_scale;
+        let mut radius = self.last_radius;
+        let carried = carry.length_squared() >= NEAR_ZERO * NEAR_ZERO
+            || (radius - radius_now).abs() >= NEAR_ZERO;
         let mut collided = false;
         if carried {
             collided |= self.move_collide(
                 mesh,
                 &pose,
                 &mut at,
+                (&mut radius, radius_now),
                 pose.pos,
                 carry,
                 (range * CARRY_STEP_SCALE).min(LONGEST_STEP),
@@ -1268,11 +1388,13 @@ impl PlayerCollider {
             mesh,
             &pose,
             &mut at,
+            (&mut radius, radius_now),
             target,
             velocity,
             range.min(LONGEST_STEP),
             carried,
         );
+        self.last_radius = radius_now;
         // `onCutCollideAffectDir`: along the cut direction the move keeps what
         // it asked for, whatever the contacts pushed.
         if self.cut_direction != Vec3::ZERO {
@@ -1306,18 +1428,20 @@ impl PlayerCollider {
         mesh: &TriangleMesh,
         pose: &Pose,
         at: &mut Vec3,
+        (radius, radius_to): (&mut f32, f32),
         target: Vec3,
         intended: Vec3,
         step: f32,
         skip_start: bool,
     ) -> bool {
-        let mut sweep = Sweep::new(*at, target, step);
+        let mut sweep = Sweep::new(*at, target, step, *radius, radius_to);
         if skip_start {
             sweep.advance();
         }
         let mut results = Results::default();
         if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
             *at = sweep.pos();
+            *radius = sweep.radius();
             return false;
         }
         let mut rounds = 0;
@@ -1326,6 +1450,7 @@ impl PlayerCollider {
         let mut previous = Vec3::ZERO;
         loop {
             *at = sweep.pos();
+            *radius = sweep.radius();
             let mut remain = sweep.remaining();
             let (fix, unaveraged) =
                 self.calc_result_vec(mesh, &pose.along(&sweep), &results, previous);
@@ -1362,7 +1487,7 @@ impl PlayerCollider {
             // Sweep again from the pose that was in collision to where the
             // corrected body wants to go, skipping the pose already handled.
             let collided_at = *at - fix;
-            sweep = Sweep::new(collided_at, *at + remain, step);
+            sweep = Sweep::new(collided_at, *at + remain, step, *radius, radius_to);
             sweep.advance();
             // What the next round is told of this one: how far the pose it
             // starts from lies back from the one that was in collision, plus
@@ -1371,6 +1496,7 @@ impl PlayerCollider {
             results = Results::default();
             if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
                 *at = sweep.pos();
+                *radius = sweep.radius();
                 return true;
             }
             rounds += 1;
@@ -1393,7 +1519,12 @@ impl PlayerCollider {
             if sweep.finished() {
                 return false;
             }
-            *results = check(mesh, &self.keeper, &pose.along(sweep));
+            *results = check(
+                mesh,
+                &self.keeper,
+                &pose.along(sweep),
+                sweep.shape_scale(self.shape_scale),
+            );
             if sweep.current == 0. && std::env::var("PJV_SKIP0").is_ok() {
                 results.collide.retain(|r| match r.hit {
                     Hit::Sphere(h) => h.depth > 3e-4,
