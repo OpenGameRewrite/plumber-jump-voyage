@@ -860,6 +860,16 @@ impl PlayerCollider {
         self.fix_reaction
     }
 
+    /// DEBUG ONLY
+    pub fn debug_probe(&self, mesh: &TriangleMesh, pos: Vec3, yaw: f32) {
+        let (sin, cos) = yaw.sin_cos();
+        let pose = Pose { pos, sin, cos, from_yaw: yaw, yaw };
+        let r = check(mesh, &self.keeper, &pose);
+        eprintln!("PROBE {:?}", pos);
+        for r in &r.collide { eprintln!("    coll shape {} tri {} {:?}", r.shape, r.triangle, r.hit); }
+        for r in &r.support { eprintln!("    supp shape {} tri {} {:?}", r.shape, r.triangle, r.hit); }
+    }
+
     /// `PlayerCollider::collide`: moves the feet from `pos` by `velocity`,
     /// both cm, facing `yaw` radians about the up axis (0 faces +z).
     pub fn collide(&mut self, mesh: &TriangleMesh, pos: Vec3, velocity: Vec3, yaw: f32) -> Outcome {
@@ -1008,6 +1018,15 @@ impl PlayerCollider {
     fn calc_result_vec(&mut self, mesh: &TriangleMesh, pose: &Pose, results: &Results) -> Vec3 {
         let flags = self.flags(mesh, results);
         self.average_ground(mesh, results);
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("  RV pose {:?} ", pose.pos);
+            for r in &results.collide {
+                eprintln!("    coll shape {} tri {} {:?}", r.shape, r.triangle, r.hit);
+            }
+            for r in &results.support {
+                eprintln!("    supp shape {} tri {} {:?}", r.shape, r.triangle, r.hit);
+            }
+        }
         // The deepest floor of the earlier rounds provides the ground
         // reference the arrows did not.
         if let Some(floor) = &self.floor {
@@ -1033,6 +1052,9 @@ impl PlayerCollider {
                     self.sphere_fix(mesh, triangle, result, &hit, &flags, &mut fixes);
                 }
             }
+        }
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("  RV fix {:?} gn {:?} floor {:?}", fixes.total(), self.ground_normal, self.floor.as_ref().map(|c| c.triangle));
         }
         fixes.total()
     }

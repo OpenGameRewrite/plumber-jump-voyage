@@ -138,7 +138,20 @@ impl Player {
         {
             self.collider.carry_from(stood);
         }
+        if let Ok(v) = std::env::var("PJV_PROBE") {
+            let n: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if n.len() == 4 && !DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.collider.debug_probe(mesh, Vec3::new(n[0], n[1], n[2]), n[3]);
+            }
+        }
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("COLLIDE start {:?} vel {:?} yaw {}", start, velocity, yaw);
+        }
         let outcome = self.collider.collide(mesh, start, velocity, yaw);
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("COLLIDE end {:?}", outcome.pos);
+        }
         if holding {
             self.catch_collider_at = Some(outcome.pos);
         }
