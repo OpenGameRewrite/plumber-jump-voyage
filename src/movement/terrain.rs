@@ -125,10 +125,7 @@ impl Player {
     /// Moves the player by this frame's velocity through the mesh.
     pub(super) fn collide_mesh(&mut self, mesh: &TriangleMesh, was_grounded: bool) {
         self.prepare_collider();
-        let mut start = mesh.snap_to_game_precision(to_cm(self.pos));
-        if std::env::var("PJV_FORCE").is_ok() && (start.y - 61.958).abs() < 0.6 && (start.z - 648.48).abs() < 0.1 {
-            start = mesh.snap_to_game_precision(Vec3::new(21.344238, 62.064941, 648.486816));
-        }
+        let start = mesh.snap_to_game_precision(to_cm(self.pos));
         // On the ground the controller keeps no downward speed of its own; the
         // game's velocity carries the pull (`units_per_frame`), and it is that
         // push into the floor that keeps the ground contact every frame.
@@ -146,22 +143,9 @@ impl Player {
         {
             self.collider.carry_from(stood);
         }
-        if let Ok(v) = std::env::var("PJV_PROBE") {
-            let n: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
-            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if n.len() == 4 && !DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                self.collider.debug_probe(mesh, Vec3::new(n[0], n[1], n[2]), n[3]);
-            }
-        }
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("COLLIDE start {:?} vel {:?} yaw {}", start, velocity, yaw);
-        }
         let outcome = self
             .collider
             .collide_tilted(mesh, start, velocity, yaw, self.pose_quat());
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("COLLIDE end {:?}", outcome.pos);
-        }
         if holding {
             self.catch_collider_at = Some(outcome.pos);
         }

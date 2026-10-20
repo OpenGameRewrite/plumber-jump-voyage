@@ -21,7 +21,7 @@ const STICK_DEADZONE: f32 = 0.1;
 /// A new wall replaces the remembered one when its normal is within 85 degrees
 /// of it (cos 85), or when the stick has turned by ten degrees (cos 10).
 const SAME_WALL_COS: f32 = 0.087_155_74;
-const SAME_STICK_COS: f32 = 0.984_807_73;
+const SAME_STICK_COS: f32 = 0.984_807_7;
 /// `al::isNearZero` of the move input.
 const NEAR_ZERO: f32 = 0.001;
 /// Angles of the bend, in radians: inputs within the first one of the wall's

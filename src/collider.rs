@@ -244,8 +244,7 @@ impl Pose {
         if let Some(tilt) = self.tilt {
             // `SpherePoseInterpolator::calcInterp`: the quaternions' spherical
             // blend, normalised.
-            let now = crate::movement::plane::slerp(tilt.from, tilt.to, sweep.current)
-                .normalize();
+            let now = crate::movement::plane::slerp(tilt.from, tilt.to, sweep.current).normalize();
             return Self {
                 pos: sweep.pos(),
                 tilt: Some(Tilt { now, ..tilt }),
@@ -833,11 +832,16 @@ impl Fixes {
 fn push_directions(fix: Vec3, normal: Vec3) -> u32 {
     let near_zero = |v: f32, limit: f32| v.abs() < limit;
     let direction = if fix.length_squared() < NEAR_ZERO * NEAR_ZERO {
-        let cleaned = normal.to_array().map(|c| if near_zero(c, 0.05) { 0. } else { c });
+        let cleaned = normal
+            .to_array()
+            .map(|c| if near_zero(c, 0.05) { 0. } else { c });
         Vec3::from_array(cleaned).normalize_or_zero()
     } else {
         let unit = fix / fix.length();
-        Vec3::from_array(unit.to_array().map(|c| if near_zero(c, 0.05) { 0. } else { c }))
+        Vec3::from_array(
+            unit.to_array()
+                .map(|c| if near_zero(c, 0.05) { 0. } else { c }),
+        )
     };
     let mut bits = 0;
     for (component, (positive, negative)) in direction.to_array().into_iter().zip([
@@ -879,7 +883,11 @@ fn average_with_previous(fix: Vec3, now: u32, previous: Vec3, before: u32) -> Ve
             if current > 0. && current > earlier && (earlier >= 0. || faint) {
                 result[axis] = both_ways(positive);
             }
-        } else if before & positive != 0 && current < 0. && current < earlier && (earlier <= 0. || faint) {
+        } else if before & positive != 0
+            && current < 0.
+            && current < earlier
+            && (earlier <= 0. || faint)
+        {
             result[axis] = both_ways(negative);
         }
     }
@@ -981,16 +989,6 @@ impl PlayerCollider {
     /// carry from where the collider stood is not part of it).
     pub fn fix_reaction(&self) -> Vec3 {
         self.fix_reaction
-    }
-
-    /// DEBUG ONLY
-    pub fn debug_probe(&self, mesh: &TriangleMesh, pos: Vec3, yaw: f32) {
-        let (sin, cos) = yaw.sin_cos();
-        let pose = Pose { pos, sin, cos, from_yaw: yaw, yaw, tilt: None };
-        let r = check(mesh, &self.keeper, &pose);
-        eprintln!("PROBE {:?}", pos);
-        for r in &r.collide { eprintln!("    coll shape {} tri {} {:?}", r.shape, r.triangle, r.hit); }
-        for r in &r.support { eprintln!("    supp shape {} tri {} {:?}", r.shape, r.triangle, r.hit); }
     }
 
     /// `PlayerCollider::collide`: moves the feet from `pos` by `velocity`,
@@ -1201,15 +1199,6 @@ impl PlayerCollider {
     ) -> (Vec3, Vec3) {
         let flags = self.flags(mesh, results);
         self.average_ground(mesh, results);
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("  RV pose {:?} ", pose.pos);
-            for r in &results.collide {
-                eprintln!("    coll shape {} tri {} n {:?} {:?}", r.shape, r.triangle, mesh.triangles[r.triangle as usize].normal, r.hit);
-            }
-            for r in &results.support {
-                eprintln!("    supp shape {} tri {} n {:?} {:?}", r.shape, r.triangle, mesh.triangles[r.triangle as usize].normal, r.hit);
-            }
-        }
         // The deepest floor of the earlier rounds provides the ground
         // reference the arrows did not.
         if let Some(floor) = &self.floor {
@@ -1239,15 +1228,6 @@ impl PlayerCollider {
         let total = fixes.total();
         let fix = average_with_previous(total, fixes.directions, previous, self.push_directions);
         self.push_directions = fixes.directions;
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!(
-                "  RV fix {:?} (total {:?}) gn {:?} floor {:?}",
-                fix,
-                total,
-                self.ground_normal,
-                self.floor.as_ref().map(|c| c.triangle)
-            );
-        }
         (fix, total)
     }
 

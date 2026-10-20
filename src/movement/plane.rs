@@ -23,11 +23,6 @@ pub fn verticalize(normal: Vec3, vec: Vec3) -> Vec3 {
     vec - normal * normal.dot(vec)
 }
 
-/// `al::parallelizeVec(out, dir, vec)`: only the part of `vec` along `dir`.
-pub fn parallelize(dir: Vec3, vec: Vec3) -> Vec3 {
-    dir * dir.dot(vec)
-}
-
 /// The vector of the plane with the normal `n` whose horizontal part is `h`.
 pub fn lift(h: Vec3, n: Vec3) -> Vec3 {
     if n.y > 0. && n != Vec3::Y {
@@ -129,9 +124,17 @@ pub fn quat_from_axes(x: Vec3, y: Vec3, z: Vec3) -> Quat {
     // executable (ties go as its selects do).
     let y_or_z = if squares_y > squares_z { 2 } else { 3 };
     let x_or_z = if squares_x > squares_z { 1 } else { 3 };
-    let by_x = if squares_x <= squares_y { y_or_z } else { x_or_z };
+    let by_x = if squares_x <= squares_y {
+        y_or_z
+    } else {
+        x_or_z
+    };
     let w_or_z = if squares_w > squares_z { 0 } else { 3 };
-    let mut largest = if squares_w <= squares_y { y_or_z } else { w_or_z };
+    let mut largest = if squares_w <= squares_y {
+        y_or_z
+    } else {
+        w_or_z
+    };
     if squares_w <= squares_x {
         largest = by_x;
     }
@@ -203,13 +206,7 @@ pub fn slerp(from: Quat, to: Quat, t: f32) -> Quat {
 /// The up it aims for is limited to `max_degrees` from straight up, the pose's
 /// up follows it by the slerp `rate`, and the front is set to the given one
 /// (carried over from the up the front was meant for to the limited up).
-pub fn slerp_up_front(
-    current: Quat,
-    up: Vec3,
-    front: Vec3,
-    rate: f32,
-    max_degrees: f32,
-) -> Quat {
+pub fn slerp_up_front(current: Quat, up: Vec3, front: Vec3, rate: f32, max_degrees: f32) -> Quat {
     let world_up = Vec3::Y;
     let target_up = turn_vec_to_vec_degree(world_up, up, max_degrees);
     let meant_up = quat_up(quat_front_up(front, up));

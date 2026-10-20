@@ -83,8 +83,23 @@ shimmy along a ledge, the climbs, the climb jump and letting go. While the body
 hangs the collider uses the hanging form (`changeCollisionWallGrab`: two
 spheres hanging out from the wall that ignore floors, and the push along the
 wall's direction cut), and carries itself from where it stood the step before
-to the pose the snap puts the actor in. A body that lands on a slope runs on
-without the slope terms of the original's ground control.
+to the pose the snap puts the actor in.
+
+The run on a slope (`src/movement/ground.rs`, `src/movement/plane.rs`) works
+in the plane of the floor under the feet as `PlayerActionGroundMoveControl`
+does: the velocity is turned from the floor of the step before onto this one
+(`updateNormalAndSnap`), the stick is mapped into the plane
+(`PlayerInput::calcMoveInput` with the ground normal), the turn control carries
+the facing and its last stick into the plane, the hill factor
+(`updateHillAffect`) adds speed downhill, and the pose follows the floor's
+normal (`rs::slerpUpFront`, `rs::waitGround`, `rs::slerpUp`). The collider
+hangs its shapes from the whole tilted pose and averages a push with the
+previous round's (`calcResultVec`'s direction flags, `calcGroundArrowAverage`'s
+per-arrow slots). The move input is bent along a wall for a while after a
+contact (`updateWallAlong`, `snapWallAlongInput`, `src/movement/wall_along.rs`).
+The squat keeps the mini collision form through its stand-up. Shapes' world
+positions are held as the game holds them, in single precision at the
+stage's magnitude.
 
 The pole climb (`PlayerJudgePoleClimb`, `PlayerStatePoleClimb`,
 `src/movement/pole.rs`, the finders of `rs::findPoleClimb*` in
@@ -101,9 +116,10 @@ the Cap Kingdom pole's size. Not ported: the swing of motion controls, the
 joints of the arms and legs, the slanted codes' angle offset, moving poles.
 
 Not ported yet: the squeeze of `Press` collision, moving collision parts, the
-averaging of a push with the previous round's (`calcResultVec`'s direction
-flags; a body that is pushed in more than one round of a sweep), slope
-sliding on triangles, the ledge hang on a moving platform or a tilted top,
+game's collision in each part's own single-precision frame (the export is in
+world space and rounded, so a contact that is decided by 1e-4 cm, such as the
+wall-slide landing on two floors, can go the other way), the forced
+slope-slide state on triangles, the ledge hang on a moving platform or a tilted top,
 the ground nerves' ledge judge (`PlayerJudgeWallCatchInputDir`) and Cappy's
 head-on wall stop, floor and lock-on reactions.
 

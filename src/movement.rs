@@ -254,8 +254,6 @@ mod ground;
 mod ledge;
 #[path = "movement/plane.rs"]
 pub mod plane;
-#[path = "movement/wall_along.rs"]
-mod wall_along;
 #[path = "movement/pole.rs"]
 mod pole;
 #[path = "movement/pole_find.rs"]
@@ -278,10 +276,12 @@ mod terrain;
 mod wait;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
+#[path = "movement/wall_along.rs"]
+mod wall_along;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
-use plane::along_vector_normal_h;
 use ledge::WallCatchControl;
+use plane::along_vector_normal_h;
 use pole::PoleControl;
 use rolling::{RollControl, RollStart};
 pub use run_cycle::RunCycle;
@@ -2623,11 +2623,7 @@ impl Player {
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
         let in_plane = self.velocity_in_plane(up);
         let (pose_up, pose_front) = self.pose_axes();
-        let front = if std::env::var("PJV_X2").is_ok() {
-            plane::verticalize(up, pose_front)
-        } else {
-            along_vector_normal_h(pose_front, pose_up, up)
-        };
+        let front = along_vector_normal_h(pose_front, pose_up, up);
         if step == 0 {
             self.ground.reset(in_plane, front);
         }
