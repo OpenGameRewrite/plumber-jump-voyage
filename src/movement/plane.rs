@@ -24,6 +24,15 @@ pub fn parallelize(dir: Vec3, vec: Vec3) -> Vec3 {
     dir * dir.dot(vec)
 }
 
+/// The vector of the plane with the normal `n` whose horizontal part is `h`.
+pub fn lift(h: Vec3, n: Vec3) -> Vec3 {
+    if n.y > 0. && n != Vec3::Y {
+        Vec3::new(h.x, -(h.x * n.x + h.z * n.z) / n.y, h.z)
+    } else {
+        h.with_y(0.)
+    }
+}
+
 /// `al::tryNormalizeOrZero`: the unit vector, or zero for one that is too short
 /// to have a direction (the library's epsilon is a squared length of 1e-12
 /// times the machine's: anything the vector maths cannot normalise).

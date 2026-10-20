@@ -218,6 +218,9 @@ pub fn label(binding: &str, device: usize) -> String {
 pub struct Orders {
     /// World-space XZ direction; length is analog tilt (walk < 0.5 < run).
     pub direction: Vec2,
+    /// The world direction (XZ, unit) a stick held straight forward walks
+    /// along: the camera's heading. Zero when unknown.
+    pub forward: Vec2,
     /// The stick as held, relative to the camera (y negative is up), and the
     /// camera yaw: climbing uses screen directions rather than world ones.
     pub stick: Vec2,
@@ -410,6 +413,7 @@ pub fn read(
         *orders = Orders::default();
     } else {
         orders.direction = rotate(stick.clamp_length_max(1.), camera.yaw);
+        orders.forward = rotate(Vec2::NEG_Y, camera.yaw);
         orders.stick = stick.clamp_length_max(1.);
         orders.camera_yaw = camera.yaw;
         orders.look =

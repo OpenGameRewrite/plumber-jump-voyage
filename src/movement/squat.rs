@@ -194,7 +194,7 @@ impl Player {
             return;
         }
         let stick = self.ground_stick();
-        self.squat.turn.update(self.facing, stick);
+        self.squat.turn.update(self.facing, stick, Vec3::Y);
         let turned = self.squat.turn.direction;
         // Against the facing the crawl goes the stick's way at once while the
         // body turns round.

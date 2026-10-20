@@ -6,10 +6,10 @@
 //! (`PlayerActionTurnControl::update`) and the pivot controller
 //! (`PlayerActionPivotTurnControl::update`), as read from the 1.0.0 executable
 //! and confirmed against recorded runs. The maths is in the plane of the
-//! floor: the rewrite's ground movement is horizontal and leaves slopes to its
-//! collision, so the controller's ground normal is always up here. The
-//! original's hill speed bonus, wall response and forced-run input have no
-//! counterpart yet and are left out.
+//! floor under the player (`mGroundNormal`, which is straight up on level
+//! ground): velocities, the facing and the stick are vectors of that plane.
+//! The original's forced-run input has no counterpart yet and is left out.
+use super::plane::{along_vector_normal_h, verticalize};
 use super::t;
 use bevy::prelude::*;
 
@@ -19,6 +19,22 @@ const RADIANS: f32 = 0.017453292;
 /// Frames that bring the stick back from a held direction when the stick is
 /// pushed over a smaller amount (`mStickOnBrakeFrame`).
 const STICK_ON_BRAKE_FRAMES: i32 = 120;
+/// `getHillAccelAddFrame` / `getHillAccelSubFrame` / `getHillAccelSubAngle{Min,Max}`
+/// (the hill factor eases toward its target over these) and `getHillAddSpeed` /
+/// `getHillSubSpeed` / `getStandAngleMin` (what it adds to the top speed, and
+/// the slope at which it is full).
+const HILL_ACCEL_ADD_FRAMES: i32 = 60;
+const HILL_ACCEL_SUB_FRAMES: i32 = 100;
+const HILL_ACCEL_SUB_ANGLE_MIN: f32 = 0.;
+const HILL_ACCEL_SUB_ANGLE_MAX: f32 = 20.;
+const HILL_ADD_SPEED: f32 = 15.;
+const HILL_SUB_SPEED: f32 = 0.;
+const STAND_ANGLE_MIN: f32 = 60.;
+/// Moving into a wall this squarely (cosine of 100 degrees against the wall's
+/// normal) takes the speed bonus away and brakes in one frame.
+const WALL_INTO_COS: f32 = -0.173_648_18;
+/// `0.9`, the share of the pull that counts against a wall's upward push.
+const WALL_PULL_SHARE: f32 = 0.9;
 /// The pull the ground move control keeps on the player, in units per frame
 /// (`mGravityMove`): what the trace reports as `vy` while running.
 pub const GRAVITY_MOVE: f32 = 7.;
@@ -53,6 +69,8 @@ const REVERSE_SMOOTH_RATE: f32 = 1.;
 const STICK_JUMP_COS: f32 = 0.3420201;
 /// Opposite directions: the cosine of 95 degrees.
 const OPPOSITE_COS: f32 = -0.08715574;
+/// `al::isNearZero(x, 0.001)` on a speed.
+const NEAR_ZERO_SPEED: f32 = 0.001;
 /// Horizontal velocity below which the player counts as standing still.
 const STANDING_SPEED: f32 = 0.1;
 /// The stick deadzone of the original's move input.
@@ -72,6 +90,9 @@ pub fn rate01(value: f32, from: f32, to: f32) -> f32 {
 }
 fn ease_in(x: f32) -> f32 {
     (-0.5 * x + 1.5) * x * x
+}
+fn ease_out(x: f32) -> f32 {
+    (-0.5 * x * x + 1.5) * x
 }
 /// `PlayerActionFunction::accel`: a value below its target gains `step` up to
 /// it; a value above is left alone.
@@ -175,6 +196,9 @@ pub struct TurnControl {
     rate: f32,
     last_direction: Vec3,
     last_axis: Vec3,
+    /// The ground normal of the last update (`_24`): the plane `last_direction`
+    /// lies in.
+    last_up: Vec3,
     /// The stick's recent turns, newest last (a ring of five).
     recent: Vec<f32>,
     /// The facing after the latest update.
@@ -207,6 +231,7 @@ impl TurnControl {
         self.rate = 0.;
         self.last_direction = Vec3::ZERO;
         self.last_axis = Vec3::ZERO;
+        self.last_up = Vec3::ZERO;
         self.recent.clear();
     }
     /// The average of the stick's last five turns, in degrees per frame.
@@ -217,12 +242,18 @@ impl TurnControl {
     fn power(&self) -> f32 {
         ease_in(rate01(self.rate, self.tuning.min_degrees, self.limit))
     }
-    /// One frame of `PlayerActionTurnControl::update` on a level floor.
-    pub fn update(&mut self, facing: Vec3, stick: Vec3) {
-        let front = unit_or_zero(flat(facing));
+    /// One frame of `PlayerActionTurnControl::update` on the floor with the
+    /// normal `up`: the facing is taken into that plane and so is the stick's
+    /// last direction, which was stored in the plane of the frame before.
+    pub fn update(&mut self, facing: Vec3, stick: Vec3, up: Vec3) {
+        let front = unit_or_zero(verticalize(up, facing));
         let new = unit_or_zero(stick);
         let has_input = !is_zero(new);
-        let last = unit_or_zero(self.last_direction);
+        let last = if is_zero(self.last_direction) {
+            Vec3::ZERO
+        } else {
+            unit_or_zero(along_vector_normal_h(self.last_direction, self.last_up, up))
+        };
         let have_both = has_input && !is_zero(last);
         let skip_tracking = is_zero(last) || !has_input;
         let front_invalid = is_zero(front);
@@ -299,11 +330,7 @@ impl TurnControl {
             }
             if extra_turn || is_reverse(front, new, 0.01) {
                 // Swing about the vertical the way the stick is swinging.
-                let axis = if stick_axis.dot(Vec3::Y) > 0. {
-                    Vec3::Y
-                } else {
-                    Vec3::NEG_Y
-                };
+                let axis = if stick_axis.dot(up) > 0. { up } else { -up };
                 out = unit_or_zero(rotate(front, axis, self.rate));
                 self.last_axis = axis;
             } else {
@@ -323,6 +350,7 @@ impl TurnControl {
                 self.last_axis = axis;
             }
             self.last_direction = new;
+            self.last_up = up;
         } else if has_input {
             // Stick against the facing: keep the facing, stop turning. (With
             // an unusable facing the stick's own direction is taken.)
@@ -331,7 +359,11 @@ impl TurnControl {
                 self.rate = 0.;
             }
         } else {
-            out = if front_invalid { flat(facing) } else { front };
+            out = if front_invalid {
+                verticalize(up, facing)
+            } else {
+                front
+            };
             self.last_direction = Vec3::ZERO;
             self.last_axis = Vec3::ZERO;
             self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
@@ -348,12 +380,19 @@ pub fn slide_speed(speed: f32) -> f32 {
 
 /// What the ground move control needs of the player each frame.
 pub struct SteerInput {
-    /// Horizontal velocity, units per frame.
+    /// The velocity in the plane of the floor (`updateNormalAndSnap`), units
+    /// per frame.
     pub velocity: Vec3,
+    /// The normal of that floor (`mGroundNormal`).
+    pub up: Vec3,
     /// The facing the player has now.
     pub front: Vec3,
-    /// The stick in world space, its length the tilt (zero in the deadzone).
+    /// The stick in the plane of the floor, its length the tilt (zero in the
+    /// deadzone).
     pub stick: Vec3,
+    /// The wall the body was pressed into the frame before: its normal, and
+    /// whether the contact was on the wall's face rather than its edge.
+    pub wall: Option<(Vec3, bool)>,
     /// Top speed and ramp frames of this frame's nerve.
     pub max_speed: f32,
     pub accel_frames: i32,
@@ -390,6 +429,11 @@ pub struct GroundMove {
     pub brake_counter: i32,
     /// The turn power smoothed over frames (`_c0`).
     turn_power: f32,
+    /// Whether the slope speeds the run up and slows it down (`_78`, which the
+    /// run's constructor switches on) and the factor it keeps (`_7c`): above
+    /// zero downhill, below it uphill.
+    hills: bool,
+    hill: f32,
 }
 impl Default for GroundMove {
     /// The run's control.
@@ -400,6 +444,8 @@ impl Default for GroundMove {
             turn: TurnControl::default(),
             brake_counter: 0,
             turn_power: 0.,
+            hills: true,
+            hill: 0.,
         }
     }
 }
@@ -409,6 +455,7 @@ impl GroundMove {
         Self {
             ramp: false,
             drift: false,
+            hills: false,
             ..Self::default()
         }
     }
@@ -417,12 +464,12 @@ impl GroundMove {
     pub fn reset(&mut self, velocity: Vec3, front: Vec3) {
         self.turn.reset();
         self.brake_counter = 0;
-        let ground = flat(velocity);
-        let speed = ground.length();
+        self.hill = 0.;
+        let speed = velocity.length();
         let brake_speed = t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE;
         if speed >= brake_speed {
-            let heading = unit_or_zero(ground);
-            let front = unit_or_zero(flat(front));
+            let heading = unit_or_zero(velocity);
+            let front = unit_or_zero(front);
             if !is_zero(heading) && !is_zero(front) && !is_opposite(front, heading) {
                 self.brake_counter = t::BRAKE_ON_COUNTER as i32;
             }
@@ -471,9 +518,64 @@ impl GroundMove {
             max / n
         }
     }
+    /// `updateHillAffect`: the hill factor eases toward what the slope asks
+    /// of this frame: downhill along the way the player wants to go it
+    /// grows with the slope and how directly it runs down it, in any other
+    /// case it is a penalty that grows with the slope; it leaves its old
+    /// value slowly when it has to fall and quickly when it has to rise.
+    fn update_hill(&mut self, up: Vec3, wanted: Vec3, has_input: bool) {
+        if !self.hills {
+            return;
+        }
+        let slope = up.y.clamp(-1., 1.).acos();
+        let downhill = unit_or_zero(verticalize(Vec3::NEG_Y, up));
+        let (mut target, mut tilt_in_degrees) = (0., 0.);
+        let mut rising = false;
+        if !is_zero(downhill) {
+            let degrees = slope * DEGREES;
+            let rate = (degrees / STAND_ANGLE_MIN).clamp(0., 1.);
+            let along = if has_input { downhill.dot(wanted) } else { 0. };
+            if has_input && along > 0. {
+                target = along * ease_out(rate);
+            } else {
+                target = -ease_in(rate);
+            }
+            tilt_in_degrees = (degrees * along).max(0.);
+            rising = target > 0.;
+            if rising && self.hill < 0. {
+                self.hill = 0.;
+            }
+        }
+        let mut frames = HILL_ACCEL_ADD_FRAMES;
+        if self.hill > target {
+            let share = (target + 1.).clamp(0., 1.);
+            let wanted_frames = share * (HILL_ACCEL_SUB_FRAMES - 1) as f32;
+            frames = wanted_frames.ceil() as i32 + 1;
+            if rising {
+                let angle = rate01(
+                    tilt_in_degrees,
+                    HILL_ACCEL_SUB_ANGLE_MIN,
+                    HILL_ACCEL_SUB_ANGLE_MAX,
+                );
+                target = lerp(target, self.hill, ease_out(ease_out(angle)));
+            }
+        }
+        self.hill = converge(self.hill, target, 1. / frames as f32);
+    }
+    /// What the hill factor adds to the top speed (`calcMaxSpeed`).
+    fn hill_speed(&self) -> f32 {
+        if !self.hills {
+            0.
+        } else if self.hill > 0. {
+            self.hill * HILL_ADD_SPEED
+        } else {
+            -(self.hill * HILL_SUB_SPEED)
+        }
+    }
     /// One frame of `updateNormalMove` for the run.
     pub fn update(&mut self, input: &SteerInput) -> Steer {
-        let mut ground = flat(input.velocity);
+        let up = input.up;
+        let mut ground = input.velocity;
         let measured = ground.length();
         if measured < STANDING_SPEED {
             ground = Vec3::ZERO;
@@ -484,7 +586,7 @@ impl GroundMove {
         let limit = lerp(t::ROUND_LIMIT_DEG_MIN, t::ROUND_LIMIT_DEG, dash);
         self.turn.limit = limit;
         self.turn.fast_limit = limit;
-        self.turn.update(input.front, input.stick);
+        self.turn.update(input.front, input.stick, up);
         let wanted = self.turn.direction;
         let stick_dir = unit_or_zero(input.stick);
         let has_input = !is_zero(stick_dir);
@@ -494,13 +596,23 @@ impl GroundMove {
         let no_input = !has_input;
         let reversing = self.turn.reverse;
         let braking_request = reversing || no_input;
+        self.update_hill(up, wanted, has_input);
+        // Running into a wall squarely: no bonus from the slope, and the
+        // brake takes everything in one frame.
+        let into_wall = input
+            .wall
+            .is_some_and(|(normal, _)| normal.dot(heading) < WALL_INTO_COS);
 
         let mut speed = measured;
         let mut target = 0.;
         if along >= 0. && !braking_request {
             // Accelerate toward what the stick's tilt allows.
             let tilt = input.stick.length().min(1.);
-            target = tilt * input.max_speed + (1. - tilt) * t::NORMAL_MIN;
+            let top = input.max_speed + self.hill_speed();
+            target = tilt * top + (1. - tilt) * t::NORMAL_MIN;
+            if into_wall {
+                target = target.min(input.max_speed);
+            }
             let rate = self.accel_rate(input.max_speed, input.accel_frames, speed);
             speed = accel(speed, target, rate);
         }
@@ -517,7 +629,9 @@ impl GroundMove {
         // a stick merely eased off lets go slowly; a stick pointing away from
         // the travel without being opposite stops at once.
         let moving_on = along >= 0.;
-        let brake_frames = if !moving_on && opposed {
+        let brake_frames = if into_wall {
+            1
+        } else if !moving_on && opposed {
             t::BRAKE_FRAMES as i32
         } else if !(no_input || moving_on) {
             1
@@ -574,8 +688,25 @@ impl GroundMove {
         } else {
             self.turn_power = 0.;
         }
-        steer.velocity = velocity;
+        // Running up a wall's face is cut off (`0x418aec`).
+        steer.velocity = match input.wall {
+            Some((normal, true)) => cut_climb(velocity, -up * GRAVITY_MOVE, normal),
+            _ => velocity,
+        };
         steer
+    }
+}
+
+/// The function `updateNormalMove` calls last (`0x418aec`): against the face of
+/// a wall, the part of the velocity that climbs along the wall, less nine tenths
+/// of the pull holding the player down, is taken off.
+fn cut_climb(velocity: Vec3, pull: Vec3, wall: Vec3) -> Vec3 {
+    let along_wall = verticalize(wall, velocity);
+    let climb = along_wall.y + WALL_PULL_SHARE * pull.y;
+    if climb >= 0. || climb.abs() < NEAR_ZERO_SPEED {
+        velocity - Vec3::Y * climb
+    } else {
+        velocity
     }
 }
 

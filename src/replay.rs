@@ -398,6 +398,7 @@ pub fn orders_for(
         // A half turn of the orbit yaw is a negation; spelling it so keeps a
         // stick along an axis exactly on it (`sin(PI)` is not zero in `f32`).
         direction: -rotate(stick, (camera_yaw_deg + aim_deg).to_radians()) * aim_gain,
+        forward: -rotate(Vec2::NEG_Y, (camera_yaw_deg + aim_deg).to_radians()),
         camera_yaw,
         ..default()
     };

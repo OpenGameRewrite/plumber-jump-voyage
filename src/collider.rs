@@ -36,7 +36,7 @@
 //! vector (`calcResultVec`), removes the part of the remaining move that goes
 //! into the surface and goes on, up to 100 rounds.
 use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
-use bevy::prelude::Vec3;
+use bevy::prelude::{Quat, Vec3};
 
 /// `PlayerCollider::_1b0`, the slope limit in degrees: a face whose normal is
 /// within 70 degrees of straight up is floor, within 70 of straight down is
@@ -63,6 +63,16 @@ const NO_CONTACT: f32 = -100_000.;
 const LONGEST_STEP: f32 = 35.;
 /// The first `moveCollide` of `collide` (the carry) steps by 0.99 of the range.
 const CARRY_STEP_SCALE: f32 = 0.99;
+/// `al::isNearZero(vec, 0.001)`: a vector shorter than this is no direction.
+const NEAR_ZERO: f32 = 0.001;
+/// The direction bits `calcResultVec` leaves in the collider's flags word
+/// (`0x4338f0`): which way a round's pushes pointed on each axis.
+const PUSH_POS_X: u32 = 0x80;
+const PUSH_NEG_X: u32 = 0x100;
+const PUSH_POS_Y: u32 = 0x200;
+const PUSH_NEG_Y: u32 = 0x400;
+const PUSH_POS_Z: u32 = 0x800;
+const PUSH_NEG_Z: u32 = 0x1000;
 /// How far above the ground plane a floor-like contact on the body sphere's
 /// flank may be and still count as ground (`keeper._58`, `CollisionSmallStepHeight`).
 const SMALL_STEP: f32 = 25.;
@@ -216,10 +226,32 @@ struct Pose {
     /// interpolates the orientation along with the position).
     from_yaw: f32,
     yaw: f32,
+    /// The orientation as quaternions when either end of the sweep is tilted
+    /// off the vertical (a run up a slope): the shapes hang from the whole
+    /// pose, not only its facing.
+    tilt: Option<Tilt>,
+}
+/// The orientations a sweep turns between, and the one it has reached.
+#[derive(Clone, Copy, Debug)]
+struct Tilt {
+    from: Quat,
+    to: Quat,
+    now: Quat,
 }
 impl Pose {
     /// The pose `sweep` has reached: its position and the interpolated facing.
     fn along(&self, sweep: &Sweep) -> Self {
+        if let Some(tilt) = self.tilt {
+            // `SpherePoseInterpolator::calcInterp`: the quaternions' spherical
+            // blend, normalised.
+            let now = crate::movement::plane::slerp(tilt.from, tilt.to, sweep.current)
+                .normalize();
+            return Self {
+                pos: sweep.pos(),
+                tilt: Some(Tilt { now, ..tilt }),
+                ..*self
+            };
+        }
         let (sin, cos) = sweep.yaw(self.from_yaw, self.yaw).sin_cos();
         Self {
             pos: sweep.pos(),
@@ -229,6 +261,9 @@ impl Pose {
         }
     }
     fn rotate(&self, local: Vec3) -> Vec3 {
+        if let Some(tilt) = self.tilt {
+            return tilt.now * local;
+        }
         Vec3::new(
             local.x * self.cos + local.z * self.sin,
             local.y,
@@ -716,9 +751,16 @@ pub struct PlayerCollider {
     carry_from: Option<Vec3>,
     /// The last `collide`'s fix reaction (`Outcome::fix`).
     fix_reaction: Vec3,
+    /// The `PUSH_*` bits of the last `calcResultVec` round (`+0x108`).
+    push_directions: u32,
+    /// The deepest floor hit of each arrow so far in this `collide`: its
+    /// depth, margin, contact point and face normal.
+    arrow_slots: [Option<(f32, f32, Vec3, Vec3)>; 3],
     /// The facing at the end of the last `collide` (the collider keeps the
     /// actor's matrix of that time): the next sweeps turn from it.
     last_yaw: Option<f32>,
+    /// The same orientation when it was tilted.
+    last_tilt: Option<Quat>,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -762,20 +804,91 @@ struct Flags {
 struct Fixes {
     low: Vec3,
     high: Vec3,
+    /// Which ways the contributions pushed, as the `PUSH_*` bits.
+    directions: u32,
 }
 impl Fixes {
-    fn add(&mut self, fix: Vec3) {
+    /// A contribution `fix`; `normal` stands in for its direction when it is
+    /// too short to have one (`0x4338f0`).
+    fn add(&mut self, fix: Vec3, normal: Vec3) {
         self.low = self.low.min(fix);
         self.high = self.high.max(fix);
+        self.directions |= push_directions(fix, normal);
     }
     fn total(&self) -> Vec3 {
         self.low + self.high
     }
 }
 
+/// `0x4338f0`: the push direction bits of a fix. The direction is the fix
+/// normalised (the normal when the fix is shorter than 0.001), with its
+/// components under 0.05 dropped; each remaining component sets the bit of
+/// its sign.
+fn push_directions(fix: Vec3, normal: Vec3) -> u32 {
+    let near_zero = |v: f32, limit: f32| v.abs() < limit;
+    let direction = if fix.length_squared() < NEAR_ZERO * NEAR_ZERO {
+        let cleaned = normal.to_array().map(|c| if near_zero(c, 0.05) { 0. } else { c });
+        Vec3::from_array(cleaned).normalize_or_zero()
+    } else {
+        let unit = fix / fix.length();
+        Vec3::from_array(unit.to_array().map(|c| if near_zero(c, 0.05) { 0. } else { c }))
+    };
+    let mut bits = 0;
+    for (component, (positive, negative)) in direction.to_array().into_iter().zip([
+        (PUSH_POS_X, PUSH_NEG_X),
+        (PUSH_POS_Y, PUSH_NEG_Y),
+        (PUSH_POS_Z, PUSH_NEG_Z),
+    ]) {
+        if near_zero(component, NEAR_ZERO) {
+            continue;
+        }
+        bits |= if component > 0. { positive } else { negative };
+    }
+    bits
+}
+
+/// The last step of `calcResultVec`: a push along an axis that goes the way
+/// the round before pushed back against the move (`previous` is the earlier
+/// round's push less the move left, see `move_collide`) is averaged with it,
+/// or replaced by it when this round has nothing pushing the other way.
+fn average_with_previous(fix: Vec3, now: u32, previous: Vec3, before: u32) -> Vec3 {
+    let mut result = fix.to_array();
+    let before_axes = [
+        (PUSH_POS_X, PUSH_NEG_X),
+        (PUSH_POS_Y, PUSH_NEG_Y),
+        (PUSH_POS_Z, PUSH_NEG_Z),
+    ];
+    for (axis, (positive, negative)) in before_axes.into_iter().enumerate() {
+        let current = result[axis];
+        let earlier = previous[axis];
+        let faint = earlier.abs() < NEAR_ZERO;
+        let both_ways = |other: u32| {
+            if now & other != 0 {
+                (current + earlier) * 0.5
+            } else {
+                earlier
+            }
+        };
+        if before & negative != 0 {
+            if current > 0. && current > earlier && (earlier >= 0. || faint) {
+                result[axis] = both_ways(positive);
+            }
+        } else if before & positive != 0 && current < 0. && current < earlier && (earlier <= 0. || faint) {
+            result[axis] = both_ways(negative);
+        }
+    }
+    Vec3::from_array(result)
+}
+
 /// The part of `v` across `axis` (`al::verticalizeVec`).
 fn across(v: Vec3, axis: Vec3) -> Vec3 {
     v - axis * v.dot(axis)
+}
+
+/// `al::isNearDirection`: the vectors do not point apart and every component of
+/// their cross product is within `limit`.
+fn is_near_direction(a: Vec3, b: Vec3, limit: f32) -> bool {
+    a.dot(b) >= 0. && a.cross(b).abs().max_element() <= limit
 }
 
 /// What a collide call found.
@@ -813,7 +926,10 @@ impl PlayerCollider {
             cut_direction: Vec3::ZERO,
             carry_from: None,
             fix_reaction: Vec3::ZERO,
+            push_directions: 0,
+            arrow_slots: [None; 3],
             last_yaw: None,
+            last_tilt: None,
         }
     }
 
@@ -851,6 +967,7 @@ impl PlayerCollider {
         self.best = [NO_CONTACT; 3];
         self.carry_from = None;
         self.last_yaw = Some(yaw);
+        self.last_tilt = None;
     }
 
     /// `rs::getCollidedFixReaction`: how far the last `collide` moved the feet
@@ -863,7 +980,7 @@ impl PlayerCollider {
     /// DEBUG ONLY
     pub fn debug_probe(&self, mesh: &TriangleMesh, pos: Vec3, yaw: f32) {
         let (sin, cos) = yaw.sin_cos();
-        let pose = Pose { pos, sin, cos, from_yaw: yaw, yaw };
+        let pose = Pose { pos, sin, cos, from_yaw: yaw, yaw, tilt: None };
         let r = check(mesh, &self.keeper, &pose);
         eprintln!("PROBE {:?}", pos);
         for r in &r.collide { eprintln!("    coll shape {} tri {} {:?}", r.shape, r.triangle, r.hit); }
@@ -873,34 +990,72 @@ impl PlayerCollider {
     /// `PlayerCollider::collide`: moves the feet from `pos` by `velocity`,
     /// both cm, facing `yaw` radians about the up axis (0 faces +z).
     pub fn collide(&mut self, mesh: &TriangleMesh, pos: Vec3, velocity: Vec3, yaw: f32) -> Outcome {
+        self.collide_tilted(mesh, pos, velocity, yaw, None)
+    }
+
+    /// [`Self::collide`] for a body whose pose may be tilted off the vertical:
+    /// `tilt` is the whole orientation then.
+    pub fn collide_tilted(
+        &mut self,
+        mesh: &TriangleMesh,
+        pos: Vec3,
+        velocity: Vec3,
+        yaw: f32,
+        tilt: Option<Quat>,
+    ) -> Outcome {
         self.floor = None;
         self.wall = None;
         self.ceiling = None;
         self.best = [NO_CONTACT; 3];
         let (sin, cos) = yaw.sin_cos();
+        let from_yaw = self.last_yaw.unwrap_or(yaw);
+        let orientation = |yaw: f32, tilt: Option<Quat>| tilt.unwrap_or(Quat::from_rotation_y(yaw));
+        let tilted = if tilt.is_some() || self.last_tilt.is_some() {
+            let from = orientation(from_yaw, self.last_tilt);
+            Some(Tilt {
+                from,
+                to: orientation(yaw, tilt),
+                now: from,
+            })
+        } else {
+            None
+        };
         let pose = Pose {
             pos,
             sin,
             cos,
-            from_yaw: self.last_yaw.unwrap_or(yaw),
+            from_yaw,
             yaw,
+            tilt: tilted,
         };
         self.last_yaw = Some(yaw);
+        self.last_tilt = tilt;
+        // `collide` forgets the last frame's push directions and the deepest
+        // floor hit of each arrow.
+        self.push_directions = 0;
+        self.arrow_slots = [None; 3];
         let range = self.keeper.check_step;
         // The carry: from where the collider was to where the actor is. The
         // replay hands the collider the actor's own position, so the move is
-        // empty (it still resolves an overlap the body starts in), except
-        // for the states that put the actor on a pose by hand.
+        // empty, except for the states that put the actor on a pose by hand.
+        // An empty carry is not swept at all; the move's own sweep then also
+        // checks the pose it starts from.
         let begin = self.carry_from.take().unwrap_or(pose.pos);
         let mut at = begin;
-        let mut collided = self.move_collide(
-            mesh,
-            &pose,
-            &mut at,
-            pose.pos,
-            Vec3::ZERO,
-            (range * CARRY_STEP_SCALE).min(LONGEST_STEP),
-        );
+        let carry = pose.pos - begin;
+        let carried = carry.length_squared() >= NEAR_ZERO * NEAR_ZERO;
+        let mut collided = false;
+        if carried {
+            collided |= self.move_collide(
+                mesh,
+                &pose,
+                &mut at,
+                pose.pos,
+                carry,
+                (range * CARRY_STEP_SCALE).min(LONGEST_STEP),
+                false,
+            );
+        }
         // The frame's own move.
         let target = at + velocity;
         collided |= self.move_collide(
@@ -910,6 +1065,7 @@ impl PlayerCollider {
             target,
             velocity,
             range.min(LONGEST_STEP),
+            carried,
         );
         // `onCutCollideAffectDir`: along the cut direction the move keeps what
         // it asked for, whatever the contacts pushed.
@@ -923,7 +1079,9 @@ impl PlayerCollider {
         Outcome { pos: at, collided }
     }
 
-    /// `PlayerCollider::moveCollide`.
+    /// `PlayerCollider::moveCollide`. `skip_start` is its last argument: the
+    /// pose at the start of the sweep was just handled (by the carry), so the
+    /// first pose checked is the next one.
     fn move_collide(
         &mut self,
         mesh: &TriangleMesh,
@@ -932,8 +1090,12 @@ impl PlayerCollider {
         target: Vec3,
         intended: Vec3,
         step: f32,
+        skip_start: bool,
     ) -> bool {
         let mut sweep = Sweep::new(*at, target, step);
+        if skip_start {
+            sweep.advance();
+        }
         let mut results = Results::default();
         if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
             *at = sweep.pos();
@@ -941,10 +1103,13 @@ impl PlayerCollider {
         }
         let mut rounds = 0;
         let mut previous_direction = Vec3::ZERO;
+        // The third argument of `calcResultVec`: nothing in the first round.
+        let mut previous = Vec3::ZERO;
         loop {
             *at = sweep.pos();
             let mut remain = sweep.remaining();
-            let fix = self.calc_result_vec(mesh, &pose.along(&sweep), &results);
+            let (fix, unaveraged) =
+                self.calc_result_vec(mesh, &pose.along(&sweep), &results, previous);
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
@@ -962,17 +1127,24 @@ impl PlayerCollider {
             }
             // A remaining move against the intended one ends the sweep.
             let against = remain.dot(intended);
-            if against < 0. && against.abs() > 1e-3 {
+            if against < 0. && against.abs() >= NEAR_ZERO {
                 return true;
             }
-            if remain.length() <= 1e-3 && previous_direction.dot(direction) < 0. {
+            if remain.length_squared() < NEAR_ZERO * NEAR_ZERO
+                && previous_direction.dot(direction) < 0.
+            {
                 return true;
             }
             previous_direction = direction;
             // Sweep again from the pose that was in collision to where the
             // corrected body wants to go, skipping the pose already handled.
-            sweep = Sweep::new(*at - fix, *at + remain, step);
+            let collided_at = *at - fix;
+            sweep = Sweep::new(collided_at, *at + remain, step);
             sweep.advance();
+            // What the next round is told of this one: how far the pose it
+            // starts from lies back from the one that was in collision, plus
+            // the push this round asked for before averaging.
+            previous = collided_at - sweep.pos() + unaveraged;
             results = Results::default();
             if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
                 *at = sweep.pos();
@@ -1008,14 +1180,19 @@ impl PlayerCollider {
 
     /// `PlayerCollider::calcResultVec`, for static geometry: the single fix
     /// vector that resolves the results of one pose, and the bookkeeping of
-    /// the deepest contacts.
+    /// the deepest contacts. `previous` is what the round before told this
+    /// one (see `move_collide`); the second result is the fix before it was
+    /// averaged with that.
     ///
-    /// Left out: the squeeze test of the `Press` collision code, the moving
-    /// parts' separate accumulators, the direction flags of the previous round
-    /// that average a fix with the carried one (`calcResultVec`, the
-    /// `0x80..0x1000` flag bits) and the border check that drops a wall's edge
-    /// hit when a thin wall's back face is there (`rs::calcExistCollisionBorder`).
-    fn calc_result_vec(&mut self, mesh: &TriangleMesh, pose: &Pose, results: &Results) -> Vec3 {
+    /// Left out: the squeeze test of the `Press` collision code and the
+    /// moving parts' separate accumulators.
+    fn calc_result_vec(
+        &mut self,
+        mesh: &TriangleMesh,
+        pose: &Pose,
+        results: &Results,
+        previous: Vec3,
+    ) -> (Vec3, Vec3) {
         let flags = self.flags(mesh, results);
         self.average_ground(mesh, results);
         if std::env::var("PJV_DBG").is_ok() {
@@ -1053,10 +1230,19 @@ impl PlayerCollider {
                 }
             }
         }
+        let total = fixes.total();
+        let fix = average_with_previous(total, fixes.directions, previous, self.push_directions);
+        self.push_directions = fixes.directions;
         if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("  RV fix {:?} gn {:?} floor {:?}", fixes.total(), self.ground_normal, self.floor.as_ref().map(|c| c.triangle));
+            eprintln!(
+                "  RV fix {:?} (total {:?}) gn {:?} floor {:?}",
+                fix,
+                total,
+                self.ground_normal,
+                self.floor.as_ref().map(|c| c.triangle)
+            );
         }
-        fixes.total()
+        (fix, total)
     }
 
     fn flags(&self, mesh: &TriangleMesh, results: &Results) -> Flags {
@@ -1083,14 +1269,13 @@ impl PlayerCollider {
     /// `calcGroundArrowAverage`: the floor normal is the average of the
     /// distinct normals under the arrows (collisions and supports alike), the
     /// ground position the average of the contact points of the arrows that
-    /// collided.
+    /// collided. Each arrow remembers its deepest floor hit over every round
+    /// of the `collide` (the slots are cleared only when it starts).
     fn average_ground(&mut self, mesh: &TriangleMesh, results: &Results) {
         self.ground_normal = Vec3::ZERO;
         self.ground_position = Vec3::ZERO;
         self.has_ground_normal = false;
         self.has_ground_position = false;
-        // Per arrow: the deepest floor-like hit and its margin.
-        let mut slots: [Option<(f32, f32, Vec3, Vec3)>; 3] = [None; 3];
         let both = results.collide.iter().chain(&results.support);
         for result in both {
             let Hit::Arrow(hit) = result.hit else {
@@ -1103,8 +1288,9 @@ impl PlayerCollider {
             if classify(normal) != Class::Floor {
                 continue;
             }
-            if slots[index].is_none_or(|slot| hit.depth > slot.0) {
-                slots[index] = Some((hit.depth, margin, hit.position, normal));
+            let slot = &mut self.arrow_slots[index];
+            if slot.is_none_or(|held| held.0 < hit.depth) {
+                *slot = Some((hit.depth, margin, hit.position, normal));
             }
         }
         let mut position = Vec3::ZERO;
@@ -1112,14 +1298,14 @@ impl PlayerCollider {
         let mut normal = Vec3::ZERO;
         let mut normals = 0;
         let mut seen: Vec<Vec3> = Vec::new();
-        for slot in slots.iter().flatten() {
+        for slot in self.arrow_slots.iter().flatten() {
             let (depth, margin, at, n) = *slot;
             if depth >= margin {
                 position += at;
                 positions += 1;
             }
-            // Arrows on the same plane count once (`isNearDirection`, 0.01).
-            if !seen.iter().any(|s| s.dot(n) >= (0.01f32).cos()) {
+            // Arrows on the same plane count once.
+            if !seen.iter().any(|s| is_near_direction(*s, n, 0.01)) {
                 normal += n;
                 normals += 1;
             }
@@ -1155,7 +1341,7 @@ impl PlayerCollider {
         let direction = pose.rotate(vector).normalize_or_zero();
         let depth = (hit.depth - margin).max(0.);
         let push = -depth * direction.dot(self.ground_normal);
-        fixes.add(self.ground_normal * push);
+        fixes.add(self.ground_normal * push, self.ground_normal);
         self.record(
             mesh,
             Class::Floor,
@@ -1242,7 +1428,7 @@ impl PlayerCollider {
                     if to_centre == Vec3::ZERO || side.normalize_or_zero() == Vec3::ZERO {
                         return;
                     }
-                    fixes.add(side);
+                    fixes.add(side, side.normalize_or_zero());
                     return;
                 }
             }
@@ -1262,7 +1448,7 @@ impl PlayerCollider {
                 }
             }
         };
-        fixes.add(fix);
+        fixes.add(fix, normal);
         self.record(mesh, class, hit.depth, result, hit.position, hit.location);
     }
 

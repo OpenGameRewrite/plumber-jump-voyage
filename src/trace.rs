@@ -557,6 +557,14 @@ impl Recorder {
         if yaw.abs() >= std::f32::consts::FRAC_PI_2 && q.y < 0. {
             q = -q;
         }
+        // A pose tilted onto a slope (a run up it) shows its own up and front.
+        let (pose_up, pose_front) = match p.pose_quat() {
+            Some(pose) => {
+                q = pose;
+                p.pose_axes()
+            }
+            None => (Vec3::Y, p.facing),
+        };
         let mut cells = Cells::default();
         cells.int(info.frame);
         for axis in [p.pos.x, p.pos.y, p.pos.z] {
@@ -565,8 +573,8 @@ impl Recorder {
         for axis in [v.x, v.y, v.z] {
             cells.num(axis);
         }
-        cells.num(p.facing.x);
-        cells.num(p.facing.z);
+        cells.num(pose_front.x);
+        cells.num(pose_front.z);
         cells.int(p.grounded as i64);
         cells.text(p.nerve_name().name);
         // The run cycle is one slot, `Move`, whose clips are the blend layers.
@@ -593,7 +601,7 @@ impl Recorder {
         cells.int(info.game_frame);
         cells.text(&format!("{}/{}", num(info.stick.x), num(info.stick.y)));
         cells.text(&buttons_cell(&info.held, &info.pressed));
-        for c in [q.x, q.y, q.z, q.w, 0., 1., 0.] {
+        for c in [q.x, q.y, q.z, q.w, pose_up.x, pose_up.y, pose_up.z] {
             cells.num(c);
         }
         // The horizontal speed of the velocity the row shows, which on a tilted

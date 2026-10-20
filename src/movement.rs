@@ -55,6 +55,10 @@ mod t {
     pub const QUICK_TURN_JUMP_FRAMES: u32 = 20;
     pub const ROUND_LIMIT_DEG: f32 = 8.5;
     pub const ROUND_LIMIT_DEG_MIN: f32 = 6.5;
+    /// `getSlerpQuatRate` and `getHillPoseDegreeMax`: how fast the pose's up
+    /// follows the floor's normal, and how far from vertical it may tilt.
+    pub const SLERP_QUAT_RATE: f32 = 0.15;
+    pub const HILL_POSE_DEGREE_MAX: f32 = 45.;
     pub const RUN_SPEED_CONTINUOUS_THROW: f32 = 16.;
     pub const RUN_TIME_CONTINUOUS_THROW: u32 = 20;
     pub const RUN_ACCEL_FRAMES_CONTINUOUS_THROW: f32 = 60.;
@@ -245,6 +249,8 @@ mod t {
 mod ground;
 #[path = "movement/ledge.rs"]
 mod ledge;
+#[path = "movement/plane.rs"]
+pub mod plane;
 #[path = "movement/pole.rs"]
 mod pole;
 #[path = "movement/pole_find.rs"]
@@ -269,6 +275,7 @@ mod wait;
 mod wall_air;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
+use plane::along_vector_normal_h;
 use ledge::WallCatchControl;
 use pole::PoleControl;
 use rolling::{RollControl, RollStart};
@@ -829,6 +836,14 @@ impl Default for FireControl {
     }
 }
 
+/// The pose of a run on a slope: the orientation, for the facing it was made
+/// for (a state that turns the player elsewhere makes it upright again).
+#[derive(Clone, Copy, Debug)]
+struct PoseTilt {
+    pose: Quat,
+    facing: Vec3,
+}
+
 #[derive(Component, Debug)]
 pub struct Player {
     /// State changes decided last step, waiting for their first step.
@@ -992,6 +1007,16 @@ pub struct Player {
     /// chose another state (a jump pressed with the stick): the game logs it
     /// for that frame only.
     run_start_effect: Option<&'static str>,
+    /// The floor normal the run was last steered on, with the horizontal
+    /// velocity it left (`mGroundNormal`): the velocity belongs to that plane
+    /// while it is unchanged.
+    run_up: Option<(Vec2, Vec3)>,
+    /// The pose when it is tilted off the vertical (a run up a slope); it
+    /// belongs to the facing it was made for.
+    pose_tilt: Option<PoseTilt>,
+    /// The world direction a stick held forward walks along (the camera's
+    /// heading).
+    forward: Vec3,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1127,6 +1152,9 @@ impl Default for Player {
             touchdown_speed: 0.,
             cycle: RunCycle::default(),
             run_start_effect: None,
+            run_up: None,
+            pose_tilt: None,
+            forward: Vec3::ZERO,
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -1508,7 +1536,12 @@ impl Player {
     /// (recorded standing and running on a floor tilted by half a degree:
     /// `-pull * normal` at rest).
     fn ground_following(&self) -> Vec3 {
-        let normal = self.mesh_ground.unwrap_or(Vec3::Y);
+        // A run keeps its velocity in the plane it was steered on (the floor
+        // the collider has found since is for the next step).
+        let normal = match self.run_up {
+            Some((h, up)) if h == Vec2::new(self.v.x, self.v.z) => up,
+            _ => self.mesh_ground.unwrap_or(Vec3::Y),
+        };
         let mut along = self.v.with_y(0.);
         if normal.y > 0. {
             along.y = -along.dot(normal) / normal.y;
@@ -2296,6 +2329,7 @@ impl Player {
     fn read_input(&mut self, o: &Orders) {
         self.camera_yaw = o.camera_yaw;
         let stick = Vec3::new(o.direction.x, 0., o.direction.y).clamp_length_max(1.);
+        self.forward = Vec3::new(o.forward.x, 0., o.forward.y).normalize_or_zero();
         self.tilt = stick.length();
         self.stick = stick.normalize_or_zero();
         self.raw_stick = Vec2::new(o.stick.x, -o.stick.y);
@@ -2445,13 +2479,104 @@ impl Player {
         }
         self.v.y = -t::GRAVITY;
     }
+    /// The velocity of the run in the plane of the floor with the normal `up`
+    /// (`updateNormalAndSnap`): the velocity the last step left in the plane of
+    /// the floor it steered on, turned onto this one.
+    fn velocity_in_plane(&self, up: Vec3) -> Vec3 {
+        let from = match self.run_up {
+            Some((h, from)) if h == Vec2::new(self.v.x, self.v.z) => from,
+            _ => up,
+        };
+        along_vector_normal_h(plane::lift(self.v, from), from, up)
+    }
+    /// The stick in the plane of the floor with the normal `up`
+    /// (`PlayerInput::calcMoveInput`): the camera's forward axis is tipped
+    /// along the slope as the camera sees it, the side axis is across that.
+    fn plane_stick(&self, up: Vec3) -> Vec3 {
+        let stick = self.ground_stick();
+        if up == Vec3::Y {
+            return stick;
+        }
+        let forward = if self.forward == Vec3::ZERO {
+            stick.normalize_or_zero()
+        } else {
+            self.forward
+        };
+        let right = forward.cross(Vec3::Y);
+        let seen = plane::normalized_or_zero(plane::verticalize(right, up));
+        let seen = if seen == Vec3::ZERO { up } else { seen };
+        let ahead = plane::normalized_or_zero(along_vector_normal_h(forward, Vec3::Y, seen));
+        let across = plane::normalized_or_zero(ahead.cross(up));
+        across * stick.dot(right) + ahead * stick.dot(forward)
+    }
+    /// `PlayerActionGroundMoveControl::appear` for a run that starts on
+    /// sloped ground: the velocity the body had is laid into the plane of
+    /// the floor, turned from the one it fell through (straight up when the
+    /// floor was only just reached).
+    fn run_appear(&mut self, landing: bool) {
+        let Some(up) = self.mesh_ground else { return };
+        let from = if landing { Vec3::Y } else { up };
+        let velocity = along_vector_normal_h(self.v, from, up);
+        self.set_h(velocity);
+        self.run_up = Some((Vec2::new(self.v.x, self.v.z), up));
+    }
+    /// The pose's up and front: tilted while a run on a slope has it so.
+    pub fn pose_axes(&self) -> (Vec3, Vec3) {
+        match self.pose_tilt {
+            Some(tilt) if tilt.facing == self.facing => {
+                (plane::quat_up(tilt.pose), plane::quat_front(tilt.pose))
+            }
+            _ => (Vec3::Y, self.facing),
+        }
+    }
+    /// The pose as a quaternion, when it is tilted.
+    pub fn pose_quat(&self) -> Option<Quat> {
+        self.pose_tilt
+            .filter(|tilt| tilt.facing == self.facing)
+            .map(|tilt| tilt.pose)
+    }
+    /// `updatePoseUpFront` at the end of a run step: the pose follows the
+    /// floor's normal, its front is the way the player means to go.
+    fn steer_pose(&mut self, up: Vec3, front: Vec3) {
+        if front.length_squared() <= 0.5 {
+            return;
+        }
+        if up == Vec3::Y && self.pose_quat().is_none() {
+            self.facing = front;
+            return;
+        }
+        let (pose_up, pose_front) = self.pose_axes();
+        let current = plane::quat_up_front(pose_up, pose_front);
+        let pose = plane::slerp_up_front(
+            current,
+            up,
+            front,
+            t::SLERP_QUAT_RATE,
+            t::HILL_POSE_DEGREE_MAX,
+        );
+        let facing = plane::quat_front(pose).with_y(0.).normalize_or_zero();
+        if facing != Vec3::ZERO {
+            self.facing = facing;
+        }
+        self.pose_tilt = Some(PoseTilt {
+            pose,
+            facing: self.facing,
+        });
+    }
     /// One step of the run nerve (`PlayerStateRunHakoniwa::exeRun`): the
     /// ground move control steers, the run cycle animates, then the nerve
     /// decides whether to brake, pivot or end.
     fn run_step(&mut self, o: &Orders) {
         let step = self.run_steps;
+        // The floor under the player and everything the control works on in
+        // its plane: the velocity (`updateNormalAndSnap`), the facing and the
+        // stick.
+        let up = self.mesh_ground.unwrap_or(Vec3::Y);
+        let in_plane = self.velocity_in_plane(up);
+        let (pose_up, pose_front) = self.pose_axes();
+        let front = along_vector_normal_h(pose_front, pose_up, up);
         if step == 0 {
-            self.ground.reset(self.v, self.facing);
+            self.ground.reset(in_plane, front);
         }
         let after_turn = self.run_nerve == RunNerve::RunAfterTurn;
         // Top speed and ramp length of this step: the stretch after a turn
@@ -2467,19 +2592,24 @@ impl Player {
             (t::NORMAL_MAX, t::ACCEL_FRAMES as i32)
         };
         let steer = self.ground.update(&SteerInput {
-            velocity: self.v,
-            front: self.facing,
-            stick: self.ground_stick(),
+            velocity: in_plane,
+            up,
+            front,
+            stick: self.plane_stick(up),
+            wall: self
+                .touched
+                .wall_contact
+                .as_ref()
+                .map(|wall| (wall.normal, wall.at_face)),
             max_speed,
             accel_frames,
         });
         self.run_steps += 1;
-        if steer.front.length_squared() > 0.5 {
-            self.facing = steer.front;
-        }
+        self.steer_pose(up, steer.front);
         self.set_h(steer.velocity);
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
+        self.run_up = Some((Vec2::new(self.v.x, self.v.z), up));
         self.mode = if steer.speed < 8. {
             Move::Walk
         } else {
@@ -3708,6 +3838,8 @@ impl Player {
                 self.spin_ground_move.reset(self.v, self.facing);
             }
             let steer = self.spin_ground_move.update(&SteerInput {
+                up: Vec3::Y,
+                wall: None,
                 velocity: self.v,
                 front: self.facing,
                 stick: self.ground_stick(),
@@ -4054,6 +4186,7 @@ impl Player {
                 self.run_frames = t::BRAKE_ON_COUNTER;
                 // The run state pulls to the floor from the step it is chosen.
                 self.pull = GRAVITY_MOVE;
+                self.run_appear(true);
                 self.go(Move::Run, "Move");
                 self.cycle_restart_in = 2;
                 self.sub_anim = Some(Anim {
@@ -4105,6 +4238,7 @@ impl Player {
                 } else if self.tilt > 0.05 && speed > 0.5 {
                     self.run_frames = t::BRAKE_ON_COUNTER;
                     self.pull = GRAVITY_MOVE;
+                    self.run_appear(true);
                     self.go(Move::Run, "Move");
                 } else {
                     // The landing clip depends on the clip the jump was playing

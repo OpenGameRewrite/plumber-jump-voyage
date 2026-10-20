@@ -148,7 +148,9 @@ impl Player {
         if std::env::var("PJV_DBG").is_ok() {
             eprintln!("COLLIDE start {:?} vel {:?} yaw {}", start, velocity, yaw);
         }
-        let outcome = self.collider.collide(mesh, start, velocity, yaw);
+        let outcome = self
+            .collider
+            .collide_tilted(mesh, start, velocity, yaw, self.pose_quat());
         if std::env::var("PJV_DBG").is_ok() {
             eprintln!("COLLIDE end {:?}", outcome.pos);
         }
@@ -159,7 +161,7 @@ impl Player {
         // only what the contacts changed is taken from the collider.
         // (On the ground that includes the horizontal part of the pull along a
         // tilted floor's normal, which the push out of the floor takes back.)
-        self.pos += Vec3::new(velocity.x, self.v.y, velocity.z) * UNIT;
+        self.pos += velocity * UNIT;
         if outcome.collided {
             let correction = outcome.pos - (start + velocity);
             self.pos.x += correction.x * UNIT;
