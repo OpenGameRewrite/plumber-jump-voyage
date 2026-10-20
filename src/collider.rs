@@ -1228,7 +1228,7 @@ impl PlayerCollider {
         let pos = mesh.to_game_vec(pos);
         let debug = std::env::var("PJV_DBG").is_ok();
         if debug {
-            eprintln!("DBG collide pos {pos:?} velocity {velocity:?} yaw {yaw}");
+            eprintln!("DBG collide pos {pos:?} velocity {velocity:?} yaw {yaw} bits {:x} {:x}", pos.z.to_bits(), velocity.z.to_bits());
         }
         let pose = Pose::new(pos, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);

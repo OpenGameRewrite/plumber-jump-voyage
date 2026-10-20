@@ -36,6 +36,13 @@ fn to_cm(metres: Vec3) -> Vec3 {
     Vec3::new(snap(metres.x), snap(metres.y), snap(metres.z))
 }
 
+/// A position in metres as the replay-relative centimetres, rounded to nothing but the
+/// conversion itself (a stage's collider snaps it to the game's own grid afterwards).
+fn to_cm_exact(metres: Vec3) -> Vec3 {
+    let cm = |m: f32| (f64::from(m) * 100.) as f32;
+    Vec3::new(cm(metres.x), cm(metres.y), cm(metres.z))
+}
+
 impl Player {
     /// The collision form `PlayerFormSensorCollisionArranger::syncForm` picks
     /// for the actor's nerve: the mini one for the squat, the slope slide and
@@ -125,7 +132,11 @@ impl Player {
     /// Moves the player by this frame's velocity through the mesh.
     pub(super) fn collide_mesh(&mut self, mesh: &TriangleMesh, was_grounded: bool) {
         self.prepare_collider();
-        let start = mesh.snap_to_game_precision(to_cm(self.pos));
+        let start = if mesh.parts.is_empty() {
+            mesh.snap_to_game_precision(to_cm(self.pos))
+        } else {
+            mesh.snap_to_game_precision(to_cm_exact(self.pos))
+        };
         // On the ground the controller keeps no downward speed of its own; the
         // game's velocity carries the pull (`units_per_frame`), and it is that
         // push into the floor that keeps the ground contact every frame.
