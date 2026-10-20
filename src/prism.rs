@@ -35,7 +35,8 @@ const CORNER_SLOPE: f32 = 0.707_106;
 
 /// `m * point` with the translation: `((x*m0 + y*m1) + z*m2) + m3` per row.
 pub fn transform_point(m: &Matrix34, p: Point) -> Point {
-    let row = |r: usize| ((p[0] * m[4 * r] + p[1] * m[4 * r + 1]) + p[2] * m[4 * r + 2]) + m[4 * r + 3];
+    let row =
+        |r: usize| ((p[0] * m[4 * r] + p[1] * m[4 * r + 1]) + p[2] * m[4 * r + 2]) + m[4 * r + 3];
     [row(0), row(1), row(2)]
 }
 
@@ -96,9 +97,7 @@ pub fn invert(m: &Matrix34) -> Option<Matrix34> {
     let i03 = (m13 * (s23 * d) - i00 * m03) - i02 * m23;
     let i13 = (s19 * d * m03 - i11 * m13) + m23 * (s16 * d);
     let i23 = (m13 * (s6 * d) - i20 * m03) - i22 * m23;
-    Some([
-        i00, i01, i02, i03, i10, i11, i12, i13, i20, i21, i22, i23,
-    ])
+    Some([i00, i01, i02, i03, i10, i11, i12, i13, i20, i21, i22, i23])
 }
 
 /// A collision part's frame: the base matrix, its inverse and the scale factors the tests use.
@@ -224,27 +223,36 @@ impl Prism {
         }
         let second = match lead {
             0 => {
-                if plane[1] <= plane[2] { 2 } else { 1 }
+                if plane[1] <= plane[2] {
+                    2
+                } else {
+                    1
+                }
             }
             1 => {
-                if plane[2] <= plane[0] { 0 } else { 2 }
+                if plane[2] <= plane[0] {
+                    0
+                } else {
+                    2
+                }
             }
             _ => {
-                if plane[0] > plane[1] { 0 } else { 1 }
+                if plane[0] > plane[1] {
+                    0
+                } else {
+                    1
+                }
             }
         };
         let normals = [a, b, c];
         let cosine = dot(normals[lead], normals[second]);
         let lead_distance = plane[lead];
-        let squared;
-        let region;
-        if lead_distance * cosine > plane[second] {
+        let (squared, region) = if lead_distance * cosine > plane[second] {
             // Beside the leading edge alone.
             if lead_distance > height {
                 return None;
             }
-            squared = radius_sq - lead_distance * lead_distance;
-            region = 2 + lead as u8;
+            (radius_sq - lead_distance * lead_distance, 2 + lead as u8)
         } else {
             // The corner where the two planes meet: the offset from it solves
             // `offset . p = plane_p`, `offset . q = plane_q`; `p` is the first plane of the pair
@@ -264,12 +272,12 @@ impl Prism {
             ];
             let distance_sq = dot(offset, offset);
             let distance = distance_sq.sqrt();
-            if !(distance < radius) || distance * CORNER_SLOPE > height {
+            // (A distance that is not a number fails the comparison too.)
+            if distance.is_nan() || distance >= radius || distance * CORNER_SLOPE > height {
                 return None;
             }
-            squared = radius_sq - distance_sq;
-            region = corner_region;
-        }
+            (radius_sq - distance_sq, corner_region)
+        };
         let depth = squared.max(0.).sqrt() - height;
         (depth >= 0.).then_some((depth, region))
     }
@@ -284,27 +292,29 @@ impl Prism {
             _ => {}
         }
         // The centre's projection onto the face's plane.
-        let d = [
-            center[0] - self.origin[0],
-            center[1] - self.origin[1],
-            center[2] - self.origin[2],
-        ];
-        let off_plane = dot(d, self.face);
+        let offset = |from: Point| {
+            [
+                center[0] - from[0],
+                center[1] - from[1],
+                center[2] - from[2],
+            ]
+        };
+        let off_plane = dot(offset(self.origin), self.face);
         let mut at = [
             center[0] - self.face[0] * off_plane,
             center[1] - self.face[1] * off_plane,
             center[2] - self.face[2] * off_plane,
         ];
         if region >= 2 {
-            // Onto the edge's line: the edge normal is the plane's normal, the line passes through
-            // the first corner (edges 1 and 2) or the second one (edge 3).
+            // Onto the edge's line: the edge normal is the plane's normal and the plane passes
+            // through the first corner (edges 1 and 2) or the second one (edge 3). The distance
+            // to the plane is measured from the centre, not from the projection.
             let (normal, through) = match region {
                 2 => (self.edges[0], self.origin),
                 3 => (self.edges[1], self.origin),
                 _ => (self.edges[2], corner(1)),
             };
-            let rel = [at[0] - through[0], at[1] - through[1], at[2] - through[2]];
-            let t = dot(rel, normal);
+            let t = dot(offset(through), normal);
             at = [
                 at[0] - normal[0] * t,
                 at[1] - normal[1] * t,
@@ -356,7 +366,7 @@ pub struct WorldTriangle {
 }
 
 impl Prism {
-    pub fn to_world(&self, frame: &PartFrame) -> WorldTriangle {
+    pub fn world_triangle(&self, frame: &PartFrame) -> WorldTriangle {
         let rotated = |v: Point| normalize(rotate_vector(&frame.base, v));
         WorldTriangle {
             corners: [0, 1, 2].map(|i| transform_point(&frame.base, self.corner(i))),
@@ -364,4 +374,11 @@ impl Prism {
             edges: self.edges.map(rotated),
         }
     }
+}
+
+#[path = "tests/prism.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

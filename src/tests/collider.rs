@@ -9,6 +9,8 @@ pub(super) fn run() {
     low_step_is_walked_over();
     ceiling_stops_a_jump();
     exact_arrival_depth_is_just_under_the_margin();
+    a_reset_body_skips_the_hair_touch_at_the_start_of_its_move();
+    the_bounding_radius_and_the_growth_of_a_reset_collider();
 }
 
 fn square(y: f32, half: f32) -> [[Vec3; 3]; 2] {
@@ -193,4 +195,79 @@ fn exact_arrival_depth_is_just_under_the_margin() {
     )
     .unwrap();
     assert!(hit.depth >= 20.);
+}
+
+/// A wall `x = 100` (normal -x) and a second one that leans away from the first by under a
+/// degree and starts 0.02 further out, so a body that touches the first by a hair is clear of the
+/// second.
+fn two_walls() -> TriangleMesh {
+    let facing_minus_x = |a: Vec3, b: Vec3, c: Vec3| {
+        if (b - a).cross(c - a).x > 0. {
+            [a, c, b]
+        } else {
+            [a, b, c]
+        }
+    };
+    let mut list = vec![];
+    let (p, q) = (500., 4000.);
+    let (a, b, c, d) = (
+        Vec3::new(100., -p, -p),
+        Vec3::new(100., p, -p),
+        Vec3::new(100., -p, p),
+        Vec3::new(100., p, p),
+    );
+    list.push(facing_minus_x(a, b, c));
+    list.push(facing_minus_x(d, c, b));
+    let angle = 0.8f32.to_radians();
+    let along = Vec3::new(angle.sin(), angle.cos(), 0.);
+    let origin = Vec3::new(100.02, 65., 0.);
+    let corner = |u: f32, z: f32| origin + along * u + Vec3::Z * z;
+    list.push(facing_minus_x(corner(-q, -q), corner(q, -q), corner(-q, q)));
+    list.push(facing_minus_x(corner(q, q), corner(-q, q), corner(q, -q)));
+    TriangleMesh::from_corners(&list)
+}
+
+/// After `rs::resetCollisionExpandCheck` the collider grows the shapes back in the next
+/// `collide` and the frame's own move skips its first pose: a body that touches a wall by a hair
+/// is not pushed at that pose but runs into the wall and out of it, which lets a second, leaning
+/// wall push it along its slope (the wall slide's start in the real game does exactly this).
+#[cfg_attr(test, test)]
+fn a_reset_body_skips_the_hair_touch_at_the_start_of_its_move() {
+    let mesh = two_walls();
+    let start = Vec3::new(45.0001, 0., 0.);
+    let into_wall = Vec3::new(15., 0., 0.);
+    let mut plain = PlayerCollider::new(Form::Normal);
+    let plain_out = plain.collide(&mesh, start, into_wall, 0.);
+    assert!(plain_out.pos.y.abs() < 1e-3, "{:?}", plain_out.pos);
+    assert!((plain_out.pos.x - 45.).abs() < 0.03, "{:?}", plain_out.pos);
+
+    let mut reset = PlayerCollider::new(Form::Normal);
+    reset.reset_expand_check(0.);
+    let out = reset.collide(&mesh, start, into_wall, 0.);
+    assert!(out.pos.y > 0.1, "{:?}", out.pos);
+    assert!((out.pos.x - 45.).abs() < 0.03, "{:?}", out.pos);
+    // The growth is a one-off: the collider has the full radius again afterwards.
+    assert_eq!(reset.last_radius, reset.keeper.bounding_radius);
+}
+
+/// `CollisionShapeKeeper::updateShape`: the sphere around the player's shapes, and the scale a
+/// reset starts the shapes at.
+#[cfg_attr(test, test)]
+fn the_bounding_radius_and_the_growth_of_a_reset_collider() {
+    let keeper = Keeper::new(Form::Normal);
+    assert!(
+        (keeper.bounding_radius - 95.532).abs() < 0.01,
+        "{}",
+        keeper.bounding_radius
+    );
+    assert_eq!(Keeper::cap().bounding_radius, 60.);
+    // From a radius of 20 to the full one, in steps of 29.7 of (length + growth).
+    let sweep = Sweep::new(Vec3::ZERO, Vec3::ZERO, 29.7, 20., keeper.bounding_radius);
+    assert!((sweep.step - 29.7 / (keeper.bounding_radius - 20.)).abs() < 1e-6);
+    assert!((sweep.shape_scale(1.) - 20. / keeper.bounding_radius).abs() < 1e-6);
+    let mut sweep = sweep;
+    while !sweep.finished() {
+        sweep.advance();
+    }
+    assert_eq!(sweep.shape_scale(1.), 1.);
 }

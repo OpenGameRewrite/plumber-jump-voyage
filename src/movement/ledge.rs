@@ -572,6 +572,9 @@ impl Player {
         self.grounded = false;
         self.catch = catch;
         self.catch_collider_at = None;
+        // `PlayerStateWallCatch::appear` (0x48fad8): `rs::resetCollisionExpandCheck`.
+        self.collider
+            .reset_expand_check(self.facing.x.atan2(self.facing.z));
         let ignore = self.input_kind_at_catch();
         self.catch.ignore_let_go = ignore;
         self.air_for = None;

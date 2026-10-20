@@ -65,6 +65,7 @@ fn main() {
         cap::self_check();
         geometry::self_check();
         collider::self_check();
+        prism::self_check();
         movement::self_check();
         input::self_check();
         ui::self_check();

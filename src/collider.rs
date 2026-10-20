@@ -410,7 +410,7 @@ fn sphere_hit(
 ) -> Option<SphereHit> {
     let Some(local) = &t.local else {
         // A world-space triangle lives in the replay's frame.
-        let hit = sphere_hit_world(t, mesh.from_game_vec(center), radius, mesh.thickness)?;
+        let hit = sphere_hit_world(t, mesh.relative_vec(center), radius, mesh.thickness)?;
         return Some(SphereHit {
             position: mesh.to_game_vec(hit.position),
             center,
@@ -593,7 +593,6 @@ fn arrow_hit(mesh: &TriangleMesh, t: &MeshTriangle, start: Vec3, vector: Vec3) -
     let vector_local = rotate_vector(&frame.inverse, vector.to_array());
     let fraction = local.prism.arrow_test(start_local, vector_local)?;
     Some(arrow_result(
-        mesh,
         frame,
         start_local,
         vector_local,
@@ -605,7 +604,12 @@ fn arrow_hit(mesh: &TriangleMesh, t: &MeshTriangle, start: Vec3, vector: Vec3) -
 /// `al::CollisionParts::checkStrikeArrow`, the query `alCollisionUtil` asks (ledge and pole
 /// probes, border checks): the same prism test, but the vector is carried as the difference of
 /// the carried end and start points.
-fn strike_hit(mesh: &TriangleMesh, t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowHit> {
+fn strike_hit(
+    mesh: &TriangleMesh,
+    t: &MeshTriangle,
+    start: Vec3,
+    vector: Vec3,
+) -> Option<ArrowHit> {
     let Some(local) = &t.local else {
         return arrow_hit_world_game(mesh, t, start, vector);
     };
@@ -620,7 +624,6 @@ fn strike_hit(mesh: &TriangleMesh, t: &MeshTriangle, start: Vec3, vector: Vec3) 
     ];
     let fraction = local.prism.arrow_test(start_local, vector_local)?;
     Some(arrow_result(
-        mesh,
         frame,
         start_local,
         vector_local,
@@ -637,7 +640,7 @@ fn arrow_hit_world_game(
     start: Vec3,
     vector: Vec3,
 ) -> Option<ArrowHit> {
-    let hit = arrow_hit_world(t, mesh.from_game_vec(start), vector)?;
+    let hit = arrow_hit_world(t, mesh.relative_vec(start), vector)?;
     Some(ArrowHit {
         position: mesh.to_game_vec(hit.position),
         ..hit
@@ -647,7 +650,6 @@ fn arrow_hit_world_game(
 /// The crossing found at `fraction` of an arrow of world length `length`: how far beyond the
 /// surface the arrow reaches, how far along it lies and where (stage coordinates).
 fn arrow_result(
-    _mesh: &TriangleMesh,
     frame: &PartFrame,
     start_local: Point,
     vector_local: Point,
@@ -655,10 +657,11 @@ fn arrow_result(
     length: f32,
 ) -> ArrowHit {
     let at_local = [0, 1, 2].map(|i| start_local[i] + fraction * vector_local[i]);
+    let depth = (1. - fraction) * length;
     ArrowHit {
-        depth: (1. - fraction) * length,
+        depth,
         position: Vec3::from_array(transform_point(&frame.base, at_local)),
-        distance: length * fraction,
+        distance: length - depth,
     }
 }
 
@@ -762,7 +765,7 @@ pub fn arrow_strikes_filtered(
 ) -> Vec<Strike> {
     let mut strikes = arrow_strikes_game(mesh, mesh.to_game_vec(start), vector, filter);
     for strike in &mut strikes {
-        strike.position = mesh.from_game_vec(strike.position);
+        strike.position = mesh.relative_vec(strike.position);
     }
     strikes
 }
@@ -777,8 +780,8 @@ fn arrow_strikes_game(
 ) -> Vec<Strike> {
     let tip = start + vector;
     let area = Aabb {
-        min: mesh.from_game_vec(start.min(tip)),
-        max: mesh.from_game_vec(start.max(tip)),
+        min: mesh.relative_vec(start.min(tip)),
+        max: mesh.relative_vec(start.max(tip)),
     };
     mesh.candidates(area)
         .into_iter()
@@ -834,7 +837,7 @@ pub fn sphere_strikes(mesh: &TriangleMesh, center: Vec3, radius: f32) -> Vec<(u3
         .filter_map(|i| {
             let t = &mesh.triangles[i as usize];
             let hit = sphere_hit(mesh, t, center_game, radius)?;
-            Some((i, mesh.from_game_vec(hit.position)))
+            Some((i, mesh.relative_vec(hit.position)))
         })
         .collect()
 }
@@ -870,7 +873,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
                 let radius = *radius * scale;
                 // The centre as the game sums it: the position plus the rotated offset.
                 let world = pose.world_point(center);
-                let world_rel = mesh.from_game_vec(world);
+                let world_rel = mesh.relative_vec(world);
                 for i in mesh.candidates(Aabb::around(world_rel, radius)) {
                     let t = &mesh.triangles[i as usize];
                     let Some(hit) = sphere_hit(mesh, t, world, radius) else {
@@ -900,8 +903,8 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
                 let vec = pose.rotate(*vector * scale);
                 let tip = from + vec;
                 let area = Aabb {
-                    min: mesh.from_game_vec(from.min(tip)),
-                    max: mesh.from_game_vec(from.max(tip)),
+                    min: mesh.relative_vec(from.min(tip)),
+                    max: mesh.relative_vec(from.max(tip)),
                 };
                 for i in mesh.candidates(area) {
                     let t = &mesh.triangles[i as usize];
@@ -1340,10 +1343,6 @@ impl PlayerCollider {
         };
         // Inside, positions are the game's own absolute ones.
         let pos = mesh.to_game_vec(pos);
-        let debug = std::env::var("PJV_DBG").is_ok();
-        if debug {
-            eprintln!("DBG collide pos {pos:?} velocity {velocity:?} yaw {yaw} bits {:x} {:x}", pos.z.to_bits(), velocity.z.to_bits());
-        }
         let pose = Pose::new(pos, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);
         self.last_tilt = tilt;
@@ -1409,13 +1408,10 @@ impl PlayerCollider {
             .into_iter()
             .flatten()
         {
-            contact.position = mesh.from_game_vec(contact.position);
-        }
-        if debug {
-            eprintln!("DBG   -> {at:?} collided {collided}");
+            contact.position = mesh.relative_vec(contact.position);
         }
         Outcome {
-            pos: mesh.from_game_vec(at),
+            pos: mesh.relative_vec(at),
             collided,
         }
     }
@@ -1454,10 +1450,6 @@ impl PlayerCollider {
             let mut remain = sweep.remaining();
             let (fix, unaveraged) =
                 self.calc_result_vec(mesh, &pose.along(&sweep), &results, previous);
-            if std::env::var("PJV_DBG").is_ok() {
-                eprintln!("DBG   round at {:?} t {} fix {:?} results {:?}", *at, sweep.current, fix,
-                    results.collide.iter().map(|r| match r.hit { Hit::Sphere(h) => ('S', r.shape, r.triangle, h.depth), Hit::Arrow(h) => ('A', r.shape, r.triangle, h.depth) }).collect::<Vec<_>>());
-            }
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
@@ -1525,12 +1517,6 @@ impl PlayerCollider {
                 &pose.along(sweep),
                 sweep.shape_scale(self.shape_scale),
             );
-            if sweep.current == 0. && std::env::var("PJV_SKIP0").is_ok() {
-                results.collide.retain(|r| match r.hit {
-                    Hit::Sphere(h) => h.depth > 3e-4,
-                    _ => true,
-                });
-            }
             if !results.collide.is_empty() {
                 return true;
             }

@@ -202,7 +202,9 @@ impl TriangleMesh {
             if let Some(exported) = floats::<12>(object.get("inverse"))
                 && exported != frame.inverse
             {
-                return Err(format!("geometry: object {i}: the exported inverse matrix differs from the computed one"));
+                return Err(format!(
+                    "geometry: object {i}: the exported inverse matrix differs from the computed one"
+                ));
             }
             object_part.push(Some(mesh.parts.len() as u32));
             mesh.parts.push(frame);
@@ -237,17 +239,19 @@ impl TriangleMesh {
             let local = match (object_part.get(object).copied().flatten(), n.get(17)) {
                 (Some(part), Some(slot)) => {
                     let model = mesh.objects.get(object).map_or("", String::as_str);
-                    let prism = prism_of(model, n[16] as usize, *slot as usize)
-                        .ok_or_else(|| format!("geometry: triangle {i}: no prism {model}#{} {slot}", n[16]))?;
+                    let prism =
+                        prism_of(model, n[16] as usize, *slot as usize).ok_or_else(|| {
+                            format!("geometry: triangle {i}: no prism {model}#{} {slot}", n[16])
+                        })?;
                     Some(LocalPrism { part, prism })
                 }
                 _ => None,
             };
             let (corners, normal, edges) = if let Some(local) = &local {
                 // The game's own derivation of the triangle (`Triangle::fillData`).
-                let world = local.prism.to_world(&mesh.parts[local.part as usize]);
+                let world = local.prism.world_triangle(&mesh.parts[local.part as usize]);
                 (
-                    world.corners.map(|c| mesh.from_game(c)),
+                    world.corners.map(|c| mesh.relative_point(c)),
                     Vec3::from_array(world.normal),
                     world.edges.map(Vec3::from_array),
                 )
@@ -262,8 +266,7 @@ impl TriangleMesh {
                     )
                 };
                 let corners = [corner(0), corner(1), corner(2)];
-                let normal =
-                    Vec3::new(n[9] as f32, n[10] as f32, n[11] as f32).normalize_or_zero();
+                let normal = Vec3::new(n[9] as f32, n[10] as f32, n[11] as f32).normalize_or_zero();
                 let [a, b, c] = corners;
                 (
                     corners,
@@ -306,13 +309,13 @@ impl TriangleMesh {
         Vec3::from_array(self.to_game(relative))
     }
 
-    /// [`Self::from_game`] for a vector.
-    pub fn from_game_vec(&self, absolute: Vec3) -> Vec3 {
-        self.from_game(absolute.to_array())
+    /// [`Self::relative_point`] for a vector.
+    pub fn relative_vec(&self, absolute: Vec3) -> Vec3 {
+        self.relative_point(absolute.to_array())
     }
 
     /// The start-relative position of an absolute single-precision one.
-    pub fn from_game(&self, absolute: Point) -> Vec3 {
+    pub fn relative_point(&self, absolute: Point) -> Vec3 {
         Vec3::new(
             (f64::from(absolute[0]) - self.origin[0]) as f32,
             (f64::from(absolute[1]) - self.origin[1]) as f32,
