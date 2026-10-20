@@ -639,7 +639,13 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose) -> Results {
                 margin,
                 ..
             } => {
-                let from = pose.pos + pose.rotate(*start);
+                // The start of the arrow is a world position that the game holds
+                // in single precision at the stage's magnitude. A tilt of a few
+                // millionths of a radian moves it by far less than that step, so
+                // a body standing flush on the floor keeps the exact height 40
+                // above it; the depth then falls a hair under the margin and the
+                // arrow only supports.
+                let from = mesh.snap_to_game_precision(pose.pos + pose.rotate(*start));
                 let vec = pose.rotate(*vector);
                 let tip = from + vec;
                 let area = Aabb {
@@ -1198,10 +1204,10 @@ impl PlayerCollider {
         if std::env::var("PJV_DBG").is_ok() {
             eprintln!("  RV pose {:?} ", pose.pos);
             for r in &results.collide {
-                eprintln!("    coll shape {} tri {} {:?}", r.shape, r.triangle, r.hit);
+                eprintln!("    coll shape {} tri {} n {:?} {:?}", r.shape, r.triangle, mesh.triangles[r.triangle as usize].normal, r.hit);
             }
             for r in &results.support {
-                eprintln!("    supp shape {} tri {} {:?}", r.shape, r.triangle, r.hit);
+                eprintln!("    supp shape {} tri {} n {:?} {:?}", r.shape, r.triangle, mesh.triangles[r.triangle as usize].normal, r.hit);
             }
         }
         // The deepest floor of the earlier rounds provides the ground
