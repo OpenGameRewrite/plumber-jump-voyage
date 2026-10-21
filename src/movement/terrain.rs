@@ -139,9 +139,12 @@ impl Player {
         };
         // On the ground the controller keeps no downward speed of its own; the
         // game's velocity carries the pull (`units_per_frame`), and it is that
-        // push into the floor that keeps the ground contact every frame.
+        // push into the floor that keeps the ground contact every frame. The
+        // pole's hold is no ground state: its velocity stays zero while the
+        // snap sets the pose, even when a contact with the pole's cap marked
+        // the body as grounded (`units_per_frame` agrees).
         let mut velocity = self.v;
-        if was_grounded && (self.v.y == 0. || self.v.y == -self.pull) {
+        if was_grounded && self.mode != Move::Pole && (self.v.y == 0. || self.v.y == -self.pull) {
             velocity = self.ground_following();
         }
         let yaw = self.facing.x.atan2(self.facing.z);
@@ -154,9 +157,9 @@ impl Player {
         {
             self.collider.carry_from(stood);
         }
-        let outcome = self
-            .collider
-            .collide_tilted(mesh, start, velocity, yaw, self.pose_quat());
+        let outcome =
+            self.collider
+                .collide_tilted(mesh, start, velocity, yaw, self.pose_read_back());
         if holding {
             self.catch_collider_at = Some(outcome.pos);
         }

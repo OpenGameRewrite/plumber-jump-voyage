@@ -84,7 +84,22 @@ executable's single precision operation in its order. Older exports (world trian
 still load and are tested in world space. After `rs::resetCollisionExpandCheck` (the wall
 slide and the ledge catch call it when they appear) the collider grows its shapes from a
 bounding radius of 20 to full size before the frame's own move, and that move starts at
-its second pose (`PlayerCollider::reset_expand_check` in `src/collider.rs`).
+its second pose (`PlayerCollider::reset_expand_check` in `src/collider.rs`). A change of
+collision form does the same from the old form's radius (`setCollisionShapeKeeper` keeps the
+old keeper's radius as the one the collider last had), so the first move after the squat
+begins also skips its starting pose.
+
+The actor's pose is the quaternion its keeper was last given, plus the rotation matrix made
+from it (`ActorPoseKeeperTQGMSV::updatePoseQuat`). The game reads the pose back through that
+matrix (`al::calcFrontDir`, `calcUpDir`, `calcQuat` = `toQuat` of the matrix), the probe's
+`qx..qw` columns and the collider's from/to quaternions included. `src/movement/pose_math.rs`
+ports the routines behind it (`slerpUpFront`, `waitGround`'s pose, `makeQuatUpFront`,
+`alongVectorNormalH`, `turnVecToVecDegree`, `toQuat`, `slerpTo`) in their single precision
+order, checked bit for bit against the executable (`PJV_POSE_CASES=<local cases file> cargo
+test pose_math`). A quarter turn about the vertical axis is a tie of `toQuat`'s scalar and
+vertical-axis branches, so the sign of `qy`/`qw` follows the rounding noise of the pose
+(the floor normals carry the game's own noise, and `slerpTo` does not renormalise). The
+standing and running states therefore update the pose every step, also on a level floor.
 
 Ported on this collision: falling off a ledge (`PlayerJudgeSpeedCheckFall`), the
 long-fall landing (`PlayerJudgeLongFall`, `Wait/LandStiffen`), the wall slide

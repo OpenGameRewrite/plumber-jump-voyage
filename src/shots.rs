@@ -117,8 +117,7 @@ fn begin(
     menu.open = false;
     menu.begun = true;
     orbit.locked = true;
-    let yaw = driver.start_yaw_deg.to_radians();
-    **player = Player::spawn_at(Vec3::ZERO, Vec3::new(yaw.sin(), 0., yaw.cos()));
+    **player = Player::spawn_facing(Vec3::ZERO, driver.start_yaw_deg);
     driver.phase = Phase::Loading;
     time.pause();
 }

@@ -290,33 +290,12 @@ struct Tilt {
     from: Quat,
     to: Quat,
 }
-/// The rotation matrix `findCollidePos` makes from a unit quaternion (the
-/// products `2*q*q` first, then sums and differences: for a turn about the
-/// vertical alone the up column is exactly (0, 1, 0)).
+/// The rotation matrix `findCollidePos` makes from a quaternion (the products `2*q*q` first, then
+/// sums and differences, as `ActorPoseKeeperTQGMSV::updatePoseQuat` does; for a turn about the
+/// vertical alone the up column is exactly (0, 1, 0)), row-major.
 fn rotation_of(q: Quat) -> [f32; 9] {
-    let (x2, y2, z2, w2) = (q.x + q.x, q.y + q.y, q.z + q.z, q.w + q.w);
-    let xy = q.y * x2;
-    let yy = q.y * y2;
-    let zz = q.z * z2;
-    let xx = q.x * x2;
-    let xz = q.z * x2;
-    let yz = y2 * q.z;
-    let zw = q.z * w2;
-    let xw = q.x * w2;
-    let yw = q.y * w2;
-    let one_minus_yy = 1. - yy;
-    let one_minus_xx = 1. - xx;
-    [
-        one_minus_yy - zz, // m00
-        xy - zw,           // m01
-        xz + yw,           // m02
-        xy + zw,           // m10
-        one_minus_xx - zz, // m11
-        yz - xw,           // m12
-        xz - yw,           // m20
-        yz + xw,           // m21
-        one_minus_xx - yy, // m22
-    ]
+    let [x, y, z] = crate::movement::plane::quat_to_axes(q);
+    [x.x, y.x, z.x, x.y, y.y, z.y, x.z, y.z, z.z]
 }
 impl Pose {
     fn new(pos: Vec3, from_yaw: f32, yaw: f32, tilt: Option<Tilt>) -> Self {
@@ -1239,8 +1218,11 @@ impl PlayerCollider {
     pub fn set_form(&mut self, form: Form) {
         if form != self.form {
             self.form = form;
-            self.keeper = Keeper::new(form);
+            // `PlayerCollider::setCollisionShapeKeeper`: the radius the collider last had becomes
+            // the old keeper's (times the shape scale), so the next `collide` finds it differs
+            // from the new keeper's and first sweeps the change in place.
             self.last_radius = self.keeper.bounding_radius * self.shape_scale;
+            self.keeper = Keeper::new(form);
         }
     }
 

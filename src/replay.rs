@@ -459,8 +459,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         },
         None => flat_floor(),
     };
-    let start_yaw = script.start_yaw_deg.to_radians();
-    let mut player = Player::spawn_at(Vec3::ZERO, Vec3::new(start_yaw.sin(), 0., start_yaw.cos()));
+    let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
     let floor = options
         .camera
         .or(options.lockstep)

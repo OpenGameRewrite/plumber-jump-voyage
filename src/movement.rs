@@ -258,6 +258,8 @@ pub mod plane;
 mod pole;
 #[path = "movement/pole_find.rs"]
 mod pole_find;
+#[path = "movement/pose_math.rs"]
+mod pose_math;
 #[path = "movement/rolling.rs"]
 mod rolling;
 #[path = "movement/run_cycle.rs"]
@@ -1510,6 +1512,20 @@ impl Player {
     fn speed_h(&self) -> f32 {
         self.v.with_y(0.).length()
     }
+    /// A player standing at `pos` (metres) facing `yaw_deg` degrees (0 looks along +z, 90
+    /// along +x), as the trace probe places the real game's: its pose is the quaternion
+    /// `(0, sin(yaw/2), 0, cos(yaw/2))` of the exact angle, which the first `waitGround` leaves
+    /// as it reads back.
+    pub fn spawn_facing(pos: Vec3, yaw_deg: f32) -> Self {
+        let yaw = yaw_deg.to_radians();
+        let mut player = Self::spawn_at(pos, Vec3::new(yaw.sin(), 0., yaw.cos()));
+        let half = f64::from(yaw_deg).to_radians() / 2.;
+        player.pose_tilt = Some(PoseTilt {
+            pose: Quat::from_xyzw(0., half.sin() as f32, 0., half.cos() as f32),
+            facing: player.facing,
+        });
+        player
+    }
     /// A player standing at `pos` (metres) facing the horizontal direction `facing`.
     pub fn spawn_at(pos: Vec3, facing: Vec3) -> Self {
         Self {
@@ -2549,40 +2565,48 @@ impl Player {
     pub fn pose_axes(&self) -> (Vec3, Vec3) {
         match self.pose_tilt {
             Some(tilt) if tilt.facing == self.facing => {
-                (plane::quat_up(tilt.pose), plane::quat_front(tilt.pose))
+                let pose = plane::ActorPose::new(tilt.pose);
+                (pose.up(), pose.front())
             }
             _ => (Vec3::Y, self.facing),
         }
     }
-    /// The pose as a quaternion, when it is tilted.
+    /// The quaternion the actor's pose keeper was last given, when it is tilted.
     pub fn pose_quat(&self) -> Option<Quat> {
         self.pose_tilt
             .filter(|tilt| tilt.facing == self.facing)
             .map(|tilt| tilt.pose)
+    }
+    /// What `al::calcQuat` reads back from a tilted pose (the trace's quaternion): `toQuat` of
+    /// the rotation matrix the stored quaternion makes.
+    pub fn pose_read_back(&self) -> Option<Quat> {
+        self.pose_quat()
+            .map(|stored| plane::ActorPose::new(stored).calc_quat())
+    }
+    /// The actor's stored pose: the tilted one, or the upright pose that faces `facing`.
+    fn actor_pose(&self) -> plane::ActorPose {
+        plane::ActorPose::new(
+            self.pose_quat()
+                .unwrap_or_else(|| plane::quat_up_front(Vec3::Y, self.facing)),
+        )
     }
     /// `rs::waitGround`'s pose (every nerve of the standing state): the pose's
     /// up follows the floor's normal (at most 45 degrees from vertical) by the
     /// slerp rate; its front is the one it has.
     fn wait_pose(&mut self) {
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
-        if up == Vec3::Y && self.pose_quat().is_none() {
-            return;
-        }
-        let (pose_up, pose_front) = self.pose_axes();
-        let target_up = plane::turn_vec_to_vec_degree(Vec3::Y, up, t::WAIT_POSE_DEGREE_MAX);
-        let parallel = target_up.cross(pose_front).abs().max_element() <= plane::PARALLEL_LIMIT;
-        let front = if parallel { pose_up } else { pose_front };
-        let target = plane::quat_up_front(target_up, front);
-        let current = self
-            .pose_quat()
-            .unwrap_or_else(|| plane::quat_up_front(Vec3::Y, self.facing));
-        let pose = plane::slerp(current, target, t::SLERP_QUAT_RATE_WAIT).normalize();
-        self.set_pose(pose);
+        let stored =
+            self.actor_pose()
+                .wait_ground(up, t::SLERP_QUAT_RATE_WAIT, t::WAIT_POSE_DEGREE_MAX);
+        self.set_pose(stored);
     }
-    /// The actor takes the orientation `pose`; its facing is the front's
-    /// horizontal direction.
+    /// The actor takes the orientation `pose` (`al::updatePoseQuat`); its facing is the
+    /// front's horizontal direction.
     fn set_pose(&mut self, pose: Quat) {
-        let facing = plane::quat_front(pose).with_y(0.).normalize_or_zero();
+        let facing = plane::ActorPose::new(pose)
+            .front()
+            .with_y(0.)
+            .normalize_or_zero();
         if facing != Vec3::ZERO {
             self.facing = facing;
         }
@@ -2597,20 +2621,13 @@ impl Player {
         if front.length_squared() <= 0.5 {
             return;
         }
-        if up == Vec3::Y && self.pose_quat().is_none() {
-            self.facing = front;
-            return;
-        }
-        let (pose_up, pose_front) = self.pose_axes();
-        let current = plane::quat_up_front(pose_up, pose_front);
-        let pose = plane::slerp_up_front(
-            current,
+        let stored = self.actor_pose().slerp_up_front(
             up,
             front,
             t::SLERP_QUAT_RATE,
             t::HILL_POSE_DEGREE_MAX,
         );
-        self.set_pose(pose);
+        self.set_pose(stored);
     }
     /// One step of the run nerve (`PlayerStateRunHakoniwa::exeRun`): the
     /// ground move control steers, the run cycle animates, then the nerve
@@ -4484,4 +4501,5 @@ pub fn self_check() {
     spin_checks::run();
     wall_air_checks::run();
     ledge_checks::run();
+    pose_math::self_check();
 }

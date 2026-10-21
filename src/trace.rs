@@ -13,7 +13,7 @@ use crate::{
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
     local_assets::{Blend, Posed, looping},
-    movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip},
+    movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip, plane},
     sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
 };
 use bevy::prelude::*;
@@ -545,20 +545,13 @@ impl Recorder {
             .unwrap_or_default();
 
         let v = p.units_per_frame();
-        // A negative zero would put a half turn on the other side of the circle.
-        let yaw = (p.facing.x + 0.).atan2(p.facing.z);
-        // The game derives the quaternion from the pose matrix, taking the
-        // largest of the trace and the diagonal: the scalar part for a turn of
-        // up to a quarter, the vertical axis for more (a quarter turn itself
-        // is a tie the vertical axis wins, as the recordings starting at
-        // yaw 270 show), which keeps its component positive (a half turn
-        // reads `(0, 1, 0, 0)`).
-        let mut q = Quat::from_rotation_y(yaw);
-        if yaw.abs() >= std::f32::consts::FRAC_PI_2 && q.y < 0. {
-            q = -q;
-        }
+        // The probe reads `al::calcQuat`: `toQuat` over the actor's rotation matrix, whose
+        // largest-of-four selection decides the sign (a quarter turn about the vertical axis is
+        // a tie of its scalar and vertical-axis branches, so its result follows the rounding of
+        // the matrix). An upright pose is the one that faces the way the player does.
+        let mut q = plane::ActorPose::new(plane::quat_up_front(Vec3::Y, p.facing)).calc_quat();
         // A pose tilted onto a slope (a run up it) shows its own up and front.
-        let (pose_up, pose_front) = match p.pose_quat() {
+        let (pose_up, pose_front) = match p.pose_read_back() {
             Some(pose) => {
                 q = pose;
                 p.pose_axes()
