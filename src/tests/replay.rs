@@ -6,6 +6,7 @@ pub(super) fn run() {
     camera_and_buttons();
     lockstep();
     command_line();
+    geometry_per_scenario();
 }
 
 const IDLE: &str = "start 0 0 0 0\n60 0 0 -\n";
@@ -234,4 +235,39 @@ fn command_line() {
     assert!(crate::shots::Driver::new(&plain, camera(&plain), "out".into()).is_err());
     let shots = Script::parse("start 0 0 0 0\nshot 3\n5 0 0 -\n").unwrap();
     assert!(crate::shots::Driver::new(&shots, camera(&shots), "out".into()).is_ok());
+}
+
+#[cfg_attr(test, test)]
+fn geometry_per_scenario() {
+    // A stage's scenarios place different objects: `<stage>.s<n>.json` wins,
+    // and `<stage>.json` serves only the scenario it records.
+    let dir = std::env::temp_dir().join(format!("pjv-geometry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+    write("S.json", r#"{"scenario":2}"#);
+    write("S.s1.json", r#"{"scenario":1}"#);
+    write("T.json", r#"{"scenario":4}"#);
+    let found = |stage: &str, scenario: Option<u32>| {
+        find_export(&dir, stage, scenario)
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+    };
+    assert_eq!(found("S", Some(1)).as_deref(), Some("S.s1.json"));
+    assert_eq!(found("S", Some(2)).as_deref(), Some("S.json"));
+    assert_eq!(found("S", Some(3)), None);
+    assert_eq!(found("S", None).as_deref(), Some("S.json"));
+    assert_eq!(found("T", Some(4)).as_deref(), Some("T.json"));
+    assert_eq!(found("T", Some(1)), None);
+    assert_eq!(found("U", Some(1)), None);
+    let script = Script::parse(
+        "stage S 1
+start 0 0 0 0
+1 0 0 -
+",
+    )
+    .unwrap();
+    assert_eq!(
+        (script.stage.as_deref(), script.scenario),
+        (Some("S"), Some(1))
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

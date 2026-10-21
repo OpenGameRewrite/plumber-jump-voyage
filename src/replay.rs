@@ -62,6 +62,8 @@ pub struct Script {
     pub camera_yaw_deg: Option<f32>,
     /// The stage the real game loaded (`stage <Name> [scenario]`), when named.
     pub stage: Option<String>,
+    /// Its scenario number, when the script gives one.
+    pub scenario: Option<u32>,
     pub spans: Vec<Span>,
     pub shots: Vec<u32>,
 }
@@ -107,7 +109,10 @@ impl Script {
                 }
                 // The real game's probe loads this stage; a replay that has the
                 // stage's geometry (`--geometry-dir`) runs in it.
-                "stage" => script.stage = words.get(1).map(|w| w.to_string()),
+                "stage" => {
+                    script.stage = words.get(1).map(|w| w.to_string());
+                    script.scenario = words.get(2).and_then(|w| w.parse().ok());
+                }
                 // The outfit the probe dresses Mario in and whether its HUD
                 // shows: the rewrite replays in its own outfit.
                 "outfit" | "hud" => {}
@@ -558,9 +563,13 @@ fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
 }
 /// The stage collision a replay runs in, when it is asked for: `--geometry`
 /// names an export file; `--geometry-dir` names a folder of exports and picks
-/// `<stage>.json` for the stage the script names, else the one the game's
-/// `game.meta.json` beside the `--camera` or `--lockstep` trace records. The
-/// script's `start` is the origin of the traces and of the loaded triangles.
+/// the one for the stage and scenario the script names, else the ones the
+/// game's `game.meta.json` beside the `--camera` or `--lockstep` trace records.
+/// A stage's scenarios place different objects, so an export is per scenario:
+/// `<stage>.s<scenario>.json` is preferred, and `<stage>.json` serves only when
+/// its own `scenario` field is the requested one (or no scenario is known).
+/// The script's `start` is the origin of the traces and of the loaded
+/// triangles.
 fn load_geometry(
     args: &[String],
     script: &Script,
@@ -569,24 +578,31 @@ fn load_geometry(
     let path = if let Some(file) = flag(args, "--geometry")? {
         std::path::PathBuf::from(file)
     } else if let Some(dir) = flag(args, "--geometry-dir")? {
-        let named = script.stage.clone().or_else(|| {
-            trace_paths.iter().flatten().find_map(|trace| {
-                let meta = std::path::Path::new(trace).with_file_name("game.meta.json");
-                let text = std::fs::read_to_string(meta).ok()?;
-                let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-                json["stage"].as_str().map(str::to_string)
-            })
+        let meta = trace_paths.iter().flatten().find_map(|trace| {
+            let meta = std::path::Path::new(trace).with_file_name("game.meta.json");
+            let text = std::fs::read_to_string(meta).ok()?;
+            serde_json::from_str::<serde_json::Value>(&text).ok()
         });
+        let named = script
+            .stage
+            .clone()
+            .or_else(|| Some(meta.as_ref()?["stage"].as_str()?.to_string()));
+        let scenario = script
+            .scenario
+            .or_else(|| meta.as_ref()?["scenario_no"].as_u64().map(|n| n as u32));
         let Some(stage) = named else {
             eprintln!("--geometry-dir: the replay names no stage, so it runs on the flat floor");
             return Ok(None);
         };
-        let file = std::path::Path::new(dir).join(format!("{stage}.json"));
-        if !file.exists() {
-            eprintln!("--geometry-dir: no {} (flat floor)", file.display());
-            return Ok(None);
+        match find_export(std::path::Path::new(dir), &stage, scenario) {
+            Some(file) => file,
+            None => {
+                eprintln!(
+                    "--geometry-dir: no export of {stage} scenario {scenario:?} (flat floor)"
+                );
+                return Ok(None);
+            }
         }
-        file
     } else {
         return Ok(None);
     };
@@ -602,6 +618,30 @@ fn load_geometry(
         script.start.z
     );
     Ok(Some(Arc::new(mesh)))
+}
+/// The export of `stage` for `scenario` in `dir` (see `load_geometry`).
+fn find_export(
+    dir: &std::path::Path,
+    stage: &str,
+    scenario: Option<u32>,
+) -> Option<std::path::PathBuf> {
+    if let Some(n) = scenario {
+        let specific = dir.join(format!("{stage}.s{n}.json"));
+        if specific.exists() {
+            return Some(specific);
+        }
+    }
+    let general = dir.join(format!("{stage}.json"));
+    let Some(wanted) = scenario else {
+        return general.exists().then_some(general);
+    };
+    let text = std::fs::read_to_string(&general).ok()?;
+    let root: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // An export without a scenario field predates the per-scenario names.
+    let matches = root["scenario"]
+        .as_u64()
+        .is_none_or(|have| have == u64::from(wanted));
+    matches.then_some(general)
 }
 /// Entry point for `--replay`: writes the trace when `--trace` is given, and
 /// returns the driver of a rendered replay when `--shots` asks for pictures.

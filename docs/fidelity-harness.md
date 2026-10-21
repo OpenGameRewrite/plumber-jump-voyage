@@ -48,10 +48,12 @@ byte-for-byte repeatable.
 `--geometry <stage.json>` loads one local export of a stage's static collision
 (the triangles of the stage's KCL files with their collision attributes, in game
 units, written by the local export tool; nothing of it is in this repository).
-`--geometry-dir <dir>` picks `<stage>.json` from a folder of exports for the
-stage the script's `stage` line names, else the stage recorded in the
-`game.meta.json` beside the `--camera` or `--lockstep` trace; a stage without an
-export replays on the flat floor. The script's `start` is the origin of the
+`--geometry-dir <dir>` picks the export for the stage (and scenario) the
+script's `stage` line names, else the ones recorded in the `game.meta.json`
+beside the `--camera` or `--lockstep` trace. A stage's scenarios place different
+objects, so `<stage>.s<scenario>.json` is preferred and `<stage>.json` serves
+only a scenario it records itself (its `scenario` field); a stage without a
+matching export replays on the flat floor. The script's `start` is the origin of the
 traces, so the triangles are loaded relative to it (the floor under the start is
 at height 0) and the replay's positions stay comparable to the game's. The export
 covers a box around the start (25 m by default); a run that leaves it falls off
