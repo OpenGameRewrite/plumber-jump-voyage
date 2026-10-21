@@ -868,6 +868,10 @@ pub struct Player {
     /// The pole climb in progress (`PlayerStatePoleClimb`).
     pole: PoleControl,
     rolling: RollControl,
+    /// Where the last stage collision left the body: the metres of `pos` it was stored as, and
+    /// the position in centimetres (start-relative, on the game's single-precision grid) the
+    /// collider returned. Valid for as long as `pos` is unchanged since.
+    collider_end: Option<(Vec3, Vec3)>,
     /// The forced slope slide (`PlayerStateSlope`).
     slide: SlopeSlide,
     /// Steps the collider has touched the ground in a row (`PlayerCollider::mTimeInAir`, which
@@ -1084,6 +1088,7 @@ impl Default for Player {
             fire: FireControl::default(),
             pole: PoleControl::default(),
             rolling: RollControl::default(),
+            collider_end: None,
             slide: SlopeSlide::default(),
             ground_contact: 0,
             squat: SquatControl::default(),
@@ -2267,7 +2272,7 @@ impl Player {
             && !was_grounded
             && !hot
             && self.mode != Move::GroundSpin
-            && !self.slide_running()
+            && self.mode != Move::SlopeSlide
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
@@ -4401,7 +4406,11 @@ impl Player {
                         {
                             self.pos.y = top;
                             self.landing_speed = self.landing_speed.min(self.v.y);
-                            self.v.y = 0.;
+                            if self.mode != Move::SlopeSlide {
+                                // (The slope slide keeps the game's own velocity, the pull into
+                                // the floor included.)
+                                self.v.y = 0.;
+                            }
                             self.grounded = true;
                             self.slope = if (self.pos.x - b.center.x).abs() < b.half.x {
                                 b.slope

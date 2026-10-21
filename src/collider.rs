@@ -39,7 +39,7 @@
 //! vector (`calcResultVec`), removes the part of the remaining move that goes
 //! into the surface and goes on, up to 100 rounds.
 use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
-use crate::movement::plane::try_normalize_or_zero;
+use crate::movement::plane::{normalize, try_normalize_or_zero};
 use crate::prism::{PartFrame, Point, rotate_vector, transform_point};
 use bevy::prelude::{Quat, Vec3};
 
@@ -1622,12 +1622,24 @@ impl PlayerCollider {
             }
             seen.push(n);
         }
+        // (The averages multiply by the reciprocal of the count, and the normal is made a unit
+        // vector with `al::normalize`.)
         if positions > 0 {
-            self.ground_position = position / positions as f32;
+            let reciprocal = 1. / positions as f32;
+            self.ground_position = Vec3::new(
+                position.x * reciprocal,
+                position.y * reciprocal,
+                position.z * reciprocal,
+            );
             self.has_ground_position = true;
         }
         if normals > 0 {
-            self.ground_normal = (normal / normals as f32).normalize_or_zero();
+            let reciprocal = 1. / normals as f32;
+            self.ground_normal = normalize(Vec3::new(
+                normal.x * reciprocal,
+                normal.y * reciprocal,
+                normal.z * reciprocal,
+            ));
             self.has_ground_normal = true;
         }
     }

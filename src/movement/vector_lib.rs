@@ -5,8 +5,8 @@
 //! `al::isNearZero` and `al::isFloorPolygonCos`. The normalising, cross and dot products are
 //! the ones of `pose_math.rs`.
 //!
-//! None of them is checked against the executable in the interpreter; they follow the dumps of
-//! the functions operation by operation.
+//! The routines agree with the executable's own, run in a local interpreter, bit for bit (see
+//! the test at the end of this file and the fidelity folder's `gen_slide_cases.py`).
 use super::pose_math::{
     DEGREES_TO_RADIANS, NO_DIRECTION, atan2f, cosf, cross, dot, scaled_by_inverse_length,
     squared_length, try_normalize_or_zero,
@@ -29,17 +29,6 @@ pub fn is_near_zero(v: Vec3, tolerance: f32) -> bool {
 /// `al::isNearZero(value, tolerance)` on a number.
 pub fn is_near_zero_value(value: f32, tolerance: f32) -> bool {
     value.abs() < tolerance
-}
-
-/// `al::sign`: 1 for a positive number, -1 for a negative one, the number itself otherwise.
-pub fn sign(value: f32) -> f32 {
-    if value > 0. {
-        1.
-    } else if value < 0. {
-        -1.
-    } else {
-        value
-    }
 }
 
 /// `sead::Vector3f::length`.
@@ -264,6 +253,102 @@ pub fn converge(value: i32, target: i32, step: i32) -> i32 {
 mod tests {
     use super::*;
 
+    fn vec3(v: &serde_json::Value) -> Vec3 {
+        let a = v.as_array().expect("array");
+        Vec3::new(
+            a[0].as_f64().unwrap() as f32,
+            a[1].as_f64().unwrap() as f32,
+            a[2].as_f64().unwrap() as f32,
+        )
+    }
+
+    fn number(v: &serde_json::Value) -> f32 {
+        v.as_f64().unwrap() as f32
+    }
+
+    fn same(a: Vec3, b: Vec3) -> bool {
+        a.to_array().map(f32::to_bits) == b.to_array().map(f32::to_bits)
+    }
+
+    /// Cases from the executable's own routines, run in a local interpreter (see the fidelity
+    /// folder's `gen_slide_cases.py`): `PJV_SLIDE_CASES` names the file; without it nothing runs.
+    #[test]
+    fn the_exes_vector_routines_agree_bit_for_bit() {
+        let Some(path) = std::env::var_os("PJV_SLIDE_CASES") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).expect("the cases file");
+        let cases: serde_json::Value = serde_json::from_str(&text).expect("json");
+        for case in cases.as_array().expect("cases") {
+            let name = case["f"].as_str().unwrap();
+            match name {
+                "calc_dir_slide" => {
+                    let got = calc_dir_slide(vec3(&case["gravity"]), vec3(&case["normal"]));
+                    assert!(same(got, vec3(&case["out"])), "{case} -> {got:?}");
+                }
+                "add_vector_limit" => {
+                    let mut vec = vec3(&case["vec"]);
+                    let ok = add_vector_limit(&mut vec, vec3(&case["add"]), number(&case["limit"]));
+                    assert_eq!(ok, case["ok"].as_bool().unwrap(), "{case}");
+                    assert!(same(vec, vec3(&case["out"])), "{case} -> {vec:?}");
+                }
+                "limit_length" => {
+                    let got = limit_length(vec3(&case["vec"]), number(&case["limit"]));
+                    assert!(same(got, vec3(&case["out"])), "{case} -> {got:?}");
+                }
+                "parallelize_vec" => {
+                    let got = parallelize_vec(vec3(&case["dir"]), vec3(&case["vec"]));
+                    assert!(same(got, vec3(&case["out"])), "{case} -> {got:?}");
+                }
+                "verticalize_vec" => {
+                    let got = verticalize_vec(vec3(&case["vertical"]), vec3(&case["vec"]));
+                    assert!(same(got, vec3(&case["out"])), "{case} -> {got:?}");
+                }
+                "separate" => {
+                    let (parallel, vertical) =
+                        separate_parallel_vertical(vec3(&case["dir"]), vec3(&case["vec"]));
+                    assert!(
+                        same(parallel, vec3(&case["parallel"])),
+                        "{case} -> {parallel:?}"
+                    );
+                    assert!(
+                        same(vertical, vec3(&case["vertical"])),
+                        "{case} -> {vertical:?}"
+                    );
+                }
+                "angle_degree" => {
+                    let got = calc_angle_degree(vec3(&case["a"]), vec3(&case["b"]));
+                    assert_eq!(
+                        got.to_bits(),
+                        number(&case["out"]).to_bits(),
+                        "{case} -> {got}"
+                    );
+                }
+                "turn_on_plane" => {
+                    let from = vec3(&case["from"]);
+                    let turned = turn_vec_to_vec_cos_on_plane(
+                        from,
+                        vec3(&case["to"]),
+                        vec3(&case["axis"]),
+                        number(&case["cos"]),
+                    );
+                    let (got, reached) = turned.unwrap_or((from, false));
+                    assert_eq!(reached, case["ok"].as_bool().unwrap(), "{case}");
+                    assert!(same(got, vec3(&case["out"])), "{case} -> {got:?}");
+                }
+                "floor_polygon_cos" => {
+                    let got = is_floor_polygon_cos(
+                        vec3(&case["normal"]),
+                        vec3(&case["gravity"]),
+                        number(&case["cos"]),
+                    );
+                    assert_eq!(got, case["out"].as_bool().unwrap(), "{case}");
+                }
+                other => panic!("unknown case {other}"),
+            }
+        }
+    }
+
     fn close(a: Vec3, b: Vec3) -> bool {
         (a - b).length() < 1.0e-5
     }
@@ -308,6 +393,10 @@ mod tests {
         assert!(is_floor_polygon_cos(Vec3::Y, Vec3::NEG_Y, flat));
         let steep = Vec3::new(0.7, 0.7, 0.).normalize();
         assert!(!is_floor_polygon_cos(steep, Vec3::NEG_Y, flat));
-        assert!(is_floor_polygon_cos(steep, Vec3::NEG_Y, 26.0f32.to_radians().cos()) == false);
+        assert!(!is_floor_polygon_cos(
+            steep,
+            Vec3::NEG_Y,
+            26.0f32.to_radians().cos()
+        ));
     }
 }

@@ -108,11 +108,6 @@ impl Player {
         self.is_on_ground_by(velocity) && self.ground_within(t::SLOPE_SLIDE_ANGLE_END)
     }
 
-    /// `rs::isOnGroundSlopeSlideStart`: on ground steeper than `SlopeSlideAngleStart`.
-    pub(super) fn on_ground_slope_slide_start(&self, velocity: Vec3) -> bool {
-        self.is_on_ground_by(velocity) && !self.ground_within(t::SLOPE_SLIDE_ANGLE_START)
-    }
-
     /// `rs::isOnGroundForceSlideCode`: on ground steeper than `SlopeSlideAngleEnd` whose
     /// floor code is `Slide`.
     pub(super) fn on_ground_force_slide_code(&self, velocity: Vec3) -> bool {

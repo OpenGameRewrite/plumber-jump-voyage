@@ -130,7 +130,13 @@ pub fn collision_cell(p: &Player) -> String {
         }
     }
     if p.wall != bevy::prelude::Vec3::ZERO {
-        items.push(format!("wn={}", vector(p.wall)));
+        // The game reports the normal of the face it touched, tilted walls included.
+        let normal = p
+            .touched
+            .wall_contact
+            .as_ref()
+            .map_or(p.wall, |contact| contact.normal);
+        items.push(format!("wn={}", vector(normal)));
     }
     items.join(";")
 }

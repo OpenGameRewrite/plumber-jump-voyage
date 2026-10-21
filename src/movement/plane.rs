@@ -38,7 +38,8 @@ pub fn normalized_or_zero(v: Vec3) -> Vec3 {
 }
 
 pub use super::pose_math::{
-    ActorPose, along_vector_normal_h, quat_to_axes, quat_up_front, slerp, try_normalize_or_zero,
+    ActorPose, along_vector_normal_h, normalize, quat_to_axes, quat_up_front, slerp,
+    try_normalize_or_zero,
 };
 
 #[cfg(test)]

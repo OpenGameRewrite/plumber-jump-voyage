@@ -22,7 +22,6 @@ const START_SPEED: f32 = 5.;
 /// Steps of flight the state remembers: a landing after this many ends the slide on flat
 /// ground (`mTimeInAir` converges to it).
 const AIR_FRAMES: i32 = 30;
-/// `isEnableCancelSandSink`'s counter limit is not needed here (no sand).
 /// The forced slide's side control and turn (`SlopeSlideForce*`).
 const FORCE_SIDE_ACCEL: f32 = 0.2;
 const FORCE_SIDE_BRAKE: f32 = 0.96;
@@ -54,12 +53,6 @@ fn add_velocity_to_direction(velocity: Vec3, dir: Vec3, force: f32) -> Vec3 {
 }
 
 impl Player {
-    /// The slope slide is the actor's nerve: its velocity is the game's own and the collider
-    /// takes the squat form, from the step that chose it on.
-    pub(super) fn slide_running(&self) -> bool {
-        self.mode == Move::SlopeSlide
-    }
-
     /// `PlayerJudgePreInputJump::judge`: a jump press still buffered counts, except while the
     /// forced slope slide judges (the buffer runs down all the same).
     pub(super) fn pre_input_jump_judges(&self) -> bool {
@@ -114,7 +107,11 @@ impl Player {
         }
     }
 
-    /// `exeSlope`: the state's step, then the judges the actor asks.
+    /// `exeSlope`: the state's step, then the judges the actor asks. The jump is the one the
+    /// executable asks (`isCollidedGround` and `PlayerJudgePreInputJump`, recorded refused on
+    /// the forced slide in `slope-slide-forced-jump`). GUESS: the roll's start below, which
+    /// stands in for the actor's roll judges (`PlayerJudgeForceRolling` and the others come
+    /// first in the executable); no recording covers it.
     pub(super) fn slope_slide(&mut self, o: &Orders) {
         if self.slope_slide_step() {
             self.end_slope_slide(o);
@@ -202,9 +199,10 @@ impl Player {
         false
     }
 
-    /// The state killed itself: `setNerveOnGround` picks what the ground allows. Only the
-    /// outcomes the controller has are chosen (the floor that still forces the slide, a buffered
-    /// jump, the squat, the run and standing).
+    /// The state killed itself: `setNerveOnGround` picks what the ground allows. GUESS: only
+    /// the outcomes the controller has are chosen (the floor that still forces the slide, a
+    /// buffered jump, the squat, the run and standing), in the order of the other ground
+    /// landings; the recordings end the slide on the flat once, never.
     fn end_slope_slide(&mut self, o: &Orders) {
         if self.on_ground_force_slide_code(self.v) {
             self.start_slope_slide();

@@ -144,11 +144,20 @@ does, and drop the wall hits with a face right behind them
 the Cap Kingdom pole's size. Not ported: the swing of motion controls, the
 joints of the arms and legs, the slanted codes' angle offset, moving poles.
 
+The forced slope slide (`PlayerStateSlope`, started by a floor with the `Slide` code and
+ended on flat ground) runs `PlayerActionSlopeSlideControl` as the roll does. The nerve
+machine starts the state in the step that chose it (`appear` and its collision, in the
+squat form, come in that step, the first `exeSlide` in the next), a buffered jump press is
+refused while the slide forces (`PlayerJudgePreInputJump::judge`) and the pressed buffer
+runs down all the same. The vector routines it uses are checked against the executable bit
+for bit, and so are the ground averages of the collider (the sum multiplied by the
+reciprocal of the count, `al::normalize`) and the stage positions the collider keeps
+(the game's single-precision ones; metres cannot hold them near 2048 cm).
+
 Not ported yet: the squeeze of `Press` collision, moving collision parts, the
 game's collision in each part's own single-precision frame (the export is in
 world space and rounded, so a contact that is decided by 1e-4 cm, such as the
-wall-slide landing on two floors, can go the other way), the forced
-slope-slide state on triangles, the ledge hang on a moving platform or a tilted top,
+wall-slide landing on two floors, can go the other way), the ledge hang on a moving platform or a tilted top,
 the ground nerves' ledge judge (`PlayerJudgeWallCatchInputDir`) and Cappy's
 head-on wall stop, floor and lock-on reactions.
 

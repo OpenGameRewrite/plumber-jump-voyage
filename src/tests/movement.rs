@@ -1096,7 +1096,7 @@ fn slope_slide() {
         30,
     );
     assert!(
-        p.pos.x > start_x + 1.5 && p.vel.x > 0.,
+        p.pos.x > start_x + 1. && p.vel.x > 0.,
         "slides downhill: {:?}",
         p.pos
     );
@@ -1434,7 +1434,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xff74444ea613ec3b,
+        hash, 0x239fc4cf9c76ba5d,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

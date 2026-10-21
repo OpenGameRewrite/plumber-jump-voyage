@@ -139,6 +139,12 @@ impl Player {
         self.prepare_collider();
         let start = if mesh.parts.is_empty() {
             mesh.snap_to_game_precision(to_cm(self.pos))
+        } else if let Some((metres, centimetres)) = self.collider_end
+            && metres == self.pos
+        {
+            // Where the collider left the body, as it holds it: the metres of `pos` cannot
+            // keep every digit of a position near the game's single-precision grid.
+            centimetres
         } else {
             mesh.snap_to_game_precision(to_cm_exact(self.pos))
         };
@@ -198,6 +204,7 @@ impl Player {
             // collider computed on the game's own grid (single precision at the stage's
             // magnitude, 4.9e-4 cm steps), not the metres arithmetic of the controller.
             self.pos = outcome.pos * UNIT;
+            self.collider_end = Some((self.pos, outcome.pos));
         }
         let collider = &self.collider;
         self.touched = Touched {
