@@ -16,6 +16,7 @@
 //! sub-nerves belong to one actor nerve, `Rolling`, so its step counter runs on
 //! through all of them, the jump included. `EndSquat` is the state's last
 //! nerve: the actor leaves for the squat in the step that reaches it.
+use super::slide_control::{SlideControl, SlideParams};
 use super::*;
 
 /// How a roll begins; the original's `appear` tells them apart by the action
@@ -66,11 +67,8 @@ pub(super) struct RollControl {
     restarts: i32,
     /// `_94`: frames in the air, for the landing reaction.
     air_frames: i32,
-    /// The slope slide control: the ground it last saw, the way down it and
-    /// the horizontal speed it left.
-    ground_normal: Vec3,
-    dir_slide: Vec3,
-    horizontal_speed: f32,
+    /// The slope slide control (`PlayerActionSlopeSlideControl`).
+    control: SlideControl,
     /// The roll's own effect (dust under the roll) is emitting, and was
     /// called this step: `exeRolling` emits it each step on the ground and
     /// deletes it in the air; `exeStart` and the stand-up delete it once.
@@ -90,9 +88,7 @@ impl Default for RollControl {
             force: 0,
             restarts: 0,
             air_frames: 0,
-            ground_normal: Vec3::Y,
-            dir_slide: Vec3::ZERO,
-            horizontal_speed: 0.,
+            control: SlideControl::default(),
             effect_on: false,
             effect_called: false,
             frame_kept: false,
@@ -142,11 +138,6 @@ impl Player {
     fn floor_up(&self) -> Vec3 {
         self.floor_normal().unwrap_or(Vec3::Y)
     }
-    /// `rs::isOnGroundSlopeSlideEnd`: on ground flatter than the slide's end angle.
-    fn on_slide_end_ground(&self) -> bool {
-        self.is_on_ground()
-            && self.floor_up().angle_between(Vec3::Y).to_degrees() < t::SLOPE_SLIDE_ANGLE_END
-    }
     /// `rs::isCollidedGroundLessAngle`: touching ground flatter than `degrees`.
     fn ground_flatter_than(&self, degrees: f32) -> bool {
         self.grounded && self.floor_up().angle_between(Vec3::Y).to_degrees() <= degrees
@@ -181,21 +172,11 @@ impl Player {
             charge: charge + 1,
             force: 1,
             restarts,
-            ground_normal: self.floor_up(),
-            dir_slide: self.slide_direction(),
+            control: self.slide_control_setup(),
             ..RollControl::default()
         };
         self.raise_speed_along_front(floor_speed);
         self.change(Move::Roll, nerve_clip(nerve), move |p| p.roll_enter(nerve));
-    }
-    /// The way down the ground under the feet (`al::calcDirSlide`): zero on
-    /// level ground.
-    fn slide_direction(&self) -> Vec3 {
-        let up = self.floor_up();
-        let down = Vec3::NEG_Y - up * Vec3::NEG_Y.dot(up);
-        down.try_normalize()
-            .filter(|_| down.length() > 1e-4)
-            .unwrap_or(Vec3::ZERO)
     }
     /// Choose another nerve of the running state; its first step is next step.
     fn roll_to(&mut self, nerve: RollNerve) {
@@ -270,9 +251,10 @@ impl Player {
             force: steps.min(t::ROLL_RESTART_FORCE),
             restarts: 0,
             air_frames: 0,
-            ground_normal: self.floor_up(),
-            dir_slide: self.slide_direction(),
-            horizontal_speed: self.v.with_y(0.).length(),
+            control: SlideControl {
+                horizontal_velocity: self.v.with_y(0.),
+                ..self.slide_control_setup()
+            },
             effect_on: self.is_on_ground() && self.anim.name == "Rolling",
             effect_called: false,
             frame_kept: false,
@@ -396,8 +378,8 @@ impl Player {
     /// The roll has slowed to its end speed on flat ground and has rolled long
     /// enough: it winds down (`UnRoll`).
     fn roll_slowed(&self) -> bool {
-        self.on_slide_end_ground()
-            && self.rolling.horizontal_speed <= t::ROLL_END_SPEED
+        self.on_ground_slope_slide_end(self.v)
+            && self.rolling.control.horizontal_speed() <= t::ROLL_END_SPEED
             && self.rolling.frames >= t::ROLL_FRAMES_MIN
     }
     /// A jump was asked for and the ground is flat enough to take it.
@@ -440,8 +422,7 @@ impl Player {
         // The step that chooses the nerve also runs `control` once more.
         self.rolling.charge = t::ROLL_RESTART_CHARGE + 1;
         self.rolling.frames = t::ROLL_RESTART_INTERVAL + 1;
-        self.rolling.ground_normal = self.floor_up();
-        self.rolling.dir_slide = self.slide_direction();
+        self.rolling.control = self.slide_control_setup();
         self.roll_to(RollNerve::Land);
     }
     /// `restartRolling`, then the start nerve again.
@@ -569,81 +550,25 @@ impl Player {
     }
 
     /// `PlayerActionSlopeSlideControl::update` for the roll: on the ground the
-    /// horizontal velocity loses `RollingBrake` (down a slope it gains speed
+    /// horizontal velocity loses `SlopeRollingBrake` (down a slope it gains speed
     /// instead) and the stick steers it; in the air gravity pulls. The facing
     /// follows the travel.
     fn slide_update(&mut self) {
-        let on_ground = self.is_on_ground();
-        let slide_end = self.on_slide_end_ground();
-        let mut up = Vec3::Y;
-        let stick = self.ground_stick();
-        if on_ground {
-            up = self.floor_up();
-            self.rolling.ground_normal = up;
-            self.rolling.dir_slide = self.slide_direction();
-            let velocity = self.v;
-            let (along, side) = if slide_end {
-                // Flat enough: the velocity in the floor's plane brakes, the
-                // part along the normal brakes with the side brake.
-                let vertical = up * velocity.dot(up);
-                let mut plane = velocity - vertical;
-                plane *= t::ROLL_BRAKE;
-                let side_dir = up.cross(plane.normalize_or_zero()).normalize_or_zero();
-                let push = side_dir * (side_dir.dot(stick) * t::ROLL_SIDE_ACCEL);
-                air_move::add_vector_limit(&mut plane, push, t::ROLL_MAX);
-                (plane, vertical * t::ROLL_SIDE_BRAKE)
-            } else {
-                let slide = self.rolling.dir_slide;
-                let mut down = slide * velocity.dot(slide);
-                let mut side = velocity - down;
-                let speed_down = down.dot(slide);
-                if speed_down < 0. {
-                    down *= t::ROLL_BRAKE;
-                }
-                let against = (-slide.dot(stick)).clamp(0., 1.);
-                let least = (1. - against * t::ROLL_AGAINST).clamp(0., 1.);
-                let norm = (speed_down + 1.).clamp(least, 1.);
-                let angle = slide.angle_between(Vec3::NEG_Y).to_degrees();
-                let power = (90. - angle).clamp(0., 90.);
-                let power_norm = (power / t::ROLL_ANGLE_POWER_MAX).min(1.);
-                air_move::add_vector_limit(
-                    &mut down,
-                    slide * (t::ROLL_SLOPE_ACCEL * power_norm * norm),
-                    t::ROLL_MAX,
-                );
-                side *= t::ROLL_SIDE_BRAKE;
-                if let Some(input) = stick.try_normalize() {
-                    let across = up.cross(slide);
-                    air_move::add_vector_limit(
-                        &mut side,
-                        across * (across.dot(input) * stick.length() * t::ROLL_SIDE_ACCEL),
-                        t::ROLL_SIDE_MAX,
-                    );
-                }
-                (down, side)
-            };
-            let velocity = (along + side).clamp_length_max(t::ROLL_MAX);
-            self.v = velocity - up * GRAVITY_MOVE;
-        } else {
-            // Leaving the ground's plane keeps the velocity; gravity pulls.
-            self.rolling.ground_normal = up;
-            air_move::add_vector_limit(&mut self.v, Vec3::NEG_Y * t::GRAVITY_AIR, t::FALL_MAX);
-        }
-        let horizontal = self.v - up * self.v.dot(up);
-        self.rolling.horizontal_speed = horizontal.length();
-        if let Some(heading) = horizontal.try_normalize() {
-            // The body turns toward the travel by at most `SlopeTurnDegree`,
-            // then swings a share of the way there.
-            let front = (self.facing - up * self.facing.dot(up)).normalize_or_zero();
-            let angle = front.angle_between(heading);
-            let limited = if angle > t::SLOPE_TURN_DEG.to_radians() {
-                let turn = t::SLOPE_TURN_DEG.to_radians();
-                let sign = if front.cross(heading).y < 0. { -1. } else { 1. };
-                Quat::from_rotation_y(sign * turn) * front
-            } else {
-                heading
-            };
-            self.swing_front(limited, SLERP_QUAT_RATE);
-        }
+        let params = SlideParams {
+            accel: t::ROLL_SLOPE_ACCEL,
+            brake: t::ROLL_BRAKE,
+            against: t::ROLL_AGAINST,
+            angle_power_max: t::ROLL_ANGLE_POWER_MAX,
+            max_speed: t::ROLL_MAX,
+            side_accel: t::ROLL_SIDE_ACCEL,
+            side_brake: t::ROLL_SIDE_BRAKE,
+            side_max_speed: t::ROLL_SIDE_MAX,
+            turn_degree: t::SLOPE_TURN_DEG,
+            gravity: t::GRAVITY_AIR,
+            rolling: true,
+        };
+        let mut control = self.rolling.control;
+        self.v = self.slide_control_update(&mut control, self.v, &params);
+        self.rolling.control = control;
     }
 }

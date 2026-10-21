@@ -15,9 +15,9 @@
 use bevy::prelude::{Quat, Vec3};
 
 /// The degree to radian factor in single precision.
-const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
+pub(super) const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
 /// `1.0000001e-6`: the squared length below which a vector has no direction.
-const NO_DIRECTION: f32 = 1.000_000_1e-6;
+pub(super) const NO_DIRECTION: f32 = 1.000_000_1e-6;
 /// `al::getAxisAngleFromTwoVec`: the cross product's components within this make two opposed
 /// vectors, and an angle under it two equal ones.
 const OPPOSED_LIMIT: f32 = 0.01;
@@ -35,26 +35,26 @@ const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
 fn sinf(x: f32) -> f32 {
     f64::from(x).sin() as f32
 }
-fn cosf(x: f32) -> f32 {
+pub(super) fn cosf(x: f32) -> f32 {
     f64::from(x).cos() as f32
 }
 fn acosf(x: f32) -> f32 {
     f64::from(x).acos() as f32
 }
-fn atan2f(y: f32, x: f32) -> f32 {
+pub(super) fn atan2f(y: f32, x: f32) -> f32 {
     f64::from(y).atan2(f64::from(x)) as f32
 }
 
-fn dot(a: Vec3, b: Vec3) -> f32 {
+pub(super) fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
-fn squared_length(v: Vec3) -> f32 {
+pub(super) fn squared_length(v: Vec3) -> f32 {
     v.x * v.x + v.y * v.y + v.z * v.z
 }
 
 /// The cross product as the library computes it (`a.y*b.z - a.z*b.y`, ...).
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
+pub(super) fn cross(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(
         a.y * b.z - a.z * b.y,
         a.z * b.x - a.x * b.z,
@@ -63,7 +63,7 @@ fn cross(a: Vec3, b: Vec3) -> Vec3 {
 }
 
 /// `1 / length` times each component, when the length is positive (`al::normalize`).
-fn scaled_by_inverse_length(v: Vec3, length: f32) -> Vec3 {
+pub(super) fn scaled_by_inverse_length(v: Vec3, length: f32) -> Vec3 {
     if length > 0. {
         let inverse = 1. / length;
         Vec3::new(inverse * v.x, inverse * v.y, inverse * v.z)

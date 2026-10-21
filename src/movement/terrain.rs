@@ -57,11 +57,22 @@ impl Player {
         }
         // The whole squat state keeps the mini form (the actor's nerve is
         // `Squat` through its stand-up, whose clip is `SquatEnd`).
+        if std::env::var("PJV_EXP").as_deref() == Ok("A")
+            && self.mode == Move::SlopeSlide
+            && self.slide.steps == 0
+        {
+            return Form::Normal;
+        }
         let standing_up = self.mode == Move::Idle && self.clip() == "SquatEnd";
         if standing_up
             || matches!(
                 self.mode,
-                Move::SquatBrake | Move::Crouch | Move::Crawl | Move::Roll | Move::RollEnd
+                Move::SquatBrake
+                    | Move::Crouch
+                    | Move::Crawl
+                    | Move::Roll
+                    | Move::RollEnd
+                    | Move::SlopeSlide
             )
         {
             Form::Mini
@@ -144,7 +155,11 @@ impl Player {
         // snap sets the pose, even when a contact with the pole's cap marked
         // the body as grounded (`units_per_frame` agrees).
         let mut velocity = self.v;
-        if was_grounded && self.mode != Move::Pole && (self.v.y == 0. || self.v.y == -self.pull) {
+        // (The slope slide's velocity is the game's own, the pull included, whatever its y.)
+        if was_grounded
+            && !matches!(self.mode, Move::Pole | Move::SlopeSlide)
+            && (self.v.y == 0. || self.v.y == -self.pull)
+        {
             velocity = self.ground_following();
         }
         let yaw = self.facing.x.atan2(self.facing.z);
@@ -162,6 +177,17 @@ impl Player {
                 .collide_tilted(mesh, start, velocity, yaw, self.pose_read_back());
         if holding {
             self.catch_collider_at = Some(outcome.pos);
+        }
+        if std::env::var("PJV_DBG").is_ok() {
+            let c = &self.collider;
+            eprintln!(
+                "  collide {:?}: start {:?} vel {:?} -> {:?} collided {} floor {:?} wall {:?} ceil {:?} gn {:?}",
+                self.mode, start, velocity, outcome.pos, outcome.collided,
+                c.floor.as_ref().map(|f| (f.triangle, f.normal)),
+                c.wall.as_ref().map(|f| (f.triangle, f.normal)),
+                c.ceiling.as_ref().map(|f| f.triangle),
+                c.ground_normal
+            );
         }
         // The plain end of the move keeps the controller's own arithmetic;
         // only what the contacts changed is taken from the collider.
@@ -225,7 +251,11 @@ impl Player {
             } else {
                 0.
             };
-            if self.v.y <= 0. {
+            if self.mode == Move::SlopeSlide {
+                // The slide keeps its velocity whatever the floor does with the body; the
+                // collider found ground (`rs::isCollidedGround`) whichever way it moves.
+                self.grounded = true;
+            } else if self.v.y <= 0. {
                 // A contact reached from the air is a landing, and a ground
                 // state that keeps a downward speed of its own (the pound's
                 // landing) reports it; the plain pull of the ground states is
@@ -241,7 +271,7 @@ impl Player {
                 self.hop_contact = true;
             }
         }
-        if collider.ceiling.is_some() && self.v.y > 0. {
+        if collider.ceiling.is_some() && self.v.y > 0. && self.mode != Move::SlopeSlide {
             self.v.y = 0.;
             // A hit head ends the jump's extend window.
             self.air.cancel_extend();
@@ -272,6 +302,6 @@ impl Player {
     /// The states whose velocity a wall contact leaves alone: the jump family,
     /// the fall and the wall states.
     fn keeps_velocity_at_walls(&self) -> bool {
-        self.mode == Move::WallSlide || self.wall_keep_applies()
+        matches!(self.mode, Move::WallSlide | Move::SlopeSlide) || self.wall_keep_applies()
     }
 }

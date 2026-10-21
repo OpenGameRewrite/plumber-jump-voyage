@@ -191,7 +191,6 @@ mod t {
     pub const SLOPE_SLIDE_BRAKE: f32 = 0.9;
     pub const SLOPE_SLIDE_MAX: f32 = 22.;
     pub const SLOPE_SLIDE_SPEED_END: f32 = 3.;
-    pub const SLOPE_SLIDE_START_SPEED: f32 = 5.;
     pub const SLOPE_SLIDE_SIDE_ACCEL: f32 = 0.6;
     pub const SLOPE_SLIDE_SIDE_BRAKE: f32 = 0.98;
     pub const SLOPE_SLIDE_SIDE_MAX: f32 = 10.;
@@ -264,6 +263,10 @@ mod pose_math;
 mod rolling;
 #[path = "movement/run_cycle.rs"]
 mod run_cycle;
+#[path = "movement/slide_control.rs"]
+mod slide_control;
+#[path = "movement/slope_slide.rs"]
+mod slope_slide;
 #[path = "movement/snap.rs"]
 mod snap;
 #[path = "movement/sounds.rs"]
@@ -278,6 +281,8 @@ mod terrain;
 mod wait;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
+#[path = "movement/vector_lib.rs"]
+mod vector_lib;
 #[path = "movement/wall_along.rs"]
 mod wall_along;
 pub use ground::turn_power;
@@ -287,10 +292,14 @@ use plane::along_vector_normal_h;
 use pole::PoleControl;
 use rolling::{RollControl, RollStart};
 pub use run_cycle::RunCycle;
+use slope_slide::SlopeSlide;
 use squat::SquatControl;
 use wait::WaitControl;
 pub use wall_air::WallContact;
 use wall_air::{WallAirControl, WallHistory};
+
+/// Steps the probe's player has stood before its teleport (it waits for 120 in `Wait`).
+const PROBE_STANDING_STEPS: u32 = 120;
 
 /// How much of the way to its target direction the body swings in a frame
 /// (`SlerpQuatRate`, used by `rs::slerpUpFront`).
@@ -859,6 +868,11 @@ pub struct Player {
     /// The pole climb in progress (`PlayerStatePoleClimb`).
     pole: PoleControl,
     rolling: RollControl,
+    /// The forced slope slide (`PlayerStateSlope`).
+    slide: SlopeSlide,
+    /// Steps the collider has touched the ground in a row (`PlayerCollider::mTimeInAir`, which
+    /// counts them up from 1 and which `rs::isJustLand` reads).
+    ground_contact: u32,
     squat: SquatControl,
     /// The standing state's idle sequence (`PlayerStateWait`).
     wait: WaitControl,
@@ -1070,6 +1084,8 @@ impl Default for Player {
             fire: FireControl::default(),
             pole: PoleControl::default(),
             rolling: RollControl::default(),
+            slide: SlopeSlide::default(),
+            ground_contact: 0,
             squat: SquatControl::default(),
             wait: WaitControl::default(),
             throwing: ThrowControl::default(),
@@ -1519,6 +1535,9 @@ impl Player {
     pub fn spawn_facing(pos: Vec3, yaw_deg: f32) -> Self {
         let yaw = yaw_deg.to_radians();
         let mut player = Self::spawn_at(pos, Vec3::new(yaw.sin(), 0., yaw.cos()));
+        // The probe teleports a player that has stood for at least 120 steps; the collider's
+        // count of steps in contact goes on from there (`rs::isJustLand` reads it).
+        player.ground_contact = PROBE_STANDING_STEPS;
         let half = f64::from(yaw_deg).to_radians() / 2.;
         player.pose_tilt = Some(PoseTilt {
             pose: Quat::from_xyzw(0., half.sin() as f32, 0., half.cos() as f32),
@@ -1543,8 +1562,12 @@ impl Player {
     /// original keeps reporting it, as the ground-following velocity. In the
     /// step that lands, it still reports the fall speed that moved the player.
     pub fn units_per_frame(&self) -> Vec3 {
-        // (The pole's hold has no pull into the floor under it.)
-        if self.grounded && self.mode != Move::Pole && (self.v.y == 0. || self.v.y == -self.pull) {
+        // (The pole's hold has no pull into the floor under it, and the slope slide keeps the
+        // game's own velocity, the pull included.)
+        if self.grounded
+            && !matches!(self.mode, Move::Pole | Move::SlopeSlide)
+            && (self.v.y == 0. || self.v.y == -self.pull)
+        {
             if self.landing_speed < 0. {
                 self.v.with_y(self.landing_speed)
             } else {
@@ -2244,6 +2267,7 @@ impl Player {
             && !was_grounded
             && !hot
             && self.mode != Move::GroundSpin
+            && self.mode != Move::SlopeSlide
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
@@ -2429,7 +2453,7 @@ impl Player {
     /// Shared ground transitions. Returns true when a new state took over.
     fn ground_actions(&mut self, o: &Orders) -> bool {
         let speed = self.speed_h();
-        if self.pre_jump > 0 {
+        if self.pre_input_jump_judges() {
             self.ground_jump(o);
             return true;
         }
@@ -2490,6 +2514,10 @@ impl Player {
     /// Standing: the stick starts the run (the start-run judge), which is a
     /// new nerve, chosen now and moving from its first step.
     fn stand(&mut self, o: &Orders) {
+        // (The forced slope slide comes before the state's own start-run judge.)
+        if self.try_force_slope_slide() {
+            return;
+        }
         if self.tilt >= STICK_DEADZONE {
             // The state's own start-run judge comes before the actor's (jump,
             // crouch, throw): a jump pressed with the stick is taken by the
@@ -2717,7 +2745,9 @@ impl Player {
         // actor's (jump, crouch, throw), which look at the state's result.
         if !ended {
             self.try_start_ground_spin();
-            self.ground_actions(o);
+            if !self.try_force_slope_slide() {
+                self.ground_actions(o);
+            }
         }
     }
     /// The first step of one of the run state's nerves.
@@ -2771,9 +2801,12 @@ impl Player {
         }
         // The actor's judges look at the state's result: the brake of this
         // frame has already slowed the player when a turning jump is chosen.
-        if self.pre_jump > 0 && self.quick_turn > 0 {
+        if self.try_force_slope_slide() {
+            return;
+        }
+        if self.pre_input_jump_judges() && self.quick_turn > 0 {
             self.side_somersault();
-        } else if self.pre_jump > 0 {
+        } else if self.pre_input_jump_judges() {
             self.ground_jump(o);
         }
     }
@@ -2880,73 +2913,6 @@ impl Player {
         let heading = plane::normalized_or_zero(velocity.with_y(0.));
         let downhill = plane::normalized_or_zero(normal.with_y(0.));
         heading != Vec3::ZERO && downhill != Vec3::ZERO && heading.dot(downhill) >= 0.
-    }
-    fn start_slope_slide(&mut self) {
-        self.change(Move::SlopeSlide, "Slide", |p| {
-            let down = Vec3::new(-p.slope.signum(), 0., 0.);
-            let mut h = p.v.with_y(0.);
-            // Start at least gently downhill, never faster than the slide's limit.
-            let along = h.dot(down);
-            if along < t::SLOPE_SLIDE_START_SPEED {
-                h += down * (t::SLOPE_SLIDE_START_SPEED - along);
-            }
-            p.set_h(h.clamp_length_max(t::SLOPE_SLIDE_MAX));
-        });
-    }
-    /// Sliding down a slope on the seat: speeds up downhill, steers a little,
-    /// and brakes to a stop once the ground flattens out.
-    fn slope_slide(&mut self, o: &Orders) {
-        if self.pre_jump > 0 {
-            self.ground_jump(o);
-            return;
-        }
-        if o.crouch && o.throw_pressed && self.grounded {
-            self.pre_throw = 0;
-            self.start_roll(RollStart::Normal);
-            return;
-        }
-        if !self.grounded {
-            self.v.y = (self.v.y - t::GRAVITY_AIR).max(-t::FALL_MAX);
-            return;
-        }
-        let h = self.v.with_y(0.);
-        let mut sliding = h;
-        if self.steep(t::SLOPE_SLIDE_ANGLE_END) {
-            let down = Vec3::new(-self.slope.signum(), 0., 0.);
-            let side_dir = Vec3::Y.cross(down);
-            let mut along = h.dot(down);
-            let mut side = h.dot(side_dir);
-            if along < 0. {
-                along *= t::SLOPE_SLIDE_BRAKE;
-            }
-            along = (along + t::SLOPE_SLIDE_ACCEL).min(t::SLOPE_SLIDE_MAX);
-            side *= t::SLOPE_SLIDE_SIDE_BRAKE;
-            if self.tilt > 0.05 {
-                side = (side + self.stick.dot(side_dir) * self.tilt * t::SLOPE_SLIDE_SIDE_ACCEL)
-                    .clamp(-t::SLOPE_SLIDE_SIDE_MAX, t::SLOPE_SLIDE_SIDE_MAX);
-            }
-            sliding = down * along + side_dir * side;
-        } else {
-            sliding *= t::SLOPE_SLIDE_BRAKE;
-            if sliding.length() <= t::SLOPE_SLIDE_SPEED_END && self.frame >= t::SLOPE_FORCE_FRAMES {
-                if o.crouch {
-                    self.start_squat();
-                } else {
-                    self.go(Move::Idle, "Wait");
-                }
-                return;
-            }
-        }
-        let sliding = sliding.clamp_length_max(t::SLOPE_SLIDE_MAX);
-        if sliding.length() > 0.5 {
-            self.facing = turn(
-                self.facing,
-                sliding.normalize(),
-                t::SLOPE_TURN_DEG.to_radians(),
-            );
-        }
-        self.set_h(sliding);
-        self.v.y = -t::GRAVITY;
     }
     /// Hot ground, as the original's fire damage: Mario leaps clutching his
     /// seat, bounces once where he lands, then runs flat out for a second
@@ -4200,6 +4166,11 @@ impl Player {
         if self.mode == Move::WallSlide {
             self.leave_wall_slide();
         }
+        // A floor with the `Slide` code takes the actor to the slope slide before any landing
+        // state (`setNerveOnGround`, `tryChangeNerveFromAir`).
+        if self.try_force_slope_slide() {
+            return;
+        }
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
         if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
@@ -4382,8 +4353,15 @@ impl Player {
             self.pos.y = ground;
             self.grounded = true;
         }
+        // `PlayerCollider::collide` ends by counting the steps in a row with ground contact.
+        self.ground_contact = if self.is_collided_ground() {
+            self.ground_contact.saturating_add(1)
+        } else {
+            0
+        };
         self.distance += (self.pos - old).with_y(0.).length();
     }
+    pub fn dbg_contact(&self) -> u32 { self.ground_contact }
     /// The player's contact with the course's box solids (the windowed demo).
     fn collide_solids(&mut self, o: &Orders, scene: &Course) {
         let crouched = matches!(

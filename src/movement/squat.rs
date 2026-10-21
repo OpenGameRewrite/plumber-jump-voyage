@@ -153,6 +153,9 @@ impl Player {
             Move::Crouch => self.squat_wait(o),
             _ => self.squat_walk(o),
         }
+        if !self.nerve.deferred && self.try_force_slope_slide() {
+            return;
+        }
         self.squat_judges(o);
     }
     /// `exeBrake`: slide on the momentum until it is spent.
@@ -236,7 +239,7 @@ impl Player {
             self.start_roll(RollStart::Normal);
             return;
         }
-        if self.pre_jump > 0 {
+        if self.pre_input_jump_judges() {
             self.pre_jump = 0;
             // Only the braking sub-state allows the long jump, and only while
             // moving forward (`PlayerStateSquat::isEnableLongJump`).

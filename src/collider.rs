@@ -1521,6 +1521,13 @@ impl PlayerCollider {
         results: &Results,
         previous: Vec3,
     ) -> (Vec3, Vec3) {
+        if std::env::var("PJV_DBG2").is_ok() {
+            for (label, list) in [("collide", &results.collide), ("support", &results.support)] {
+                for r in list {
+                    eprintln!("    {label} shape {} tri {} {:?}", r.shape, r.triangle, r.hit);
+                }
+            }
+        }
         let flags = self.flags(mesh, results);
         self.average_ground(mesh, results);
         // The deepest floor of the earlier rounds provides the ground
