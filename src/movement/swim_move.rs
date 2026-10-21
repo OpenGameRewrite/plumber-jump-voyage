@@ -287,7 +287,7 @@ impl Player {
     /// The vertical speed under the surface (the helper at 0x48b154): the speed along
     /// `normal` rises while the paddle's rise lasts and falls with `gravity` after, within
     /// the limits. Ground below stops the fall.
-    fn swim_vertical(&self, vertical: Vec3, normal: Vec3, gravity: f32) -> Vec3 {
+    pub(super) fn swim_vertical(&self, vertical: Vec3, normal: Vec3, gravity: f32) -> Vec3 {
         let along = pose_math::dot(vertical, normal);
         let speed = if self.is_collided_ground() && along < 0. {
             0.
@@ -341,6 +341,9 @@ impl Player {
             gravity = k::GRAVITY;
         }
         let vertical = self.swim_vertical(vertical, normal, gravity);
+        if std::env::var("PJV_DBG").is_ok() {
+            eprintln!("DBG under on_ground {on_ground} old {old_normal:?} new {normal:?} h {horizontal:?} v {vertical:?} stick {:?} tilt {} v_in {:?}", self.swim_stick(), self.tilt, self.v);
+        }
         let high = (k::HIGH_ACCEL_PERMIT_FRAME as u32) > self.swim.since_paddle as u32;
         let horizontal = self.swim_horizontal(
             horizontal,

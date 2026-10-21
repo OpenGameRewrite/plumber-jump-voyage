@@ -235,9 +235,14 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
         "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
-        | "SquatWait" | "SwimWait" | "SwimLand" | "SwimStand" => 3.,
+        | "SquatWait" | "SwimLand" | "SwimStand" => 3.,
         "SpinJumpDownFall" => 4.,
+        // The swim's clips (recorded `interp`): the surface strokes blend over fifteen steps,
+        // the idle surface over ten, the idle on the bottom over twenty.
         "SwimWalk" => 7.,
+        "SwimSurfaceNormal" => 15.,
+        "SwimStandSurface" => 10.,
+        "SwimStandWait" => 20.,
         "PoleWait" => 8.,
         // Recorded on the pole (`pole-climb`, `pole-top`): the turn round the
         // pole after the slide, and the handstand's start and wait.
@@ -306,6 +311,11 @@ impl<P: Default + Posed> Blend<P> {
         self.current = next;
         for (_, weight, fade) in &mut self.old {
             *weight -= *fade * dt;
+            // The fade is a whole number of steps: what is left of it under half a step is the
+            // rounding of the steps before (seven steps of a seventh do not sum to one).
+            if *weight < 0.5 * *fade * dt {
+                *weight = 0.;
+            }
         }
         self.old.retain(|o| o.1 > 0.);
     }

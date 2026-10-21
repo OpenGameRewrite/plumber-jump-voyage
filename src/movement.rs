@@ -267,6 +267,10 @@ mod spin;
 mod squat;
 #[path = "movement/swim.rs"]
 mod swim;
+#[path = "movement/swim_dive.rs"]
+mod swim_dive;
+#[path = "movement/swim_ground.rs"]
+mod swim_ground;
 #[path = "movement/swim_const.rs"]
 mod swim_const;
 #[path = "movement/swim_move.rs"]
@@ -437,6 +441,9 @@ pub mod clip {
     }
     /// The swim's clips (recorded `anim_len`).
     pub const SWIM_STAND: u32 = 32;
+    pub const SWIM_LAND: u32 = 45;
+    pub const SWIM_HIP_DROP_START: u32 = 30;
+    pub const SWIM_HIP_DROP_LAND: u32 = 74;
     pub const LAND: u32 = 26;
     /// The landing after a long fall (`PlayerStateWait`'s `LandStiffen` nerve).
     pub const LAND_STIFFEN: u32 = 120;
@@ -874,6 +881,9 @@ pub struct Player {
     /// the position in centimetres (start-relative, on the game's single-precision grid) the
     /// collider returned. Valid for as long as `pos` is unchanged since.
     collider_end: Option<(Vec3, Vec3)>,
+    /// Where the collider stood (cm) when a state moved the actor by hand (`al::setTrans`)
+    /// since: the collider's next move carries it from there to the actor first.
+    trans_carry: Option<Vec3>,
     /// The forced slope slide (`PlayerStateSlope`).
     slide: SlopeSlide,
     /// Steps the collider has touched the ground in a row (`PlayerCollider::mTimeInAir`, which
@@ -918,6 +928,10 @@ pub struct Player {
     /// update is skipped (a clip just started under a sub animation).
     sub: SubClip,
     anim_skip: bool,
+    /// A running clip's rate was changed by a state (`PlayerAnimator::setAnimRate`): the
+    /// animator's frame counter takes the change over once more at its next update (the model
+    /// advances by the old rate and the counter is synchronised to it plus the new one).
+    anim_rate_change: f32,
     /// The clip began at a frame set by hand (`setAnimFrame`): the animator's
     /// counter, which the trace's `anim_frame` shows, starts over at zero for
     /// the row while the pose shows the frame.
@@ -1015,6 +1029,8 @@ pub struct Player {
     /// The clip started in this step does not fade in from the one before it
     /// (`PlayerAnimator::clearInterpolation`).
     interpolation_cleared: bool,
+    /// Steps taken since the player was placed (a teleport clears the animator's blend).
+    age: u32,
     /// Pole axis base, its height, the climb cycle in progress and a re-grab delay.
     /// Frames since the burn's bounce landed (run and falls together).
     /// Burn leap: horizontal direction its air control works along.
@@ -1093,6 +1109,7 @@ impl Default for Player {
             pole: PoleControl::default(),
             rolling: RollControl::default(),
             collider_end: None,
+            trans_carry: None,
             slide: SlopeSlide::default(),
             ground_contact: 0,
             squat: SquatControl::default(),
@@ -1115,6 +1132,7 @@ impl Default for Player {
             upper_catch: None,
             sub: SubClip::default(),
             anim_skip: false,
+            anim_rate_change: 0.,
             counter_restarted: false,
             winding_age: 0,
             throw_clip: "SpinCapStart",
@@ -1180,6 +1198,7 @@ impl Default for Player {
             fall_after_ledge: None,
             sub_restarted: false,
             interpolation_cleared: false,
+            age: 0,
             swim: swim::Swim::default(),
             water_finder: crate::water::SurfaceFinder::default(),
             step_phase: 0.,
@@ -1592,7 +1611,7 @@ impl Player {
         // (The pole's hold has no pull into the floor under it, and the slope slide keeps the
         // game's own velocity, the pull included.)
         if self.grounded
-            && !matches!(self.mode, Move::Pole | Move::SlopeSlide)
+            && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim)
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
             if self.landing_speed < 0. {
@@ -2043,6 +2062,10 @@ impl Player {
     fn play(&mut self, name: &'static str) {
         self.nerve.queue_clip(name);
     }
+    /// The rate change the animator's counter has still to take over (see `anim_rate_change`).
+    pub fn anim_rate_change(&self) -> f32 {
+        self.anim_rate_change
+    }
     /// The clip the state plays or is about to play.
     fn clip(&self) -> &'static str {
         self.nerve.pending_clip().unwrap_or(self.anim.name)
@@ -2121,7 +2144,7 @@ impl Player {
                 self.anim.frame = self.anim.frame.min(clip::ROLLING_END as f32);
             }
             if !skipped {
-                self.anim.frame += self.anim.rate;
+                self.anim.frame += self.anim.rate + std::mem::take(&mut self.anim_rate_change);
             }
             // A jump clip that has played out holds a frame past its end.
             if let Some(length) = clip::held_length(self.anim.name) {
@@ -2251,6 +2274,7 @@ impl Player {
         self.sensor_restart = false;
         self.sub_restarted = false;
         self.interpolation_cleared = false;
+        self.age = self.age.saturating_add(1);
         let was_grounded = self.grounded;
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
@@ -2294,6 +2318,7 @@ impl Player {
             && !hot
             && self.mode != Move::GroundSpin
             && self.mode != Move::SlopeSlide
+            && self.mode != Move::Swim
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {

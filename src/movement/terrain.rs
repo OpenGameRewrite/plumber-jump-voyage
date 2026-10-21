@@ -166,7 +166,7 @@ impl Player {
         let mut velocity = self.v;
         // (The slope slide's velocity is the game's own, the pull included, whatever its y.)
         if was_grounded
-            && !matches!(self.mode, Move::Pole | Move::SlopeSlide)
+            && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim)
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
             velocity = self.ground_following();
@@ -179,6 +179,9 @@ impl Player {
         if let Some(stood) = self.catch_collider_at.take()
             && holding
         {
+            self.collider.carry_from(stood);
+        }
+        if let Some(stood) = self.trans_carry.take() {
             self.collider.carry_from(stood);
         }
         let outcome =
@@ -250,9 +253,9 @@ impl Player {
             } else {
                 0.
             };
-            if self.mode == Move::SlopeSlide {
-                // The slide keeps its velocity whatever the floor does with the body; the
-                // collider found ground (`rs::isCollidedGround`) whichever way it moves.
+            if matches!(self.mode, Move::SlopeSlide | Move::Swim) {
+                // The slide and the swim keep their velocity whatever the floor does with the
+                // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;
             } else if self.v.y <= 0. {
                 // A contact reached from the air is a landing, and a ground
@@ -270,7 +273,10 @@ impl Player {
                 self.hop_contact = true;
             }
         }
-        if collider.ceiling.is_some() && self.v.y > 0. && self.mode != Move::SlopeSlide {
+        if collider.ceiling.is_some()
+            && self.v.y > 0.
+            && !matches!(self.mode, Move::SlopeSlide | Move::Swim)
+        {
             self.v.y = 0.;
             // A hit head ends the jump's extend window.
             self.air.cancel_extend();

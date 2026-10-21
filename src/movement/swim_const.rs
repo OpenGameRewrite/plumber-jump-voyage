@@ -74,3 +74,46 @@ pub const ROT_FAST_ANGLE: f32 = 80.;
 pub const ROT_ACCEL_FRAME: i32 = 20;
 pub const ROT_ACCEL_FRAME_FAST: i32 = 1;
 pub const ROT_BRAKE_FRAME: i32 = 30;
+
+/// `Tall`: the body's height, the depth the hip drop's wind-up holds without a surface.
+pub const TALL: f32 = 160.;
+
+/// The water hip drop (`SwimDive*`): the speed the dive starts at, the frames the button is
+/// valid for, the frames before the brake can start, the brake, the speed and frames that end
+/// the dive, the landing's steps and when it may be cancelled.
+pub const DIVE_START_SPEED: f32 = 26.5;
+pub const DIVE_BUTTON_VALID_FRAME: i32 = 10;
+pub const DIVE_NO_BRAKE_FRAME: i32 = 15;
+pub const DIVE_BRAKE: f32 = 0.875;
+pub const DIVE_END_SPEED: f32 = 1.25;
+pub const DIVE_END_FRAME: i32 = 5;
+pub const DIVE_LAND_COUNT: i32 = 0;
+pub const DIVE_LAND_CANCEL_FRAME: i32 = 15;
+/// `JumpHipDropPermitEndFrame`: the jump button works this many steps into the landing.
+pub const JUMP_HIP_DROP_PERMIT_END_FRAME: i32 = 30;
+/// `JumpHipDropPower`: the most the pop jump out of the water may rise with.
+pub const JUMP_HIP_DROP_POWER: f32 = 40.;
+
+/// The jump from the bottom (`SwimJumpHipDrop*`).
+pub const JUMP_HIP_DROP_SPEED: f32 = 27.;
+pub const JUMP_HIP_DROP_BRAKE_V: f32 = 0.98;
+pub const JUMP_HIP_DROP_BRAKE_V_CEILING: f32 = 0.5;
+pub const JUMP_HIP_DROP_GRAVITY: f32 = 0.2;
+pub const JUMP_HIP_DROP_ACCEL_H: f32 = 0.25;
+pub const JUMP_HIP_DROP_MOVE_SPEED_H: f32 = 3.;
+pub const JUMP_HIP_DROP_CANCEL_SPEED: f32 = 7.5;
+pub const JUMP_HIP_DROP_POP_SPEED: f32 = 8.;
+pub const JUMP_HIP_DROP_POP_JUMP_ADD: f32 = 7.;
+
+/// The paddle's clip (`SwimPaddleAnim*`): its length, and the rate that follows how soon the
+/// last paddle was.
+pub const PADDLE_ANIM_INTERVAL: i32 = 32;
+pub const PADDLE_ANIM_RATE_INTERVAL_MIN: f32 = 5.;
+pub const PADDLE_ANIM_RATE_INTERVAL_MAX: f32 = 22.;
+pub const PADDLE_ANIM_MAX_RATE: f32 = 3.;
+
+/// The walk's clip rate (`SwimWalkAnim*`): speeds and rates it is spread over.
+pub const WALK_ANIM_SPEED_MIN: f32 = 1.;
+pub const WALK_ANIM_SPEED_MAX: f32 = 6.5;
+pub const WALK_ANIM_FRAME_RATE_MIN: f32 = 0.5;
+pub const WALK_ANIM_FRAME_RATE_MAX: f32 = 1.75;

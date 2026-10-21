@@ -25,6 +25,9 @@ const FINDER_DISTANCE: f32 = 200.;
 /// `PlayerStateSwim::appear` sets the pre-input counter of the paddle to this (a count that is
 /// never reached: nothing has been paddled).
 const NEVER_PADDLED: i32 = 9999;
+/// Steps after the player is placed during which a clip starts without a blend (a guess, see
+/// `swim_anim`).
+const PLACED_STEPS: u32 = 10;
 
 /// The inner nerves of `PlayerStateSwim`, by the names the probe logs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -34,6 +37,20 @@ pub(super) enum SwimNerve {
     Move,
     /// At the surface.
     Surface,
+    /// Walking on the bottom.
+    Walk,
+    /// Standing on the bottom after touching it.
+    Land,
+    /// The stroke that pushes up.
+    Paddle,
+    /// The wind-up of the water hip drop.
+    HipDropStart,
+    /// The dive down.
+    HipDropLoop,
+    /// Landing on the bottom after the dive.
+    HipDropLand,
+    /// The jump up from the bottom.
+    HipDropJump,
 }
 impl SwimNerve {
     /// The name `<actor nerve>/<state nerve>` the probe logs.
@@ -41,15 +58,24 @@ impl SwimNerve {
         match self {
             Self::Move => "Swim/SwimMove",
             Self::Surface => "Swim/SwimSurface",
+            Self::Walk => "Swim/SwimWalk",
+            Self::Land => "Swim/SwimLand",
+            Self::Paddle => "Swim/SwimPaddle",
+            Self::HipDropStart => "Swim/SwimHipDropStart",
+            Self::HipDropLoop => "Swim/SwimHipDropLoop",
+            Self::HipDropLand => "Swim/SwimHipDropLand",
+            Self::HipDropJump => "Swim/SwimHipDropJump",
         }
     }
 }
 
 /// How the state ended, for the actor to pick what comes next (`isEndSwimJump*`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SwimEnd {
+pub(super) enum SwimEnd {
     /// The jump out of the water from the surface (`EndSwimJump`).
     Jump,
+    /// The jump out of the water at the end of the jump from the bottom (`EndSwimJumpPop`).
+    JumpPop,
 }
 
 /// What `PlayerStateSwim` keeps.
@@ -57,7 +83,7 @@ enum SwimEnd {
 pub(super) struct Swim {
     pub nerve: SwimNerve,
     /// Updates the inner nerve has executed (`al::getNerveStep`).
-    steps: u32,
+    pub steps: u32,
     /// The nerve that is executing set another (or itself again) in this update.
     nerve_set: bool,
     /// Steps since the last paddle (`this+0xa0`, counted up by `control`).
@@ -77,6 +103,17 @@ pub(super) struct Swim {
     move_timer: i32,
     /// The jump judge's pre-input counter (`PlayerJudgeStartSwimJump`).
     start_jump: i32,
+    /// Steps without ground the walk, the landing and the paddle tolerate (`this+0xf0`).
+    pub air_steps: i32,
+    /// The depth the hip drop's wind-up holds (`this+0xb0`).
+    pub keep_depth: f32,
+    /// The dive's button frames left, steps on ground and steps of slow dive (`this+0xb4`, `0xb8`, `0xbc`).
+    pub dive_hold: i32,
+    pub land_steps: i32,
+    pub slow_steps: i32,
+    /// The paddle clip's rate and whether it is asked to restart (`this+0xa4`, `0xa8`).
+    pub paddle_rate: f32,
+    pub paddle_restart: bool,
     /// `PlayerJudgeOutInWater`: the player took off in the water (or was in it) and has neither
     /// left it nor started to fall since; the jump nerve's water judge waits for that.
     pub(super) out_in_inside: bool,
@@ -97,6 +134,13 @@ impl Default for Swim {
             jump_invalid: 0,
             move_timer: 0,
             start_jump: 0,
+            air_steps: 0,
+            keep_depth: 0.,
+            dive_hold: 0,
+            land_steps: 0,
+            slow_steps: 0,
+            paddle_rate: 1.,
+            paddle_restart: false,
             out_in_inside: true,
             turn: TurnControl::swim(),
         }
@@ -218,7 +262,7 @@ impl Player {
     }
 
     /// Set the inner nerve: it is current at once, its first step is the next update's.
-    fn set_swim_nerve(&mut self, nerve: SwimNerve) {
+    pub(super) fn set_swim_nerve(&mut self, nerve: SwimNerve) {
         self.swim.nerve = nerve;
         self.swim.steps = 0;
         self.swim.nerve_set = true;
@@ -301,10 +345,34 @@ impl Player {
             self.pre_jump = buffered;
             return;
         }
+        if let Some(SwimEnd::JumpPop) = ended {
+            self.start_swim_pop_jump();
+            return;
+        }
         // Still swimming: the actor asks whether the water is still deep enough.
         if !self.is_in_water(scene, SWIM_JUDGE) {
             self.leave_swim(o);
         }
+    }
+
+    /// `EndSwimJumpPop`: the actor leaves the water into a jump with the power of the swim
+    /// up (its vertical speed, at least nothing, and `SwimJumpHipDropPopJumpAdd` more, at most
+    /// `JumpHipDropPower`); the jump keeps the clip playing and has no extension.
+    fn start_swim_pop_jump(&mut self) {
+        let speed_up = (-pose_math::dot(self.v, GRAVITY)).max(0.) + k::JUMP_HIP_DROP_POP_JUMP_ADD;
+        let power = if speed_up > k::JUMP_HIP_DROP_POWER {
+            k::JUMP_HIP_DROP_POWER
+        } else {
+            speed_up
+        };
+        self.mode = Move::Jump;
+        self.frame = 0;
+        self.nerve.choose_keeping_clip(true, move |p| {
+            p.prior_v = p.v;
+            p.leave_ground(Move::Jump, power, t::JUMP_GRAVITY);
+            p.jump_extend = false;
+            p.arm_air_control(Move::Jump, power, t::JUMP_GRAVITY);
+        });
     }
 
     /// The player is out of the water (`setNerveOnGround`): GUESS, no recording ends a swim
@@ -327,6 +395,13 @@ impl Player {
         let end = match self.swim.nerve {
             SwimNerve::Move => self.exe_swim_move(first, o, scene),
             SwimNerve::Surface => self.exe_swim_surface(first, o, scene),
+            SwimNerve::Walk => self.exe_swim_walk(first, o, scene),
+            SwimNerve::Land => self.exe_swim_land(first, o, scene),
+            SwimNerve::Paddle => self.exe_swim_paddle(first, o, scene),
+            SwimNerve::HipDropStart => self.exe_swim_hip_drop_start(first, o, scene),
+            SwimNerve::HipDropLoop => self.exe_swim_hip_drop_loop(first, o, scene),
+            SwimNerve::HipDropLand => self.exe_swim_hip_drop_land(first, o, scene),
+            SwimNerve::HipDropJump => self.exe_swim_hip_drop_jump(first, o, scene),
         };
         if end.is_some() {
             return end;
@@ -361,12 +436,18 @@ impl Player {
 
     /// Start a clip of the swim nerves now (`PlayerAnimator::startAnim`, which leaves a clip
     /// that is already playing alone).
-    fn swim_anim(&mut self, name: &'static str) {
+    pub(super) fn swim_anim(&mut self, name: &'static str) {
         if self.anim.name != name {
             self.start_clip(name);
+            // GUESS: the probe's teleport clears the animator's blend, and a swimmer placed in
+            // the water starts its first clips within the steps right after (the recordings'
+            // first rows show no blend).
+            if self.age <= PLACED_STEPS {
+                self.interpolation_cleared = true;
+            }
         }
     }
-    fn is_swim_anim(&self, name: &str) -> bool {
+    pub(super) fn is_swim_anim(&self, name: &str) -> bool {
         self.anim.name == name
     }
 
@@ -382,12 +463,25 @@ impl Player {
             self.set_swim_nerve(SwimNerve::Surface);
             return None;
         }
-        // (NOT PORTED YET: the trample trigger, the paddle and the hip drop.)
-        let _ = o;
+        // (The trample trigger is not ported.)
+        if o.jump {
+            self.set_swim_nerve(SwimNerve::Paddle);
+            return None;
+        }
+        if o.crouch_pressed {
+            self.set_swim_nerve(SwimNerve::HipDropStart);
+            return None;
+        }
         let on_ground = self.is_on_ground_by(self.v);
         let moving = self.is_move();
         if on_ground {
-            // (NOT PORTED YET: `SwimWalk` when moving, `SwimLand` when not.)
+            if moving {
+                self.swim_walk_velocity();
+                self.set_swim_nerve(SwimNerve::Walk);
+            } else {
+                self.swim_wait_ground(k::GRAVITY, k::FALL_SPEED_MAX, 0., 0.);
+                self.set_swim_nerve(SwimNerve::Land);
+            }
             return None;
         }
         if moving {
@@ -473,11 +567,19 @@ impl Player {
             self.swim.surface_hold = 0;
             return Some(SwimEnd::Jump);
         }
-        // (NOT PORTED YET: the hip drop trigger, `SwimHipDropStart`.)
-        if let_go {
-            // (NOT PORTED YET: standing on the bottom goes to `SwimWalk`.)
-            self.set_swim_nerve(SwimNerve::Move);
+        if o.crouch_pressed {
+            self.swim.surface_hold = 0;
+            self.set_swim_nerve(SwimNerve::HipDropStart);
             return None;
+        }
+        if let_go {
+            if self.is_swim_anim("SwimStandWait") && self.is_collided_ground() {
+                // Standing on the bottom: the swimmer walks (and the rest of the step still runs).
+                self.set_swim_nerve(SwimNerve::Walk);
+            } else {
+                self.set_swim_nerve(SwimNerve::Move);
+                return None;
+            }
         }
         if waiting && o.jump {
             self.swim.since_paddle = 0;

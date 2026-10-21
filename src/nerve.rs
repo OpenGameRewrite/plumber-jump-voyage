@@ -89,6 +89,17 @@ impl Nerve {
         self.deferred = true;
         self.renewed = renew;
     }
+    /// A state chosen that keeps the clip playing and does its first-step work next step.
+    pub fn choose_keeping_clip(
+        &mut self,
+        renew: bool,
+        work: impl FnOnce(&mut Player) + Send + Sync + 'static,
+    ) {
+        self.clip = None;
+        self.work = Some(Box::new(work));
+        self.deferred = true;
+        self.renewed = renew;
+    }
     /// Queue a clip and first-step work without leaving the running nerve.
     pub fn queue(
         &mut self,
