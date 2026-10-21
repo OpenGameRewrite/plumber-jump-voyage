@@ -482,9 +482,6 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &bindings,
         );
         player.step(&orders, &course);
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("settle {i}: {:?} pos {:?} v {:?} grounded {} contact {}", player.mode, player.pos * 100., player.units_per_frame(), player.grounded, player.dbg_contact());
-        }
         info.game_frame = i as i64;
         recorder.record(&info, &mut player);
     }

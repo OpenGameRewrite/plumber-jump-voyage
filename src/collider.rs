@@ -39,6 +39,7 @@
 //! vector (`calcResultVec`), removes the part of the remaining move that goes
 //! into the surface and goes on, up to 100 rounds.
 use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
+use crate::movement::plane::try_normalize_or_zero;
 use crate::prism::{PartFrame, Point, rotate_vector, transform_point};
 use bevy::prelude::{Quat, Vec3};
 
@@ -1521,13 +1522,6 @@ impl PlayerCollider {
         results: &Results,
         previous: Vec3,
     ) -> (Vec3, Vec3) {
-        if std::env::var("PJV_DBG2").is_ok() {
-            for (label, list) in [("collide", &results.collide), ("support", &results.support)] {
-                for r in list {
-                    eprintln!("    {label} shape {} tri {} {:?}", r.shape, r.triangle, r.hit);
-                }
-            }
-        }
         let flags = self.flags(mesh, results);
         self.average_ground(mesh, results);
         // The deepest floor of the earlier rounds provides the ground
@@ -1694,10 +1688,7 @@ impl PlayerCollider {
         }
         // The push along the face normal, and the radial one for an edge.
         let by_normal = normal * hit.depth;
-        let radial = || {
-            let to_centre = (hit.center - hit.position).normalize_or_zero();
-            to_centre * (hit.depth * normal.dot(to_centre))
-        };
+        let radial = || edge_fix(normal, hit.depth, hit.center - hit.position);
         let class = classify(normal);
         // A wall hit with a face right behind it (the back of a thin wall) is
         // dropped: by every wall hit in the hanging forms, by those on an edge
@@ -1740,12 +1731,30 @@ impl PlayerCollider {
                     {
                         return;
                     }
-                    let to_centre = (hit.center - hit.position).normalize_or_zero();
-                    let side = across(to_centre * by_normal.dot(to_centre), Vec3::Y);
-                    if to_centre == Vec3::ZERO || side.normalize_or_zero() == Vec3::ZERO {
+                    // The push is the normal one's part along the line from the touched
+                    // point to the sphere's centre, taken across the up axis. A direction
+                    // too short to normalise (`al::tryNormalizeOrZero`'s own limit, a
+                    // length of 0.001) is no contact at all: a body resting on a flank
+                    // only touches the slope, it is not pushed along it.
+                    let (to_centre, usable) = try_normalize_or_zero(hit.center - hit.position);
+                    if !usable {
                         return;
                     }
-                    fixes.add(side, side.normalize_or_zero());
+                    let along = (by_normal.x * to_centre.x + by_normal.y * to_centre.y)
+                        + by_normal.z * to_centre.z;
+                    let side = verticalize_vec(
+                        GRAVITY,
+                        Vec3::new(
+                            to_centre.x * along,
+                            to_centre.y * along,
+                            to_centre.z * along,
+                        ),
+                    );
+                    let (direction, usable) = try_normalize_or_zero(side);
+                    if !usable {
+                        return;
+                    }
+                    fixes.add(side, direction);
                     return;
                 }
             }
@@ -1799,6 +1808,29 @@ impl PlayerCollider {
             });
         }
     }
+}
+
+/// The direction of gravity the collider classifies faces and takes the up axis from.
+const GRAVITY: Vec3 = Vec3::NEG_Y;
+
+/// `al::verticalizeVec(out, vertical, vec)`: `vec` without its part along `vertical`.
+fn verticalize_vec(vertical: Vec3, vec: Vec3) -> Vec3 {
+    let along = (vertical.x * vec.x + vertical.y * vec.y) + vertical.z * vec.z;
+    Vec3::new(
+        vec.x - vertical.x * along,
+        vec.y - vertical.y * along,
+        vec.z - vertical.z * along,
+    )
+}
+
+/// `SphereHitInfo::calcFixVector` away from a face: the push along the line from the touched
+/// point to the centre (`to_centre`, which `al::tryNormalizeOrZero` makes a unit vector or
+/// zero), as long as the normal pushed by `depth` reaches along it.
+fn edge_fix(normal: Vec3, depth: f32, to_centre: Vec3) -> Vec3 {
+    let (v, _) = try_normalize_or_zero(to_centre);
+    let pushed = Vec3::new(depth * normal.x, depth * normal.y, depth * normal.z);
+    let along = (pushed.x * v.x + pushed.y * v.y) + pushed.z * v.z;
+    Vec3::new(v.x * along, v.y * along, v.z * along)
 }
 
 /// `calcFixVector`: the push along the face normal on a face, the radial one

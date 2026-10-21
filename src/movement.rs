@@ -277,12 +277,12 @@ mod spin;
 mod squat;
 #[path = "movement/terrain.rs"]
 mod terrain;
+#[path = "movement/vector_lib.rs"]
+mod vector_lib;
 #[path = "movement/wait.rs"]
 mod wait;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
-#[path = "movement/vector_lib.rs"]
-mod vector_lib;
 #[path = "movement/wall_along.rs"]
 mod wall_along;
 pub use ground::turn_power;
@@ -2267,7 +2267,7 @@ impl Player {
             && !was_grounded
             && !hot
             && self.mode != Move::GroundSpin
-            && self.mode != Move::SlopeSlide
+            && !self.slide_running()
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
@@ -4361,7 +4361,6 @@ impl Player {
         };
         self.distance += (self.pos - old).with_y(0.).length();
     }
-    pub fn dbg_contact(&self) -> u32 { self.ground_contact }
     /// The player's contact with the course's box solids (the windowed demo).
     fn collide_solids(&mut self, o: &Orders, scene: &Course) {
         let crouched = matches!(

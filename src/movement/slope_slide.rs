@@ -54,6 +54,12 @@ fn add_velocity_to_direction(velocity: Vec3, dir: Vec3, force: f32) -> Vec3 {
 }
 
 impl Player {
+    /// The slope slide is the actor's nerve: its velocity is the game's own and the collider
+    /// takes the squat form, from the step that chose it on.
+    pub(super) fn slide_running(&self) -> bool {
+        self.mode == Move::SlopeSlide
+    }
+
     /// `PlayerJudgePreInputJump::judge`: a jump press still buffered counts, except while the
     /// forced slope slide judges (the buffer runs down all the same).
     pub(super) fn pre_input_jump_judges(&self) -> bool {
@@ -70,8 +76,17 @@ impl Player {
         true
     }
 
-    /// Choose the `Slope` nerve and run `PlayerStateSlope::appear`.
+    /// Choose the `Slope` nerve. The nerve machine starts the state in the same update that
+    /// chose it, after the choosing nerve has run: `PlayerStateSlope::appear` takes the velocity
+    /// the old state left, and the step's collision already moves the body by the velocity it
+    /// sets. The first `exeSlide` comes with the next step.
     pub(super) fn start_slope_slide(&mut self) {
+        self.slope_slide_appear();
+        self.go(Move::SlopeSlide, "Slide");
+    }
+
+    /// `PlayerStateSlope::appear`.
+    fn slope_slide_appear(&mut self) {
         let mut velocity = self.units_per_frame();
         let mut state = SlopeSlide {
             control: self.slide_control_setup(),
@@ -88,7 +103,6 @@ impl Player {
         }
         self.v = lib::limit_length(velocity, t::SLOPE_SLIDE_MAX);
         self.slide = state;
-        self.go(Move::SlopeSlide, "Slide");
     }
 
     /// The velocity along the way down only (zero where there is none).

@@ -57,12 +57,6 @@ impl Player {
         }
         // The whole squat state keeps the mini form (the actor's nerve is
         // `Squat` through its stand-up, whose clip is `SquatEnd`).
-        if std::env::var("PJV_EXP").as_deref() == Ok("A")
-            && self.mode == Move::SlopeSlide
-            && self.slide.steps == 0
-        {
-            return Form::Normal;
-        }
         let standing_up = self.mode == Move::Idle && self.clip() == "SquatEnd";
         if standing_up
             || matches!(
@@ -177,17 +171,6 @@ impl Player {
                 .collide_tilted(mesh, start, velocity, yaw, self.pose_read_back());
         if holding {
             self.catch_collider_at = Some(outcome.pos);
-        }
-        if std::env::var("PJV_DBG").is_ok() {
-            let c = &self.collider;
-            eprintln!(
-                "  collide {:?}: start {:?} vel {:?} -> {:?} collided {} floor {:?} wall {:?} ceil {:?} gn {:?}",
-                self.mode, start, velocity, outcome.pos, outcome.collided,
-                c.floor.as_ref().map(|f| (f.triangle, f.normal)),
-                c.wall.as_ref().map(|f| (f.triangle, f.normal)),
-                c.ceiling.as_ref().map(|f| f.triangle),
-                c.ground_normal
-            );
         }
         // The plain end of the move keeps the controller's own arithmetic;
         // only what the contacts changed is taken from the collider.

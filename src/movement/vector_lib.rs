@@ -291,13 +291,9 @@ mod tests {
 
     #[test]
     fn a_turn_by_cosine_stops_short_of_the_target() {
-        let (out, reached) = turn_vec_to_vec_cos_on_plane(
-            Vec3::Z,
-            Vec3::X,
-            Vec3::Y,
-            15.0f32.to_radians().cos(),
-        )
-        .unwrap();
+        let (out, reached) =
+            turn_vec_to_vec_cos_on_plane(Vec3::Z, Vec3::X, Vec3::Y, 15.0f32.to_radians().cos())
+                .unwrap();
         assert!(!reached);
         assert!((calc_angle_degree(out, Vec3::Z) - 15.).abs() < 1.0e-3);
         let (done, reached) =

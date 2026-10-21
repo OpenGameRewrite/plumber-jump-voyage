@@ -117,7 +117,11 @@ impl Player {
     /// floor code is `Slide`.
     pub(super) fn on_ground_force_slide_code(&self, velocity: Vec3) -> bool {
         self.is_on_ground_by(velocity)
-            && self.touched.floor.as_ref().is_some_and(|f| f.floor == "Slide")
+            && self
+                .touched
+                .floor
+                .as_ref()
+                .is_some_and(|f| f.floor == "Slide")
             && !self.ground_within(t::SLOPE_SLIDE_ANGLE_END)
     }
 
@@ -163,13 +167,18 @@ impl Player {
             );
             let sum = lib::limit_length(sum, p.max_speed);
             let pull = GRAVITY_MOVE;
-            Vec3::new(sum.x - pull * up.x, sum.y - pull * up.y, sum.z - pull * up.z)
+            Vec3::new(
+                sum.x - pull * up.x,
+                sum.y - pull * up.y,
+                sum.z - pull * up.z,
+            )
         } else {
             // Leaving the ground: the velocity of the slope's plane turns onto the horizontal
             // plane and the part along the old normal goes on along the new one.
             control.ground_normal = up;
             let previous_up_speed = pose_math::dot(previous_normal, velocity);
-            let mut turned = along_vector_normal_h(velocity, previous_normal, control.ground_normal);
+            let mut turned =
+                along_vector_normal_h(velocity, previous_normal, control.ground_normal);
             turned = Vec3::new(
                 previous_up_speed * control.ground_normal.x + turned.x,
                 previous_up_speed * control.ground_normal.y + turned.y,
@@ -194,12 +203,9 @@ impl Player {
         let pose = self.actor_pose();
         let flat_front = lib::verticalize_vec(up, pose.front());
         let mut front = pose_math::try_normalize_or_zero(flat_front).0;
-        if let Some((turned, _)) = lib::turn_vec_to_vec_cos_on_plane(
-            front,
-            heading,
-            up,
-            lib::cos_of_degrees(turn_degree),
-        ) {
+        if let Some((turned, _)) =
+            lib::turn_vec_to_vec_cos_on_plane(front, heading, up, lib::cos_of_degrees(turn_degree))
+        {
             front = turned;
         }
         let stored = pose.slerp_up_front(up, front, t::SLERP_QUAT_RATE, t::HILL_POSE_DEGREE_MAX);
@@ -235,7 +241,8 @@ impl Player {
         p: &SlideParams,
     ) -> (Vec3, Vec3) {
         let dir_slide = control.dir_slide;
-        let (mut vel_dir_slide, mut vel_side) = lib::separate_parallel_vertical(dir_slide, velocity);
+        let (mut vel_dir_slide, mut vel_side) =
+            lib::separate_parallel_vertical(dir_slide, velocity);
         let move_input = self.plane_stick(up);
         let speed_dir_slide = pose_math::dot(vel_dir_slide, dir_slide);
         if speed_dir_slide < 0. {
