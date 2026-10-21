@@ -151,8 +151,8 @@ impl Player {
         let finder = self.water_finder;
         if self.swim.steps as i32 <= k::JUMP_HIP_DROP_PERMIT_END_FRAME && o.jump {
             if finder.found && finder.distance <= k::SURFACE_ENABLE_JUMP_HEIGHT {
-                // (Jumping out of shallow water from the hip drop's landing is not ported.)
-                self.set_swim_nerve(SwimNerve::Move);
+                self.swim.surface_hold = 0;
+                return Some(SwimEnd::JumpHipDrop);
             } else {
                 self.set_swim_nerve(SwimNerve::HipDropJump);
             }
@@ -251,6 +251,99 @@ impl Player {
         }
         None
     }
+}
+
+impl Player {
+    /// `PlayerStateSwim::exeSwimDive`: the dive of a hip drop that fell into the water; the
+    /// speed it came with is held to `SwimDiveStartSpeed`.
+    pub(super) fn exe_swim_dive(&mut self, first: bool, o: &Orders, _scene: &Course) -> Option<SwimEnd> {
+        if first {
+            self.swim_anim("SwimDive");
+            self.v = limit_velocity_dir(self.v, GRAVITY, k::DIVE_START_SPEED);
+        }
+        self.swim_down_fall(first, o);
+        None
+    }
+
+    /// `PlayerStateSwim::exeSwimFallIn`: the first steps in the water after a fast fall. The
+    /// fall speed is held to `SwimFallInSpeed`, then braked until it is slow enough for the
+    /// swim's own rules to take over.
+    pub(super) fn exe_swim_fall_in(
+        &mut self,
+        first: bool,
+        o: &Orders,
+        _scene: &Course,
+    ) -> Option<SwimEnd> {
+        if first {
+            self.swim_anim("SwimFallIn");
+            self.v = limit_velocity_dir(self.v, GRAVITY, k::FALL_IN_SPEED);
+        }
+        self.swim.ground_normal = self.ground_normal_or_up();
+        let falling = -(-pose_math::dot(self.v, GRAVITY));
+        let slow = if k::FALL_SPEED_MAX > falling {
+            self.move_dive_swim(k::FALL_IN_BRAKE_H, 1., 0.);
+            lib::add_vector_limit(
+                &mut self.v,
+                Vec3::new(
+                    GRAVITY.x * k::GRAVITY,
+                    GRAVITY.y * k::GRAVITY,
+                    GRAVITY.z * k::GRAVITY,
+                ),
+                k::FALL_SPEED_MAX,
+            );
+            true
+        } else {
+            self.move_dive_swim(k::FALL_IN_BRAKE_H, k::FALL_IN_BRAKE_V, 0.);
+            k::FALL_SPEED_MAX > pose_math::dot(self.v, GRAVITY)
+        };
+        self.swim_turn(1.);
+        if !slow {
+            return None;
+        }
+        let finder = self.water_finder;
+        if self.is_move() && finder.found {
+            self.swim.surface_hold = k::FALL_IN_FORCE_SURFACE_FRAME;
+            self.set_swim_nerve(SwimNerve::Surface);
+            return None;
+        }
+        if self.is_on_ground_by(self.v) {
+            if self.is_move() {
+                self.swim_walk_velocity();
+                self.set_swim_nerve(SwimNerve::Walk);
+            } else {
+                self.swim_wait_ground(k::GRAVITY, k::FALL_SPEED_MAX, 0., 0.);
+                self.set_swim_nerve(SwimNerve::Land);
+            }
+            return None;
+        }
+        if finder.found && finder.distance < k::SURFACE_START_DIST {
+            if self.start_swim_jump_judged(o) {
+                self.swim.surface_hold = 0;
+                return Some(SwimEnd::Jump);
+            }
+            return None;
+        }
+        if o.jump {
+            self.set_swim_nerve(SwimNerve::Paddle);
+            return None;
+        }
+        // The hit reaction of falling in (the effects and sounds it raises are not ported).
+        self.set_swim_nerve(SwimNerve::Move);
+        None
+    }
+}
+
+/// `al::limitVelocityDir`: the part of the velocity along `dir` is held to `limit`.
+fn limit_velocity_dir(velocity: Vec3, dir: Vec3, limit: f32) -> Vec3 {
+    let (mut along, across) = lib::separate_parallel_vertical(dir, velocity);
+    if pose_math::squared_length(along) > limit * limit {
+        let length = lib::length(along);
+        if length > 0. {
+            let scale = limit / length;
+            along = Vec3::new(along.x * scale, along.y * scale, along.z * scale);
+        }
+    }
+    Vec3::new(along.x + across.x, along.y + across.y, along.z + across.z)
 }
 
 /// `al::converge(f32 value, target, step)`.

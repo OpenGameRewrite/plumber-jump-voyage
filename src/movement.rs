@@ -3381,16 +3381,7 @@ impl Player {
             return;
         }
         if self.mode == Move::PoundLand && self.pound_jump_permitted() {
-            self.jump_with(
-                Move::PoundJump,
-                "JumpHipDrop",
-                t::HIP_DROP_JUMP_POWER,
-                t::JUMP_GRAVITY,
-                |p| {
-                    p.set_h(Vec3::ZERO);
-                    p.jump_extend = false;
-                },
-            );
+            self.start_pound_jump();
             return;
         }
         if self.catch_window > 0 {
@@ -3410,6 +3401,20 @@ impl Player {
             return;
         }
         self.start_standard_jump();
+    }
+    /// The jump out of a hip drop's landing (the jump request 17, whether the landing was on
+    /// the ground or in the water): `HipDropJumpPower`, no extension, no horizontal speed.
+    fn start_pound_jump(&mut self) {
+        self.jump_with(
+            Move::PoundJump,
+            "JumpHipDrop",
+            t::HIP_DROP_JUMP_POWER,
+            t::JUMP_GRAVITY,
+            |p| {
+                p.set_h(Vec3::ZERO);
+                p.jump_extend = false;
+            },
+        );
     }
     fn side_somersault(&mut self) {
         // The direction is the request's, taken from the stick as the jump is

@@ -51,6 +51,10 @@ pub(super) enum SwimNerve {
     HipDropLand,
     /// The jump up from the bottom.
     HipDropJump,
+    /// The first steps after a fast fall into the water.
+    FallIn,
+    /// The dive of a hip drop that fell into the water.
+    Dive,
 }
 impl SwimNerve {
     /// The name `<actor nerve>/<state nerve>` the probe logs.
@@ -65,6 +69,8 @@ impl SwimNerve {
             Self::HipDropLoop => "Swim/SwimHipDropLoop",
             Self::HipDropLand => "Swim/SwimHipDropLand",
             Self::HipDropJump => "Swim/SwimHipDropJump",
+            Self::FallIn => "Swim/SwimFallIn",
+            Self::Dive => "Swim/SwimDive",
         }
     }
 }
@@ -76,6 +82,9 @@ pub(super) enum SwimEnd {
     Jump,
     /// The jump out of the water at the end of the jump from the bottom (`EndSwimJumpPop`).
     JumpPop,
+    /// The jump out of the water from a hip drop's landing near the surface
+    /// (`EndSwimJumpHipDrop`).
+    JumpHipDrop,
 }
 
 /// What `PlayerStateSwim` keeps.
@@ -96,7 +105,7 @@ pub(super) struct Swim {
     /// The counter that fades the surface spring in and out (`this+0xf4`).
     pub damper: i32,
     /// Keeps the surface nerve from letting go (`this+0xfc`).
-    surface_hold: i32,
+    pub surface_hold: i32,
     /// A jump from the surface is refused while this runs (`this+0x100`).
     jump_invalid: i32,
     /// `SwimMove`'s timer of the "moving" clip (`this+0xac`).
@@ -117,6 +126,9 @@ pub(super) struct Swim {
     /// `PlayerJudgeOutInWater`: the player took off in the water (or was in it) and has neither
     /// left it nor started to fall since; the jump nerve's water judge waits for that.
     pub(super) out_in_inside: bool,
+    /// The water was entered by a hip drop (`EActionTrigger 19`, set by the actor's hip drop
+    /// nerve): `appear` picks the dive.
+    entered_by_hip_drop: bool,
     /// The body's turn.
     pub turn: TurnControl,
 }
@@ -142,6 +154,7 @@ impl Default for Swim {
             paddle_rate: 1.,
             paddle_restart: false,
             out_in_inside: true,
+            entered_by_hip_drop: false,
             turn: TurnControl::swim(),
         }
     }
@@ -175,10 +188,12 @@ impl Player {
         if !finder.found || finder.distance < 0. {
             return false;
         }
-        let ground = if self.ground_height > 0. {
-            self.ground_height
-        } else {
+        // `PlayerColliderHakoniwa::updateHeightCheck` reports no height at all (zero) for a
+        // collider that touches ground; otherwise the distance down to the floor.
+        let ground = if self.is_collided_ground() || self.ground_height <= 0. {
             0.
+        } else {
+            self.ground_height
         };
         finder.distance + ground < height
     }
@@ -235,6 +250,10 @@ impl Player {
             self.events.push(Fx::Quenched);
         }
         self.events.push(Fx::Splash);
+        // `PlayerStateHipDrop::isEnableInWater`: from its fall on (not the wind-up) the hip drop
+        // sets the dive trigger.
+        self.swim.entered_by_hip_drop = matches!(self.mode, Move::PoundLand)
+            || self.mode == Move::GroundPound && self.clip() != "HipDropStart";
         self.start_swim(scene);
     }
 
@@ -283,6 +302,24 @@ impl Player {
         // The velocity is laid on the plane of the ground normal: the stroke keeps the speed
         // the player came with (at most `SwimSurfaceSpeedMaxH` less a quarter on the ground),
         // and the vertical part is held between the fall and the rise limits.
+        if std::mem::take(&mut self.swim.entered_by_hip_drop) {
+            self.set_swim_nerve(SwimNerve::Dive);
+            return;
+        }
+        // A fast fall into water near the surface (not the dive or the head slide, which
+        // are not ported) is the fall-in: only the vertical speed is kept without a stick.
+        let finder = self.water_finder;
+        if !self.is_on_ground_by(self.v)
+            && finder.found
+            && finder.distance < k::SURFACE_START_DIST
+            && pose_math::dot(self.v, GRAVITY) > k::FALL_IN_SPEED
+        {
+            if !self.is_move() {
+                self.v = lib::parallelize_vec(GRAVITY, self.v);
+            }
+            self.set_swim_nerve(SwimNerve::FallIn);
+            return;
+        }
         let (vertical, mut horizontal) =
             lib::separate_parallel_vertical(self.swim.ground_normal, self.v);
         if self.is_move() {
@@ -349,6 +386,10 @@ impl Player {
             self.start_swim_pop_jump();
             return;
         }
+        if let Some(SwimEnd::JumpHipDrop) = ended {
+            self.start_pound_jump();
+            return;
+        }
         // Still swimming: the actor asks whether the water is still deep enough.
         if !self.is_in_water(scene, SWIM_JUDGE) {
             self.leave_swim(o);
@@ -402,6 +443,8 @@ impl Player {
             SwimNerve::HipDropLoop => self.exe_swim_hip_drop_loop(first, o, scene),
             SwimNerve::HipDropLand => self.exe_swim_hip_drop_land(first, o, scene),
             SwimNerve::HipDropJump => self.exe_swim_hip_drop_jump(first, o, scene),
+            SwimNerve::FallIn => self.exe_swim_fall_in(first, o, scene),
+            SwimNerve::Dive => self.exe_swim_dive(first, o, scene),
         };
         if end.is_some() {
             return end;
@@ -427,7 +470,7 @@ impl Player {
 
     /// `PlayerJudgeStartSwimJump::judge`: a jump button just pressed or pre-input, with the
     /// surface close enough above the root.
-    fn start_swim_jump_judged(&self, o: &Orders) -> bool {
+    pub(super) fn start_swim_jump_judged(&self, o: &Orders) -> bool {
         let pressed = o.jump || self.swim.start_jump >= 1;
         pressed
             && self.water_finder.found

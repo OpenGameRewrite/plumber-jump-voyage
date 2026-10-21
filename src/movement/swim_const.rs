@@ -117,3 +117,10 @@ pub const WALK_ANIM_SPEED_MIN: f32 = 1.;
 pub const WALK_ANIM_SPEED_MAX: f32 = 6.5;
 pub const WALK_ANIM_FRAME_RATE_MIN: f32 = 0.5;
 pub const WALK_ANIM_FRAME_RATE_MAX: f32 = 1.75;
+
+/// The fall into the water (`SwimFallIn*`): the speed it is entered at most, the brakes
+/// (horizontal, vertical) and the steps the surface nerve is held for after it.
+pub const FALL_IN_SPEED: f32 = 15.;
+pub const FALL_IN_BRAKE_H: f32 = 0.95;
+pub const FALL_IN_BRAKE_V: f32 = 0.91;
+pub const FALL_IN_FORCE_SURFACE_FRAME: i32 = 10;
