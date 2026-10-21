@@ -81,6 +81,14 @@ impl Nerve {
         self.deferred = true;
         self.renewed = renew;
     }
+    /// A state chosen whose own code starts its clip and does its first-step work (the swim's
+    /// nerves decide that themselves): the choice alone counts.
+    pub fn choose_silently(&mut self, renew: bool) {
+        self.clip = None;
+        self.work = None;
+        self.deferred = true;
+        self.renewed = renew;
+    }
     /// Queue a clip and first-step work without leaving the running nerve.
     pub fn queue(
         &mut self,

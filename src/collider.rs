@@ -1216,6 +1216,11 @@ impl PlayerCollider {
     }
 
     /// `PlayerColliderHakoniwa::changeCollisionNormal` / `changeCollisionMini`.
+    /// `rs::getCollidedGroundPos`: the average of the ground arrows' contact points (the
+    /// floor contact's own point when no arrow average exists).
+    pub fn ground_position(&self) -> Vec3 {
+        self.ground_position
+    }
     pub fn set_form(&mut self, form: Form) {
         if form != self.form {
             self.form = form;

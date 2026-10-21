@@ -38,12 +38,21 @@ fn to_cm(metres: Vec3) -> Vec3 {
 
 /// A position in metres as the replay-relative centimetres, rounded to nothing but the
 /// conversion itself (a stage's collider snaps it to the game's own grid afterwards).
-fn to_cm_exact(metres: Vec3) -> Vec3 {
+pub(super) fn to_cm_exact(metres: Vec3) -> Vec3 {
     let cm = |m: f32| (f64::from(m) * 100.) as f32;
     Vec3::new(cm(metres.x), cm(metres.y), cm(metres.z))
 }
 
 impl Player {
+    /// The body's position in centimetres relative to the replay's start, as the collider holds
+    /// it (the metres of `pos` cannot keep every digit of a stage-sized position).
+    pub(super) fn position_cm(&self) -> Vec3 {
+        match self.collider_end {
+            Some((metres, centimetres)) if metres == self.pos => centimetres,
+            _ => to_cm_exact(self.pos),
+        }
+    }
+
     /// The collision form `PlayerFormSensorCollisionArranger::syncForm` picks
     /// for the actor's nerve: the mini one for the squat, the slope slide and
     /// the roll, the hanging one while a ledge is held, the normal one

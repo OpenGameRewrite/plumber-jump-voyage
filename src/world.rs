@@ -541,7 +541,9 @@ fn setup(
         false,
         false,
     );
-    course.water = Some((Vec3::new(9., 0., 25.), Vec3::new(6., 4., 5.)));
+    // (The pool's water in centimetres: centre, half sizes, surface height and depth.)
+    course.water =
+        crate::water::WaterAreas::demo_box(900., 2500., 600., 500., 0., 400.);
     // A lava plate: touching it burns, as hot ground does in the original.
     let lava = materials.add(StandardMaterial {
         base_color: Color::srgb(0.95, 0.32, 0.05),
@@ -1081,7 +1083,7 @@ fn camera(
     let settled = p.grounded
         || matches!(
             p.mode,
-            Move::Ledge | Move::Pole | Move::Swim | Move::SwimDash | Move::WallSlide
+            Move::Ledge | Move::Pole | Move::Swim | Move::WallSlide
         );
     let target = if settled || p.pos.y < orbit.anchor - 0.3 {
         p.pos.y

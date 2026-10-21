@@ -199,8 +199,8 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
         // The footfall, its material variant and the clothes' rustle.
         Fx::Step { left } => match (context.mode, left) {
             (Move::Crawl, _) => vec![],
-            (Move::Swim | Move::SwimDash, true) => vec![Cue::Play("SwimRunL")],
-            (Move::Swim | Move::SwimDash, false) => vec![Cue::Play("SwimRunR")],
+            (Move::Swim, true) => vec![Cue::Play("SwimRunL")],
+            (Move::Swim, false) => vec![Cue::Play("SwimRunR")],
             (_, true) => vec![
                 Cue::Rated("RunL"),
                 Cue::Rated("RunMatL"),

@@ -88,7 +88,7 @@ pub fn rate01(value: f32, from: f32, to: f32) -> f32 {
     }
     ((value - from) / span).clamp(0., 1.)
 }
-fn ease_in(x: f32) -> f32 {
+pub fn ease_in(x: f32) -> f32 {
     (-0.5 * x + 1.5) * x * x
 }
 fn ease_out(x: f32) -> f32 {
@@ -186,6 +186,18 @@ impl Default for TurnTuning {
     }
 }
 
+/// The arguments of `PlayerActionTurnControl::setup`.
+#[derive(Clone, Copy, Debug)]
+pub struct TurnSetup {
+    pub min_degrees: f32,
+    pub fast_degrees: f32,
+    pub accel_frames: i32,
+    pub accel_frames_fast: i32,
+    pub brake_frames: i32,
+    pub limit: f32,
+    pub fast_limit: f32,
+}
+
 /// The turn controller: how fast the facing swings toward the stick.
 #[derive(Clone, Debug, Default)]
 pub struct TurnControl {
@@ -226,6 +238,32 @@ impl TurnControl {
             fast_limit: CRAWL_TURN_DEGREES,
             ..Self::default()
         }
+    }
+    /// The controller the swim state keeps (`PlayerStateSwim`'s constructor): forced like the
+    /// crawl's (it keeps turning when the stick pulls the opposite way). Every step sets it up
+    /// anew with [`Self::setup`].
+    pub fn swim() -> Self {
+        Self {
+            tuning: TurnTuning {
+                forced: true,
+                ..TurnTuning::default()
+            },
+            ..Self::default()
+        }
+    }
+    /// `PlayerActionTurnControl::setup`: the angles and ramps of the turn, the turn rate it may
+    /// reach and the one it may reach for a quick turn.
+    pub fn setup(&mut self, setup: TurnSetup) {
+        self.tuning = TurnTuning {
+            min_degrees: setup.min_degrees,
+            fast_degrees: setup.fast_degrees,
+            accel_frames: setup.accel_frames,
+            accel_frames_fast: setup.accel_frames_fast,
+            brake_frames: setup.brake_frames,
+            forced: self.tuning.forced,
+        };
+        self.limit = setup.limit;
+        self.fast_limit = setup.fast_limit;
     }
     pub fn reset(&mut self) {
         self.rate = 0.;

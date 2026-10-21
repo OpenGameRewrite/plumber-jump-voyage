@@ -268,10 +268,6 @@ impl WaterAreas {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.areas.is_empty()
-    }
-
     /// `al::AreaObjGroup::getInVolumeAreaObj`.
     pub fn volume_at(&self, p: Vec3) -> Option<&Area> {
         let mut best: Option<&Area> = None;

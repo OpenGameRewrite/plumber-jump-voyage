@@ -232,7 +232,6 @@ impl Player {
             Move::GroundPound
             | Move::PoundLand
             | Move::Swim
-            | Move::SwimDash
             | Move::SlopeSlide
             | Move::BurnJump
             | Move::BurnBounce

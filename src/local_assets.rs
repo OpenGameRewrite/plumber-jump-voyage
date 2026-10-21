@@ -254,6 +254,8 @@ pub fn skeleton_clip(action: &str) -> &str {
     match action {
         "StartSpinJumpL" | "RestartSpinJumpL" => "SpinJumpL",
         "StartSpinJumpR" | "RestartSpinJumpR" => "SpinJumpR",
+        // The action table's swim clip names; the skeleton file has the surface swim as one clip.
+        "SwimSurfaceNormal" | "SwimSurfaceCarry" => "SwimSurface",
         other => other,
     }
 }
@@ -335,7 +337,9 @@ pub fn looping(name: &str) -> bool {
             | "PoleTurn"
             | "PoleHandStandWait"
             | "PoleHandStandTurn"
-            | "SwimWait"
+            | "SwimStandSurface"
+            | "SwimSurfaceNormal"
+            | "SwimStandWait"
             | "SwimWalk"
             | "SpinJumpLoop"
             | "Slide"

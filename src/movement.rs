@@ -235,16 +235,6 @@ mod t {
     pub const SPIN_BRAKE_FRAMES: u32 = 15;
     pub const SPIN_BRAKE_RATE: f32 = 0.95;
 
-    pub const SWIM_GRAVITY: f32 = 0.25;
-    pub const SWIM_FALL_MAX: f32 = 6.5;
-    pub const SWIM_RISE_POWER: f32 = 0.6;
-    pub const SWIM_RISE_MAX: f32 = 7.5;
-    pub const SWIM_RISE_FRAMES: u32 = 10;
-    pub const SWIM_ACCEL_H: f32 = 0.25;
-    pub const SWIM_SPEED_MAX_H: f32 = 7.5;
-    pub const SWIM_BRAKE_H: f32 = 0.975;
-    pub const SWIM_DIVE_SPEED: f32 = 26.5;
-    pub const SWIM_DIVE_BRAKE: f32 = 0.875;
 }
 
 #[path = "movement/ground.rs"]
@@ -275,6 +265,12 @@ mod sounds;
 mod spin;
 #[path = "movement/squat.rs"]
 mod squat;
+#[path = "movement/swim.rs"]
+mod swim;
+#[path = "movement/swim_const.rs"]
+mod swim_const;
+#[path = "movement/swim_move.rs"]
+mod swim_move;
 #[path = "movement/terrain.rs"]
 mod terrain;
 #[path = "movement/vector_lib.rs"]
@@ -417,6 +413,11 @@ pub mod clip {
             "StartSpinJumpL" | "StartSpinJumpR" | "RestartSpinJumpL" | "RestartSpinJumpR" => {
                 Some(8.)
             }
+            // The swim clips (recorded `anim_len`).
+            "SwimStandSurface" => Some(46.),
+            "SwimSurfaceNormal" => Some(38.),
+            "SwimStandWait" => Some(140.),
+            "SwimWalk" => Some(68.),
             _ => None,
         }
     }
@@ -429,9 +430,13 @@ pub mod clip {
             // The pole's turning clips show their length for a row (50, then 1;
             // 23, then 1) before they wrap.
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
+            // The swim's loops show their length for a row (38, then 1).
+            "SwimStandSurface" | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" => 1.,
             _ => 0.,
         }
     }
+    /// The swim's clips (recorded `anim_len`).
+    pub const SWIM_STAND: u32 = 32;
     pub const LAND: u32 = 26;
     /// The landing after a long fall (`PlayerStateWait`'s `LandStiffen` nerve).
     pub const LAND_STIFFEN: u32 = 120;
@@ -484,14 +489,13 @@ pub enum Move {
     Ledge,
     Pole,
     Swim,
-    SwimDash,
     CapBounce,
     CatchJump,
     Throw,
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 38] = [
+    pub const ALL: [Move; 37] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -526,7 +530,6 @@ impl Move {
         Self::Ledge,
         Self::Pole,
         Self::Swim,
-        Self::SwimDash,
         Self::CapBounce,
         Self::CatchJump,
         Self::Throw,
@@ -564,7 +567,6 @@ impl Move {
             Self::Ledge => "Ledge hang",
             Self::Pole => "Pole climb",
             Self::Swim => "Swim",
-            Self::SwimDash => "Swim dash",
             Self::CapBounce => "Cap jump",
             Self::CatchJump => "Catch jump",
             Self::Throw => "Cap throw",
@@ -1018,7 +1020,9 @@ pub struct Player {
     /// Burn leap: horizontal direction its air control works along.
     /// Burn leap frames left without gravity.
     /// Fire run frames since the stick was released, capped at the brake time.
-    swim_rise: u32,
+    /// The swim state (`PlayerStateSwim`) and the player's water surface finder.
+    swim: swim::Swim,
+    water_finder: crate::water::SurfaceFinder,
     step_phase: f32,
     /// Fall speed the ground stopped in the latest step (zero when it did not
     /// land), kept for the trace: the original still reports it that frame.
@@ -1176,7 +1180,8 @@ impl Default for Player {
             fall_after_ledge: None,
             sub_restarted: false,
             interpolation_cleared: false,
-            swim_rise: 0,
+            swim: swim::Swim::default(),
+            water_finder: crate::water::SurfaceFinder::default(),
             step_phase: 0.,
             landing_speed: 0.,
             touchdown_speed: 0.,
@@ -1307,7 +1312,8 @@ pub struct Pole {
 pub struct Course {
     pub solids: Vec<Solid>,
     pub poles: Vec<Pole>,
-    pub water: Option<(Vec3, Vec3)>,
+    /// The toy course's pool (a stage's own `WaterArea`s come with its collision mesh).
+    pub water: crate::water::WaterAreas,
     /// Hot surfaces (lava): centre of the top face and half extents.
     pub hot: Vec<(Vec3, Vec3)>,
     /// Shallow water to stand in: centre of the surface and half extents.
@@ -1353,10 +1359,26 @@ impl Course {
             })
             .clone()
     }
+    /// The water areas the player swims in: the stage's own (`WaterArea` placements) or the toy
+    /// course's pool.
+    pub fn water_areas(&self) -> &crate::water::WaterAreas {
+        match &self.mesh {
+            Some(mesh) => &mesh.water,
+            None => &self.water,
+        }
+    }
+    /// A replay-relative position in centimetres in the frame the water areas are placed in
+    /// (a stage's own coordinates; the toy pool lives in the replay's).
+    pub fn in_water_frame(&self, relative_cm: Vec3) -> Vec3 {
+        match &self.mesh {
+            Some(mesh) => mesh.to_game_vec(relative_cm),
+            None => relative_cm,
+        }
+    }
+    /// `al::isInWaterPos` for a position in metres.
     pub fn wet(&self, pos: Vec3) -> bool {
-        self.water.is_some_and(|(c, h)| {
-            (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && pos.y < c.y
-        })
+        self.water_areas()
+            .is_water(self.in_water_frame(pos / UNIT))
     }
     /// Standing on a hot surface.
     pub fn hot(&self, pos: Vec3) -> bool {
@@ -2044,18 +2066,15 @@ impl Player {
         if self.mode == Move::Pole {
             return crate::game_names::known(self.pole_nerve().name());
         }
+        if self.mode == Move::Swim {
+            return crate::game_names::known(self.swim.nerve.name());
+        }
         crate::game_names::nerve(self.mode, self.clip())
     }
     /// The actor nerve of that state (the part before the sub-state).
     fn actor_name(&self) -> &'static str {
         let name = self.nerve_name().name;
         name.split('/').next().unwrap_or(name)
-    }
-    /// Ask for a clip unless the state is already playing or about to play it.
-    fn keep(&mut self, name: &'static str) {
-        if self.clip() != name {
-            self.play(name);
-        }
     }
     /// The clip has played to its last frame (`isAnimEnd`): its frame count is
     /// reached, which the row shows one frame before the state reacts.
@@ -2252,10 +2271,12 @@ impl Player {
             self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
             self.judge_wall_keep(scene);
+            self.judge_in_water(scene);
         }
         self.finish_catch();
         let moved = self.v;
         self.collide(&o, scene);
+        self.update_water_finder(scene);
         self.fall.update(
             self.pos.y / UNIT,
             moved.y,
@@ -2289,21 +2310,10 @@ impl Player {
         }
         self.finish_frame(scene);
     }
-    /// Changes of state the surroundings force, decided before the state runs:
-    /// water, the ground reached last step.
-    fn change_from_surroundings(&mut self, scene: &Course, o: &Orders) {
-        let wet = scene.wet(self.pos + Vec3::Y * 0.8);
-        if wet && !matches!(self.mode, Move::Swim | Move::SwimDash) {
-            if self.burning() {
-                self.events.push(Fx::Quenched);
-            }
-            self.events.push(Fx::Splash);
-            self.v *= 0.3;
-            self.nerve.touchdown = false;
-            self.go(Move::Swim, "SwimFallIn");
-        } else if !wet && matches!(self.mode, Move::Swim | Move::SwimDash) {
-            self.go(Move::Fall, "Fall");
-        } else if std::mem::take(&mut self.nerve.touchdown) {
+    /// Changes of state the surroundings force, decided before the state runs: the ground
+    /// reached last step. (Water is asked after the state's own step, see `judge_in_water`.)
+    fn change_from_surroundings(&mut self, _scene: &Course, o: &Orders) {
+        if std::mem::take(&mut self.nerve.touchdown) {
             self.land(o);
         }
     }
@@ -2374,7 +2384,7 @@ impl Player {
             Move::WallSlide => self.wall_slide(o),
             Move::Ledge => self.wall_catch(o, scene),
             Move::Pole => self.pole_climb(o, scene),
-            Move::Swim | Move::SwimDash => self.swim(o),
+            Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
             _ => self.air(o),
         }
@@ -3167,6 +3177,8 @@ impl Player {
         });
     }
     fn leave_ground(&mut self, mode: Move, power: f32, gravity: f32) {
+        // The jump nerve's first step resets its water judge (`PlayerJudgeOutInWater`).
+        self.swim.out_in_inside = true;
         self.v.y = power;
         self.gravity = gravity;
         self.jump_extend = true;
@@ -3732,52 +3744,6 @@ impl Player {
         self.facing = facing;
     }
 
-    // ---- Swimming ---------------------------------------------------------
-    fn swim(&mut self, o: &Orders) {
-        if self.pre_throw > 0 || o.throw_pressed {
-            self.pre_throw = 0;
-            self.change(Move::SwimDash, "SwimDive", |p| {
-                p.set_h(p.facing * t::SWIM_DIVE_SPEED);
-                p.events.push(Fx::SwimStroke);
-            });
-            return;
-        }
-        if self.pre_jump > 0 {
-            self.pre_jump = 0;
-            self.swim_rise = t::SWIM_RISE_FRAMES;
-            self.play("SwimWalk");
-            self.events.push(Fx::SwimStroke);
-        }
-        let mut h = self.v.with_y(0.);
-        if self.mode == Move::SwimDash {
-            h *= t::SWIM_DIVE_BRAKE;
-            if h.length() < t::SWIM_SPEED_MAX_H {
-                self.set(Move::Swim);
-            }
-        } else if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, 0.08);
-            h = (h + self.stick * t::SWIM_ACCEL_H * self.tilt)
-                .clamp_length_max(t::SWIM_SPEED_MAX_H);
-        } else {
-            h *= t::SWIM_BRAKE_H;
-        }
-        self.set_h(h);
-        if self.swim_rise > 0 {
-            self.swim_rise -= 1;
-            self.v.y = (self.v.y + t::SWIM_RISE_POWER * 4.).min(t::SWIM_RISE_MAX);
-        } else if o.crouch {
-            self.v.y = (self.v.y - t::SWIM_GRAVITY * 2.).max(-t::SWIM_FALL_MAX);
-        } else {
-            self.v.y = (self.v.y - t::SWIM_GRAVITY).max(-t::SWIM_FALL_MAX);
-        }
-        if self.mode == Move::Swim && self.anim.name != "SwimWalk" || self.anim.frame > 60. {
-            self.keep(if h.length() > 1. {
-                "SwimWalk"
-            } else {
-                "SwimWait"
-            });
-        }
-    }
     // ---- Cap ---------------------------------------------------------------
     fn throw_kind(&self, o: &Orders) -> Throw {
         if o.up_throw {
@@ -4118,7 +4084,6 @@ impl Player {
         !matches!(
             self.mode,
             Move::Swim
-                | Move::SwimDash
                 | Move::Pole
                 | Move::Ledge
                 | Move::GroundPound

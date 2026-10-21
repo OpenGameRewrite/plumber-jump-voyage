@@ -78,9 +78,8 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::WallJump => known("WallAir/Jump"),
         Move::Ledge => ledge(anim),
         Move::Pole => pole(anim),
-        Move::Swim if anim == "SwimFallIn" => known("Swim/SwimFallIn"),
-        Move::Swim => guessed("Swim/SwimMove"),
-        Move::SwimDash => guessed("Swim/SwimDive"),
+        // The swim state's nerve is the state's own (see `Player::nerve_name`).
+        Move::Swim => known("Swim/SwimMove"),
         Move::Throw if anim.contains("Air") => known("SpinCap/SpinAir"),
         Move::Throw => known("SpinCap/SpinGround"),
     }

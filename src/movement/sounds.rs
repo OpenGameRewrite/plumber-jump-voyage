@@ -18,7 +18,7 @@ impl Player {
             run_start: self.cycle.weights[4],
             speed: self.move_speed,
             vertical_speed: self.units_per_frame().y,
-            swimming: matches!(self.mode, Move::Swim | Move::SwimDash),
+            swimming: self.mode == Move::Swim,
             rolling: ROLLING_CLIPS
                 .contains(&self.anim.name)
                 .then_some(self.anim.frame),

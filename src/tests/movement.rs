@@ -978,11 +978,24 @@ fn wall_slide_and_ledge() {
 
 #[cfg_attr(test, test)]
 fn swimming() {
-    let floor = floor();
-    // Water.
-    let mut water = floor.clone();
-    water.water = Some((Vec3::Y * 5., Vec3::splat(100.)));
-    let mut p = Player::default();
+    // A pool of water, its surface a metre up and ten metres deep, with nothing under it.
+    let pool = Course {
+        water: crate::water::WaterAreas::demo_box(0., 0., 10_000., 10_000., 100., 1000.),
+        ..default()
+    };
+    // Falling in: the water judge puts the player in the swim state, which settles at the
+    // surface (the root floats about 80 under it, `SwimSurfaceBaseHeight`; the spring that
+    // holds it there fades out after 50 idle steps and the swimmer then sinks).
+    let mut p = Player::spawn_at(Vec3::new(0., 3., 0.), Vec3::Z);
+    frames(&mut p, Orders::default(), &pool, 50);
+    assert_eq!(p.mode, Move::Swim);
+    assert_eq!(p.nerve_name().name, "Swim/SwimSurface");
+    assert!(
+        (p.pos.y - (1. - 0.8)).abs() < 0.4,
+        "the root floats at the surface: {}",
+        p.pos.y
+    );
+    // The jump button at the surface jumps out of the water.
     frames(
         &mut p,
         Orders {
@@ -990,10 +1003,10 @@ fn swimming() {
             jump_held: true,
             ..default()
         },
-        &water,
-        3,
+        &pool,
+        1,
     );
-    assert!(matches!(p.mode, Move::Swim | Move::SwimDash));
+    assert_eq!(p.mode, Move::Jump);
 }
 
 #[cfg_attr(test, test)]
@@ -1214,7 +1227,7 @@ fn burn_and_soot() {
     assert_eq!(p.mode, Move::Run, "landing in shallow water ends the burn");
     assert!(p.events.contains(&Fx::Quenched));
     let mut pool = cool.clone();
-    pool.water = Some((Vec3::new(0., 2., 0.), Vec3::new(50., 4., 50.)));
+    pool.water = crate::water::WaterAreas::demo_box(0., 0., 5000., 5000., 200., 400.);
     p = Player::default();
     p.pos = Vec3::ZERO;
     p.step(&Orders::default(), &lava);
@@ -1365,9 +1378,9 @@ macro_rules! scene {
                 vec![]
             },
             water: if $variant == 2 {
-                Some((Vec3::new(0., 2., 0.), Vec3::new(50., 4., 50.)))
+                crate::water::WaterAreas::demo_box(0., 0., 5000., 5000., 200., 400.)
             } else {
-                None
+                default()
             },
             ..default()
         }
@@ -1434,7 +1447,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x239fc4cf9c76ba5d,
+        hash, 0x4077be4aa3bfeec8,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]
