@@ -41,6 +41,7 @@ mod spin_input;
 mod tone;
 mod trace;
 mod ui;
+mod water;
 mod world;
 
 use bevy::{prelude::*, window::WindowResolution};

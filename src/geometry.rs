@@ -103,6 +103,8 @@ pub struct TriangleMesh {
     /// steps are far coarser than the replay's start-relative numbers.
     origin: [f64; 3],
     cells: HashMap<(i32, i32), Vec<u32>>,
+    /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
+    pub water: crate::water::WaterAreas,
 }
 
 /// `N` floats from a JSON array (`None` when absent, short or not numbers).
@@ -186,6 +188,7 @@ impl TriangleMesh {
             objects,
             thickness: PRISM_THICKNESS,
             origin,
+            water: crate::water::WaterAreas::from_export(&root["areas"]),
             ..Self::default()
         };
         // Per object: the part frame of its base matrix (newer exports only).

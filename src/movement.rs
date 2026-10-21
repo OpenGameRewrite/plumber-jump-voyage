@@ -258,7 +258,7 @@ mod pole;
 #[path = "movement/pole_find.rs"]
 mod pole_find;
 #[path = "movement/pose_math.rs"]
-mod pose_math;
+pub(crate) mod pose_math;
 #[path = "movement/rolling.rs"]
 mod rolling;
 #[path = "movement/run_cycle.rs"]
