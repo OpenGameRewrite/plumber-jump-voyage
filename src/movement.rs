@@ -234,7 +234,6 @@ mod t {
     pub const SPIN_AIR_GRAVITY: f32 = 0.3;
     pub const SPIN_BRAKE_FRAMES: u32 = 15;
     pub const SPIN_BRAKE_RATE: f32 = 0.95;
-
 }
 
 #[path = "movement/ground.rs"]
@@ -267,12 +266,12 @@ mod spin;
 mod squat;
 #[path = "movement/swim.rs"]
 mod swim;
+#[path = "movement/swim_const.rs"]
+mod swim_const;
 #[path = "movement/swim_dive.rs"]
 mod swim_dive;
 #[path = "movement/swim_ground.rs"]
 mod swim_ground;
-#[path = "movement/swim_const.rs"]
-mod swim_const;
 #[path = "movement/swim_move.rs"]
 mod swim_move;
 #[path = "movement/terrain.rs"]
@@ -1396,8 +1395,7 @@ impl Course {
     }
     /// `al::isInWaterPos` for a position in metres.
     pub fn wet(&self, pos: Vec3) -> bool {
-        self.water_areas()
-            .is_water(self.in_water_frame(pos / UNIT))
+        self.water_areas().is_water(self.in_water_frame(pos / UNIT))
     }
     /// Standing on a hot surface.
     pub fn hot(&self, pos: Vec3) -> bool {

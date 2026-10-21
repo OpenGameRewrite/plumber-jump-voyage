@@ -84,7 +84,11 @@ impl Area {
         let x = (d.x * m[0] + d.y * m[4]) + d.z * m[8];
         let y = (d.x * m[1] + d.y * m[5]) + d.z * m[9];
         let z = (d.x * m[2] + d.y * m[6]) + d.z * m[10];
-        Some(Vec3::new(x / self.scale.x, y / self.scale.y, z / self.scale.z))
+        Some(Vec3::new(
+            x / self.scale.x,
+            y / self.scale.y,
+            z / self.scale.z,
+        ))
     }
 
     /// `al::AreaShape::calcWorldPos`.
@@ -125,7 +129,12 @@ impl Area {
             Shape::Infinite => true,
             Shape::CubeBase | Shape::CubeCenter | Shape::CubeTop => {
                 let Some(l) = self.local(p) else { return false };
-                !(l.y < bottom || top < l.y || l.x < -500. || 500. < l.x || l.z < -500. || 500. < l.z)
+                !(l.y < bottom
+                    || top < l.y
+                    || l.x < -500.
+                    || 500. < l.x
+                    || l.z < -500.
+                    || 500. < l.z)
             }
             Shape::CylinderBase | Shape::CylinderCenter | Shape::CylinderTop => {
                 let Some(l) = self.local(p) else { return false };
@@ -156,15 +165,11 @@ impl Area {
         let a = self.local(from)?;
         let b = self.local(to)?;
         let d = b - a;
-        let inside = !(a.y < bottom
-            || top < a.y
-            || a.x < -500.
-            || 500. < a.x
-            || a.z > 500.
-            || a.z < -500.);
+        let inside =
+            !(a.y < bottom || top < a.y || a.x < -500. || 500. < a.x || a.z > 500. || a.z < -500.);
         // The point of the segment at `t`, as the executable computes it: start + step * t.
         let at = |t: f32| Vec3::new(d.x * t + a.x, d.y * t + a.y, d.z * t + a.z);
-        let in_range = |t: f32| t >= 0. && t <= 1.;
+        let in_range = |t: f32| (0. ..=1.).contains(&t);
         let in_xz = |h: Vec3| h.x >= -500. && h.x <= 500. && h.z >= -500. && h.z <= 500.;
         let in_yz = |h: Vec3| h.z >= -500. && h.z <= 500. && h.y >= bottom && h.y <= top;
         let in_xy = |h: Vec3| h.x >= -500. && h.x <= 500. && h.y >= bottom && h.y <= top;
@@ -256,7 +261,14 @@ impl WaterAreas {
 
     /// A box of water for the demo course: its surface at `top`, the given extent below it
     /// (`AreaCubeTop`, no rotation), in the replay-relative frame the course lives in.
-    pub fn demo_box(center_x: f32, center_z: f32, half_x: f32, half_z: f32, top: f32, depth: f32) -> Self {
+    pub fn demo_box(
+        center_x: f32,
+        center_z: f32,
+        half_x: f32,
+        half_z: f32,
+        top: f32,
+        depth: f32,
+    ) -> Self {
         Self {
             areas: vec![Area {
                 shape: Shape::CubeTop,

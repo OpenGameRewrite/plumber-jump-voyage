@@ -17,7 +17,11 @@ impl Player {
     /// gravity moves toward zero by at most `step`.
     pub(super) fn move_dive_swim(&mut self, horizontal: f32, vertical: f32, step: f32) {
         let (down, across) = lib::separate_parallel_vertical(GRAVITY, self.v);
-        let across = Vec3::new(across.x * horizontal, across.y * horizontal, across.z * horizontal);
+        let across = Vec3::new(
+            across.x * horizontal,
+            across.y * horizontal,
+            across.z * horizontal,
+        );
         let down = Vec3::new(down.x * vertical, down.y * vertical, down.z * vertical);
         let speed = down.x * GRAVITY.x + down.y * GRAVITY.y + down.z * GRAVITY.z;
         let speed = converge_f32(speed, 0., step);
@@ -256,7 +260,12 @@ impl Player {
 impl Player {
     /// `PlayerStateSwim::exeSwimDive`: the dive of a hip drop that fell into the water; the
     /// speed it came with is held to `SwimDiveStartSpeed`.
-    pub(super) fn exe_swim_dive(&mut self, first: bool, o: &Orders, _scene: &Course) -> Option<SwimEnd> {
+    pub(super) fn exe_swim_dive(
+        &mut self,
+        first: bool,
+        o: &Orders,
+        _scene: &Course,
+    ) -> Option<SwimEnd> {
         if first {
             self.swim_anim("SwimDive");
             self.v = limit_velocity_dir(self.v, GRAVITY, k::DIVE_START_SPEED);

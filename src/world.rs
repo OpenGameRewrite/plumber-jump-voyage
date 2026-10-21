@@ -542,8 +542,7 @@ fn setup(
         false,
     );
     // (The pool's water in centimetres: centre, half sizes, surface height and depth.)
-    course.water =
-        crate::water::WaterAreas::demo_box(900., 2500., 600., 500., 0., 400.);
+    course.water = crate::water::WaterAreas::demo_box(900., 2500., 600., 500., 0., 400.);
     // A lava plate: touching it burns, as hot ground does in the original.
     let lava = materials.add(StandardMaterial {
         base_color: Color::srgb(0.95, 0.32, 0.05),

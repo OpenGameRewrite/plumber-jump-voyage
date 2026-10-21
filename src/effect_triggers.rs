@@ -415,11 +415,10 @@ pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Raised>
         })
         .collect();
     let on_player = |name| Raised { cap: false, name };
-    match fx {
-        Fx::Quenched => raised.push(on_player("SootWash")),
-        // (The reaction "WaterDive" belongs to the dive entries of the swim state, not to the
-        // splash of a plain entry into the water.)
-        _ => {}
+    // (The reaction "WaterDive" belongs to the dive entries of the swim state, not to the
+    // splash of a plain entry into the water.)
+    if let Fx::Quenched = fx {
+        raised.push(on_player("SootWash"));
     }
     raised
 }

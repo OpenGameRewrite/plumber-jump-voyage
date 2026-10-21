@@ -51,7 +51,11 @@ fn scaled(v: Vec3, s: f32) -> Vec3 {
 fn scale_except_direction(dir: Vec3, vec: Vec3, scale: f32) -> Vec3 {
     let along = pose_math::dot(dir, vec);
     let direction = scaled(dir, along);
-    let rest = Vec3::new(vec.x - direction.x, vec.y - direction.y, vec.z - direction.z);
+    let rest = Vec3::new(
+        vec.x - direction.x,
+        vec.y - direction.y,
+        vec.z - direction.z,
+    );
     scale_add(scale, rest, direction)
 }
 
@@ -59,7 +63,11 @@ fn scale_except_direction(dir: Vec3, vec: Vec3, scale: f32) -> Vec3 {
 fn scale_direction(dir: Vec3, vec: Vec3, scale: f32) -> Vec3 {
     let along = pose_math::dot(dir, vec);
     let direction = scaled(dir, along);
-    let rest = Vec3::new(vec.x - direction.x, vec.y - direction.y, vec.z - direction.z);
+    let rest = Vec3::new(
+        vec.x - direction.x,
+        vec.y - direction.y,
+        vec.z - direction.z,
+    );
     let kept = scaled(direction, scale);
     Vec3::new(rest.x + kept.x, rest.y + kept.y, rest.z + kept.z)
 }
@@ -156,8 +164,9 @@ impl Player {
     /// in.
     fn surface_spring(&self, speed: f32, moving: bool) -> f32 {
         let finder = &self.water_finder;
-        let ramp = (self.swim.damper - k::SURFACE_DAMPER_START) as f32 / k::SURFACE_DAMPER_FRAME as f32;
-        let ramp = if ramp < 0. { 0. } else if ramp > 1. { 1. } else { ramp };
+        let ramp =
+            (self.swim.damper - k::SURFACE_DAMPER_START) as f32 / k::SURFACE_DAMPER_FRAME as f32;
+        let ramp = ramp.clamp(0., 1.);
         if !finder.found {
             return speed;
         }
@@ -224,7 +233,11 @@ impl Player {
     /// `rate` scales the turn speed.
     pub(super) fn swim_turn(&mut self, rate: f32) {
         let speed_h = self.swim_speed_h();
-        let by_speed = ease_in(rate01(speed_h, k::ROT_SPEED_CHANGE_START, k::LOW_SPEED_MAX_H));
+        let by_speed = ease_in(rate01(
+            speed_h,
+            k::ROT_SPEED_CHANGE_START,
+            k::LOW_SPEED_MAX_H,
+        ));
         let by_paddle = rate01(
             self.swim.since_paddle as f32,
             0.,
@@ -264,9 +277,13 @@ impl Player {
         let (heading, _) = pose_math::try_normalize_or_zero(horizontal);
         if pose_math::dot(heading, wall_normal) < -0.5 {
             let length = lib::length(horizontal);
-            let mut speed = if length < min_speed { length } else { min_speed };
+            let mut speed = if length < min_speed {
+                length
+            } else {
+                min_speed
+            };
             let scaled_length = length * ratio;
-            if !(scaled_length < speed) {
+            if scaled_length >= speed {
                 speed = scaled_length;
                 if scaled_length > max_speed {
                     speed = max_speed;
@@ -341,9 +358,6 @@ impl Player {
             gravity = k::GRAVITY;
         }
         let vertical = self.swim_vertical(vertical, normal, gravity);
-        if std::env::var("PJV_DBG").is_ok() {
-            eprintln!("DBG under on_ground {on_ground} old {old_normal:?} new {normal:?} h {horizontal:?} v {vertical:?} stick {:?} tilt {} v_in {:?}", self.swim_stick(), self.tilt, self.v);
-        }
         let high = (k::HIGH_ACCEL_PERMIT_FRAME as u32) > self.swim.since_paddle as u32;
         let horizontal = self.swim_horizontal(
             horizontal,

@@ -983,10 +983,10 @@ fn swimming() {
         water: crate::water::WaterAreas::demo_box(0., 0., 10_000., 10_000., 100., 1000.),
         ..default()
     };
-    // Falling in: the water judge puts the player in the swim state, which settles at the
-    // surface (the root floats about 80 under it, `SwimSurfaceBaseHeight`; the spring that
-    // holds it there fades out after 50 idle steps and the swimmer then sinks).
-    let mut p = Player::spawn_at(Vec3::new(0., 3., 0.), Vec3::Z);
+    // Dropping in from just above the water: the judge puts the player in the swim state, which
+    // settles at the surface (the root floats about 80 under it, `SwimSurfaceBaseHeight`; the
+    // spring that holds it there fades out after 50 idle steps and the swimmer then sinks).
+    let mut p = Player::spawn_at(Vec3::new(0., 1.6, 0.), Vec3::Z);
     frames(&mut p, Orders::default(), &pool, 50);
     assert_eq!(p.mode, Move::Swim);
     assert_eq!(p.nerve_name().name, "Swim/SwimSurface");

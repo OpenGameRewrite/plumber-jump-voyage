@@ -142,8 +142,7 @@ impl Pose {
                         name => p.model_frame().unwrap_or_else(|| {
                             // (The model is one rate change ahead of the counter.)
                             let frame = a.frame + p.anim_rate_change();
-                            clip::held_length(name)
-                                .map_or(frame, |length| frame.min(length as f32))
+                            clip::held_length(name).map_or(frame, |length| frame.min(length as f32))
                                 - clip::loop_length(name)
                                     .filter(|length| frame >= *length)
                                     .unwrap_or(0.)

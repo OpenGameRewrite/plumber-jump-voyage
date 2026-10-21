@@ -10,11 +10,11 @@
 //! the update that chose the nerve and picks the first inner nerve), every later update runs
 //! the inner nerve (`exe*`, one step per update, a nerve set by it starts at once and executes
 //! next update) and then the state's `control`.
+use super::ground::TurnControl;
 use super::swim_const as k;
 use super::swim_move::{Stroke, limit_vector_opposite_dir};
 use super::vector_lib as lib;
 use super::*;
-use super::ground::TurnControl;
 
 /// The up axis (`-al::getGravity`) and the gravity.
 const UP: Vec3 = Vec3::Y;
@@ -167,7 +167,9 @@ pub(super) struct InWaterJudge {
     ground_check: bool,
 }
 /// The judge the ground, air and water-bound states of the actor ask (`0x410` in the actor).
-pub(super) const ACTOR_JUDGE: InWaterJudge = InWaterJudge { ground_check: false };
+pub(super) const ACTOR_JUDGE: InWaterJudge = InWaterJudge {
+    ground_check: false,
+};
 /// The judge the swim nerve asks to stay (`0x428`).
 pub(super) const SWIM_JUDGE: InWaterJudge = InWaterJudge { ground_check: true };
 
@@ -334,21 +336,18 @@ impl Player {
                 let length = lib::length(horizontal);
                 if length > 0. {
                     let scale = speed / length;
-                    horizontal =
-                        Vec3::new(scale * horizontal.x, scale * horizontal.y, scale * horizontal.z);
+                    horizontal = Vec3::new(
+                        scale * horizontal.x,
+                        scale * horizontal.y,
+                        scale * horizontal.z,
+                    );
                 }
             }
         } else {
             horizontal = Vec3::ZERO;
         }
         let up_speed = -(GRAVITY.y * vertical.y) - GRAVITY.x * vertical.x - GRAVITY.z * vertical.z;
-        let up_speed = if up_speed < -k::FALL_SPEED_MAX {
-            -k::FALL_SPEED_MAX
-        } else if up_speed > k::RISE_SPEED_MAX {
-            k::RISE_SPEED_MAX
-        } else {
-            up_speed
-        };
+        let up_speed = up_speed.clamp(-k::FALL_SPEED_MAX, k::RISE_SPEED_MAX);
         let lift = Vec3::new(
             GRAVITY.x * -up_speed,
             GRAVITY.y * -up_speed,
@@ -554,8 +553,8 @@ impl Player {
             self.swim.surface_at = if finder.found { finder.position } else { here };
         }
         // The nerve lets go when the surface is out of reach and the hold has run out.
-        let let_go = (!finder.found || finder.distance >= k::SURFACE_END_DIST)
-            && self.swim.surface_hold < 1;
+        let let_go =
+            (!finder.found || finder.distance >= k::SURFACE_END_DIST) && self.swim.surface_hold < 1;
         self.swim_surface_motion(Stroke {
             surface: true,
             ..Stroke::default()

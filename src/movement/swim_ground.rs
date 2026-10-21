@@ -111,7 +111,11 @@ impl Player {
         let ground_normal = self.collided_ground_normal();
         let mut sum = Vec3::ZERO;
         if ground {
-            sum = Vec3::new(sum.x + ground_normal.x, sum.y + ground_normal.y, sum.z + ground_normal.z);
+            sum = Vec3::new(
+                sum.x + ground_normal.x,
+                sum.y + ground_normal.y,
+                sum.z + ground_normal.z,
+            );
         }
         if let Some(n) = wall {
             sum = Vec3::new(sum.x + n.x, sum.y + n.y, sum.z + n.z);
@@ -149,7 +153,11 @@ impl Player {
             // Squeezed between ground and ceiling: the velocity along them goes too.
             self.v = lib::verticalize_vec(normal, self.v);
         }
-        let pull = Vec3::new(-(normal.x * gravity), -(normal.y * gravity), -(normal.z * gravity));
+        let pull = Vec3::new(
+            -(normal.x * gravity),
+            -(normal.y * gravity),
+            -(normal.z * gravity),
+        );
         lib::add_vector_limit(&mut self.v, pull, limit);
         let pose = self.actor_pose().wait_ground(normal, rate, degrees);
         self.set_pose(pose);
@@ -159,13 +167,22 @@ impl Player {
     /// `distance` below the root that is at most 45 degrees from the normal the swimmer had.
     /// Returns the normal, the point to snap to (in the stage's coordinates) and whether
     /// there is one.
-    fn snap_ground_normal(&self, scene: &Course, distance: f32, previous: Vec3) -> (Vec3, Vec3, bool) {
+    fn snap_ground_normal(
+        &self,
+        scene: &Course,
+        distance: f32,
+        previous: Vec3,
+    ) -> (Vec3, Vec3, bool) {
         let here = self.trans_in_stage(scene);
         if self.is_collided_ground() {
             return (self.collided_ground_normal(), here, true);
         }
         if let Some(mesh) = &scene.mesh {
-            let reach = Vec3::new(GRAVITY.x * distance, GRAVITY.y * distance, GRAVITY.z * distance);
+            let reach = Vec3::new(
+                GRAVITY.x * distance,
+                GRAVITY.y * distance,
+                GRAVITY.z * distance,
+            );
             let strikes =
                 arrow_strikes_filtered(mesh, self.position_cm(), reach, FaceFilter::FloorsOnly);
             let nearest = strikes
@@ -196,7 +213,11 @@ impl Player {
     /// `PlayerAnimControlSwimWalk::update`: the clip's rate follows the speed.
     fn swim_walk_anim_rate(&mut self, speed: f32) {
         let t = rate01(speed, k::WALK_ANIM_SPEED_MIN, k::WALK_ANIM_SPEED_MAX);
-        self.set_swim_anim_rate(lerp_value(k::WALK_ANIM_FRAME_RATE_MIN, k::WALK_ANIM_FRAME_RATE_MAX, t));
+        self.set_swim_anim_rate(lerp_value(
+            k::WALK_ANIM_FRAME_RATE_MIN,
+            k::WALK_ANIM_FRAME_RATE_MAX,
+            t,
+        ));
     }
 
     /// `PlayerAnimator::setAnimRate`. A clip that is already running takes the change over
@@ -211,7 +232,12 @@ impl Player {
     // ---- SwimWalk --------------------------------------------------------------------------
 
     /// `PlayerStateSwim::exeSwimWalk`: walking on the bottom.
-    pub(super) fn exe_swim_walk(&mut self, first: bool, o: &Orders, scene: &Course) -> Option<SwimEnd> {
+    pub(super) fn exe_swim_walk(
+        &mut self,
+        first: bool,
+        o: &Orders,
+        scene: &Course,
+    ) -> Option<SwimEnd> {
         if first {
             self.swim_anim("SwimWalk");
             self.swim.air_steps = 0;
@@ -222,19 +248,25 @@ impl Player {
         self.swim.ground_normal = normal;
         let horizontal = along_vector_normal_h(horizontal, old_normal, normal);
         let mut along = pose_math::dot(old_normal, vertical);
-        let gravity;
-        if snapped {
+        let gravity = if snapped {
             along = along.min(0.);
             // The root is held 7 above the ground the arrow found.
             let here = self.trans_in_stage(scene);
             let delta = Vec3::new(snap_at.x - here.x, snap_at.y - here.y, snap_at.z - here.z);
             let rise = delta.x * normal.x + delta.y * normal.y + delta.z * normal.z + -7.;
-            self.move_trans(scene, Vec3::new(normal.x * rise, normal.y * rise, normal.z * rise));
-            gravity = k::GRAVITY_WALK;
+            self.move_trans(
+                scene,
+                Vec3::new(normal.x * rise, normal.y * rise, normal.z * rise),
+            );
+            k::GRAVITY_WALK
         } else {
-            gravity = k::GRAVITY;
-        }
-        let vertical = self.swim_vertical(Vec3::new(normal.x * along, normal.y * along, normal.z * along), normal, gravity);
+            k::GRAVITY
+        };
+        let vertical = self.swim_vertical(
+            Vec3::new(normal.x * along, normal.y * along, normal.z * along),
+            normal,
+            gravity,
+        );
         let high = (k::HIGH_ACCEL_PERMIT_FRAME as u32) > self.swim.since_paddle as u32;
         let horizontal = self.swim_horizontal(
             horizontal,
@@ -292,7 +324,12 @@ impl Player {
     // ---- SwimLand --------------------------------------------------------------------------
 
     /// `PlayerStateSwim::exeSwimLand`: the swimmer touched the bottom and stands.
-    pub(super) fn exe_swim_land(&mut self, first: bool, o: &Orders, _scene: &Course) -> Option<SwimEnd> {
+    pub(super) fn exe_swim_land(
+        &mut self,
+        first: bool,
+        o: &Orders,
+        _scene: &Course,
+    ) -> Option<SwimEnd> {
         if first {
             self.swim_anim("SwimLand");
             self.swim.air_steps = 0;
@@ -330,20 +367,23 @@ impl Player {
 
     /// The paddle clip's rate: faster the sooner the last paddle was (`SwimPaddleAnimRateInterval*`).
     fn paddle_rate(since_paddle: f32) -> f32 {
-        let t = rate01(since_paddle, k::PADDLE_ANIM_RATE_INTERVAL_MIN, k::PADDLE_ANIM_RATE_INTERVAL_MAX);
+        let t = rate01(
+            since_paddle,
+            k::PADDLE_ANIM_RATE_INTERVAL_MIN,
+            k::PADDLE_ANIM_RATE_INTERVAL_MAX,
+        );
         let weight = 1. - t;
-        let weight = if weight < 0. {
-            0.
-        } else if weight > 1. {
-            1.
-        } else {
-            weight
-        };
+        let weight = weight.clamp(0., 1.);
         lerp_value(1., k::PADDLE_ANIM_MAX_RATE, weight)
     }
 
     /// `PlayerStateSwim::exeSwimPaddle`: the stroke that pushes the swimmer up.
-    pub(super) fn exe_swim_paddle(&mut self, first: bool, o: &Orders, _scene: &Course) -> Option<SwimEnd> {
+    pub(super) fn exe_swim_paddle(
+        &mut self,
+        first: bool,
+        o: &Orders,
+        _scene: &Course,
+    ) -> Option<SwimEnd> {
         if first {
             let rate = Self::paddle_rate(self.swim.since_paddle as f32);
             self.swim.since_paddle = 0;
