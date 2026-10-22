@@ -4,6 +4,7 @@
 mod air_move;
 mod asset_contract;
 mod cap;
+mod cap_joint;
 mod collider;
 // The original's effects: their data and trigger rules also serve the headless trace.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
@@ -64,6 +65,7 @@ fn main() {
     if args.iter().any(|a| a == "--self-check") {
         air_move::self_check();
         cap::self_check();
+        cap_joint::self_check();
         geometry::self_check();
         collider::self_check();
         prism::self_check();

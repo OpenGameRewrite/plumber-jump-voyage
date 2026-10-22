@@ -27,7 +27,7 @@ pub const PARALLEL_LIMIT: f32 = 0.01;
 /// `sead::QuatCalcCommon::slerpTo`: a sine under this takes the linear weights.
 const SLERP_LINEAR_SINE: f32 = 1.192_092_9e-7;
 /// The negated gravity (`-al::getGravity`, gravity being (0, -1, 0)), signed zeros included.
-const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
+pub(super) const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
 
 /// The single-precision library functions, correctly rounded (computed in double precision and
 /// rounded once), which is what the console's `sinf`, `cosf`, `acosf` and `atan2f` return for
@@ -359,6 +359,11 @@ impl ActorPose {
     /// `al::calcFrontDir(actor)`.
     pub fn front(&self) -> Vec3 {
         self.axes[2]
+    }
+
+    /// `al::calcSideDir(actor)`.
+    pub fn side(&self) -> Vec3 {
+        self.axes[0]
     }
 
     /// `rs::slerpUpFront(actor, up, front, rate, max_degrees)`: the pose turned toward `up` (at

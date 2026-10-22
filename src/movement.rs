@@ -236,6 +236,8 @@ mod t {
     pub const SPIN_BRAKE_RATE: f32 = 0.95;
 }
 
+#[path = "movement/cap_pose.rs"]
+pub(crate) mod cap_pose;
 #[path = "movement/ground.rs"]
 mod ground;
 #[path = "movement/ledge.rs"]

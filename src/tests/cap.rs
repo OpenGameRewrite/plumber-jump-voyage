@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn run() {
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
+    the_return_after_a_trample_leaves_along_the_cap_pose();
 }
 
 /// The standing throw of the recorded `capthrow` run: the cap appears 150 in
@@ -111,4 +112,63 @@ fn a_wall_at_an_angle_turns_the_cap() {
     assert!(deepest <= 440.01, "reached x = {deepest}");
     // Free flight at 45 degrees ends near z = 480; turned along the wall it goes on.
     assert!(cap.pos.z / UNIT > 485., "slid to z = {}", cap.pos.z / UNIT);
+}
+
+/// The cap-bounce run: Cappy hovers 678 ahead, the player lands on it, and after the fifteen
+/// steps of the trample the cap flies back. It does not head straight for the player: the pose it
+/// has (facing back at the thrower) leans a quarter of the way toward the head and then turns
+/// toward it by 40 degrees at most, so the first step goes sideways and up at 18 a frame and
+/// the cap arcs. Positions are the recording's (centimetres, rows 112 to 116).
+#[cfg_attr(test, test)]
+fn the_return_after_a_trample_leaves_along_the_cap_pose() {
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::Z,
+            kind: Throw::Forward,
+            left: false,
+            air: false,
+            continuous: false,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    let centimetres = |y: f32, z: f32| Vec3::new(0., y * UNIT, z * UNIT);
+    let mut world = CapWorld {
+        player: centimetres(339.343_5, 789.248_05),
+        hold: true,
+        mesh: None,
+    };
+    while cap.state_name() != "ThrowStay" {
+        cap.update(&world);
+    }
+    let foot = cap.pos / UNIT + Vec3::Y * 30.;
+    assert!(cap.take_trample(foot, true, true));
+    while cap.state_name() != "Return" {
+        cap.update(&world);
+    }
+    // The player's heights and distances of rows 111 to 115, which the cap flies toward in
+    // rows 112 to 116 (it updates before the player does).
+    let player = [
+        (339.343_5, 789.248_05),
+        (346.343_5, 803.248_05),
+        (352.343_5, 817.248_05),
+        (357.343_5, 831.248_05),
+        (361.343_5, 845.248_05),
+    ];
+    let cap_rows = [
+        Vec3::new(8.420_898, 83.242_55, 669.183_6),
+        Vec3::new(17.276_855, 120.992_19, 667.742_2),
+        Vec3::new(24.603_027, 177.055_73, 675.328_1),
+        Vec3::new(29.098_145, 249.206_6, 694.292_97),
+        Vec3::new(29.965_332, 326.909_06, 723.283_2),
+    ];
+    for ((y, z), want) in player.into_iter().zip(cap_rows) {
+        world.player = centimetres(y, z);
+        cap.update(&world);
+        let got = cap.pos / UNIT;
+        assert!(
+            (got - want).length() < 0.01,
+            "got {got:?}, recorded {want:?}"
+        );
+    }
 }

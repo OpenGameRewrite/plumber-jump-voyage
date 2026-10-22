@@ -18,6 +18,7 @@
 //! the nerve name a trace row shows is the one the frame left behind.
 use crate::collider::{Location, PlayerCollider};
 use crate::geometry::TriangleMesh;
+use crate::movement::cap_pose::{CapPose, direction_of, horizontal_length, length};
 use crate::movement::{Throw, UNIT};
 use bevy::prelude::*;
 
@@ -49,18 +50,20 @@ const START_DISTANCE: f32 = 150.;
 /// Height of the player's head above the feet (`rs::getPlayerHeadPos`
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
-/// The cap is caught when it starts a frame this close to the player's head:
-/// the contact is found at the end of the frame the cap flew into range, and
-/// the catch itself runs when the next frame begins (`HackCap::receiveMsg`
-/// takes the catch message and flags the cap, the player's movement then
-/// puts it on). Nine recorded catches and 72 frames of returns that were not
-/// caught bracket the range at 198 to 210 from the head (a cap 198 away was
-/// caught, one 210 away was not); 200 is also the distance the return code
-/// compares (see `RETURN_SLOW_DISTANCE`). The cap's own catch sensor is 100
-/// wide, which is not what the recordings show: the real contact test between
-/// the player's sensors and the cap's is not derived, so this range is a
-/// reading of the recordings, not of the code.
-const CATCH_DISTANCE: f32 = 200.;
+/// The cap is caught when it starts a frame this close to the player's `Body` sensor (centred
+/// 75 above the feet): the contact is found at the end of the frame the cap flew into range, and
+/// the catch itself runs when the next frame begins (`HackCap::receiveMsg` takes
+/// `PlayerCapCatch` on its `Catch` sensor and flags the cap, the player's movement then puts it
+/// on). The sensors are a sphere of 100 on the cap and one of 50 on the body, which would touch
+/// at 150, but the recordings do not show that: 32 catches (standing, spin and air throws and
+/// a cap jump) were made from up to 205.9 away, and
+/// returns that were not caught stayed outside 216.4, so the reach is read off them as 210.
+/// Nothing in the code explains the difference (guess: the cap's sensor is scaled), so this is a
+/// reading of the recordings and not of the code. Measured to the head the same data leave a gap
+/// of only 1.2 (202.8 to 204.0), to the feet none.
+const CATCH_DISTANCE: f32 = 210.;
+/// Height of the player's `Body` sensor above the feet (`PlayerActorHakoniwa/InitSensor`).
+const CATCH_CENTER_HEIGHT: f32 = 75.;
 /// The return only slows down this near the head: speed is limited to a
 /// fraction of the distance there.
 const RETURN_SLOW_DISTANCE: f32 = 200.;
@@ -241,6 +244,9 @@ pub struct Cap {
     velocity: Vec3,
     /// Direction of the throw, and the speed the braking started from.
     front: Vec3,
+    /// The actor's pose (`HackCap`'s quaternion): facing back at the thrower while it
+    /// flies and stays, then turned by the trample and the return.
+    pose: CapPose,
     speed: f32,
     /// Frames the throw flies at full speed before it brakes, and the speed
     /// the brake takes off each frame (`_27c` and `_280`).
@@ -292,6 +298,7 @@ impl Cap {
             spot,
             velocity: front * speed,
             front,
+            pose: CapPose::thrown_along(front),
             speed,
             cruise_frames: cruise_frames(speed),
             brake_step: -speed / brake_frames,
@@ -421,6 +428,11 @@ impl Cap {
         self.action_frame = frame;
         if moment.velocity.length() > NEAR_ZERO {
             self.front = moment.velocity.normalize();
+            // (A cap put back in the middle of its return has no pose history: it
+            // faces the way it was moving.)
+            if moment.nerve == CapNerve::Return && moment.step > 0 {
+                self.pose.stand_facing(self.front);
+            }
         }
     }
     /// Run one frame: the current nerve, then the collider's move. Returns
@@ -430,10 +442,11 @@ impl Cap {
         self.age = self.frames as f32 / crate::movement::FPS;
         self.action_frame += 1;
         let head = world.player / UNIT + Vec3::Y * HEAD_HEIGHT;
+        let body = world.player / UNIT + Vec3::Y * CATCH_CENTER_HEIGHT;
         let mut events = Vec::new();
         // In range at the start of the frame: the catch happens before the
         // cap moves any further.
-        if self.nerve == CapNerve::Return && (self.spot - head).length() <= CATCH_DISTANCE {
+        if self.nerve == CapNerve::Return && (self.spot - body).length() <= CATCH_DISTANCE {
             events.push(CapEvent::Caught);
             return events;
         }
@@ -556,36 +569,59 @@ impl Cap {
     /// clip, stand still for fifteen steps, then return.
     fn trample(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         if self.step == 0 {
+            self.face_joint_front();
             self.play("Trample");
             self.velocity = Vec3::ZERO;
             events.push(CapEvent::Trampled);
         }
         (self.step >= TRAMPLE_FRAMES).then_some(CapNerve::Return)
     }
-    /// `HackCap::exeReturn`: fly toward the head, a little faster every frame.
+    /// The first step of `exeTrample`: the actor turns to the front of its model's `AllRoot` joint
+    /// (`al::calcJointFrontDir`, then `al::faceToDirection`). The joint matrix is the one the
+    /// model last updated, which is the pose and the clip frame of the frame before.
+    fn face_joint_front(&mut self) {
+        let (length, looping) = clip_shape(self.action);
+        let before = self.action_frame.saturating_sub(1);
+        let frame = if looping {
+            before % length
+        } else {
+            before.min(length)
+        };
+        let local = crate::cap_joint::all_root_front(self.action, frame as f32);
+        let (front, found) = direction_of(self.pose.world_axis(local));
+        if found {
+            self.pose.face_to_direction(front);
+        }
+    }
+    /// `HackCap::exeReturn`: fly toward the head, a little faster every frame. The pose first
+    /// leans a quarter of the way toward the head (only within `RETURN_SLOW_DISTANCE` of it, as
+    /// the speed limit), then its front turns toward the head by at most the turn limit, and the
+    /// cap flies along that front. The cap's front is the one it had when the return began: facing
+    /// the player after a throw, the joint's front after a trample.
     fn go_back(&mut self, head: Vec3) -> Option<CapNerve> {
         if self.step == 0 {
             self.play(flying(self.kind, self.air, self.left));
             self.return_speed = 0.;
         }
         let to_head = head - self.spot;
-        let distance = to_head.length();
-        let direction = to_head.try_normalize()?;
-        // The cap's heading follows the head, at most the turn limit a frame.
-        self.front = if self.step == 0 {
-            direction
-        } else {
-            turn_toward(
-                self.front,
-                direction,
-                param::TURN_LIMIT_DEGREES.to_radians(),
-            )
-        };
-        if to_head.with_y(0.).length() < RETURN_SLOW_DISTANCE {
+        let (direction, found) = direction_of(to_head);
+        if !found {
+            return None;
+        }
+        if horizontal_length(to_head) < RETURN_SLOW_DISTANCE {
             self.return_speed = self
                 .return_speed
-                .clamp(0., (distance * RETURN_SLOW_RATE).max(0.));
+                .clamp(0., (length(to_head) * RETURN_SLOW_RATE).max(0.));
+            self.pose.lean_toward(direction);
         }
+        // (A rolling throw takes another up axis here, which is not ported; `front_turned_toward`
+        // writes nothing only for a direction without a plane, which does not happen here.)
+        let front = self
+            .pose
+            .front_turned_toward(direction, param::TURN_LIMIT_DEGREES)
+            .unwrap_or(Vec3::ZERO);
+        self.pose.stand_facing(front);
+        self.front = front;
         self.return_speed =
             (self.return_speed + param::RETURN_STRENGTH).min(param::RETURN_SPEED_MAX);
         // What the cap still moves across its new heading fades out.
@@ -617,6 +653,7 @@ impl std::fmt::Debug for Cap {
             .field("spot", &self.spot)
             .field("velocity", &self.velocity)
             .field("front", &self.front)
+            .field("pose", &self.pose.quat())
             .field("speed", &self.speed)
             .field("cruise_frames", &self.cruise_frames)
             .field("brake_step", &self.brake_step)
@@ -672,19 +709,6 @@ fn clip_shape(name: &str) -> (u32, bool) {
 fn ease_in(x: f32) -> f32 {
     (-0.5 * x + 1.5) * x * x
 }
-/// Turn `from` toward `to` by at most `limit` radians (`al::turnFrontSpherical`).
-fn turn_toward(from: Vec3, to: Vec3, limit: f32) -> Vec3 {
-    let angle = from.angle_between(to);
-    if angle <= limit || angle < 1e-6 {
-        return to;
-    }
-    let axis = from.cross(to);
-    if axis.length_squared() < 1e-12 {
-        return to;
-    }
-    Quat::from_axis_angle(axis.normalize(), limit) * from
-}
-
 #[path = "tests/cap.rs"]
 mod checks;
 

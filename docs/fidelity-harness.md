@@ -64,7 +64,12 @@ collider does (`src/collider.rs`, written from the 1.0.0 executable): normal or
 crouched shapes, three ground arrows, the sweep in steps with a push-out per
 contact, the 70 degree rule for floor, wall and ceiling. Cappy collides with a
 sphere of its own (`PlayerColliderHackCap`) and turns along a wall it meets at
-an angle. The replay's `collision` column then also carries `ceiling`, `gmat`
+an angle. The thrown cap keeps a pose like any actor (`src/movement/cap_pose.rs`):
+it faces back at the thrower while it flies and hovers, the cap jump turns it to the
+front of its model's `AllRoot` joint (`src/cap_joint.rs` reads that joint's clips from
+the installed `assets/local/caps/MarioCap.glb`), and the return leans it toward the
+player's head and flies along its front, which turns toward the head by at most 40
+degrees a frame, so a return that begins facing away arcs. The replay's `collision` column then also carries `ceiling`, `gmat`
 (the floor's material), `gcode` and `gcodeidx` (its floor code), taken from the
 triangle under the feet. Replays without geometry are unchanged.
 `py tools/fidelity-report.py <runs> --geometry <exports>` replays every
