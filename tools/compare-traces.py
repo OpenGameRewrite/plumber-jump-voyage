@@ -39,6 +39,7 @@ frames disagree and ranks the worst ones rather than looking for drift.
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import sys
@@ -79,8 +80,29 @@ KEYED = OrderedDict(
     ]
 )
 # `key=value` columns: name -> (item separator, tolerance of the numbers inside).
-KEY_VALUE = OrderedDict([("counters", ("|", 0)), ("collision", (";", 0.01)), ("triggers", (";", 0))])
-VECTORS = OrderedDict([("in_stick", 0.01), ("move_input", 0.01), ("floor_normal", 0.01)])
+KEY_VALUE = OrderedDict([
+    ("counters", ("|", 0)), ("collision", (";", 0.01)), ("triggers", (";", 0)),
+    # The head look-at: the keeper's state and the sensors it picked (host/sensor/type).
+    ("look_keeper", (";", 0)), ("look_sensors", (";", 0)),
+])
+VECTORS = OrderedDict([
+    ("in_stick", 0.01), ("move_input", 0.01), ("floor_normal", 0.01),
+    # The point the head was asked to look at (the sensor's position in the stage, cm).
+    ("look_target", 0.05),
+])
+# Rotations as x/y/z/w quaternions: the angle between the two, in degrees (the sign of a
+# quaternion does not matter). `head_q` is the Head joint's world rotation after the look-at.
+ROTATIONS = OrderedDict([("head_q", 1.0)])
+# head_q is compared only where the animated head is where the game's is: the rewrite poses the
+# head from the clips alone, while the game's joint controllers (ground and swim poses...) bend the
+# spine on slopes and in the water, which moves the head by more than the look-at turns it. The
+# head joint's position does not depend on the look-at, so it tells which frames are comparable.
+HEAD_POSITION_GATE = 1.0  # cm, rewrite `head_pos` against the game's `bones` Head
+# Outside the look-at the head's rotation is the skeleton's animation alone, which this column is not
+# about: head_q is compared where the game asked for a look (`requested=1` in look_keeper) or the
+# rewrite's head is turned by more than this many degrees (`head_turn`, which also covers the
+# head returning to its animation).
+HEAD_TURN_ACTIVE = 0.5
 # The cap columns, compared only while both sides have the cap out.
 CAP_NUMERIC = OrderedDict([("cap_px", 0.5), ("cap_py", 0.5), ("cap_pz", 0.5)])
 CAP_CATEGORICAL = ["cap_state", "cap_anim"]
@@ -119,6 +141,7 @@ GROUPS = OrderedDict(
         ("effects", {"effects_live"}),
         ("input", {"in_stick", "in_buttons", "move_input", "cam_yaw"}),
         ("camera", {"cam_pitch", "cam_px", "cam_py", "cam_pz", "cam_fov", "cam_mode"}),
+        ("look-at", {"head_q", "look_target", "look_keeper", "look_sensors"}),
         ("other", {"random"}),
     ]
 )
@@ -361,6 +384,39 @@ def compare_keyed(g, r, tol):
     return worst, problems
 
 
+def quaternion_angle(g, r):
+    """Degrees between two x/y/z/w quaternions (None when a cell is not one)."""
+    gv = [as_float(x) for x in g.split("/")] if g else []
+    rv = [as_float(x) for x in r.split("/")] if r else []
+    if len(gv) != 4 or len(rv) != 4 or None in gv + rv:
+        return None
+    dot = sum(a * b for a, b in zip(gv, rv))
+    norm = (sum(a * a for a in gv) * sum(b * b for b in rv)) ** 0.5
+    if norm == 0:
+        return None
+    return math.degrees(2 * math.acos(min(1.0, abs(dot) / norm)))
+
+
+def compare_rotation(g, r, tol):
+    if g == "" and r == "":
+        return None, []
+    err = quaternion_angle(g, r)
+    if err is None:
+        return None, [f"{g or 'none'} vs {r or 'none'}"]
+    return err, ([f"{g} vs {r} (error {err:.4g} degrees)"] if err > tol else [])
+
+
+def bone_position(bones, name):
+    """The x/y/z of one joint in a `bones` cell (`Joint:x/y/z|...`), or None."""
+    for item in split_items(bones, "|"):
+        key, _, value = item.partition(":")
+        if key == name:
+            parts = [as_float(v) for v in value.split("/")]
+            if len(parts) == 3 and None not in parts:
+                return parts
+    return None
+
+
 def compare_vector(g, r, tol):
     if g == "" and r == "":
         return None, []
@@ -491,6 +547,7 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
     tolerances.update(KEYED)
     tolerances.update({k: v[1] for k, v in KEY_VALUE.items()})
     tolerances.update(VECTORS)
+    tolerances.update(ROTATIONS)
     tolerances.update(tol_overrides or {})
     ignore = set(PROBE_EVENT_KINDS) | set(ignore_events)
 
@@ -648,6 +705,37 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
         for f in use:
             err, problems = compare_vector(res.game[f], res.rewrite[f], tolerances[name])
             res.add(f, err, problems)
+
+    # The head's rotation, where the animated head position agrees (see HEAD_POSITION_GATE).
+    for name in ROTATIONS:
+        res, use = prepare(name, "rotation")
+        if res is None or res.status == "N/C":
+            continue
+        left_out = 0
+        for f in use:
+            if res.game[f] == "" and res.rewrite[f] == "":
+                continue
+            asked = "requested=1" in game[f].get("look_keeper", "").split(";")
+            turned = (as_float(rew[f].get("head_turn", "")) or 0.0) > HEAD_TURN_ACTIVE
+            if not (asked or turned):
+                continue
+            game_head = bone_position(game[f].get("bones", ""), "Head")
+            own = [as_float(v) for v in rew[f].get("head_pos", "").split("/")]
+            if game_head is None or len(own) != 3 or None in own:
+                left_out += 1
+                continue
+            if max(abs(a - b) for a, b in zip(game_head, own)) > HEAD_POSITION_GATE:
+                left_out += 1
+                continue
+            err, problems = compare_rotation(res.game[f], res.rewrite[f], tolerances[name])
+            res.add(f, err, problems)
+        res.note = (f"{left_out} frames of the look-at left out: the animated head position differs "
+                    f"from the game's by more than {HEAD_POSITION_GATE:g} cm there; frames with no look-at "
+                    "on either side are not compared (the head is then the skeleton's animation alone)")
+        if res.compared == 0:
+            res.not_comparable(res.note)
+        elif left_out:
+            report.notes.append(f"{name}: {res.note}")
 
     # key=value columns: every key is its own result.
     for name, (sep, _) in KEY_VALUE.items():
@@ -851,6 +939,31 @@ def self_check():
         report = compare(game, rewrite, allow_contaminated=True)
         assert report.excluded == [2] and report.result("counters.prejump").status == "PASS"
         assert any(n.startswith("CONTAMINATED") for n in report.notes)
+    # The head's rotation: only where a look was asked for or shown, and the animated head agrees.
+    import math as _math
+    half = lambda degrees: f"0/{_math.sin(_math.radians(degrees) / 2):.6f}/0/{_math.cos(_math.radians(degrees) / 2):.6f}"
+    keeper = lambda asked: f"mode=1;count=0;requested={asked}"
+    with tempfile.TemporaryDirectory() as folder:
+        game, rewrite = os.path.join(folder, "game.csv"), os.path.join(folder, "rewrite.csv")
+        write_csv(game, [
+            {"frame": "0", "head_q": half(0), "bones": "Head:1/2/3", "look_keeper": keeper(0)},
+            {"frame": "1", "head_q": half(10), "bones": "Head:1/2/3", "look_keeper": keeper(1)},
+            {"frame": "2", "head_q": half(10), "bones": "Head:1/2/3", "look_keeper": keeper(1)},
+            {"frame": "3", "head_q": half(10), "bones": "Head:1/2/3", "look_keeper": keeper(1)},
+        ])
+        write_csv(rewrite, [
+            {"frame": "0", "head_q": half(40), "head_pos": "1/2/3", "head_turn": "0", "look_keeper": keeper(0)},
+            {"frame": "1", "head_q": half(10.5), "head_pos": "1/2/3.5", "head_turn": "9", "look_keeper": keeper(1)},
+            {"frame": "2", "head_q": half(10), "head_pos": "1/2/8", "head_turn": "9", "look_keeper": keeper(1)},
+            {"frame": "3", "head_q": half(15), "head_pos": "1/2/3", "head_turn": "9", "look_keeper": keeper(1)},
+        ])
+        report = compare(game, rewrite)
+        head = report.result("head_q")
+        # Frame 0 has no look, frame 2 a head 5 cm away: only frames 1 (half a degree) and 3 (5 degrees).
+        assert head.compared == 2 and head.first_bad() == 3 and len(head.bad) == 1, (head.compared, head.bad)
+        negated = "/".join(v[1:] if v.startswith("-") else "-" + v for v in half(10).split("/"))
+        assert abs(quaternion_angle(half(0), half(10)) - 10) < 1e-3 and quaternion_angle(half(10), negated) < 1e-3
+        assert quaternion_angle("", half(10)) is None
     # The game's Japanese reaction names compare with the rewrite's English ones.
     jp, en = "reaction:着地[走り];se:Land", "se:Land;reaction:LandRun"
     assert compare_set(jp, en, ";", set())[1] == [], compare_set(jp, en, ";", set())

@@ -13,7 +13,7 @@
 //! during the pause; its pitch and distance are the game's defaults.
 use crate::{
     input::{Orders, Settings},
-    movement::{ExactFrames, Player},
+    movement::{Course, ExactFrames, Player, UNIT, look_at::LookSensor},
     replay::{CameraTrack, SETTLE_FRAMES, Script, Span, orders_for},
     ui::Menu,
     world::{MainCamera, Orbit},
@@ -42,6 +42,8 @@ pub struct Driver {
     finished: usize,
     next_shot: usize,
     phase: Phase,
+    /// Where the recorded stage placed the sensors the head looks at (replay frame, cm).
+    look_sensors: Vec<LookSensor>,
 }
 #[derive(PartialEq)]
 enum Phase {
@@ -54,7 +56,12 @@ enum Phase {
     Saving(u32),
 }
 impl Driver {
-    pub fn new(script: &Script, camera: CameraTrack, dir: PathBuf) -> Result<Self, String> {
+    pub fn new(
+        script: &Script,
+        camera: CameraTrack,
+        dir: PathBuf,
+        look_sensors: Vec<LookSensor>,
+    ) -> Result<Self, String> {
         if script.shots.is_empty() {
             return Err("the script has no 'shot <frame>...' line".into());
         }
@@ -73,6 +80,7 @@ impl Driver {
             finished: 0,
             next_shot: 0,
             phase: Phase::Loading,
+            look_sensors,
         })
     }
     /// Where the picture of the frame being captured goes.
@@ -102,7 +110,18 @@ pub fn install(app: &mut App, driver: Driver) {
         )
         .add_systems(FixedPreUpdate, feed)
         .add_systems(FixedPostUpdate, |mut d: ResMut<Driver>| d.finished += 1)
-        .add_systems(Update, capture);
+        .add_systems(Update, (capture, mark_look_sensors));
+}
+
+/// Show where the head's look-at sensors are (the actors themselves are not drawn).
+fn mark_look_sensors(driver: Res<Driver>, mut gizmos: Gizmos) {
+    for sensor in &driver.look_sensors {
+        gizmos.sphere(
+            Isometry3d::from_translation(sensor.position * UNIT),
+            sensor.radius * UNIT,
+            Color::srgb(1., 0.8, 0.1),
+        );
+    }
 }
 
 /// Start playing at once, standing at the origin facing the start yaw, and
@@ -113,7 +132,9 @@ fn begin(
     mut orbit: ResMut<Orbit>,
     mut time: ResMut<Time<Virtual>>,
     mut player: Single<&mut Player>,
+    mut course: ResMut<Course>,
 ) {
+    course.look_sensors = driver.look_sensors.clone();
     menu.open = false;
     menu.begun = true;
     orbit.locked = true;

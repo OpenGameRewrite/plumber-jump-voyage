@@ -569,7 +569,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
 
 const USAGE: &str = "usage: plumber-jump-voyage --replay <file.input> --trace <out.csv> \
 [--camera <game.csv>] [--lockstep <game.csv>] [--random <game.csv>] [--geometry <stage.json> | --geometry-dir <dir>]
-   or: plumber-jump-voyage --replay <file.input> --shots <dir> [--camera <game.csv>]
+   or: plumber-jump-voyage --replay <file.input> --shots <dir> [--camera <game.csv>] [--geometry-dir <dir>]
 (--replay --states lists the state names the trace uses)";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
@@ -699,6 +699,10 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
              has no random choices to replace, so the replay is unchanged"
         );
     }
+    let sensors = geometry
+        .as_ref()
+        .map(|mesh| mesh.look_sensors.clone())
+        .unwrap_or_default();
     if let Some(trace_path) = trace_path {
         let table = Table::load();
         if table.is_none() {
@@ -738,7 +742,7 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
     shots_dir
         .map(|dir| {
             let camera = CameraTrack::new(&script, camera.as_ref())?;
-            crate::shots::Driver::new(&script, camera, dir.into())
+            crate::shots::Driver::new(&script, camera, dir.into(), sensors)
         })
         .transpose()
 }

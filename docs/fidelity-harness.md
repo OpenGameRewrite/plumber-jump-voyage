@@ -228,7 +228,7 @@ Empty cells mean the rewrite has no equivalent:
 - `sub_step` counts the game's sub-nerve: it starts over whenever the state
   label changes or the actor nerve restarts, and at the start of a replay it
   equals `state_step`.
-- Not available headless: `bones`, camera position and pitch, clip lengths
+- Not available headless: `bones` (the head joint alone is evaluated, see "Head look-at"), camera position and pitch, clip lengths
   other than the run cycle's, hand/face/eye part clips, model offsets and the face.
 - `effects_live` is approximate: bursts for their nominal lifetime plus the
   state's trail effects. The effects a hit reaction starts (`Land`,
@@ -258,6 +258,38 @@ floor has no codes). The rewrite's own counters (`ground_lost`, `jump_count`,
 `jump_timer`, `run_frames`, ...) follow the game's keys. The timer of
 `cjump` and `clong` means nothing while their count is zero, and the
 comparison ignores it then.
+
+## Head look-at
+
+The head follows a nearby sensor the way the original's `PlayerEyeSensorHitHolder`,
+`PlayerJointControlKeeper` and `al::JointLookAtController` do (`src/movement/look_at.rs`,
+`src/movement/look_joint.rs`; the joint callback is checked bit for bit against the executable,
+`PJV_LOOKAT_CASES=<local cases file> cargo test look_joint`). The state lives in the player
+(`Player::look`); the windowed game turns the model's `Head` joint after the animation
+(`aim_head` in `src/local_assets.rs`), and the headless trace evaluates the head itself.
+
+* **Targets.** A replay knows other actors only through the stage export: `--geometry` files
+  may carry `look_sensors` (`collision_export.py`: the hit sensors of placed actors whose
+  handlers answer neither `PlayerDisregard` nor `PlayerLookAtPosition`; today the Cap Kingdom's
+  collected coins, `CoinCollectEmpty`, at the placement plus `DisplayTranslate`). Without them a
+  replay has no look-at candidates, as on the flat floor. Hosts that answer `LookAtPosition`, NPCs
+  that move and the fixed-direction modes of the bind and demo states are not ported.
+* **Columns.** `look_keeper`, `look_sensors` (the holder's candidate and the keeper's target as
+  `host/sensor/type`) and `look_target` (the stage position asked for this frame) follow the probe's
+  format. `head_q` is the head joint's world rotation after the look-at. `head_pos` (the animated
+  head's position, cm in the replay's frame) and `head_turn` (degrees the look-at has turned it) are
+  the rewrite's own: the trace has no skeleton, so `src/head_pose.rs` poses the head joint chain
+  from the clips of `assets/local/Mario.glb` with the blend the trace already shows. That is the
+  animation alone: the original's joint controllers that run before the head's (ground and swim
+  poses) lean the spine on slopes and in the water, which moves the head by up to 35 cm there.
+* **Comparing.** `head_q` is compared (angle between quaternions, 1 degree) only where a look was
+  asked for in the game (`requested=1`) or the rewrite's head is turned by more than half a
+  degree, and only where the rewrite's `head_pos` is within 1 cm of the game's `bones` Head: that
+  position does not depend on the look-at, so it tells where the unported joint controllers do not
+  bend the chain. The report notes how many frames were left out. The keeper's acquisition frame
+  depends on the same head position (the 400 cm gate), so a head that leans differently can take a
+  target a frame early or late; lockstep takes the head position, keeper counter and target from
+  the game's previous row.
 
 ## Sample point
 
@@ -388,7 +420,8 @@ plumber-jump-voyage --replay run.input --shots runs/name [--camera game.csv]
 ```
 
 Plays the script in the real game (the game-data build shows the original
-Mario) on the same flat floor, one simulation step per update, and saves
+Mario) on the same flat floor (with `--geometry-dir` the stage's look-at sensors are marked by
+yellow rings, though the stage itself is not drawn), one simulation step per update, and saves
 `rewrite-<frame>.png` for every frame a `shot` line lists, showing the state
 after that frame. The window is 1600x900 (scale factor 1), the size of the
 real game's screenshots. The course HUD is hidden. Time stops during a

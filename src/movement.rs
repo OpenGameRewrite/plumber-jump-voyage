@@ -1388,6 +1388,9 @@ pub struct Course {
     /// Shallow water to stand in: centre of the surface and half extents.
     pub puddles: Vec<(Vec3, Vec3)>,
     pub targets: Vec<Vec3>,
+    /// Sensors of other actors the head looks at when the course has no stage of its own
+    /// (a rendered replay shows where the recorded stage placed them).
+    pub look_sensors: Vec<look_at::LookSensor>,
     /// The real game's stage collision, when a replay loads one. It takes the
     /// place of the solids for the player's contact.
     pub mesh: Option<Arc<TriangleMesh>>,
@@ -1431,7 +1434,9 @@ impl Course {
     /// The other actors' sensors the head may look at (the stage's placements the replay
     /// knows; the toy course has none).
     pub fn look_sensors(&self) -> &[look_at::LookSensor] {
-        self.mesh.as_ref().map_or(&[], |mesh| &mesh.look_sensors)
+        self.mesh
+            .as_ref()
+            .map_or(&self.look_sensors[..], |mesh| &mesh.look_sensors)
     }
     /// The water areas the player swims in: the stage's own (`WaterArea` placements) or the toy
     /// course's pool.
@@ -2615,7 +2620,8 @@ impl Player {
         }
         // The head's look-at runs after the state (`PlayerActorHakoniwa::movement`).
         let enabled = look_at::look_enabled(self.nerve_name().name);
-        self.look.step(self.pos / UNIT, enabled, scene.look_sensors());
+        let actor = self.pose_matrix();
+        self.look.step(&actor, enabled, scene.look_sensors());
     }
 
     // ---- Ground movement ------------------------------------------------
@@ -4641,4 +4647,5 @@ pub fn self_check() {
     ledge_checks::run();
     pose_math::self_check();
     look_joint::self_check();
+    look_at::self_check();
 }

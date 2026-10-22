@@ -83,7 +83,13 @@ fn the_exes_look_at_callback_agrees_bit_for_bit() {
             );
             let q = floats(&frame["q_cur"]);
             assert_eq!(
-                [head.current.x, head.current.y, head.current.z, head.current.w].map(f32::to_bits),
+                [
+                    head.current.x,
+                    head.current.y,
+                    head.current.z,
+                    head.current.w
+                ]
+                .map(f32::to_bits),
                 [q[0], q[1], q[2], q[3]].map(f32::to_bits),
                 "sequence {n} frame {i}: current turn"
             );

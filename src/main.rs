@@ -68,6 +68,7 @@ fn main() {
         cap::self_check();
         cap_joint::self_check();
         geometry::self_check();
+        head_pose::self_check();
         collider::self_check();
         prism::self_check();
         movement::self_check();

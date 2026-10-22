@@ -232,9 +232,9 @@ fn command_line() {
     // Rendered replays need frames to capture.
     let camera = |script: &Script| CameraTrack::new(script, None).unwrap();
     let plain = Script::parse("start 0 0 0 0\n5 0 0 -\n").unwrap();
-    assert!(crate::shots::Driver::new(&plain, camera(&plain), "out".into()).is_err());
+    assert!(crate::shots::Driver::new(&plain, camera(&plain), "out".into(), Vec::new()).is_err());
     let shots = Script::parse("start 0 0 0 0\nshot 3\n5 0 0 -\n").unwrap();
-    assert!(crate::shots::Driver::new(&shots, camera(&shots), "out".into()).is_ok());
+    assert!(crate::shots::Driver::new(&shots, camera(&shots), "out".into(), Vec::new()).is_ok());
 }
 
 #[cfg_attr(test, test)]

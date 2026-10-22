@@ -449,6 +449,14 @@ mod imported {
         checks::run();
     }
     pub fn plugin(app: &mut App) {
+        // The head's look-at turns the joint the animation just posed, before the transforms
+        // are propagated.
+        app.add_systems(
+            PostUpdate,
+            aim_head
+                .after(bevy::app::AnimationSystems)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
         app.init_resource::<Loaded>().add_systems(
             Update,
             (
@@ -464,6 +472,60 @@ mod imported {
                 .chain()
                 .after(crate::world::animate),
         );
+    }
+    /// The player's head look-at, shown. The simulation owns its state (`Player::look`); this
+    /// hands it the head joint as the animation leaves it, in the model's frame (the joint's
+    /// local transform times those of the nodes above it, up to the imported model), and turns
+    /// the joint the way the look-at answers (`look_joint.rs`: the matrix times the turn).
+    fn aim_head(
+        mut player: Single<&mut crate::movement::Player>,
+        bones: Query<(Entity, &Bone)>,
+        parents: Query<&ChildOf>,
+        imported: Query<(), With<Imported>>,
+        mut transforms: Query<&mut Transform>,
+        // The head, the rotation the animation gave it, and the one written back.
+        mut written: Local<Option<(Entity, Quat, Quat)>>,
+    ) {
+        let Some((head, _)) = bones.iter().find(|(_, b)| b.key[0] == "Armature_Head") else {
+            return;
+        };
+        let Ok(mut transform) = transforms.get_mut(head) else {
+            return;
+        };
+        // A clip with no rotation for the head leaves what was written last frame there.
+        let animated = match *written {
+            Some((entity, animated, shown)) if entity == head && transform.rotation == shown => {
+                animated
+            }
+            _ => transform.rotation,
+        };
+        transform.rotation = animated;
+        let mut matrix = Mat4::IDENTITY;
+        let mut node = head;
+        loop {
+            let Ok(local) = transforms.get(node) else {
+                return;
+            };
+            matrix = local.to_matrix() * matrix;
+            match parents.get(node) {
+                Ok(parent) if !imported.contains(parent.parent()) => node = parent.parent(),
+                _ => break,
+            }
+        }
+        let rows = |r: usize| {
+            [
+                matrix.col(0)[r],
+                matrix.col(1)[r],
+                matrix.col(2)[r],
+                matrix.col(3)[r],
+            ]
+        };
+        player.look.set_animated_head([rows(0), rows(1), rows(2)]);
+        let turned = animated * player.look.joint.turn();
+        if let Ok(mut transform) = transforms.get_mut(head) {
+            transform.rotation = turned;
+        }
+        *written = Some((head, animated, turned));
     }
     fn select(
         mut commands: Commands,

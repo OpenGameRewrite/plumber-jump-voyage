@@ -16,9 +16,10 @@
 //! executable's single-precision order, fused multiply-adds included where it uses them, and is
 //! checked bit for bit against the executable (`PJV_LOOKAT_CASES`, see `tests/look_joint.rs`).
 use super::pose_math::{
-    DEGREES_TO_RADIANS, acosf, asinf, atan2f, cosf, cross, dot, normalize, sinf, squared_length,
-    to_quat, try_normalize_or_zero,
+    DEGREES_TO_RADIANS, acosf, asinf, atan2f, cosf, cross, dot, sinf, squared_length, to_quat,
+    try_normalize_or_zero,
 };
+use super::vector_lib::is_near_zero;
 use bevy::prelude::{Quat, Vec3};
 
 /// A `sead::Matrix34f`: three rows of the rotation and the translation column.
@@ -69,8 +70,8 @@ impl Axes {
         // JointLookAtParam: the side axis is the cross product of the up and front axes.
         let side = try_normalize_or_zero(cross(up, front)).0;
         let basis = to_quat([side, up, front]);
-        let squared = ((basis.w * basis.w + basis.x * basis.x) + basis.y * basis.y)
-            + basis.z * basis.z;
+        let squared =
+            ((basis.w * basis.w + basis.x * basis.x) + basis.y * basis.y) + basis.z * basis.z;
         let basis_scaled = if squared > BASIS_NORMALISE_LIMIT {
             let k = 1. / squared;
             Quat::from_xyzw(basis.x * k, basis.y * k, basis.z * k, basis.w * k)
@@ -206,15 +207,6 @@ fn quat_from_pitch_yaw(pitch: f32, yaw: f32, axes: &Axes) -> Quat {
     Quat::from_xyzw(x, y, z, w)
 }
 
-/// `Quat` product `a * b` in the executable's term order.
-fn quat_mul(a: Quat, b: Quat) -> Quat {
-    let x = ((a.x * b.w + a.w * b.x) + a.y * b.z) - a.z * b.y;
-    let y = (a.z * b.x + (a.y * b.w + (a.w * b.y - a.x * b.z))) ;
-    let z = a.z * b.w + ((a.x * b.y + a.w * b.z) - a.y * b.x);
-    let w = ((a.w * b.w - a.x * b.x) - a.y * b.y) - a.z * b.z;
-    Quat::from_xyzw(x, y, z, w)
-}
-
 /// The executable's `q * basis^-1` step on `basis * current`, in its term order: the rotation
 /// `basis * current * conj(basis_scaled)`.
 fn conjugated_by_basis(current: Quat, axes: &Axes) -> Quat {
@@ -277,6 +269,8 @@ pub struct HeadLookAt {
     following: bool,
     /// The actor's front at the last call.
     last_front: Vec3,
+    /// The rotation the last call put on the joint (applied on the right of its matrix).
+    turn: Quat,
 }
 
 impl Default for HeadLookAt {
@@ -291,6 +285,7 @@ impl Default for HeadLookAt {
             wanted: Quat::IDENTITY,
             following: false,
             last_front: Vec3::Z,
+            turn: Quat::IDENTITY,
         }
     }
 }
@@ -337,11 +332,6 @@ impl HeadLookAt {
         self.requested
     }
 
-    /// The point last asked for (the probe's `look_target` when a request is live).
-    pub fn target(&self) -> Vec3 {
-        self.target
-    }
-
     pub fn keeps_turn(&self) -> bool {
         self.keeps_turn
     }
@@ -351,16 +341,23 @@ impl HeadLookAt {
         self.current
     }
 
-    /// Put the head straight on the wanted turn at the next callback (`JointLookAtController`'s
-    /// reset flag).
-    pub fn snap_to_wanted(&mut self) {
-        self.snap = true;
+    /// The rotation the last call put on the right of the joint's matrix (none when it left the
+    /// joint alone): a joint's local rotation is turned the same way.
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn turn(&self) -> Quat {
+        self.turn
+    }
+
+    /// How far that turn is from none, in degrees.
+    pub fn turn_degrees(&self) -> f32 {
+        2. * self.current.w.abs().min(1.).acos() * RADIANS_TO_DEGREES
     }
 
     /// `JointLookAtController::calcJointCallback` for the head joint. `joint` is the head's
     /// animated world matrix and is replaced by the turned one; `actor` is the player's pose
     /// matrix (its third column is the front).
     pub fn apply(&mut self, joint: &mut Mat34, actor: &Mat34) {
+        self.turn = Quat::IDENTITY;
         let axes = axes();
         let to_point = Vec3::new(
             self.target.x - joint[0][3],
@@ -377,7 +374,7 @@ impl HeadLookAt {
             START_FOLLOWING_COSINE
         };
         let front = Vec3::new(actor[0][2], actor[1][2], actor[2][2]);
-        if !(squared_length(front) < FRONT_NEAR_ZERO * FRONT_NEAR_ZERO) {
+        if !is_near_zero(front, FRONT_NEAR_ZERO) {
             // The actor swinging round faster than the head can follow starts the head over.
             let before = self.last_front;
             self.last_front = front;
@@ -388,10 +385,11 @@ impl HeadLookAt {
                 return;
             }
         }
+        let follows = threshold < dot(to_point, front);
         let wanted = if !self.requested {
             self.following = false;
             Quat::IDENTITY
-        } else if !(threshold < dot(to_point, front)) {
+        } else if !follows {
             self.following = false;
             if self.keeps_turn {
                 self.wanted
@@ -412,6 +410,7 @@ impl HeadLookAt {
             self.current = super::pose_math::slerp(self.current, wanted, FOLLOW_SHARE);
         }
         let turn = conjugated_by_basis(self.current, axes);
+        self.turn = turn;
         let rotation = rotation_rows(turn);
         // The matrix times the turn, each element a product and two fused multiply-adds.
         let old = *joint;
@@ -491,6 +490,24 @@ impl HeadLookAt {
     }
 }
 
+/// A joint's matrix in the frame of the actor's pose: the actor's pose matrix (a rotation with
+/// the position in its last column) applied to the joint's matrix in the actor's frame.
+pub fn world_matrix(actor: &Mat34, local: &Mat34) -> Mat34 {
+    let mut out = [[0.; 4]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = (0..3).map(|k| actor[r][k] * local[k][c]).sum();
+        }
+        out[r][3] = (0..3).map(|k| actor[r][k] * local[k][3]).sum::<f32>() + actor[r][3];
+    }
+    out
+}
+
+/// The matrix's translation column.
+pub fn translation(m: &Mat34) -> Vec3 {
+    Vec3::new(m[0][3], m[1][3], m[2][3])
+}
+
 /// The matrix `m` and the quaternion it turns into; used by the trace for `head_q`.
 pub fn quat_of_rotation(m: &Mat34) -> Quat {
     let columns = [
@@ -499,13 +516,6 @@ pub fn quat_of_rotation(m: &Mat34) -> Quat {
         Vec3::new(m[0][2], m[1][2], m[2][2]),
     ];
     to_quat(columns)
-}
-
-#[allow(dead_code)]
-fn unused_helpers(v: Vec3) -> Vec3 {
-    // (`normalize` and `quat_mul` are kept for the tests that compare single steps.)
-    let _ = quat_mul(Quat::IDENTITY, Quat::IDENTITY);
-    normalize(v)
 }
 
 #[path = "../tests/look_joint.rs"]

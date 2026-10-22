@@ -18,7 +18,6 @@
 //! the same joints, and a pose that leans on them (running down a slope, swimming) deviates by
 //! what they add; the trace's `bones` column of the original shows where.
 use crate::movement::look_joint::Mat34;
-use bevy::prelude::Vec3;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -295,22 +294,26 @@ impl HeadPose {
         let view = self.document.buffer_views.get(a.buffer_view)?;
         let start = self.bin_start + view.byte_offset.unwrap_or(0) + a.byte_offset.unwrap_or(0);
         let raw = self.bytes.get(start..start + a.count * N * 4)?;
-        Some(
-            raw.chunks_exact(N * 4)
-                .map(|chunk| {
-                    let mut value = [0.; N];
-                    for (slot, bytes) in value.iter_mut().zip(chunk.chunks_exact(4)) {
-                        *slot = f32::from_le_bytes(bytes.try_into().unwrap());
-                    }
-                    value
-                })
-                .collect(),
-        )
+        let numbers: Vec<f32> = raw
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect();
+        Some(numbers.as_chunks::<N>().0.to_vec())
     }
 
-    fn track<const N: usize>(&self, animation: &AnimationDef, channel: &ChannelDef) -> Option<Track<N>> {
+    fn track<const N: usize>(
+        &self,
+        animation: &AnimationDef,
+        channel: &ChannelDef,
+    ) -> Option<Track<N>> {
         let sampler = animation.samplers.get(channel.sampler)?;
-        let times = self.floats::<1>(sampler.input)?.into_iter().map(|t| t[0]).collect();
+        let times = self
+            .floats::<1>(sampler.input)?
+            .into_iter()
+            .map(|t| t[0])
+            .collect();
         Some(Track {
             times,
             values: self.floats::<N>(sampler.output)?,
@@ -388,7 +391,9 @@ impl HeadPose {
                 let q = clip.rotation[slot]
                     .as_ref()
                     .and_then(|track| track.around(time))
-                    .map_or(bind.rotation, |(a, b, k)| slerp(a.map(f64::from), b.map(f64::from), f64::from(k)));
+                    .map_or(bind.rotation, |(a, b, k)| {
+                        slerp(a.map(f64::from), b.map(f64::from), f64::from(k))
+                    });
                 // Rotations are summed on one hemisphere.
                 let reference = if blended == [0.; 4] { q } else { blended };
                 let sign = if dot4(q, reference) < 0. { -1. } else { 1. };
@@ -446,20 +451,9 @@ fn slerp(a: [f64; 4], mut b: [f64; 4], t: f64) -> [f64; 4] {
     std::array::from_fn(|i| (wa * a[i] + wb * b[i]) / sine)
 }
 
-/// The head's world matrix: the actor's pose (a rotation matrix with the position `feet`, cm)
-/// applied to the head's matrix in the actor's frame.
-pub fn world_matrix(actor: &Mat34, local: &Mat34) -> Mat34 {
-    let mut out = [[0.; 4]; 3];
-    for r in 0..3 {
-        for c in 0..3 {
-            out[r][c] = (0..3).map(|k| actor[r][k] * local[k][c]).sum();
-        }
-        out[r][3] = (0..3).map(|k| actor[r][k] * local[k][3]).sum::<f32>() + actor[r][3];
-    }
-    out
-}
+#[path = "tests/head_pose.rs"]
+mod checks;
 
-/// The matrix's translation.
-pub fn translation(m: &Mat34) -> Vec3 {
-    Vec3::new(m[0][3], m[1][3], m[2][3])
+pub fn self_check() {
+    checks::run();
 }

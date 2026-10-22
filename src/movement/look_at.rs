@@ -21,7 +21,7 @@
 //! and widens the gate by the sensor's radius), the fixed-direction modes of the bind and demo
 //! states, the entrance camera, and the dead or disregarding hosts: the sensors that replays
 //! know are static placements whose hosts answer neither query.
-use super::look_joint::{HeadLookAt, Mat34};
+use super::look_joint::{HeadLookAt, Mat34, translation, world_matrix};
 use super::vector_lib::converge;
 use bevy::prelude::Vec3;
 
@@ -71,7 +71,12 @@ pub fn look_enabled(label: &str) -> bool {
         // Standing: everything but the landing, snoozing and sleeping sub-states.
         "Wait" => !matches!(
             sub,
-            "Land" | "LandStiffen" | "WaitSnoozeStart" | "WaitSnooze" | "WaitSleepStart" | "WaitSleep"
+            "Land"
+                | "LandStiffen"
+                | "WaitSnoozeStart"
+                | "WaitSnooze"
+                | "WaitSleepStart"
+                | "WaitSleep"
         ),
         "Run" => sub == "Run3D",
         "Swim" => matches!(
@@ -118,6 +123,10 @@ pub struct LookAt {
     /// The head joint's position after the previous model calculation (cm), which the keeper
     /// reads when it chooses.
     head: Option<Vec3>,
+    /// The head joint's matrix in the model's frame as the renderer's animation leaves it, when
+    /// a renderer provides it: the step then turns the head itself (the headless trace calls
+    /// `turn_head` with the pose it evaluates instead).
+    animated_head: Option<Mat34>,
 }
 
 /// What a recorded row says of the look-at, for a lockstep replay that starts every frame from
@@ -141,11 +150,18 @@ impl Default for LookAt {
             joint: HeadLookAt::default(),
             previous_eye: None,
             head: None,
+            animated_head: None,
         }
     }
 }
 
 impl LookAt {
+    /// The head joint's matrix in the model's frame (cm) after the animation, from the renderer.
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn set_animated_head(&mut self, head: Mat34) {
+        self.animated_head = Some(head);
+    }
+
     /// The head joint's position (cm, replay frame) after the model's last calculation.
     pub fn set_head_position(&mut self, head: Vec3) {
         self.head = Some(head);
@@ -231,8 +247,10 @@ impl LookAt {
     }
 
     /// One frame of the holder, keeper and controller request, after the state's own step.
-    /// `feet` is the player's position (cm), `enabled` what `look_enabled` says of the state.
-    pub fn step(&mut self, feet: Vec3, enabled: bool, sensors: &[LookSensor]) {
+    /// `actor` is the player's pose matrix (cm, its last column the position), `enabled` what
+    /// `look_enabled` says of the state.
+    pub fn step(&mut self, actor: &Mat34, enabled: bool, sensors: &[LookSensor]) {
+        let feet = translation(actor);
         // The keeper reads the holder as the last frame left it.
         let head = self.head_position(feet);
         self.active = enabled;
@@ -249,7 +267,7 @@ impl LookAt {
         self.previous_eye = Some(eye);
         for (index, sensor) in sensors.iter().enumerate() {
             let reach = EYE_RADIUS + sensor.radius;
-            if !(squared_distance(sensor.position, overlap_from) < reach * reach) {
+            if squared_distance(sensor.position, overlap_from) >= reach * reach {
                 continue;
             }
             let nearer = self.candidate.is_none_or(|held| {
@@ -259,6 +277,12 @@ impl LookAt {
             if nearer {
                 self.candidate = Some(index);
             }
+        }
+        // The model's calculation that follows, when a renderer provides the animated head.
+        if let Some(local) = self.animated_head {
+            let mut head = world_matrix(actor, &local);
+            self.head = Some(translation(&head));
+            self.joint.apply(&mut head, actor);
         }
     }
 
@@ -296,4 +320,11 @@ impl LookAt {
     pub fn turn_head(&mut self, animated: &mut Mat34, actor: &Mat34) {
         self.joint.apply(animated, actor);
     }
+}
+
+#[path = "../tests/look_at.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

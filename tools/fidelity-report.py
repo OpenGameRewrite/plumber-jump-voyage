@@ -38,9 +38,9 @@ import sys
 from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GROUP_ORDER = ["movement", "state", "animation", "cap", "events/sound", "effects", "input", "camera"]
+GROUP_ORDER = ["movement", "state", "animation", "cap", "events/sound", "effects", "look-at", "input", "camera"]
 # Groups the dashboard leads with; the others are listed after them.
-SHOWN = ["movement", "state", "animation", "cap", "events/sound", "effects"]
+SHOWN = ["movement", "state", "animation", "cap", "events/sound", "effects", "look-at"]
 
 
 _COMPARE = None

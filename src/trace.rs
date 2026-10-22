@@ -12,16 +12,20 @@ use crate::{
     fx,
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
+    head_pose::{HeadPose, PoseLayer},
     local_assets::{Blend, Posed, looping},
-    head_pose::{self, HeadPose, PoseLayer},
-    movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip, look_at::{LookHint, LookSensor}, look_joint, plane},
+    movement::{
+        Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip,
+        look_at::{LookHint, LookSensor},
+        look_joint, plane,
+    },
     sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
 };
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Column names, in file order.
-pub const COLUMNS: [&str; 65] = [
+pub const COLUMNS: [&str; 66] = [
     "frame",
     "px",
     "py",
@@ -82,9 +86,11 @@ pub const COLUMNS: [&str; 65] = [
     "face",
     "cam_mode",
     "cam_fov",
-    // The head: where the animation puts it (cm, replay frame, not a probe column), the world
-    // rotation the look-at leaves it with, and the look-at's request, keeper and sensors.
+    // The head: where the animation puts it (cm, replay frame) and how far the look-at has
+    // turned it (degrees), neither a probe column; the world rotation the look-at leaves it
+    // with; and the look-at's request, keeper and sensors.
     "head_pos",
+    "head_turn",
     "head_q",
     "look_target",
     "look_keeper",
@@ -259,7 +265,10 @@ impl Recorder {
     }
 
     /// The stage the replay runs in, for the head look-at's sensors and coordinates.
-    pub fn with_stage(mut self, stage: Option<std::sync::Arc<crate::geometry::TriangleMesh>>) -> Self {
+    pub fn with_stage(
+        mut self,
+        stage: Option<std::sync::Arc<crate::geometry::TriangleMesh>>,
+    ) -> Self {
         self.stage = stage;
         self
     }
@@ -340,46 +349,64 @@ impl Recorder {
     /// The head's cells: the animated head joint with the look-at turned on it, and what the
     /// look-at asked for. Without the model (no installed game data) the head columns stay empty
     /// but the keeper's and sensors' do not.
-    fn head_cells(
-        &mut self,
-        p: &mut Player,
-        cells: &mut Cells,
-        covering: Option<Anim>,
-        kept: f32,
-    ) {
+    fn head_cells(&mut self, p: &mut Player, cells: &mut Cells, covering: Option<Anim>, kept: f32) {
         let actor = p.pose_matrix();
         // The clips and shares the pose is made of (the renderer's weights: outgoing poses keep
         // their share, the current one the rest).
         let mut playing: Vec<PoseLayer> = Vec::new();
         if let Some(sub) = covering {
-            playing.push(PoseLayer { clip: sub.name, frame: sub.frame, weight: 1. });
+            playing.push(PoseLayer {
+                clip: sub.name,
+                frame: sub.frame,
+                weight: 1.,
+            });
         } else if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != p.anim.name) {
-            playing.push(PoseLayer { clip: name, frame, weight: 1. });
+            playing.push(PoseLayer {
+                clip: name,
+                frame,
+                weight: 1.,
+            });
         } else {
             for (old, share, _) in &self.blend.old {
                 for l in &old.layers {
-                    playing.push(PoseLayer { clip: l.name, frame: l.frame, weight: l.weight * share });
+                    playing.push(PoseLayer {
+                        clip: l.name,
+                        frame: l.frame,
+                        weight: l.weight * share,
+                    });
                 }
             }
             for l in &self.blend.current.layers {
-                playing.push(PoseLayer { clip: l.name, frame: l.frame, weight: l.weight * (1. - kept) });
+                playing.push(PoseLayer {
+                    clip: l.name,
+                    frame: l.frame,
+                    weight: l.weight * (1. - kept),
+                });
             }
         }
         let head = HeadPose::installed()
             .and_then(|model| model.head_in_actor_frame(&playing))
-            .map(|local| head_pose::world_matrix(&actor, &local));
+            .map(|local| look_joint::world_matrix(&actor, &local));
         match head {
             Some(mut matrix) => {
                 // The keeper reads this row's head position at the next step.
-                p.look.set_head_position(head_pose::translation(&matrix));
+                p.look.set_head_position(look_joint::translation(&matrix));
                 p.look.turn_head(&mut matrix, &actor);
-                let at = head_pose::translation(&matrix);
+                let at = look_joint::translation(&matrix);
                 cells.text(&format!("{}/{}/{}", num(at.x), num(at.y), num(at.z)));
+                cells.num(p.look.joint.turn_degrees());
                 let q = look_joint::quat_of_rotation(&matrix).normalize();
                 let q = if q.w < 0. { -q } else { q };
-                cells.text(&format!("{}/{}/{}/{}", num(q.x), num(q.y), num(q.z), num(q.w)));
+                cells.text(&format!(
+                    "{}/{}/{}/{}",
+                    num(q.x),
+                    num(q.y),
+                    num(q.z),
+                    num(q.w)
+                ));
             }
             None => {
+                cells.empty();
                 cells.empty();
                 cells.empty();
             }
@@ -1078,7 +1105,11 @@ impl TraceFile {
             .find_map(|kv| kv.strip_prefix("count=")?.parse().ok());
         let point = |text: &str| {
             let mut axes = text.split('/').map(|v| v.parse::<f32>());
-            Some(Vec3::new(axes.next()?.ok()?, axes.next()?.ok()?, axes.next()?.ok()?))
+            Some(Vec3::new(
+                axes.next()?.ok()?,
+                axes.next()?.ok()?,
+                axes.next()?.ok()?,
+            ))
         };
         let head = self
             .cell(row, "bones")
