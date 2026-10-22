@@ -184,7 +184,10 @@ impl Triggers {
                         });
                 }
                 if trigger.table == "Reaction" && trigger.reactions.is_empty() {
-                    triggers.emitted.entry(effect.clone()).or_insert(key.clone());
+                    triggers
+                        .emitted
+                        .entry(effect.clone())
+                        .or_insert(key.clone());
                 }
                 for reaction in &trigger.reactions {
                     triggers

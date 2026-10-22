@@ -282,12 +282,12 @@ mod terrain;
 mod vector_lib;
 #[path = "movement/wait.rs"]
 mod wait;
-#[path = "movement/wet.rs"]
-mod wet;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
 #[path = "movement/wall_along.rs"]
 mod wall_along;
+#[path = "movement/wet.rs"]
+mod wet;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
 use ledge::WallCatchControl;

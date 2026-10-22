@@ -353,7 +353,12 @@ fn tick(
             }
         }
     }
-    let material = course.puddle(p.pos).then_some("Puddle");
+    // The material code's prefixes pick the variant: the water's wins over the puddle's.
+    let material = if p.material_water() {
+        Some("Water")
+    } else {
+        course.puddle(p.pos).then_some("Puddle")
+    };
     let now = effects.frames;
     for (_, name, keep) in effects
         .debug_starts

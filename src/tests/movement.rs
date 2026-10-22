@@ -983,10 +983,11 @@ fn swimming() {
         water: crate::water::WaterAreas::demo_box(0., 0., 10_000., 10_000., 100., 1000.),
         ..default()
     };
-    // Dropping in from just above the water: the judge puts the player in the swim state, which
-    // settles at the surface (the root floats about 80 under it, `SwimSurfaceBaseHeight`; the
-    // spring that holds it there fades out after 50 idle steps and the swimmer then sinks).
-    let mut p = Player::spawn_at(Vec3::new(0., 1.6, 0.), Vec3::Z);
+    // Dropping in from just above the water (a player placed in the air builds up speed
+    // with the wait pull): the judge puts the player in the swim state, which settles at the
+    // surface (the root floats about 80 under it, `SwimSurfaceBaseHeight`; the spring that
+    // holds it there fades out after 50 idle steps and the swimmer then sinks).
+    let mut p = Player::spawn_at(Vec3::new(0., 1.3, 0.), Vec3::Z);
     frames(&mut p, Orders::default(), &pool, 50);
     assert_eq!(p.mode, Move::Swim);
     assert_eq!(p.nerve_name().name, "Swim/SwimSurface");
@@ -1447,7 +1448,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x582af962cfcbe1e4,
+        hash, 0x9f65b70f96b0ae4,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

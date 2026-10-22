@@ -34,13 +34,18 @@ The player is placed on a flat floor with nothing around it (or in the real
 stage's collision, see below), idles for ten
 frames, then takes one `Player::step` per scripted frame. The start position
 only matters relative to itself on flat ground, so the run happens at the
-origin and positions are written in game units relative to `start`. The camera
+origin and positions are written in game units relative to `start`. A start with
+no floor within 40 cm below it puts the player in the air: the player has found
+no ground since the teleport, as the probe's player has not (the fall state is
+chosen in the fifth step). The camera
 yaw is the script's `camera`, else the start yaw; with `--camera game.csv` it
 follows that trace's `cam_yaw` column, and the stick's world direction is turned
 on top of it to the one the trace logged (`move_input`: the game turns the stick
 by the line from its camera to the player, which swings while the player moves
 although the locked yaw does not), so the world-space input matches the real
-run. No window, clock or random source is involved, so a run is
+run. The camera's position (`cam_px/py/pz`) goes to the player too: its sound
+control hears the camera dip into the water (`CamWaterIn`, `CamWaterAmb`,
+`CamWaterOut`). No window, clock or random source is involved, so a run is
 byte-for-byte repeatable.
 
 ## Replaying in the real stage's collision

@@ -87,9 +87,40 @@ fn event_cues() {
         [Cue::Rated("RunUpR")]
     );
     assert!(fx_cues(Fx::Step { left: true }, on(Move::Crawl), &mut boosts).is_empty());
+    // The swim's footfalls are the SwimWalk clip's, not the sound control's.
     assert_eq!(
         fx_cues(Fx::Step { left: false }, on(Move::Swim), &mut boosts),
-        [Cue::Play("SwimRunR")]
+        [
+            Cue::Rated("RunR"),
+            Cue::Rated("RunMatR"),
+            Cue::Rated("ShakeNoiseR")
+        ]
+    );
+    // The water entry sounds by itself, the exit and the dive through hit reactions.
+    assert_eq!(
+        fx_cues(Fx::WaterIn { strong: true }, on(Move::Swim), &mut boosts),
+        [Cue::Play("PlWaterIn")]
+    );
+    assert_eq!(
+        fx_cues(Fx::WaterIn { strong: false }, on(Move::Swim), &mut boosts),
+        [Cue::Play("PlWaterInMedSlow")]
+    );
+    assert_eq!(
+        fx_cues(Fx::WaterOut, on(Move::Jump), &mut boosts),
+        [Cue::Reaction {
+            cap: false,
+            name: "WaterOut"
+        }]
+    );
+    assert_eq!(
+        fx_cues(
+            Fx::SwimStrokeSound {
+                camera_under: false
+            },
+            on(Move::Swim),
+            &mut boosts
+        ),
+        [Cue::Play("SwimStandBubbleOver")]
     );
     assert_eq!(
         fx_cues(Fx::RollSpin, on(Move::Roll), &mut boosts),

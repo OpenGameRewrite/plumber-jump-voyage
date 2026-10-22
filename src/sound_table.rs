@@ -292,7 +292,9 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
         Fx::SwimStrokeSound { camera_under: true } => {
             vec![Cue::Play("SwimStandBubble"), Cue::Play("SwimStand")]
         }
-        Fx::SwimStrokeSound { camera_under: false } => vec![Cue::Play("SwimStandBubbleOver")],
+        Fx::SwimStrokeSound {
+            camera_under: false,
+        } => vec![Cue::Play("SwimStandBubbleOver")],
         Fx::Burned(again) => reaction(if again { "BurnBounce" } else { "BurnJump" }),
         _ => vec![],
     }

@@ -198,7 +198,9 @@ impl SeCtrl {
         let under = frame.camera.is_some_and(|camera| camera.under);
         if let Some(camera) = frame.camera {
             if camera.under != self.camera_under {
-                events.push(SeEvent::CameraWater { entered: camera.under });
+                events.push(SeEvent::CameraWater {
+                    entered: camera.under,
+                });
             }
             if camera.ambience {
                 events.push(SeEvent::CameraWaterHold);
@@ -209,7 +211,9 @@ impl SeCtrl {
         if let Some(now) = frame.stroke
             && self.last_anim_frame > now
         {
-            events.push(SeEvent::SwimStroke { camera_under: under });
+            events.push(SeEvent::SwimStroke {
+                camera_under: under,
+            });
         }
     }
 

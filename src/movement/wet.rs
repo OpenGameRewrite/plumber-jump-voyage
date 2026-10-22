@@ -89,3 +89,57 @@ impl WetControl {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One step at the surface, in the order the actor runs it: record, then update.
+    fn swim_at_surface(wet: &mut WetControl, steps: usize) {
+        for _ in 0..steps {
+            wet.record_water_surface();
+            wet.update();
+        }
+    }
+    fn dry(wet: &mut WetControl, steps: usize) {
+        for _ in 0..steps {
+            wet.update();
+        }
+    }
+
+    #[test]
+    fn drops_start_the_step_after_the_surface_is_left() {
+        let mut wet = WetControl::default();
+        swim_at_surface(&mut wet, 110);
+        assert!(!wet.dripping);
+        wet.update();
+        assert!(
+            wet.dripping,
+            "recorded: 110 rows swimming, the drops at 110"
+        );
+    }
+
+    #[test]
+    fn drops_wait_twenty_steps_after_the_player_was_under_the_water() {
+        let mut wet = WetControl::default();
+        wet.record_in_water();
+        wet.update();
+        dry(&mut wet, 19);
+        assert!(!wet.dripping);
+        dry(&mut wet, 2);
+        assert!(wet.dripping);
+    }
+
+    #[test]
+    fn a_deleted_drip_is_not_started_again_at_once() {
+        let mut wet = WetControl::default();
+        swim_at_surface(&mut wet, 60);
+        wet.update();
+        assert!(wet.dripping);
+        // Back in the water for a dozen steps, then out again: still emitting.
+        swim_at_surface(&mut wet, 12);
+        assert!(!wet.dripping);
+        wet.update();
+        assert!(!wet.dripping);
+    }
+}
