@@ -566,7 +566,9 @@ impl GroundMove {
             return;
         }
         let slope = up.y.clamp(-1., 1.).acos();
-        let downhill = unit_or_zero(verticalize(Vec3::NEG_Y, up));
+        // The way down in the floor's plane: gravity with its part along the normal taken off
+        // (`al::verticalizeVec(out, normal, gravity)`).
+        let downhill = unit_or_zero(verticalize(up, Vec3::NEG_Y));
         let (mut target, mut tilt_in_degrees) = (0., 0.);
         let mut rising = false;
         if !is_zero(downhill) {

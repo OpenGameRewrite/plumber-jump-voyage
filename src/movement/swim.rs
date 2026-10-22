@@ -126,6 +126,12 @@ pub(super) struct Swim {
     /// `PlayerJudgeOutInWater`: the player took off in the water (or was in it) and has neither
     /// left it nor started to fall since; the jump nerve's water judge waits for that.
     pub(super) out_in_inside: bool,
+    /// The velocity the swimmer had when the jump was chosen. A jump that takes off from the
+    /// floor keeps only the part of it in the floor's plane (GUESS from the pond recordings: the
+    /// jump from the bowl's slope leaves with the slope-ward speed the swimmer's pull into the
+    /// floor has in the plane, 0.824/2.195 from (-0.019, -6.106, -0.050) on the normal
+    /// (0.153, 0.901, 0.406); the exe's `PlayerStateJump::appear` is not read here).
+    pub(super) jump_from_floor: Option<Vec3>,
     /// The water was entered by a hip drop (`EActionTrigger 19`, set by the actor's hip drop
     /// nerve): `appear` picks the dive.
     entered_by_hip_drop: bool,
@@ -154,6 +160,7 @@ impl Default for Swim {
             paddle_rate: 1.,
             paddle_restart: false,
             out_in_inside: true,
+            jump_from_floor: None,
             entered_by_hip_drop: false,
             turn: TurnControl::swim(),
         }
@@ -285,6 +292,10 @@ impl Player {
     /// (`PlayerStateSwim::appear` takes the velocity the old state left and the step's collision
     /// moves the body by what it sets); the first inner nerve executes with the next update.
     fn start_swim(&mut self, scene: &Course) {
+        // The state starts from the velocity the actor holds (`al::getVelocity`): a body that
+        // ran into the water carries the floor-following velocity with the pull along the
+        // floor's normal, which the ground states keep apart from `v`.
+        self.v = self.units_per_frame();
         self.mode = Move::Swim;
         self.frame = 0;
         self.nerve.choose_silently(true);
@@ -436,6 +447,7 @@ impl Player {
             // jump judge: the buffered press the generic judge counted stays until the jump's
             // first step.)
             let buffered = self.pre_jump;
+            self.swim.jump_from_floor = Some(self.v);
             self.start_standard_jump();
             self.pre_jump = buffered;
             return;

@@ -2369,7 +2369,6 @@ impl Player {
         }
         self.read_input(&o);
         self.landing_speed = 0.;
-        self.hop_contact = false;
         self.nerve.deferred = false;
         self.nerve.renewed = false;
         self.sensor_restart = false;
@@ -3309,6 +3308,12 @@ impl Player {
     fn leave_ground(&mut self, mode: Move, power: f32, gravity: f32) {
         // The jump nerve's first step resets its water judge (`PlayerJudgeOutInWater`).
         self.swim.out_in_inside = true;
+        if let Some(incoming) = self.swim.jump_from_floor.take()
+            && self.is_collided_ground()
+        {
+            let normal = self.collided_ground_normal();
+            self.v = incoming - normal * normal.dot(incoming);
+        }
         self.v.y = power;
         self.gravity = gravity;
         self.jump_extend = true;
@@ -4429,6 +4434,9 @@ impl Player {
         let old = self.pos;
         let was_grounded = self.grounded;
         self.grounded = false;
+        // The collider's contact report lives until the next collision: a body that took off
+        // keeps `isCollidedGround` for the judges of the next step.
+        self.hop_contact = false;
         self.landing_speed = 0.;
         self.wall = Vec3::ZERO;
         self.touched = terrain::Touched::default();
