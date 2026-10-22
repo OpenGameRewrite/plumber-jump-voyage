@@ -26,6 +26,9 @@ use std::sync::Arc;
 
 /// Frames the player idles after the teleport before frame 0.
 pub const SETTLE_FRAMES: usize = 10;
+/// Height above the floor (metres) from which the placed player counts as in the air: the
+/// collider's arrows reach 40 cm below the feet.
+const AIR_START_HEIGHT: f32 = 0.4;
 
 /// Switch button names and the gamepad buttons the game's bindings use.
 const BUTTONS: [(&str, &str); 16] = [
@@ -465,6 +468,14 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         None => flat_floor(),
     };
     let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
+    // Over no floor within reach of the collider's arrows (40 below the feet): the player is
+    // in the air.
+    if course
+        .ground(player.pos)
+        .is_none_or(|floor| player.pos.y - floor > AIR_START_HEIGHT)
+    {
+        player.start_in_air();
+    }
     let floor = options
         .camera
         .or(options.lockstep)

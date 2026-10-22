@@ -56,8 +56,8 @@ pub struct SeFrame {
     pub speed: f32,
     /// Vertical speed in units a frame (negative falling).
     pub vertical_speed: f32,
-    /// In water, where the fall is silent.
-    pub swimming: bool,
+    /// The player is in a water area (`al::isInWater`), where the fall is silent.
+    pub in_water: bool,
     /// Frame of the rolling clip, while it plays.
     pub rolling: Option<f32>,
     /// The frame the animator shows now (`PlayerAnimator::getAnimFrame`).
@@ -214,7 +214,7 @@ impl SeCtrl {
     }
 
     fn whoosh(&mut self, frame: &SeFrame, events: &mut Vec<SeEvent>) {
-        if frame.swimming || frame.vertical_speed > -WHOOSH_SPEED {
+        if frame.in_water || frame.vertical_speed > -WHOOSH_SPEED {
             self.falling = 0;
             return;
         }

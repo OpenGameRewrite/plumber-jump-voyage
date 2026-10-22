@@ -386,6 +386,8 @@ pub mod clip {
     pub fn held_length(name: &str) -> Option<u32> {
         match name {
             "SquatStart" => Some(3),
+            // (The fall's clip is 28 frames long and its counter stops one past that.)
+            "Fall" => Some(28),
             "Jump" | "JumpReverse" => Some(84),
             "Jump2" => Some(42),
             "Jump3" | "JumpBack" => Some(68),
@@ -1631,6 +1633,14 @@ impl Player {
         });
         player
     }
+    /// The probe's teleport put the player in the air, over no floor the collider reaches (the
+    /// collision was reset with it): no ground contact is counted when the first step runs, so
+    /// the fall judge counts that step as one without ground (recorded: the fall state is
+    /// chosen in the fifth step, not the sixth).
+    pub fn start_in_air(&mut self) {
+        self.grounded = false;
+        self.ground_contact = 0;
+    }
     /// A player standing at `pos` (metres) facing the horizontal direction `facing`.
     pub fn spawn_at(pos: Vec3, facing: Vec3) -> Self {
         Self {
@@ -2684,7 +2694,14 @@ impl Player {
             self.set(Move::Idle);
             self.wait_nerve(step);
         }
-        self.v.y = -t::GRAVITY;
+        // `rs::waitGround` adds the pull every step; the floor takes it back at once, but in
+        // the air it builds up to the fall speed limit (a player placed in the air falls
+        // 3, 6, 9... per step until the fall state takes over).
+        self.v.y = if self.grounded {
+            -t::GRAVITY
+        } else {
+            (self.v.y - t::GRAVITY).max(-t::FALL_MAX)
+        };
     }
     /// The velocity of the run in the plane of the floor with the normal `up`
     /// (`updateNormalAndSnap`): the velocity the last step left in the plane of

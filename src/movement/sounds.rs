@@ -1,6 +1,6 @@
 //! The player's own per-frame sounds: what the player tells the sound control
 //! about this frame, and the events it answers with.
-use super::{Course, Fx, Move, Player};
+use super::{Course, Fx, Player};
 use crate::se_ctrl::{CameraWater, SeEvent, SeFrame};
 
 /// Clips the roll sound follows.
@@ -18,7 +18,9 @@ impl Player {
             run_start: self.cycle.weights[4],
             speed: self.move_speed,
             vertical_speed: self.units_per_frame().y,
-            swimming: self.mode == Move::Swim,
+            in_water: scene
+                .water_areas()
+                .is_water(scene.in_water_frame(self.position_cm())),
             rolling: ROLLING_CLIPS
                 .contains(&self.anim.name)
                 .then_some(self.anim.frame),
