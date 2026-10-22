@@ -132,6 +132,8 @@ pub(super) struct Swim {
     /// floor has in the plane, 0.824/2.195 from (-0.019, -6.106, -0.050) on the normal
     /// (0.153, 0.901, 0.406); the exe's `PlayerStateJump::appear` is not read here).
     pub(super) jump_from_floor: Option<Vec3>,
+    /// The state was just entered: its first step stands the pose upright.
+    entry_pose: bool,
     /// The water was entered by a hip drop (`EActionTrigger 19`, set by the actor's hip drop
     /// nerve): `appear` picks the dive.
     entered_by_hip_drop: bool,
@@ -160,6 +162,7 @@ impl Default for Swim {
             paddle_rate: 1.,
             paddle_restart: false,
             out_in_inside: true,
+            entry_pose: false,
             jump_from_floor: None,
             entered_by_hip_drop: false,
             turn: TurnControl::swim(),
@@ -311,6 +314,7 @@ impl Player {
 
     /// `PlayerStateSwim::appear`.
     fn swim_appear(&mut self, scene: &Course) {
+        self.swim.entry_pose = true;
         self.swim.start_jump = 0;
         self.swim.since_paddle = NEVER_PADDLED;
         self.swim.jump_invalid = 0;
@@ -509,6 +513,16 @@ impl Player {
     /// `NerveStateBase::update`: the inner nerve's step, then `control` unless the state ended.
     fn swim_update(&mut self, o: &Orders, scene: &Course) -> Option<SwimEnd> {
         let first = self.swim.steps == 0;
+        // A body that ran down a slope has a tilted pose: the swimmer stands upright in the
+        // first step, with the yaw the tilted pose's quaternion has about the vertical (the
+        // twist of its `y` and `w`; recorded: the pond runs turn 2.97 degrees there).
+        if std::mem::take(&mut self.swim.entry_pose)
+            && let Some(pose) = self.pose_quat()
+        {
+            let yaw = 2. * pose.y.atan2(pose.w);
+            self.facing = Vec3::new(yaw.sin(), 0., yaw.cos());
+            self.pose_tilt = None;
+        }
         self.swim.nerve_set = false;
         let end = match self.swim.nerve {
             SwimNerve::Move => self.exe_swim_move(first, o, scene),
