@@ -32,14 +32,17 @@ pub(super) const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
 /// The single-precision library functions, correctly rounded (computed in double precision and
 /// rounded once), which is what the console's `sinf`, `cosf`, `acosf` and `atan2f` return for
 /// the arguments seen.
-fn sinf(x: f32) -> f32 {
+pub(super) fn sinf(x: f32) -> f32 {
     f64::from(x).sin() as f32
 }
 pub(super) fn cosf(x: f32) -> f32 {
     f64::from(x).cos() as f32
 }
-fn acosf(x: f32) -> f32 {
+pub(super) fn acosf(x: f32) -> f32 {
     f64::from(x).acos() as f32
+}
+pub(super) fn asinf(x: f32) -> f32 {
+    f64::from(x).asin() as f32
 }
 pub(super) fn atan2f(y: f32, x: f32) -> f32 {
     f64::from(y).atan2(f64::from(x)) as f32

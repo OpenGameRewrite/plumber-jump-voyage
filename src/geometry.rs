@@ -105,6 +105,9 @@ pub struct TriangleMesh {
     cells: HashMap<(i32, i32), Vec<u32>>,
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
+    /// The hit sensors of the stage's placed actors the head can look at (the export's
+    /// `look_sensors`), in the replay's frame.
+    pub look_sensors: Vec<crate::movement::look_at::LookSensor>,
 }
 
 /// `N` floats from a JSON array (`None` when absent, short or not numbers).
@@ -118,6 +121,34 @@ fn floats<const N: usize>(value: Option<&serde_json::Value>) -> Option<[f32; N]>
         *slot = item.as_f64()? as f32;
     }
     Some(out)
+}
+
+/// The export's `look_sensors`: `{host, name, type, radius, position: [x, y, z]}` in the stage's
+/// own coordinates, moved to the replay's frame.
+fn look_sensors_from_export(
+    list: &serde_json::Value,
+    origin: [f64; 3],
+) -> Vec<crate::movement::look_at::LookSensor> {
+    let Some(list) = list.as_array() else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|item| {
+            let position = floats::<3>(item.get("position"))?;
+            Some(crate::movement::look_at::LookSensor {
+                host: item.get("host")?.as_str()?.to_string(),
+                name: item.get("name")?.as_str()?.to_string(),
+                kind: item.get("type")?.as_u64()? as u32,
+                position: Vec3::new(
+                    (f64::from(position[0]) - origin[0]) as f32,
+                    (f64::from(position[1]) - origin[1]) as f32,
+                    (f64::from(position[2]) - origin[2]) as f32,
+                ),
+                stage_position: Vec3::from(position),
+                radius: item.get("radius")?.as_f64()? as f32,
+            })
+        })
+        .collect()
 }
 
 fn cell_of(v: f32) -> i32 {
@@ -189,6 +220,7 @@ impl TriangleMesh {
             thickness: PRISM_THICKNESS,
             origin,
             water: crate::water::WaterAreas::from_export(&root["areas"]),
+            look_sensors: look_sensors_from_export(&root["look_sensors"], origin),
             ..Self::default()
         };
         // Per object: the part frame of its base matrix (newer exports only).

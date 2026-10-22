@@ -480,7 +480,8 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         .camera
         .or(options.lockstep)
         .and_then(TraceFile::floor_material);
-    let mut recorder = Recorder::new(options.table, options.library, floor);
+    let mut recorder =
+        Recorder::new(options.table, options.library, floor).with_stage(options.geometry.clone());
     let settle = Span {
         frames: 0,
         stick: Vec2::ZERO,
@@ -516,12 +517,18 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 == Some(0.);
             if !just_chosen {
                 player.inject(&game.snapshot(last));
+                if let Some(hint) = game.look_hint(last) {
+                    player.look.restore(&hint, course.look_sensors());
+                }
             } else if last > 0 {
                 // A row at step 0 shows a state that was only chosen: its first
                 // step, with the clip, the impulse and the sounds, is still to
                 // come, and a snapshot cannot hold that. Choose it again from
                 // the row before, with that frame's input.
                 player.inject(&game.snapshot(last - 1));
+                if let Some(hint) = game.look_hint(last - 1) {
+                    player.look.restore(&hint, course.look_sensors());
+                }
                 let before: &[&str] = if last > 1 {
                     &spans[last - 1].buttons
                 } else {

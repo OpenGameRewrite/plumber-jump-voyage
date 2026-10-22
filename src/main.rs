@@ -21,6 +21,7 @@ mod fx;
 mod game_columns;
 mod game_names;
 mod geometry;
+mod head_pose;
 mod input;
 #[cfg(feature = "local-assets")]
 mod legacy_assets;

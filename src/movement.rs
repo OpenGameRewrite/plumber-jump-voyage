@@ -242,6 +242,10 @@ pub(crate) mod cap_pose;
 mod ground;
 #[path = "movement/ledge.rs"]
 mod ledge;
+#[path = "movement/look_at.rs"]
+pub(crate) mod look_at;
+#[path = "movement/look_joint.rs"]
+pub(crate) mod look_joint;
 #[path = "movement/plane.rs"]
 pub mod plane;
 #[path = "movement/pole.rs"]
@@ -917,6 +921,8 @@ pub struct Player {
     /// The standing state's idle sequence (`PlayerStateWait`).
     wait: WaitControl,
     throwing: ThrowControl,
+    /// The head's look-at (holder, keeper and joint controller).
+    pub look: look_at::LookAt,
     /// Metres.
     pub pos: Vec3,
     /// Metres per second, derived each frame from `v`.
@@ -1153,6 +1159,7 @@ impl Default for Player {
             squat: SquatControl::default(),
             wait: WaitControl::default(),
             throwing: ThrowControl::default(),
+            look: look_at::LookAt::default(),
             pos: SPAWN,
             vel: Vec3::ZERO,
             facing: Vec3::NEG_Z,
@@ -1420,6 +1427,11 @@ impl Course {
                 ))
             })
             .clone()
+    }
+    /// The other actors' sensors the head may look at (the stage's placements the replay
+    /// knows; the toy course has none).
+    pub fn look_sensors(&self) -> &[look_at::LookSensor] {
+        self.mesh.as_ref().map_or(&[], |mesh| &mesh.look_sensors)
     }
     /// The water areas the player swims in: the stage's own (`WaterArea` placements) or the toy
     /// course's pool.
@@ -2601,6 +2613,9 @@ impl Player {
         if out_of_course || !self.pos.is_finite() || !self.v.is_finite() {
             self.reset();
         }
+        // The head's look-at runs after the state (`PlayerActorHakoniwa::movement`).
+        let enabled = look_at::look_enabled(self.nerve_name().name);
+        self.look.step(self.pos / UNIT, enabled, scene.look_sensors());
     }
 
     // ---- Ground movement ------------------------------------------------
@@ -2778,6 +2793,18 @@ impl Player {
             self.pose_quat()
                 .unwrap_or_else(|| plane::quat_up_front(Vec3::Y, self.facing)),
         )
+    }
+    /// The actor's pose as the model's matrix: the pose's side, up and front axes as columns and
+    /// the position (cm, replay frame), the third column being the front the head looks along.
+    pub fn pose_matrix(&self) -> look_joint::Mat34 {
+        let pose = self.actor_pose();
+        let (side, up, front) = (pose.side(), pose.up(), pose.front());
+        let feet = self.pos / UNIT;
+        [
+            [side.x, up.x, front.x, feet.x],
+            [side.y, up.y, front.y, feet.y],
+            [side.z, up.z, front.z, feet.z],
+        ]
     }
     /// `rs::waitGround`'s pose (every nerve of the standing state): the pose's
     /// up follows the floor's normal (at most 45 degrees from vertical) by the
@@ -4613,4 +4640,5 @@ pub fn self_check() {
     wall_air_checks::run();
     ledge_checks::run();
     pose_math::self_check();
+    look_joint::self_check();
 }

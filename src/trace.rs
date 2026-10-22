@@ -13,14 +13,15 @@ use crate::{
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
     local_assets::{Blend, Posed, looping},
-    movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip, plane},
+    head_pose::{self, HeadPose, PoseLayer},
+    movement::{Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip, look_at::{LookHint, LookSensor}, look_joint, plane},
     sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
 };
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Column names, in file order.
-pub const COLUMNS: [&str; 60] = [
+pub const COLUMNS: [&str; 65] = [
     "frame",
     "px",
     "py",
@@ -81,6 +82,13 @@ pub const COLUMNS: [&str; 60] = [
     "face",
     "cam_mode",
     "cam_fov",
+    // The head: where the animation puts it (cm, replay frame, not a probe column), the world
+    // rotation the look-at leaves it with, and the look-at's request, keeper and sensors.
+    "head_pos",
+    "head_q",
+    "look_target",
+    "look_keeper",
+    "look_sensors",
 ];
 
 /// One clip contributing to the pose.
@@ -221,6 +229,9 @@ pub struct Recorder {
     effects: Option<Tracker>,
     /// The cap was thrown from the right hand (its clip names carry the side).
     right_hand: bool,
+    /// The stage the replay runs in: its sensors and its frame (the probe logs stage
+    /// coordinates).
+    stage: Option<std::sync::Arc<crate::geometry::TriangleMesh>>,
 }
 impl Recorder {
     /// `floor` is the material of the floor the run stands on (the recorded
@@ -229,6 +240,7 @@ impl Recorder {
         Self {
             table,
             right_hand: true,
+            stage: None,
             effects: library.map(|library| Tracker::new(library).on_floor(floor)),
             cursor: AnimCursor::default(),
             cap_cursor: AnimCursor::default(),
@@ -244,6 +256,12 @@ impl Recorder {
             overlay: 0.,
             bursts: Vec::new(),
         }
+    }
+
+    /// The stage the replay runs in, for the head look-at's sensors and coordinates.
+    pub fn with_stage(mut self, stage: Option<std::sync::Arc<crate::geometry::TriangleMesh>>) -> Self {
+        self.stage = stage;
+        self
     }
 
     /// One sound starting: the event name and, with a sound table, its mix.
@@ -317,6 +335,71 @@ impl Recorder {
                 self.play(cap, &play, speed, events, mix);
             }
         }
+    }
+
+    /// The head's cells: the animated head joint with the look-at turned on it, and what the
+    /// look-at asked for. Without the model (no installed game data) the head columns stay empty
+    /// but the keeper's and sensors' do not.
+    fn head_cells(
+        &mut self,
+        p: &mut Player,
+        cells: &mut Cells,
+        covering: Option<Anim>,
+        kept: f32,
+    ) {
+        let actor = p.pose_matrix();
+        // The clips and shares the pose is made of (the renderer's weights: outgoing poses keep
+        // their share, the current one the rest).
+        let mut playing: Vec<PoseLayer> = Vec::new();
+        if let Some(sub) = covering {
+            playing.push(PoseLayer { clip: sub.name, frame: sub.frame, weight: 1. });
+        } else if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != p.anim.name) {
+            playing.push(PoseLayer { clip: name, frame, weight: 1. });
+        } else {
+            for (old, share, _) in &self.blend.old {
+                for l in &old.layers {
+                    playing.push(PoseLayer { clip: l.name, frame: l.frame, weight: l.weight * share });
+                }
+            }
+            for l in &self.blend.current.layers {
+                playing.push(PoseLayer { clip: l.name, frame: l.frame, weight: l.weight * (1. - kept) });
+            }
+        }
+        let head = HeadPose::installed()
+            .and_then(|model| model.head_in_actor_frame(&playing))
+            .map(|local| head_pose::world_matrix(&actor, &local));
+        match head {
+            Some(mut matrix) => {
+                // The keeper reads this row's head position at the next step.
+                p.look.set_head_position(head_pose::translation(&matrix));
+                p.look.turn_head(&mut matrix, &actor);
+                let at = head_pose::translation(&matrix);
+                cells.text(&format!("{}/{}/{}", num(at.x), num(at.y), num(at.z)));
+                let q = look_joint::quat_of_rotation(&matrix).normalize();
+                let q = if q.w < 0. { -q } else { q };
+                cells.text(&format!("{}/{}/{}/{}", num(q.x), num(q.y), num(q.z), num(q.w)));
+            }
+            None => {
+                cells.empty();
+                cells.empty();
+            }
+        }
+        let sensors: &[LookSensor] = self.stage.as_ref().map_or(&[], |mesh| &mesh.look_sensors);
+        cells.text(
+            &p.look
+                .requested_sensor()
+                .and_then(|i| sensors.get(i))
+                .map_or(String::new(), |s| {
+                    format!(
+                        "{}/{}/{}",
+                        num(s.stage_position.x),
+                        num(s.stage_position.y),
+                        num(s.stage_position.z)
+                    )
+                }),
+        );
+        cells.text(&p.look.keeper_cell());
+        cells.text(&p.look.sensors_cell(sensors));
     }
 
     /// Row of cells (in `COLUMNS` order) for the state after a step. The
@@ -664,6 +747,7 @@ impl Recorder {
         for _ in 0..5 {
             cells.empty(); // random, model, face, cam_mode, cam_fov
         }
+        self.head_cells(p, &mut cells, covering, kept);
         cells.finish()
     }
 }
@@ -985,6 +1069,28 @@ impl TraceFile {
             10.
         };
         Some((name, self.number(row, "sub_frame")?, length))
+    }
+    /// What the row records of the look-at (see `LookHint`).
+    pub fn look_hint(&self, row: usize) -> Option<LookHint> {
+        let keeper = self.cell(row, "look_keeper")?;
+        let counter = keeper
+            .split(';')
+            .find_map(|kv| kv.strip_prefix("count=")?.parse().ok());
+        let point = |text: &str| {
+            let mut axes = text.split('/').map(|v| v.parse::<f32>());
+            Some(Vec3::new(axes.next()?.ok()?, axes.next()?.ok()?, axes.next()?.ok()?))
+        };
+        let head = self
+            .cell(row, "bones")
+            .and_then(|bones| bones.split('|').find_map(|b| b.strip_prefix("Head:")))
+            .and_then(point);
+        let n = |c| self.number(row, c).unwrap_or(0.);
+        Some(LookHint {
+            feet: Vec3::new(n("px"), n("py"), n("pz")),
+            head,
+            counter,
+            target_stage: self.cell(row, "look_target").and_then(point),
+        })
     }
     /// The injectable player state a row records, for lockstep stepping.
     pub fn snapshot(&self, row: usize) -> Snapshot {
