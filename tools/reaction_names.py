@@ -14,6 +14,8 @@ MARIO_REACTIONS = {
     'あちちジャンプ': 'BurnJump',
     'あちちジャンプ(バウンド)': 'BurnBounce',
     'アチチ走り浅瀬キャンセル': 'FireQuench',
+    # Leaving the water (`PlayerStateSwim::tryReactionWaterOut`).
+    '出水': 'WaterOut',
 }
 CAP_REACTIONS = {
     '帽子投げ': 'Throw',

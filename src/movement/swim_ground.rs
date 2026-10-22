@@ -391,7 +391,6 @@ impl Player {
             self.swim.paddle_rate = rate;
             self.swim_anim("SwimStand");
             self.set_swim_anim_rate(rate);
-            self.events.push(Fx::SwimStroke);
         }
         self.swim_underwater_motion();
         self.swim_turn(1.);
@@ -408,7 +407,6 @@ impl Player {
             self.swim.paddle_rate = rate;
             self.swim.paddle_restart = true;
             self.set_swim_anim_rate(rate);
-            self.events.push(Fx::SwimStroke);
             return None;
         }
         if o.crouch_pressed {

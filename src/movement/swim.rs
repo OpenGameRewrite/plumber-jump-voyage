@@ -185,7 +185,7 @@ impl Player {
 
     /// `rs::isInPuddleHeight`: the water is shallower than `height` (the surface above the
     /// root plus the ground under it).
-    fn is_in_puddle_height(&self, height: f32) -> bool {
+    pub(super) fn is_in_puddle_height(&self, height: f32) -> bool {
         let finder = &self.water_finder;
         if !finder.found || finder.distance < 0. {
             return false;
@@ -198,6 +198,16 @@ impl Player {
             self.ground_height
         };
         finder.distance + ground < height
+    }
+
+    /// The material code the actor ends its movement with: the water prefix
+    /// (`PlayerAreaChecker::isInWater` at the root while the water is deeper than the swim's
+    /// center offset).
+    pub(super) fn update_material_code(&mut self, scene: &Course) {
+        let in_area = scene
+            .water_areas()
+            .is_water(scene.in_water_frame(self.position_cm()));
+        self.material_water = in_area && !self.is_in_puddle_height(k::CENTER_OFFSET);
     }
 
     /// `PlayerJudgeInWater::judge`: the root, or the point `SwimCenterOffset` above it, is in a
@@ -251,7 +261,6 @@ impl Player {
         if self.burning() {
             self.events.push(Fx::Quenched);
         }
-        self.events.push(Fx::Splash);
         // `PlayerStateHipDrop::isEnableInWater`: from its fall on (not the wind-up) the hip drop
         // sets the dive trigger.
         self.swim.entered_by_hip_drop = matches!(self.mode, Move::PoundLand)
@@ -290,7 +299,7 @@ impl Player {
     }
 
     /// `PlayerStateSwim::appear`.
-    fn swim_appear(&mut self, _scene: &Course) {
+    fn swim_appear(&mut self, scene: &Course) {
         self.swim.start_jump = 0;
         self.swim.since_paddle = NEVER_PADDLED;
         self.swim.jump_invalid = 0;
@@ -301,6 +310,8 @@ impl Player {
         } else {
             UP
         };
+        // (The damage swim, trigger 20, skips the reaction; it is not ported.)
+        self.try_reaction_water_in(scene);
         // The velocity is laid on the plane of the ground normal: the stroke keeps the speed
         // the player came with (at most `SwimSurfaceSpeedMaxH` less a quarter on the ground),
         // and the vertical part is held between the fall and the rise limits.
@@ -369,9 +380,57 @@ impl Player {
         }
     }
 
+    /// `rs::tryCalcEffectMtxDoubleCheckWaterIn/Out`: whether there is a surface to splash on.
+    /// The surface the finder holds counts unless the body stands on the ground; with none in
+    /// reach the segment the body moved along since last step is tried for a crossing, from the
+    /// swim's center offset above the root and from the root itself.
+    fn surface_to_splash(&self, scene: &Course) -> bool {
+        if self.water_finder.found {
+            return !self.is_collided_ground();
+        }
+        let here = self.position_cm();
+        let (vertical, horizontal) = lib::separate_parallel_vertical(GRAVITY, self.v);
+        [k::CENTER_OFFSET, 0.].into_iter().any(|offset| {
+            let start = here + UP * offset;
+            [vertical, horizontal].into_iter().any(|part| {
+                let back = start - part * 1.5;
+                let areas = scene.water_areas();
+                areas.crosses_surface(scene.in_water_frame(back), scene.in_water_frame(start))
+            })
+        })
+    }
+
+    /// `PlayerStateSwim::tryReactionWaterIn`: the splash and the entry sound; the dive and the
+    /// hip drop (action triggers 9, 15, 19 and 29) enter harder.
+    fn try_reaction_water_in(&mut self, scene: &Course) {
+        if self.surface_to_splash(scene) {
+            let strong = self.swim.entered_by_hip_drop;
+            self.events.push(Fx::WaterIn { strong });
+        }
+    }
+
+    /// `PlayerStateSwim::tryReactionWaterOut`: the hit reaction of leaving the water and its
+    /// splash.
+    fn try_reaction_water_out(&mut self, scene: &Course) {
+        if self.surface_to_splash(scene) {
+            self.events.push(Fx::WaterOut);
+        }
+    }
+
+    /// `PlayerStateSwim::isSurface`: the surface is in reach and the swimmer is at it.
+    fn swim_at_surface(&self) -> bool {
+        let finder = self.water_finder;
+        finder.found
+            && (self.swim.nerve == SwimNerve::Surface || finder.distance <= k::SURFACE_START_DIST)
+    }
+
     /// `PlayerActorHakoniwa::exeSwim`: the state's update, then what the actor decides.
     pub(super) fn swim(&mut self, o: &Orders, scene: &Course) {
         let ended = self.swim_update(o, scene);
+        if ended.is_some() {
+            // Every way out of the water raises the reaction first.
+            self.try_reaction_water_out(scene);
+        }
         if let Some(SwimEnd::Jump) = ended {
             // `EndSwimJump`: the actor leaves the water into a jump. (The swim has its own
             // jump judge: the buffered press the generic judge counted stays until the jump's
@@ -389,8 +448,15 @@ impl Player {
             self.start_pound_jump();
             return;
         }
-        // Still swimming: the actor asks whether the water is still deep enough.
+        // Still swimming: the wetness is recorded, and the actor asks whether the water is still
+        // deep enough.
+        if self.swim_at_surface() {
+            self.wet.record_water_surface();
+        } else {
+            self.wet.record_in_water();
+        }
         if !self.is_in_water(scene, SWIM_JUDGE) {
+            self.try_reaction_water_out(scene);
             self.leave_swim(o);
         }
     }

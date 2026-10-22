@@ -417,7 +417,7 @@ impl Recorder {
         }
         // Effects: the original's by their table names, or the stand-ins'.
         let live: BTreeSet<String> = if let Some(tracker) = &mut self.effects {
-            let (names, alive) = tracker.step(p, &fxs, p.trigger_frame());
+            let (names, alive) = tracker.step(p, &fxs, p.effect_frame());
             events.extend(names.into_iter().map(|n| format!("effect:{n}")));
             alive.into_iter().collect()
         } else {

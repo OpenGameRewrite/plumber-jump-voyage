@@ -403,7 +403,7 @@ fn react(
                     );
                 }
             }
-            Fx::Splash => {
+            Fx::WaterIn { .. } | Fx::WaterOut => {
                 for _ in 0..16 {
                     let d = s.dir().with_y(0.).normalize_or(Vec3::X);
                     let up = 3. + s.rand() * 4.;
@@ -418,20 +418,6 @@ fn react(
                     );
                 }
                 s.ring(feet + Vec3::Y * 0.6, 2., 0.5, false);
-            }
-            Fx::SwimStroke => {
-                for _ in 0..5 {
-                    let d = s.dir() * 0.4;
-                    s.particle(
-                        feet + Vec3::Y * 0.8 + d,
-                        Vec3::Y * 1.5 + back,
-                        0.18,
-                        0.9,
-                        -2.,
-                        1.,
-                        3,
-                    );
-                }
             }
             _ => {}
         }
@@ -687,8 +673,7 @@ pub fn burst_names(fx: Fx, flat_speed: f32) -> Vec<&'static str> {
         Fx::Ledge => vec!["LedgeSparks"],
         Fx::Burned(_) => vec!["BurnSparks", "BurnSmoke"],
         Fx::Quenched => vec!["QuenchSteam"],
-        Fx::Splash => vec!["SplashDrops", "SplashRing"],
-        Fx::SwimStroke => vec!["SwimBubbles"],
+        Fx::WaterIn { .. } | Fx::WaterOut => vec!["SplashDrops", "SplashRing"],
         _ => vec![],
     }
 }
@@ -698,7 +683,7 @@ pub fn burst_frames(name: &str) -> u32 {
         n if n.ends_with("Ring") => 30,
         "BurnSparks" | "PoundSparks" | "RollBoostSparks" => 36,
         "BurnSmoke" => 42,
-        "QuenchSteam" | "SplashDrops" | "SwimBubbles" => 54,
+        "QuenchSteam" | "SplashDrops" => 54,
         _ => 27,
     }
 }

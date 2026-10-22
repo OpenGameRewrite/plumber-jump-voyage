@@ -147,8 +147,8 @@ impl Player {
         if first {
             self.swim_anim("SwimHipDropLand");
             self.v = Vec3::ZERO;
-            // (The hit reaction of the landing, `rs::startHitReactionHipDropLand`.)
-            self.events.push(Fx::Land { hard: false });
+            // The hit reaction of the landing (`rs::startHitReactionHipDropLand`).
+            self.events.push(Fx::SwimHipDropLand);
         }
         self.swim.ground_normal = self.ground_normal_or_up();
         self.swim_wait_ground(k::GRAVITY, k::FALL_SPEED_MAX, 0., 0.);
@@ -336,7 +336,8 @@ impl Player {
             self.set_swim_nerve(SwimNerve::Paddle);
             return None;
         }
-        // The hit reaction of falling in (the effects and sounds it raises are not ported).
+        // The fall's last step raises the hit reaction of falling in (its bubbles).
+        self.events.push(Fx::WaterDive);
         self.set_swim_nerve(SwimNerve::Move);
         None
     }

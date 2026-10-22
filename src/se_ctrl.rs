@@ -15,6 +15,10 @@
 //! - **Rolling** starts `Roll` each time the rolling clip passes its sixth frame.
 //! - **Falling fast** holds `FallWhoosh_loop` every frame the vertical speed is
 //!   30 units a frame down or more, counting the frames it has held.
+//! - **The water around the camera**: a sound when the camera dips into the water or comes
+//!   out of it, and an ambience held every frame the camera and the player are both under.
+//! - **The swim stroke** (`SwimStand`) sounds when its clip begins or loops (its frame went
+//!   back since the last update), the bubbles louder from under the water.
 //!
 //! The control lives in the player so one source feeds the sound, the dust and
 //! the headless trace.
@@ -56,6 +60,21 @@ pub struct SeFrame {
     pub swimming: bool,
     /// Frame of the rolling clip, while it plays.
     pub rolling: Option<f32>,
+    /// The frame the animator shows now (`PlayerAnimator::getAnimFrame`).
+    pub anim_frame: f32,
+    /// Frame of the swim stroke's clip, while it plays.
+    pub stroke: Option<f32>,
+    /// Where the camera is, when it is known.
+    pub camera: Option<CameraWater>,
+}
+
+/// The camera's relation to the water.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CameraWater {
+    /// The camera is in a water area, ignored areas too (`al::isInWaterNoIgnore`).
+    pub under: bool,
+    /// The camera and the player are both in water (`al::isInWaterPos` and `al::isInWater`).
+    pub ambience: bool,
 }
 
 /// A sound request of the control.
@@ -69,6 +88,12 @@ pub enum SeEvent {
     Roll,
     /// The fall's wind, held: the consecutive frames it has held.
     FallWhoosh { frames: u32 },
+    /// The camera dipped into the water or came out of it.
+    CameraWater { entered: bool },
+    /// The camera's underwater ambience, held.
+    CameraWaterHold,
+    /// The swim stroke's bubbles; louder when the camera is under the water.
+    SwimStroke { camera_under: bool },
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +108,10 @@ pub struct SeCtrl {
     roll_frame: f32,
     /// Frames the loud fall has held; -1 until the first quiet frame.
     falling: i32,
+    /// The camera was under the water in the last update (`this+0x168`).
+    camera_under: bool,
+    /// The animator's frame in the last update (`this+0x18`).
+    last_anim_frame: f32,
 }
 impl Default for SeCtrl {
     fn default() -> Self {
@@ -92,6 +121,8 @@ impl Default for SeCtrl {
             lifted: false,
             roll_frame: 0.,
             falling: -1,
+            camera_under: false,
+            last_anim_frame: 0.,
         }
     }
 }
@@ -105,6 +136,8 @@ impl SeCtrl {
             self.footsteps(frame, &mut events);
         }
         self.whoosh(frame, &mut events);
+        self.water(frame, &mut events);
+        self.last_anim_frame = frame.anim_frame;
         // Moving counts toward the next footfall in every state.
         if frame.speed.abs() >= NEAR_ZERO {
             self.moved += 1;
@@ -159,6 +192,25 @@ impl SeCtrl {
             events.push(SeEvent::Roll);
         }
         self.roll_frame = now;
+    }
+
+    fn water(&mut self, frame: &SeFrame, events: &mut Vec<SeEvent>) {
+        let under = frame.camera.is_some_and(|camera| camera.under);
+        if let Some(camera) = frame.camera {
+            if camera.under != self.camera_under {
+                events.push(SeEvent::CameraWater { entered: camera.under });
+            }
+            if camera.ambience {
+                events.push(SeEvent::CameraWaterHold);
+            }
+        }
+        self.camera_under = under;
+        // The stroke's sounds start when the clip's frame went back (or it just began).
+        if let Some(now) = frame.stroke
+            && self.last_anim_frame > now
+        {
+            events.push(SeEvent::SwimStroke { camera_under: under });
+        }
     }
 
     fn whoosh(&mut self, frame: &SeFrame, events: &mut Vec<SeEvent>) {

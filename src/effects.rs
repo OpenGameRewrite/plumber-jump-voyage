@@ -312,8 +312,10 @@ fn tick(
     let effects = &mut *effects;
     let context = FxContext { mode: p.mode };
     let mut reactions = vec![];
+    let mut emitted = vec![];
     for f in &fx {
         reactions.extend(reactions_of(*f, context, &mut effects.boosts));
+        emitted.extend(crate::effect_triggers::emitted_by(*f));
         if matches!(f, Fx::Throw(_)) {
             effects.right_hand = !p.anim.name.contains("Left");
         }
@@ -326,7 +328,7 @@ fn tick(
     let changes = effects.triggers.evaluate(&Frame {
         anim: p.anim.name,
         serial: p.anim.serial,
-        frame: p.trigger_frame(),
+        frame: p.effect_frame(),
         cap_anim,
         cap_serial: p.cap.as_ref().map_or(0, crate::movement::Cap::clip_serial),
         cap_frame: p.cap.as_ref().map_or(0., crate::movement::Cap::clip_frame),
@@ -336,6 +338,7 @@ fn tick(
             .is_some_and(crate::movement::Cap::clip_wrapped),
         reactions: &reactions,
         code: &code,
+        emitted: &emitted,
         calls: &code_calls(&p),
         wrapped: p.clip_wrapped,
     });

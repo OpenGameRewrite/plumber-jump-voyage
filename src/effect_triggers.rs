@@ -52,6 +52,10 @@ pub enum Source {
     CapReaction,
     /// Kept running by the controller's own conditions.
     Code,
+    /// Started by the controller's own call through the player's effect keeper (the splash of
+    /// entering and leaving the water): logged without the model's owner mark, and it ends
+    /// with its particles.
+    Emitted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +98,8 @@ pub struct Frame<'a> {
     pub reactions: &'a [Raised],
     /// Effects the controller wants running this frame.
     pub code: &'a [&'a str],
+    /// Effects the controller emits in this very frame through the player's effect keeper.
+    pub emitted: &'a [&'a str],
     /// Effects whose emit call the controller makes in this very frame (the
     /// roll calls its effect every frame it is on the ground).
     pub calls: &'a [&'a str],
@@ -107,6 +113,8 @@ struct ActionEntry {
     key: Key,
     start: i32,
     keep: bool,
+    /// The clip frame that stops the effect (`EndFrame`).
+    end: Option<i32>,
 }
 
 #[derive(Default)]
@@ -114,6 +122,8 @@ pub struct Triggers {
     mario: HashMap<String, Vec<ActionEntry>>,
     cap: HashMap<String, Vec<ActionEntry>>,
     reactions: HashMap<String, Vec<Key>>,
+    /// The player's own entries that no reaction starts: the controller emits them by name.
+    emitted: HashMap<String, Key>,
     /// Effects currently running because of a table entry, with whether to keep them.
     running: HashMap<Key, (Source, bool)>,
     /// Entries of the current clip waiting for their start frame.
@@ -128,6 +138,9 @@ pub struct Triggers {
     /// Entries running that their clip started with itself (start frame -1),
     /// that follow the actor and are not kept.
     clip_bound: HashSet<Key>,
+    /// Entries with an end frame that run in the clip now playing: the effect
+    /// stops when the clip reaches the frame.
+    ending: Vec<(Source, Key, i32)>,
 }
 
 impl Triggers {
@@ -167,7 +180,11 @@ impl Triggers {
                             key: key.clone(),
                             start: action.start,
                             keep: action.keep && !endless,
+                            end: action.end,
                         });
+                }
+                if trigger.table == "Reaction" && trigger.reactions.is_empty() {
+                    triggers.emitted.entry(effect.clone()).or_insert(key.clone());
                 }
                 for reaction in &trigger.reactions {
                     triggers
@@ -209,6 +226,10 @@ impl Triggers {
             source,
             once: false,
         });
+        self.ending.retain(|(_, key, _)| *key != entry.key);
+        if let Some(end) = entry.end {
+            self.ending.push((source, entry.key.clone(), end));
+        }
     }
 
     fn follow_clip(
@@ -229,6 +250,7 @@ impl Triggers {
         *last = now;
         if changed {
             self.waiting.retain(|(s, _)| *s != source);
+            self.ending.retain(|(s, _, _)| *s != source);
             let ended: Vec<Key> = self
                 .running
                 .iter()
@@ -278,6 +300,9 @@ impl Triggers {
                 }
             }
         }
+        // The loop has just restarted: its frame counts from the start again (a counter that
+        // shows the clip's length for a row before it wraps has not wrapped yet).
+        let frame = if wrapped && !changed { 0. } else { frame };
         // Entries that wait for a frame of the clip.
         let (due, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting)
             .into_iter()
@@ -285,6 +310,16 @@ impl Triggers {
         self.waiting = still;
         for (s, entry) in due {
             self.start_action(changes, s, &entry);
+        }
+        // Entries whose end frame the clip has reached.
+        let (over, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.ending)
+            .into_iter()
+            .partition(|(s, _, end)| *s == source && frame >= *end as f32);
+        self.ending = running;
+        for (_, key, _) in over {
+            self.running.remove(&key);
+            self.clip_bound.remove(&key);
+            changes.push(Change::Stop { key });
         }
     }
 
@@ -324,6 +359,15 @@ impl Triggers {
                     key: key.clone(),
                     source,
                     once: true,
+                });
+            }
+        }
+        for name in input.emitted {
+            if let Some(key) = self.emitted.get(*name) {
+                changes.push(Change::Start {
+                    key: key.clone(),
+                    source: Source::Emitted,
+                    once: false,
                 });
             }
         }
@@ -392,7 +436,19 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     if matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun) || p.soot.smoking {
         wanted.push("StateFire");
     }
+    // The drops running off the player after he left the water.
+    if p.is_dripping() {
+        wanted.push("StateWet");
+    }
     wanted
+}
+
+/// The effects the controller emits by name in this frame: the water's splash.
+pub fn emitted_by(fx: Fx) -> Vec<&'static str> {
+    match fx {
+        Fx::WaterIn { .. } | Fx::WaterOut => vec!["WaterSurfaceInOut"],
+        _ => vec![],
+    }
 }
 
 /// The effects whose emit call the controller makes in this frame.
@@ -415,8 +471,6 @@ pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Raised>
         })
         .collect();
     let on_player = |name| Raised { cap: false, name };
-    // (The reaction "WaterDive" belongs to the dive entries of the swim state, not to the
-    // splash of a plain entry into the water.)
     if let Fx::Quenched = fx {
         raised.push(on_player("SootWash"));
     }
@@ -478,6 +532,22 @@ struct Live {
     key: Key,
     owner: &'static str,
     left: Option<u32>,
+    /// Started in the water, with the variant the material code's water prefix picks: the
+    /// effect ends when the prefix goes (`al::Effect::tryUpdateMaterial` replaces the emitter).
+    water_bound: bool,
+}
+/// The material the water prefix picks effect variants by.
+const WATER_MATERIAL: &str = "Water";
+/// Effect resources whose whole span (emission, particles and the report lag) was recorded:
+/// the particles of their nested child emitters depend on the effect system's random draws,
+/// so the table's lives cannot give it (the hip drop landing in water, three recordings,
+/// 73 steps each).
+const MEASURED_SPANS: [(&str, u32); 1] = [("PlayerHipDropLandWater", 73)];
+fn measured_span(resource: &str) -> Option<u32> {
+    MEASURED_SPANS
+        .iter()
+        .find(|(name, _)| *name == resource)
+        .map(|(_, span)| *span)
 }
 /// The real game's name for the actor whose effect keeper runs an effect: its
 /// model for Mario's own and the controller's, its cap for Cappy's.
@@ -485,7 +555,7 @@ fn owner(source: Source) -> &'static str {
     match source {
         Source::Cap | Source::CapReaction => "cap",
         Source::Mario | Source::Code => "model",
-        Source::Reaction => "player",
+        Source::Reaction | Source::Emitted => "player",
     }
 }
 /// Follows the effects a run starts and how long each stays alive, without
@@ -500,6 +570,10 @@ pub struct Tracker {
     live: Vec<Live>,
     /// The material of the floor the effects start on (their resource variant).
     floor: Option<String>,
+    /// Whether the player's root was in water at the end of the last two steps, newest first:
+    /// the effect keeper learns the material code a step late, and the effect that depends on
+    /// it ends a step after that.
+    water: [bool; 2],
 }
 
 impl Tracker {
@@ -511,6 +585,7 @@ impl Tracker {
             right_hand: true,
             live: Vec::new(),
             floor: None,
+            water: [false; 2],
         }
     }
     /// Effects start on this floor material (the course's, when it has one).
@@ -528,8 +603,10 @@ impl Tracker {
     pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
         let context = FxContext { mode: p.mode };
         let mut reactions = vec![];
+        let mut emitted = vec![];
         for fx in events {
             reactions.extend(reactions_of(*fx, context, &mut self.boosts));
+            emitted.extend(emitted_by(*fx));
             if matches!(fx, Fx::Throw(_)) {
                 self.right_hand = !p.anim.name.contains("Left");
             }
@@ -546,6 +623,7 @@ impl Tracker {
             cap_wrapped: p.cap.as_ref().is_some_and(Cap::clip_wrapped),
             reactions: &reactions,
             code: &code,
+            emitted: &emitted,
             calls: &code_calls(p),
             wrapped: p.clip_wrapped,
         });
@@ -554,22 +632,46 @@ impl Tracker {
             match change {
                 Change::Start { key, source, once } => {
                     let owner = owner(source);
-                    if source == Source::Reaction {
+                    if matches!(source, Source::Reaction | Source::Emitted) {
                         started.push(key.effect.clone());
                     } else {
                         started.push(format!("{}@{owner}", key.effect));
                     }
                     self.live.retain(|l| l.key != key);
-                    // An entry with no resource for this floor starts nothing
-                    // that emits, so it never shows among the live effects.
-                    let Some(timing) = self
+                    // The variant is picked by the material code the keeper held in this
+                    // step: the water prefix wins over the floor.
+                    let trigger = self
                         .library
                         .effects
                         .get(&key.effect)
-                        .and_then(|t| t.get(key.trigger))
-                        .and_then(|t| t.resource_for(self.floor.as_deref()))
-                        .and_then(|choice| self.library.timing(Some(choice)))
-                    else {
+                        .and_then(|t| t.get(key.trigger));
+                    let in_water = self.water[0];
+                    let material = if in_water {
+                        Some(WATER_MATERIAL)
+                    } else {
+                        self.floor.as_deref()
+                    };
+                    let choice = trigger.and_then(|t| t.resource_for(material));
+                    let water_variant = in_water
+                        && trigger.is_some_and(|t| {
+                            t.resources
+                                .iter()
+                                .any(|r| r.material.as_deref() == Some(WATER_MATERIAL))
+                        });
+                    // The empty dummy the water prefix picks keeps the effect alive without
+                    // emitting anything (recorded: the jump out of the water).
+                    if water_variant && choice.is_some_and(|c| c.name == EMPTY_RESOURCE) {
+                        self.live.push(Live {
+                            key,
+                            owner,
+                            left: None,
+                            water_bound: true,
+                        });
+                        continue;
+                    }
+                    // An entry with no resource for this floor starts nothing
+                    // that emits, so it never shows among the live effects.
+                    let Some(timing) = choice.and_then(|c| self.library.timing(Some(c))) else {
                         continue;
                     };
                     let emitting = match timing.emitting {
@@ -581,12 +683,22 @@ impl Tracker {
                     // never leave the player's list in any recording of up to
                     // 190 frames; only starting the same effect again renews
                     // them. The others end when their emitters and particles do.
+                    let measured = choice.and_then(|c| measured_span(&c.name));
                     let left = match source {
+                        _ if measured.is_some() => measured,
                         Source::Reaction => None,
                         _ if self.triggers.lives_with_clip(&key) => None,
                         _ => emitting.map(|e| e + timing.linger + REPORT_LAG),
                     };
-                    self.live.push(Live { key, owner, left });
+                    // An emitter that never finishes is swapped for the water's when the
+                    // material code changes, which ends the effect.
+                    let water_bound = water_variant && timing.emitting.is_none();
+                    self.live.push(Live {
+                        key,
+                        owner,
+                        left,
+                        water_bound,
+                    });
                 }
                 // A stopped effect no longer emits at once; the particles it
                 // left only fade.
@@ -601,6 +713,12 @@ impl Tracker {
         {
             self.live.retain(|l| l.key.effect != effect);
         }
+        // The effect that depends on the water prefix ends two steps after the player's root
+        // left the water.
+        if !self.water[1] {
+            self.live.retain(|l| !l.water_bound);
+        }
+        self.water = [p.material_water(), self.water[0]];
         self.live.retain_mut(|live| match &mut live.left {
             Some(0) => false,
             Some(frames) => {
@@ -648,6 +766,7 @@ pub fn self_check() {
         cap_wrapped: false,
         reactions: &[],
         code: &[],
+        emitted: &[],
         calls: &[],
         wrapped: false,
     };

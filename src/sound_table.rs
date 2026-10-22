@@ -278,6 +278,23 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
             name: "StayStart",
         }],
         Fx::Quenched => reaction("FireQuench"),
+        // `PlayerStateSwim::tryReactionWaterIn` starts the entry sound itself; the exit and the
+        // dive raise hit reactions (the exit's sound is in the reaction table).
+        Fx::WaterIn { strong: true } => vec![Cue::Play("PlWaterIn")],
+        Fx::WaterIn { strong: false } => vec![Cue::Play("PlWaterInMedSlow")],
+        Fx::WaterOut => reaction("WaterOut"),
+        Fx::WaterDive => reaction("WaterDive"),
+        Fx::SwimHipDropLand => reaction("HipDropLand"),
+        // The sound control's camera sounds: the camera dipping into the water, its ambience
+        // while it and the player are under, and the swim stroke's bubbles (heard from under
+        // the water; from above only the louder surfacing sound).
+        Fx::CameraWater { entered: true } => vec![Cue::Play("CamWaterIn")],
+        Fx::CameraWater { entered: false } => vec![Cue::Play("CamWaterOut")],
+        Fx::CameraWaterHold => vec![Cue::Hold("CamWaterAmb")],
+        Fx::SwimStrokeSound { camera_under: true } => {
+            vec![Cue::Play("SwimStandBubble"), Cue::Play("SwimStand")]
+        }
+        Fx::SwimStrokeSound { camera_under: false } => vec![Cue::Play("SwimStandBubbleOver")],
         Fx::Burned(again) => reaction(if again { "BurnBounce" } else { "BurnJump" }),
         _ => vec![],
     }

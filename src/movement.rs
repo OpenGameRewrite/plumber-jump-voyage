@@ -282,6 +282,8 @@ mod terrain;
 mod vector_lib;
 #[path = "movement/wait.rs"]
 mod wait;
+#[path = "movement/wet.rs"]
+mod wet;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
 #[path = "movement/wall_along.rs"]
@@ -764,12 +766,31 @@ pub enum Fx {
     WallSlide,
     Ledge,
     Pole,
-    Splash,
+    /// The player entered the water (`PlayerStateSwim::tryReactionWaterIn`): the splash effect
+    /// and the entry sound, the stronger one after a dive or a hip drop.
+    WaterIn {
+        strong: bool,
+    },
+    /// The player left the water (`tryReactionWaterOut`): its hit reaction and the splash effect.
+    WaterOut,
+    /// The fall into the water that starts the swim's dive (the hit reaction `入水落下`).
+    WaterDive,
+    /// The water hip drop reached the bottom (`rs::startHitReactionHipDropLand`).
+    SwimHipDropLand,
+    /// The camera went under the water (`entered`) or came out of it (`PlayerSeCtrl::update`).
+    CameraWater {
+        entered: bool,
+    },
+    /// The ambience of the camera under the water, held while the player is under it too.
+    CameraWaterHold,
+    /// The swim stroke's clip began or looped (`PlayerSeCtrl::update`).
+    SwimStrokeSound {
+        camera_under: bool,
+    },
     /// Hot ground: the leap (false) or the bounce where it lands (true).
     Burned(bool),
     /// Water put the burn out.
     Quenched,
-    SwimStroke,
 }
 /// Clip the presentation should play: an original animation name, or "Move"
 /// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
@@ -1040,6 +1061,14 @@ pub struct Player {
     /// The swim state (`PlayerStateSwim`) and the player's water surface finder.
     swim: swim::Swim,
     water_finder: crate::water::SurfaceFinder,
+    /// The player's wetness and the drops that run off him (`PlayerWetControl`).
+    wet: wet::WetControl,
+    /// Where the camera is, in centimetres relative to the replay's start, when the host
+    /// tells (the water sounds of the camera need it).
+    camera_cm: Option<Vec3>,
+    /// The player's root is in water (not a puddle): the water prefix of the material code that
+    /// effects and sounds pick their variants by (`PlayerActorHakoniwa::movement`).
+    material_water: bool,
     step_phase: f32,
     /// Fall speed the ground stopped in the latest step (zero when it did not
     /// land), kept for the trace: the original still reports it that frame.
@@ -1092,8 +1121,14 @@ pub struct Player {
     mesh_ground: Option<Vec3>,
     /// The collision codes of the mesh surfaces the body touched this step.
     pub touched: terrain::Touched,
-    /// The main clip looped back to its start in this step.
+    /// The main clip looped back to its start in this step, as the game's triggers see it: a
+    /// clip whose counter shows its length for a row before it wraps starts its loop in that
+    /// row.
     pub clip_wrapped: bool,
+    /// The clip's counter wrapped in this step's advance.
+    counter_wrapped: bool,
+    /// The pose frame (unwrapped) the looping clip of that serial showed in the last step.
+    pose_seen: Option<(u32, f32)>,
     /// Steps until the run cycle that follows a dive's landing restarts
     /// (the animator starts it a second time one step after the first).
     cycle_restart_in: u8,
@@ -1201,6 +1236,9 @@ impl Default for Player {
             interpolation_cleared: false,
             age: 0,
             swim: swim::Swim::default(),
+            wet: wet::WetControl::default(),
+            camera_cm: None,
+            material_water: false,
             water_finder: crate::water::SurfaceFinder::default(),
             step_phase: 0.,
             landing_speed: 0.,
@@ -1225,6 +1263,8 @@ impl Default for Player {
             mesh_ground: None,
             touched: terrain::Touched::default(),
             clip_wrapped: false,
+            counter_wrapped: false,
+            pose_seen: None,
             cycle_restart_in: 0,
         }
     }
@@ -1647,8 +1687,46 @@ impl Player {
     pub fn trigger_frame(&self) -> f32 {
         match self.model_frame() {
             Some(frame) => frame,
-            None => self.anim.trigger_frame(),
+            None => self
+                .loop_pose_frame()
+                .unwrap_or_else(|| self.anim.trigger_frame()),
         }
+    }
+    /// The frame effect entries (start and end frames) are matched against: the trigger frame
+    /// within the clip, a loop that has just run past the clip's length counted from its start.
+    pub fn effect_frame(&self) -> f32 {
+        let frame = self.trigger_frame();
+        match clip::loop_length(self.anim.name) {
+            Some(length) if clip::loop_slack(self.anim.name) > 0. && frame >= length => {
+                frame - length
+            }
+            _ => frame,
+        }
+    }
+    /// The pose's frame of a clip whose counter shows its length for a row before it wraps,
+    /// without the wrap: the counter plus the rate change it has still to take over. The loop
+    /// restarts for the triggers when this reaches the clip's length.
+    fn loop_pose_frame(&self) -> Option<f32> {
+        let length = clip::loop_length(self.anim.name)?;
+        (clip::loop_slack(self.anim.name) > 0.).then(|| {
+            let wrapped = if self.counter_wrapped { length } else { 0. };
+            self.anim.frame + self.anim_rate_change + wrapped
+        })
+    }
+    /// A looping clip with a slack starts its loop for the triggers in the step its pose frame
+    /// reaches the clip's length (the pose wraps there, the counter a row later).
+    fn update_loop_start(&mut self) {
+        let Some(length) = clip::loop_length(self.anim.name) else {
+            self.pose_seen = None;
+            return;
+        };
+        let Some(pose) = self.loop_pose_frame() else {
+            self.pose_seen = None;
+            return;
+        };
+        self.clip_wrapped = matches!(self.pose_seen,
+            Some((serial, before)) if serial == self.anim.serial && before < length && pose >= length);
+        self.pose_seen = Some((self.anim.serial, pose));
     }
     /// The frame of the model's action when a sub animation is playing the
     /// main clip too.
@@ -1982,6 +2060,22 @@ impl Player {
             self.cap = Some(cap);
         }
     }
+    /// Tell the player where the camera is, in centimetres relative to the replay's start
+    /// (`None` when the host has no camera): the sound control hears the camera dip into the
+    /// water.
+    pub fn set_camera_position(&mut self, camera_cm: Option<Vec3>) {
+        self.camera_cm = camera_cm;
+    }
+    /// The material code's water prefix: the root is in a water area and the water is deeper
+    /// than a puddle (`PlayerActorHakoniwa::movement`: `isInWater(trans)` and not
+    /// `rs::isInPuddleHeight`).
+    pub fn material_water(&self) -> bool {
+        self.material_water
+    }
+    /// Drops run off the player after the water (the `StateWet` effect emits).
+    pub fn is_dripping(&self) -> bool {
+        self.wet.dripping
+    }
     pub fn reset(&mut self) {
         let checkpoint = self.checkpoint;
         *self = Self::default();
@@ -2122,6 +2216,7 @@ impl Player {
     /// (`PlayerAnimator::updateAnimFrame` inside its movement).
     fn advance_clips(&mut self) {
         self.clip_wrapped = false;
+        self.counter_wrapped = false;
         if self.anim.name == "Move" {
             // The dive's landing clip covers the legs for a while; the run's
             // pose does not move under it.
@@ -2153,11 +2248,17 @@ impl Player {
             if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
                 self.anim.frame -= clip::FIRE_RUN;
             }
-            if let Some(length) = clip::loop_length(self.anim.name)
-                && self.anim.frame >= length + clip::loop_slack(self.anim.name)
-            {
-                self.anim.frame -= length;
-                self.clip_wrapped = true;
+            if let Some(length) = clip::loop_length(self.anim.name) {
+                let slack = clip::loop_slack(self.anim.name);
+                // (A clip whose counter shows its length for a row starts its loop for the
+                // triggers when its pose does: `update_loop_start`.)
+                if slack == 0. {
+                    self.clip_wrapped = self.anim.frame >= length;
+                }
+                if self.anim.frame >= length + slack {
+                    self.anim.frame -= length;
+                    self.counter_wrapped = true;
+                }
             }
         }
         // The upper-body catch animation runs 13 frames.
@@ -2476,7 +2577,11 @@ impl Player {
         }
         self.vel = self.v * UNIT * FPS;
         self.move_speed = self.speed_h();
-        self.update_sounds();
+        self.update_loop_start();
+        // (`PlayerWetControl::update` ends the actor's movement; the player is never in a wet area.)
+        self.wet.update();
+        self.update_material_code(scene);
+        self.update_sounds(scene);
         self.timer = self.frame as f32 / FPS;
         self.since_land = self.land_frames as f32 / FPS;
         // The toy course has nothing below it: falling out of it brings the

@@ -321,6 +321,8 @@ pub struct ActionTrigger {
     pub start: i32,
     /// Keep the effect running after the clip ends.
     pub keep: bool,
+    /// Frame of the clip at which the effect is stopped (the table's `EndFrame`).
+    pub end: Option<i32>,
 }
 
 #[derive(Deserialize, Default, Clone, Debug)]

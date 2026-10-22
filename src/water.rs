@@ -324,6 +324,16 @@ impl WaterAreas {
         None
     }
 
+    /// Whether the segment `from -> to` crosses the surface of the water area that holds either
+    /// end (the arrow `rs::calcFindWaterAreaSurfaceNoWaveByArrow` shoots; GUESS: the executable's
+    /// own area choice is not read, this one follows `find_surface`).
+    pub fn crosses_surface(&self, from: Vec3, to: Vec3) -> bool {
+        let usable = |p: Vec3| self.volume_at(p).filter(|area| !area.ignore);
+        usable(from)
+            .or_else(|| usable(to))
+            .is_some_and(|area| area.arrow(from, to).is_some())
+    }
+
     /// `al::WaterSurfaceFinder::update`: ask for the surface within `dist` of `position` along
     /// `up` (the player passes its up direction and 200).
     pub fn update_finder(&self, position: Vec3, up: Vec3, dist: f32) -> SurfaceFinder {

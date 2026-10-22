@@ -217,6 +217,7 @@ SpinCapAirStartDoubleLeft SpinCapAirStartDoubleRight
 JumpCapLeapFrog JumpCapCatchCommon JumpCapCatch JumpCapCatchAir WallJump WallKeep WallSlideL WallCatchStart WallCatch
 WallCatchEnd WallCatchEndJump PoleCatch PoleClimb PoleFall PoleWait SwimFallIn SwimWait SwimWalk SwimDive'''.split()
 # Event tables keyed by the original's reaction names (shared with the effect tool).
+import reaction_names
 from reaction_names import MARIO_REACTIONS,CAP_REACTIONS
 CAP_ACTIONS=['FlyingWait','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
 # Sounds the player's own code starts (its per-frame sound control, not a clip's
@@ -339,10 +340,13 @@ def install_resources(names,a,game,output,temp):
     return resources,skipped
 
 def add_clips(a):
-    """Add the sound triggers of named Mario clips to the installed table: only
-    new clips are appended, nothing already installed changes. The sounds they
-    play are installed too when `--vgmstream` is given and they are missing
-    (their files are added next to the installed ones, which stay as they are)."""
+    """Add sounds to the installed table without touching what is installed.
+
+    `--add-clip` appends the sound triggers of named Mario clips, `--add-reaction` the plays of
+    named hit reactions (by the original's name) and `--add-play` plays the player's code starts
+    by name; only new entries are appended. The sounds they play are installed too when
+    `--vgmstream` is given and they are missing (their files are added next to the installed
+    ones, which stay as they are)."""
     output=a.output or extract.ROOT/'assets/local/sounds'
     path=output/'player.json'
     table=json.loads(path.read_text(encoding='utf-8'))
@@ -350,15 +354,27 @@ def add_clips(a):
     mario=outfits.byml(db['Mario.byml'])
     known=table['mario']['actions']
     added,missing=[],set()
+    wanted_clips=a.add_clip or []
     for item in mario.get('ActionInfoList',[]):
         name=item['Name']
-        if name not in a.add_clip or name in known:continue
+        if name not in wanted_clips or name in known:continue
         known[name]=[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
             for x in item.get('PlayInfoInActionList',[])]
         missing|={x['play'] for x in known[name] if x['play'] not in table['mario']['plays']}
         added.append(name)
-    for name in a.add_clip:
+    for name in wanted_clips:
         if name not in added and name not in known:print(f'{name}: the game has no sound triggers for this clip')
+    reactions=table['mario']['reactions']
+    for item in mario.get('HitReactionInfoList',[]):
+        name=item['Name']
+        if name not in (a.add_reaction or []):continue
+        english=reaction_names.english(name)
+        if english in reactions:continue
+        reactions[english]=[x['Name'] for x in item.get('PlayInfoList',[])]
+        missing|={x for x in reactions[english] if x not in table['mario']['plays']}
+        added.append(f'{name} ({english})')
+    for name in a.add_play or []:
+        if name not in table['mario']['plays']:missing.add(name)
     if missing and a.vgmstream:
         load=lambda n:outfits.byml(db[n]) if n in db else {}
         plays={}
@@ -391,9 +407,11 @@ def main():
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
     p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
     p.add_argument('--add-clip',action='append',help='Add the sound triggers of this Mario clip (repeatable) to the installed table, and with --vgmstream the sounds it plays that are missing; nothing else changes')
+    p.add_argument('--add-reaction',action='append',help='Add the plays of this hit reaction of Mario (its original name, repeatable) the same way')
+    p.add_argument('--add-play',action='append',help='Add this play the player code starts by name (repeatable) the same way')
     a=p.parse_args()
     if a.self_check:self_check();return
-    if a.add_clip:add_clips(a);return
+    if a.add_clip or a.add_reaction or a.add_play:add_clips(a);return
     if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
     game=read_game(a)
     sounds,wave_files,files,db=game

@@ -538,6 +538,8 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             camera.aim_gain(frame),
             &bindings,
         );
+        // The game's camera (when the trace records it) is what its sound control hears.
+        player.set_camera_position(camera.view(frame).map(|view| view.position * 100.));
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (SETTLE_FRAMES + frame) as i64;

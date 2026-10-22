@@ -42,7 +42,9 @@ def effect_trigger(table, entry):
     """One table entry in the form the game reads."""
     return {
         'table': table,
-        'actions': [{'name': a['ActionName'], 'start': a.get('StartFrame', 0), 'keep': bool(a.get('KeepEmitter'))}
+        # `end` (the table's EndFrame) stops the effect when the clip reaches that frame.
+        'actions': [{'name': a['ActionName'], 'start': a.get('StartFrame', 0), 'keep': bool(a.get('KeepEmitter')),
+                     **({'end': a['EndFrame']} if 'EndFrame' in a else {})}
                     for a in entry.get('ActionList', [])],
         'reactions': [reaction_names.english(r['ReactionName']) for r in entry.get('HitReactionList', [])],
         'joint': entry.get('JointName'),
@@ -181,6 +183,8 @@ def self_check():
     trigger = effect_trigger('Mario', entry)
     assert trigger['flags'] == ['FollowTrans'] and trigger['reactions'] == ['Land', 'unlisted']
     assert trigger['actions'] == [{'name': 'Jump', 'start': -1, 'keep': True}]
+    ended = effect_trigger('Mario', {'ActionList': [{'ActionName': 'Swim', 'StartFrame': 0, 'EndFrame': 12}]})
+    assert ended['actions'] == [{'name': 'Swim', 'start': 0, 'keep': False, 'end': 12}]
     assert trigger['resources'][1] == {'name': 'B', 'material': 'Snow', 'joint': None, 'offset': [0., 30., 0.]}
     assert referenced_resources({'Land': [trigger]}) == ['A', 'B']
     assert finite({'a': [float('nan'), 1.5, float('inf')]}) == {'a': [0., 1.5, 0.]}

@@ -22,8 +22,6 @@ struct Sounds {
 /// A looping sound, tied to the animation or cap state that started it.
 #[derive(Component)]
 struct Looping(&'static str);
-/// Tag of the sound the player holds while its cue keeps coming (falling fast).
-const HOLD: &str = "hold";
 #[derive(Default)]
 struct Tracker {
     cursor: AnimCursor,
@@ -250,7 +248,7 @@ fn play(
     }
     // Event sounds.
     let context = FxContext { mode: p.mode };
-    let mut held = false;
+    let mut held: Vec<&'static str> = Vec::new();
     for f in fx {
         let mut boosts = t.boosts;
         let cues = fx_cues(f, context, &mut boosts);
@@ -265,9 +263,10 @@ fn play(
                     ctx.speed = speed;
                 }
                 Cue::Hold(name) => {
-                    held = true;
-                    if !loops.iter().any(|(_, tag)| tag.0 == HOLD) {
-                        ctx.start_with(false, name, Some(HOLD), true, &mut t);
+                    // A held sound's loop is tagged with its own name.
+                    held.push(name);
+                    if !loops.iter().any(|(_, tag)| tag.0 == name) {
+                        ctx.start_with(false, name, Some(name), true, &mut t);
                     }
                 }
                 Cue::CapPlay(name) => ctx.start(true, name, None, &mut t),
@@ -276,11 +275,9 @@ fn play(
         }
     }
     // A held sound ends the frame its cue stops coming.
-    if !held {
-        for (e, tag) in &loops {
-            if tag.0 == HOLD {
-                ctx.commands.entity(e).despawn();
-            }
+    for (e, tag) in &loops {
+        if !matches!(tag.0, "anim" | "cap") && !held.contains(&tag.0) {
+            ctx.commands.entity(e).despawn();
         }
     }
     // The cap's own clip starts its sounds; its loops end with the clip or
