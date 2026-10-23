@@ -863,6 +863,11 @@ struct ThrowControl {
     continuous: bool,
     /// Which kind the state in progress throws.
     kind: Option<Throw>,
+    /// The state in progress began in the air (`exeSpinAir` instead of
+    /// `exeSpinGround`): the ground judges never ask about it.
+    in_air: bool,
+    /// The direction the cap leaves along, fixed on the state's first step.
+    dir: Option<Vec3>,
 }
 /// A partial animation playing on top of the main clip (`PlayerAnimator::startSubAnim`).
 /// While one plays the main clip's frame is counted by the animator itself
@@ -1026,7 +1031,6 @@ pub struct Player {
     quick_turn: u32,
     catch_window: u32,
     cap_jump_possible: bool,
-    air_throw_used: bool,
     dive_possible: bool,
     gravity: f32,
     jump_extend: bool,
@@ -1228,7 +1232,6 @@ impl Default for Player {
             quick_turn: 0,
             catch_window: 0,
             cap_jump_possible: true,
-            air_throw_used: false,
             dive_possible: true,
             gravity: t::GRAVITY_AIR,
             jump_extend: false,
@@ -1628,6 +1631,21 @@ fn fall_takeoff(vertical_speed: f32) -> air_move::Takeoff {
         fall_max: t::FALL_MAX,
     }
 }
+/// What `PlayerStateSpinCap::updateSpinAirNerve` asks of the air control on
+/// its first step: speed limit and base speed `SpinAirSpeedMax`, lift
+/// `SpinAirJumpPower`, gravity `GravitySpinAir`, no extension, the stick free.
+fn spin_air_takeoff() -> air_move::Takeoff {
+    air_move::Takeoff {
+        speed_limit: t::SPIN_AIR_SPEED_MAX,
+        base_speed: t::SPIN_AIR_SPEED_MAX,
+        extend_frames: 0,
+        power: t::SPIN_AIR_JUMP,
+        gravity: t::SPIN_AIR_GRAVITY,
+        input_lock: 0,
+        speed_window: None,
+        fall_max: t::FALL_MAX,
+    }
+}
 fn lerp_clamped(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0., 1.)
 }
@@ -1861,7 +1879,6 @@ impl Player {
             ("catch_window", self.catch_window as i64),
             ("land_frames", self.land_frames as i64),
             ("cap_jump_possible", self.cap_jump_possible as i64),
-            ("air_throw_used", self.air_throw_used as i64),
             ("dive_possible", self.dive_possible as i64),
             ("run_steps", self.run_steps as i64),
         ]
@@ -1883,7 +1900,6 @@ impl Player {
             "catch_window" => self.catch_window = frames,
             "land_frames" => self.land_frames = frames,
             "cap_jump_possible" => self.cap_jump_possible = value != 0,
-            "air_throw_used" => self.air_throw_used = value != 0,
             "dive_possible" => self.dive_possible = value != 0,
             "run_steps" => self.run_steps = frames,
             _ => return false,
@@ -2496,7 +2512,7 @@ impl Player {
     fn judge_fall(&mut self) {
         if self.ground_lost > GROUND_LOST_FRAMES
             && !self.nerve.deferred
-            && matches!(
+            && (matches!(
                 self.mode,
                 Move::Idle
                     | Move::Walk
@@ -2507,8 +2523,7 @@ impl Player {
                     | Move::Crouch
                     | Move::Crawl
                     | Move::GroundSpin
-                    | Move::Throw
-            )
+            ) || self.mode == Move::Throw && !self.throwing.in_air)
         {
             self.go(Move::Fall, "Fall");
         }
@@ -3998,21 +4013,24 @@ impl Player {
             self.throwing.count = 0;
         }
         self.throwing.kind = Some(kind);
+        self.throwing.in_air = air;
         let name = throw_clip(kind, air, self.throwing.count, self.throwing.continuous);
-        let hang = air && !self.air_throw_used;
-        if hang {
-            self.air_throw_used = true;
-        }
         if !air {
             // The state's ground control pulls the player to the floor from
             // the frame it is chosen.
             self.pull = GRAVITY_MOVE;
             self.v.y = -GRAVITY_MOVE;
         }
+        self.throwing.dir = None;
         self.change(Move::Throw, name, move |p| {
-            if hang {
-                // One small hang per airtime.
-                p.v.y = p.v.y.max(t::SPIN_AIR_JUMP);
+            // First step of the state (`updateSpinGroundNerve` and
+            // `updateSpinAirNerve`): the actor turns to the throw direction.
+            p.face_throw_direction();
+            if air {
+                // `PlayerActionAirMoveControl::setup` with the spin's values:
+                // the small lift of every air throw.
+                p.air.setup(&mut p.v, p.facing, &spin_air_takeoff());
+                p.air_for = Some(Move::Throw);
             }
             p.winding = true;
             p.winding_age = 0;
@@ -4024,6 +4042,23 @@ impl Player {
                 p.start_sub(name, clip::throw(name) as f32, 0.);
             }
         });
+    }
+    /// The first step of a spin: `PlayerInput::calcCapThrowInput` is the
+    /// stick's world direction (the actor's own front when it is not pushed),
+    /// the actor takes it at once (`rs::slerpUpFront` with rate 1) and the cap
+    /// will leave along it whatever the facing does later.
+    fn face_throw_direction(&mut self) {
+        let dir = if self.tilt >= STICK_DEADZONE {
+            self.stick
+        } else {
+            self.facing
+        };
+        let up = self.mesh_ground.filter(|_| self.grounded).unwrap_or(Vec3::Y);
+        let stored = self
+            .actor_pose()
+            .slerp_up_front(up, dir, 1., t::HILL_POSE_DEGREE_MAX);
+        self.set_pose(stored);
+        self.throwing.dir = Some(dir);
     }
     /// Start a sub animation on the model; `frame` is where its counter
     /// stands before this frame's advance.
@@ -4114,11 +4149,16 @@ impl Player {
     /// `PlayerStateSpinCap::exeSpinAir`: the small hang, the cap leaving on
     /// the air throw frame, then the fall once the cap is away.
     fn spin_air(&mut self, o: &Orders, step: u32) {
-        let h = self.v.with_y(0.).clamp_length_max(
-            t::SPIN_AIR_SPEED_MAX.max(self.max_air_speed.min(t::SPIN_AIR_SPEED_MAX)),
-        );
-        self.set_h(h);
-        self.v.y = (self.v.y - t::SPIN_AIR_GRAVITY).max(-t::FALL_MAX);
+        // `updateSpinAirNerve`: the ordinary air control, set up on the first
+        // step with the spin's speed limit, lift and gravity.
+        let steer = air_move::Steering {
+            front: t::JUMP_ACCEL_FRONT,
+            back: t::JUMP_ACCEL_BACK,
+            turn: t::JUMP_ACCEL_TURN,
+        };
+        let push = self.push();
+        self.air.update(&mut self.v, push, o.jump_held, &steer);
+        self.facing = self.air.turn_facing(self.facing, push);
         let release = self.throw_frame(self.throwing.kind.unwrap_or(Throw::Forward), true);
         if step > 22 && !self.winding
             || !self.winding && step >= release + 6 && (self.pre_jump > 0 || o.crouch_pressed)
@@ -4133,7 +4173,12 @@ impl Player {
     }
     fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {
         Launch {
-            front: self.facing.with_y(0.).normalize_or(Vec3::NEG_Z),
+            front: self
+                .throwing
+                .dir
+                .unwrap_or(self.facing)
+                .with_y(0.)
+                .normalize_or(Vec3::NEG_Z),
             kind,
             left: false,
             air: !self.grounded,
@@ -4339,7 +4384,6 @@ impl Player {
                 // Guesses: the new jump may be left with a dive and the air
                 // throw is available again.
                 p.dive_possible = true;
-                p.air_throw_used = false;
             },
         );
     }
@@ -4397,7 +4441,6 @@ impl Player {
         let speed = self.speed_h();
         self.land_frames = 0;
         self.dive_possible = true;
-        self.air_throw_used = false;
         self.gravity = t::GRAVITY_AIR;
         self.hard_land = self.fall.distance >= t::LONG_FALL
             && !matches!(

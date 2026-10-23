@@ -349,7 +349,6 @@ impl Player {
         self.air_for = None;
         self.jump_extend = false;
         self.dive_possible = true;
-        self.air_throw_used = false;
         self.wall_history = WallHistory::default();
         // A stick that already points down when the pole is caught is ignored
         // until it is moved (`_b4`).
@@ -873,7 +872,6 @@ impl Player {
             self.facing = away;
             self.v = away * t::WALL_JUMP_H;
             self.dive_possible = true;
-            self.air_throw_used = false;
             self.jump_extend = false;
             self.gravity = t::WALL_JUMP_GRAVITY;
             self.grounded = false;

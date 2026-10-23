@@ -549,7 +549,6 @@ impl Player {
             p.facing = away;
             p.v = away * t::WALL_JUMP_H;
             p.dive_possible = true;
-            p.air_throw_used = false;
             p.jump_extend = false;
             p.gravity = t::WALL_JUMP_GRAVITY;
             p.grounded = false;
