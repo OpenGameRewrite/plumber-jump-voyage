@@ -308,6 +308,26 @@ The head follows a nearby sensor the way the original's `PlayerEyeSensorHitHolde
   target a frame early or late; lockstep takes the head position, keeper counter and target from
   the game's previous row.
 
+## Cap throw and catch
+
+The throw is the player's `SpinCap` state (`SpinGround` or `SpinAir`). Its first
+step takes the stick's world direction (the facing when the stick is idle) as the
+direction the cap leaves along and turns the actor to it at once. In the air the
+same step sets the air control up with the spin's limits (speed 7, lift 6, gravity
+0.3, nothing extended) and the ordinary air update then pushes with the stick; the
+ground fall judge never ends an air spin (it lasts 23 steps). A ground spin ends
+when its clip does, after the cap is away; the run starts only then.
+
+The cap is caught when its `Catch` sensor (radius 100) touches the player's `Body`
+sensor (50, 75 above the feet) after the cap moved in the frame. The catch plays
+its animation and reaction only in the states that ask for them (standing,
+running, spinning, falling, the ground pound, the long jump, a plain jump or wall
+jump, swimming); in any other (squat, roll, dive, flips, slide, ledge, pole) the
+cap goes on the head at once and the frame is the last one that reports the cap.
+A jump pressed in the catch window, in the air, pops the player up; without the
+press an air catch changes nothing. The cap reads the throw button as the frame
+before left it.
+
 ## Sample point
 
 The game's probe takes one sample per logic frame after the player's movement
