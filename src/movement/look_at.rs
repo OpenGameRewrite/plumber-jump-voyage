@@ -78,6 +78,8 @@ pub fn look_enabled(label: &str) -> bool {
                 | "WaitSleepStart"
                 | "WaitSleep"
         ),
+        // The run state's own test, for its nerve, is `Player::run_nerve_blocks_look`: the
+        // label is `Run/Run3D` through the turn and the brake alike.
         "Run" => sub == "Run3D",
         "Swim" => matches!(
             sub,

@@ -43,7 +43,6 @@ fn the_states_that_may_look_are_the_originals() {
         "Wait/LandStiffen",
         "Wait/WaitSnooze",
         "Wait/WaitSleepStart",
-        "Run/Brake",
         "Jump/Jump",
         "Fall/Fall",
         "Swim/SwimDive",

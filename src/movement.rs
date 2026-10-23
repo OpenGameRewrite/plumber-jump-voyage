@@ -2624,7 +2624,8 @@ impl Player {
             self.reset();
         }
         // The head's look-at runs after the state (`PlayerActorHakoniwa::movement`).
-        let enabled = look_at::look_enabled(self.nerve_name().name);
+        let enabled =
+            look_at::look_enabled(self.nerve_name().name) && !self.run_nerve_blocks_look();
         let actor = self.pose_matrix();
         self.look.step(&actor, enabled, scene.look_sensors());
     }
@@ -2976,6 +2977,13 @@ impl Player {
             }
             RunNerve::Run | RunNerve::RunAfterTurn => {}
         }
+    }
+    /// `PlayerStateRunHakoniwa2D3D::isEnableLookAt` hands `Run3D` to the base run state's own
+    /// `isEnableLookAt`, which answers for its nerve: the run, the brake and the run after a
+    /// turn may look; the turn and the pivot (`TurnPoint`) may not. The nerve counts from the
+    /// step that chooses it (the keeper reads it in that step, a step before the clip starts).
+    fn run_nerve_blocks_look(&self) -> bool {
+        self.mode == Move::Turn
     }
     /// The run state dies and the actor chooses the standing state.
     fn end_run(&mut self) {
