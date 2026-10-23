@@ -550,11 +550,15 @@ const WATER_MATERIAL: &str = "Water";
 /// system's random draws, so the table's lives cannot give it (the hip drop landing in water,
 /// three recordings, 73 steps each; the roll boosts' `Accel` and `AccelSecond`, 37 steps in
 /// one recording each: both end alike although their base lives differ (34 and 32 frames), which
-/// suggests the spark particles' randomised lives, 30 +-60%, set the end; a guess).
-const MEASURED_SPANS: [(&str, u32); 3] = [
+/// suggests the spark particles' randomised lives, 30 +-60%, set the end; a guess). The
+/// run's brake dust on the two lawns was recorded in the long area runs: it is up for 192
+/// steps every time (six brakes), where the table gives 84.
+const MEASURED_SPANS: [(&str, u32); 5] = [
     ("PlayerHipDropLandWater", 73),
     ("PlayerAccel", 37),
     ("PlayerAccelSecond", 37),
+    ("PlayerDashBrakeLawnCap", 192),
+    ("PlayerDashBrakeLawnWaterfall", 192),
 ];
 fn measured_span(resource: &str) -> Option<u32> {
     MEASURED_SPANS
