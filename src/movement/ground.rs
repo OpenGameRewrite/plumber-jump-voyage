@@ -284,7 +284,11 @@ impl TurnControl {
     /// axis points up the same way as `up`.
     pub fn power_signed(&self, up: Vec3) -> f32 {
         let power = self.power();
-        if up.dot(self.last_axis) > 0. { -power } else { power }
+        if up.dot(self.last_axis) > 0. {
+            -power
+        } else {
+            power
+        }
     }
     /// One frame of `PlayerActionTurnControl::update` on the floor with the
     /// normal `up`: the facing is taken into that plane and so is the stick's

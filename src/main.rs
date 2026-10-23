@@ -21,7 +21,6 @@ mod fx;
 mod game_columns;
 mod game_names;
 mod geometry;
-mod skeleton_pose;
 mod input;
 #[cfg(feature = "local-assets")]
 mod legacy_assets;
@@ -34,6 +33,7 @@ mod replay;
 mod scripted_input;
 mod se_ctrl;
 mod shots;
+mod skeleton_pose;
 #[cfg(feature = "local-assets")]
 mod sound;
 // Pure sound rules, shared by the audio and the headless trace.

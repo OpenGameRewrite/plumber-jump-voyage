@@ -174,11 +174,7 @@ impl JointCalc for Unbent {
     fn calc(&mut self, _: Joint, _: &mut Mat34, _: &mut Matrices) {}
 }
 
-pub const IDENTITY: Mat34 = [
-    [1., 0., 0., 0.],
-    [0., 1., 0., 0.],
-    [0., 0., 1., 0.],
-];
+pub const IDENTITY: Mat34 = [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]];
 
 fn invert3(m: &Mat34) -> [[f32; 3]; 3] {
     let c = |r: usize, k: usize| m[r][k];
@@ -227,9 +223,9 @@ fn without_scale_below_root(parent: &Mat34, root: &Mat34) -> Mat34 {
         }
     }
     for c in 0..3 {
-        let length =
-            ((relative[0][c] * relative[0][c] + relative[1][c] * relative[1][c]) + relative[2][c] * relative[2][c])
-                .sqrt();
+        let length = ((relative[0][c] * relative[0][c] + relative[1][c] * relative[1][c])
+            + relative[2][c] * relative[2][c])
+            .sqrt();
         for row in &mut relative {
             row[c] /= length;
         }

@@ -237,6 +237,15 @@ impl GroundPose {
         out
     }
 
+    /// `calcGroundPoseUp`: the actor's up axis as the stood-up spine carries it (the actor's own
+    /// while no stand-up is applied).
+    pub fn ground_pose_up(&self, actor_up: Vec3) -> Vec3 {
+        if is_near_zero_value(self.ik, NEAR_ZERO) {
+            return actor_up;
+        }
+        normalize(rotate_vec(&self.frame.spine.back, actor_up))
+    }
+
     /// The frame the root worked out (the tests read it).
     #[allow(dead_code)]
     pub fn stand_frame(&self) -> &StandFrame {
@@ -287,16 +296,8 @@ impl GroundPose {
             Joint::AllRoot => self.calc_root(world),
             Joint::Hip => self.stand_up(world, self.frame.hip.forward),
             Joint::Spine1 => self.stand_up(world, self.frame.spine.forward),
-            Joint::FootL => self.calc_leg_bottom(
-                world,
-                solved,
-                [Joint::LegL1, Joint::LegL2],
-            ),
-            Joint::FootR => self.calc_leg_bottom(
-                world,
-                solved,
-                [Joint::LegR1, Joint::LegR2],
-            ),
+            Joint::FootL => self.calc_leg_bottom(world, solved, [Joint::LegL1, Joint::LegL2]),
+            Joint::FootR => self.calc_leg_bottom(world, solved, [Joint::LegR1, Joint::LegR2]),
             _ => {}
         }
     }
@@ -326,7 +327,11 @@ impl GroundPose {
         // How far the root's side axis is from level: 0 when it lies across the up, 1 at 45
         // degrees (or more) either way, signed.
         let from_level = calc_angle_degree(side, up) + SHIFT_LEVEL_DEGREES;
-        let magnitude = if from_level > 0. { from_level } else { -from_level };
+        let magnitude = if from_level > 0. {
+            from_level
+        } else {
+            -from_level
+        };
         let share = (magnitude / SHIFT_FULL_DEGREES).clamp(0., 1.);
         let signed = if from_level < 0. { -share } else { share };
         let reach = self.ik * (signed * SHIFT_DISTANCE);
@@ -506,7 +511,8 @@ impl GroundPose {
         let shin = solved[legs[1] as usize];
         let foot_at = Vec3::new(foot[0][3], foot[1][3], foot[2][3]);
         // The foot's place before the hip was turned and shifted.
-        let from_pivot = foot_at - Vec3::new(pivot.x + shift.x, pivot.y + shift.y, pivot.z + shift.z);
+        let from_pivot =
+            foot_at - Vec3::new(pivot.x + shift.x, pivot.y + shift.y, pivot.z + shift.z);
         let held_at = rotate_vec(&hip.back, from_pivot) + pivot;
         let turned_back = rotate_matrix(&hip.back, foot);
         // Only a low foot is held: by how far it stands over the root's plane.
@@ -662,14 +668,7 @@ fn column(m: &Mat34, index: usize) -> Vec3 {
 /// The tilt routine (`0x4546e4`): the matrix leans about its `front` axis so that its `up` axis
 /// is `degrees * tilt` further over than it stands from the vertical, as far as `limit` from
 /// it, the rotation put on the left of the matrix (about the axes of the space it lies in).
-fn tilt_about_front(
-    world: &mut Mat34,
-    front: Vec3,
-    up: Vec3,
-    degrees: f32,
-    tilt: f32,
-    limit: f32,
-) {
+fn tilt_about_front(world: &mut Mat34, front: Vec3, up: Vec3, degrees: f32, tilt: f32, limit: f32) {
     let angle = calc_angle_degree(Vec3::Y, up);
     let across = Vec3::new(
         Vec3::Y.y * up.z - Vec3::Y.z * up.y,
@@ -822,11 +821,7 @@ fn calc_between_two_link_pos(from: Vec3, to: Vec3, first: f32, second: f32, hint
         Vec3::new(d.x * inverse, d.y * inverse, d.z * inverse)
     };
     let along = ((second * second - first * first) + squared) / (squared + squared);
-    let middle = Vec3::new(
-        d.x * along + to.x,
-        d.y * along + to.y,
-        d.z * along + to.z,
-    );
+    let middle = Vec3::new(d.x * along + to.x, d.y * along + to.y, d.z * along + to.z);
     let off = middle - to;
     let height_squared = second * second - squared_length(off);
     if height_squared <= 0. {

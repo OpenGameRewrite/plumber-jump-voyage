@@ -10,6 +10,8 @@ use super::ground_pose::{CenterInput, GroundInputs, GroundPose};
 use super::joint_math::{calc_rate01, lerp_value};
 use super::look_at::LookAt;
 use super::look_joint::{Mat34, translation};
+use super::pose_math::{along_vector_normal_h, try_normalize_or_zero};
+use super::vector_lib::verticalize_vec;
 use super::*;
 use crate::skeleton_pose::{Joint, JointCalc, Matrices};
 
@@ -34,13 +36,17 @@ pub struct RunPose {
 }
 
 impl RunPose {
+    /// `PlayerStateRunHakoniwa::appear`: the count starts over and the rate is whole until the
+    /// first `exeRun` sets it (the frame that begins the state reads it before that).
+    pub fn appear(&mut self) {
+        self.at_top_speed = 0;
+        self.ik = 1.;
+    }
+
     /// One step of `PlayerStateRunHakoniwa::exeRun` (the run and the run after a turn): the
-    /// speed the ground move control gave and the turn tilt it measures.
-    pub fn run_step(&mut self, first_step: bool, speed: f32, turn_tilt: f32) {
-        if first_step {
-            // Every other nerve of the state resets the count when it starts.
-            self.at_top_speed = 0;
-        }
+    /// speed the ground move control gave and the turn tilt it measures. (The count is reset
+    /// by `appear` and by the brake, the turn and the pivot, never by this nerve itself.)
+    pub fn run_step(&mut self, speed: f32, turn_tilt: f32) {
         let over = speed - t::NORMAL_MAX;
         // `al::isNearZeroOrGreater`.
         let reached = over >= 0. || -over < 0.001;
@@ -90,7 +96,6 @@ pub struct JointState {
     /// Frames of follow-up impulses the run still gives after a landing (`PlayerStateRunHakoniwa`
     /// `+0xbc`).
     run_landing: i32,
-    run_active: bool,
     /// What the frame began with: the actor was in the run state, and the collider had just
     /// found the ground (`rs::isJustLand`, which the states read while they decide).
     was_running: bool,
@@ -111,58 +116,90 @@ impl Player {
         self.joints.ground.update(inputs, &center);
     }
 
-    /// `rs::startCenterJointControl(param, actor, collision, vector, false)`: an impulse of
-    /// `vector` along the ground the player stands on.
-    fn start_center_joint_control(&mut self, vector: Vec3) {
-        let up = if self.is_collided_ground() {
-            self.collided_ground_normal()
-        } else {
-            Vec3::Y
-        };
-        // (Ground that moves under the player adds its motion on the landing frame; the
-        // collision this rewrite replays is static.)
+    /// `rs::startCenterJointControl(param, actor, collision, vector, front_free)`: an impulse of
+    /// `vector` along the ground the player stands on. With `front_free` (the landing of the
+    /// standing state) the part of the vector along the actor's front is dropped, so that a
+    /// landing only sways the body sideways.
+    fn start_center_joint_control(&mut self, vector: Vec3, front_free: bool) {
+        let up = self.ground_normal_or_up();
+        let mut vector = vector;
+        if front_free {
+            let (actor_up, front) = self.pose_axes();
+            let (along, found) = try_normalize_or_zero(along_vector_normal_h(front, actor_up, up));
+            if found {
+                vector = verticalize_vec(along, vector);
+            }
+        }
+        // (Ground that moves under the player adds its motion on the landing frame and limits
+        // the vector against the front; the collision this rewrite replays is static.)
         self.joints.center.impulse = true;
-        self.joints.center.impulse_vector = super::vector_lib::verticalize_vec(up, vector);
+        self.joints.center.impulse_vector = verticalize_vec(up, vector);
+    }
+
+    /// `PlayerStateWait::appear` after a landing (not the stiff one, not the triple jump's):
+    /// the velocity the player came down with, carried along the floor, sways the body.
+    pub(super) fn wait_state_appears_after_landing(&mut self, landing_velocity: Vec3) {
+        let up = self.ground_normal_or_up();
+        let along_floor = along_vector_normal_h(landing_velocity, Vec3::Y, up);
+        self.start_center_joint_control(along_floor, true);
+    }
+
+    /// `PlayerStateWait::appear` after the roll's stand-up (`EActionTrigger 0x19`, which
+    /// `PlayerActorHakoniwa::exeRolling` sets when the stand-up ends): the velocity the
+    /// roll still has sways the body strongly, along the ground pose's own up.
+    pub(super) fn wait_state_appears_after_roll(&mut self, velocity: Vec3) {
+        self.start_center_joint_control(velocity, false);
+        let up = self.ground_normal_or_up();
+        let (actor_up, _) = self.pose_axes();
+        let pose_up = self.joints.ground.ground_pose_up(actor_up);
+        let center = &mut self.joints.center;
+        center.impulse_vector = along_vector_normal_h(center.impulse_vector, up, pose_up);
+        center.strong = true;
     }
 
     /// The start of a frame.
     pub(super) fn note_frame_start_for_joints(&mut self) {
         self.joints.was_running = self.actor_name() == "Run";
         self.joints.just_landed = self.is_just_land();
+        // The run state's `control` comes with the frame, before the actor's nerve runs: the
+        // frame that begins the state (`appear`) does not call it. (Recordings of a landing
+        // into a run agree: the impulse of `appear` reaches the sway as an impulse and the
+        // follow-ups start with the next frame.)
+        if self.joints.was_running {
+            self.run_state_control();
+        }
     }
 
     /// The end of a frame, for the run state: the actor choosing it calls its `appear` in that
-    /// frame, and an active run state's `control` follows.
+    /// frame.
     pub(super) fn run_state_frame(&mut self) {
-        let running = self.actor_name() == "Run";
-        if running && !self.joints.was_running {
+        if self.actor_name() == "Run" && !self.joints.was_running {
             self.run_state_appear();
         }
-        self.joints.run_active = running;
-        self.run_state_control();
     }
 
     /// `PlayerStateRunHakoniwa::appear`: landing into a run gives the body its sway.
     fn run_state_appear(&mut self) {
+        self.joints.run.appear();
         self.joints.run_landing = 0;
         if self.joints.just_landed {
             self.joints.run_landing = RUN_LANDING_FRAMES;
             let vector = self.v * RUN_IMPULSE_SHARE;
-            self.start_center_joint_control(vector);
+            self.start_center_joint_control(vector, false);
         }
     }
 
     /// `PlayerStateRunHakoniwa::control`: for a few frames after the landing the run keeps
     /// pushing the sway, as a follow-up of the first impulse; leaving the run's own nerve ends
     /// it with a quick fade.
-    pub(super) fn run_state_control(&mut self) {
-        if !self.joints.run_active || self.joints.run_landing < 1 {
+    fn run_state_control(&mut self) {
+        if self.joints.run_landing < 1 {
             return;
         }
         if self.run_nerve == RunNerve::Run {
             self.joints.run_landing -= 1;
             let vector = self.v * RUN_IMPULSE_SHARE;
-            self.start_center_joint_control(vector);
+            self.start_center_joint_control(vector, false);
             let center = &mut self.joints.center;
             center.impulse = false;
             center.follow_up = true;

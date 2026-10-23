@@ -132,8 +132,7 @@ pub fn rotate_matrix(r: &Rows, m: &Mat34) -> Mat34 {
     let mut out = [[0.; 4]; 3];
     for row in 0..3 {
         for col in 0..4 {
-            out[row][col] =
-                (r[row][0] * m[0][col] + r[row][1] * m[1][col]) + r[row][2] * m[2][col];
+            out[row][col] = (r[row][0] * m[0][col] + r[row][1] * m[1][col]) + r[row][2] * m[2][col];
         }
     }
     out

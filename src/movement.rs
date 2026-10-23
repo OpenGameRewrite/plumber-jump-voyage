@@ -244,10 +244,10 @@ mod ground;
 pub(crate) mod ground_pose;
 #[path = "movement/joint_controls.rs"]
 pub(crate) mod joint_controls;
-#[path = "movement/ledge.rs"]
-mod ledge;
 #[path = "movement/joint_math.rs"]
 pub(crate) mod joint_math;
+#[path = "movement/ledge.rs"]
+mod ledge;
 #[path = "movement/look_at.rs"]
 pub(crate) mod look_at;
 #[path = "movement/look_joint.rs"]
@@ -2978,7 +2978,7 @@ impl Player {
         self.run_steps += 1;
         self.joints
             .run
-            .run_step(step == 0, steer.speed, self.ground.turn_tilt_rate(up));
+            .run_step(steer.speed, self.ground.turn_tilt_rate(up));
         self.steer_pose(up, steer.front);
         self.set_h(steer.velocity);
         self.v.y = -GRAVITY_MOVE;
@@ -4671,6 +4671,10 @@ impl Player {
                         "Jump3" => "LandJump3",
                         _ => "Land",
                     };
+                    // (The triple jump's landing gives the body no sway.)
+                    if anim != "LandJump3" {
+                        self.wait_state_appears_after_landing(flown.0);
+                    }
                     self.change(Move::Idle, anim, |p| p.set_h(Vec3::ZERO));
                 }
             }

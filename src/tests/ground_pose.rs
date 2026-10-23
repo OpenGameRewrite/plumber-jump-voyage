@@ -95,7 +95,10 @@ fn the_exes_ground_pose_agrees_bit_for_bit() {
                     "sequence {n} frame {f} joint {joint:?}: {world:?} want {want:?}"
                 );
                 if let Some(legs) = entry.get("legs") {
-                    for (k, slot) in [joint as usize - 2, joint as usize - 1].into_iter().enumerate() {
+                    for (k, slot) in [joint as usize - 2, joint as usize - 1]
+                        .into_iter()
+                        .enumerate()
+                    {
                         let want = mat34(&legs[k]);
                         assert!(
                             same(&solved[slot], &want),
@@ -107,8 +110,12 @@ fn the_exes_ground_pose_agrees_bit_for_bit() {
                 if joint == Joint::JointRoot {
                     // (Nothing after the joint root changes what the state shows.)
                     let state = pose.state();
-                    let want: Vec<f32> =
-                        frame["state"].as_array().unwrap().iter().map(number).collect();
+                    let want: Vec<f32> = frame["state"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(number)
+                        .collect();
                     let first = state
                         .iter()
                         .zip(&want)
@@ -125,9 +132,17 @@ fn the_exes_ground_pose_agrees_bit_for_bit() {
                 }
             }
             let state = pose.state();
-            let want: Vec<f32> = frame["state"].as_array().unwrap().iter().map(number).collect();
+            let want: Vec<f32> = frame["state"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(number)
+                .collect();
             assert!(
-                state.iter().zip(&want).all(|(a, b)| a.to_bits() == b.to_bits()),
+                state
+                    .iter()
+                    .zip(&want)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
                 "sequence {n} frame {f}: state {state:?} want {want:?}"
             );
         }

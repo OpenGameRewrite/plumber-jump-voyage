@@ -509,6 +509,7 @@ impl Player {
             self.run_frames = t::BRAKE_ON_COUNTER;
             self.go(Move::Run, "Move");
         } else {
+            self.wait_state_appears_after_roll(self.v);
             self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
         }
     }

@@ -12,13 +12,13 @@ use crate::{
     fx,
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
-    skeleton_pose::{Joint, Matrices, PoseLayer, SkeletonPose},
     local_assets::{Blend, Posed, looping},
     movement::{
         Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip,
         look_at::{LookHint, LookSensor},
         look_joint, plane,
     },
+    skeleton_pose::{Joint, Matrices, PoseLayer, SkeletonPose},
     sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
 };
 use bevy::prelude::*;
@@ -346,7 +346,12 @@ impl Recorder {
 
     /// The clips and shares the skeleton's pose is made of (the renderer's weights: outgoing
     /// poses keep their share, the current one the rest).
-    fn pose_layers(&self, p: &Player, covering: Option<Anim>, kept: f32) -> Vec<PoseLayer<'static>> {
+    fn pose_layers(
+        &self,
+        p: &Player,
+        covering: Option<Anim>,
+        kept: f32,
+    ) -> Vec<PoseLayer<'static>> {
         let mut playing: Vec<PoseLayer> = Vec::new();
         if let Some(sub) = covering {
             playing.push(PoseLayer {
@@ -383,7 +388,12 @@ impl Recorder {
 
     /// The skeleton as the model's calculation leaves it this row, controllers included; `None`
     /// without the installed model.
-    fn posed_skeleton(&self, p: &mut Player, covering: Option<Anim>, kept: f32) -> Option<Matrices> {
+    fn posed_skeleton(
+        &self,
+        p: &mut Player,
+        covering: Option<Anim>,
+        kept: f32,
+    ) -> Option<Matrices> {
         let playing = self.pose_layers(p, covering, kept);
         let locals = SkeletonPose::installed()?.locals(&playing)?;
         Some(p.pose_skeleton(&locals))
