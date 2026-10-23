@@ -633,7 +633,7 @@ fn roll_boost_needs_the_force_to_fill() {
     p.step(&press, &floor);
     assert_eq!(chosen(&p), (Move::Roll, "RollingStart"));
     let mut boosts = vec![];
-    for press_number in 1..=4 {
+    for _ in 0..4 {
         frames(&mut p, held.clone(), &floor, 19);
         p.events.clear();
         p.step(&press, &floor);
