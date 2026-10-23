@@ -67,6 +67,7 @@ pub(super) fn run() {
     roll_jump_is_a_nerve_of_the_roll();
     cap_flight();
     spin_throw();
+    air_throw();
     running_throw();
     cap_bounce();
     wall_slide_and_ledge();
@@ -896,16 +897,66 @@ fn spin_throw() {
         (length..=length + 3).contains(&lasted),
         "{lasted} steps for a clip of {length}"
     );
-    // The stick cuts it short once the cap is away (`isEnableCancelGround`),
-    // but not while the cap still winds up.
+    // The stick does not end it: the state runs on to the end of its clip with
+    // the cap away (`exeSpinGround`), and the run starts then.
     let moving = Orders {
         direction: Vec2::X,
         ..default()
     };
     frames(&mut q, moving.clone(), &floor, 5);
     assert_eq!(q.mode, Move::Throw, "the cap has not left yet");
-    frames(&mut q, moving, &floor, 6);
+    frames(&mut q, moving.clone(), &floor, 6);
+    assert_eq!(q.mode, Move::Throw, "the stick does not cut the clip short");
+    frames(&mut q, moving, &floor, length + 3);
     assert_ne!(q.mode, Move::Throw);
+}
+
+/// The throw in the air (`PlayerStateSpinCap::exeSpinAir`): the state stays
+/// in the air for its 23 steps (the ground fall judge is not asked), the first
+/// step sets the air control up with the spin's values (lift 6, gravity 0.3,
+/// the stick pushes 0.5 a frame) and turns the actor to the stick at once.
+#[cfg_attr(test, test)]
+fn air_throw() {
+    let floor = floor();
+    let mut p = Player::default();
+    frames(&mut p, default(), &floor, 12);
+    p.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..default()
+        },
+        &floor,
+    );
+    frames(&mut p, default(), &floor, 8);
+    assert!(!p.grounded);
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!(p.mode, Move::Throw);
+    let right = Orders {
+        direction: Vec2::X,
+        ..default()
+    };
+    p.step(&right, &floor);
+    // The first step: lift 6 less one gravity, the push along the stick, the
+    // actor facing it.
+    assert!((p.v.y - 5.7).abs() < 1e-4, "{}", p.v.y);
+    assert!(
+        (p.v.x - 0.5).abs() < 1e-4 && p.v.z.abs() < 1e-4,
+        "{:?}",
+        p.v
+    );
+    assert!((p.facing - Vec3::X).length() < 1e-4, "{:?}", p.facing);
+    for _ in 0..10 {
+        p.step(&right, &floor);
+        assert_eq!(p.nerve_name().name, "SpinCap/SpinAir");
+    }
+    assert!((p.v.y - 2.7).abs() < 1e-3, "{}", p.v.y);
 }
 
 #[cfg_attr(test, test)]
@@ -962,6 +1013,8 @@ fn cap_bounce() {
             return_speed: 0.,
         });
         p.cap = Some(cap);
+        // The cap reads the button as the frame before left it.
+        p.throw_held_before = true;
         p
     };
     let held = Orders {
@@ -1543,7 +1596,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xd7e78318e36700b1,
+        hash, 0x9d873b8c87386585,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

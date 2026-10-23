@@ -4087,7 +4087,10 @@ impl Player {
         } else {
             self.facing
         };
-        let up = self.mesh_ground.filter(|_| self.grounded).unwrap_or(Vec3::Y);
+        let up = self
+            .mesh_ground
+            .filter(|_| self.grounded)
+            .unwrap_or(Vec3::Y);
         let stored = self
             .actor_pose()
             .slerp_up_front(up, dir, 1., t::HILL_POSE_DEGREE_MAX);

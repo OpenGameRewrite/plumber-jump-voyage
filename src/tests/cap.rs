@@ -4,6 +4,45 @@ pub(super) fn run() {
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
+    the_catch_is_the_sensor_contact();
+}
+
+/// The catch is the contact of the cap's `Catch` sensor (100) with the player's
+/// `Body` sensor (50, centred 75 above the feet), read after the cap moved: a
+/// cap returning at full speed is caught from 150 plus its step away.
+#[cfg_attr(test, test)]
+fn the_catch_is_the_sensor_contact() {
+    let returning = |z: f32| {
+        let mut cap = Cap::start(
+            Launch {
+                front: Vec3::Z,
+                kind: Throw::Forward,
+                left: false,
+                air: false,
+                continuous: false,
+            },
+            Vec3::ZERO,
+            1,
+        );
+        cap.resume(&Moment {
+            nerve: CapNerve::Return,
+            step: 6,
+            spot: Vec3::new(0., 75., z),
+            velocity: Vec3::new(0., 0., -80.),
+            speed: 32.,
+            return_speed: 80.,
+        });
+        cap
+    };
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: None,
+    };
+    // 220 away it comes to about 140 from the body in this frame: touching.
+    assert!(returning(220.).update(&world).contains(&CapEvent::Caught));
+    // 250 away it only comes to about 170: not yet.
+    assert!(!returning(250.).update(&world).contains(&CapEvent::Caught));
 }
 
 /// The standing throw of the recorded `capthrow` run: the cap appears 150 in
