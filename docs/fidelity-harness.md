@@ -156,6 +156,19 @@ does, and drop the wall hits with a face right behind them
 the Cap Kingdom pole's size. Not ported: the swing of motion controls, the
 joints of the arms and legs, the slanted codes' angle offset, moving poles.
 
+Landing (`PlayerActorHakoniwa::setNerveOnGround`) asks its judges in the original's order: the
+buffered jump, `PlayerJudgeStartRun` (the stick), `PlayerJudgeStartSquat` (crouch), then the wait
+state. The force-land judge (`PlayerJudgeForceLand`: a long fall, or action trigger 11, which
+`exeJump` sets when the spin drop's `DownFall` nerve ends on the ground) vetoes the run and the
+squat, and `PlayerStateWait::appear` then picks `LandStiffen`: it plays `LandDownFall` after the
+spin drop and can be cancelled from its 24th step (`HipDropLandCancelFrame`), a hard fall's
+clip not at all. A landing with the stick and crouch held therefore runs first and crouches a
+step later. The roll's restart counters follow `PlayerStateRolling::appear` (counters set in
+the choosing step; `control` first runs after the first nerve step), `control` (the jump nerve
+empties charge and force every step) and `restartRolling` (the boost reaction is named by the
+restart counter: `[1回目]` the first, `[2回目以降]` after that, which a roll that began on a landing
+or a pound cancel starts at one). The probe prints the action trigger word in hexadecimal.
+
 The forced slope slide (`PlayerStateSlope`, started by a floor with the `Slide` code and
 ended on flat ground) runs `PlayerActionSlopeSlideControl` as the roll does. The nerve
 machine starts the state in the step that chose it (`appear` and its collision, in the
@@ -274,6 +287,10 @@ The head follows a nearby sensor the way the original's `PlayerEyeSensorHitHolde
   collected coins, `CoinCollectEmpty`, at the placement plus `DisplayTranslate`). Without them a
   replay has no look-at candidates, as on the flat floor. Hosts that answer `LookAtPosition`, NPCs
   that move and the fixed-direction modes of the bind and demo states are not ported.
+* **Run state.** `PlayerStateRunHakoniwa2D3D::isEnableLookAt` hands `Run3D` to the base run
+  state's test for its own nerve: the run, the brake and the run after a turn may look, the turn
+  and the pivot (`TurnPoint`) may not. The mode follows the nerve chosen in the same step, a step
+  before the clip starts (`spin-ground-restart`, `land-down-fall-zl`). The wall push is not ported.
 * **Columns.** `look_keeper`, `look_sensors` (the holder's candidate and the keeper's target as
   `host/sensor/type`) and `look_target` (the stage position asked for this frame) follow the probe's
   format. `head_q` is the head joint's world rotation after the look-at. `head_pos` (the animated

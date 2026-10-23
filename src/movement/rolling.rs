@@ -242,14 +242,53 @@ impl Player {
             "RollingLand" => RollNerve::Land,
             _ => RollNerve::Rolling,
         };
+        // The counters the row does not show, from the steps it does: the actor's state steps
+        // (since the roll was entered) and the nerve's (since the latest restart, or since the
+        // roll began on a landing, which starts in `Rolling`).
         let steps = state_steps as i32;
+        let nerve_rows = nerve_steps as i32;
+        let landed_into_rolling = nerve == RollNerve::Rolling && steps == nerve_rows;
+        let (frames, charge, restarts) = match nerve {
+            _ if landed_into_rolling => {
+                // `appear` preset frames, charge and the restart counter (action trigger 8 or
+                // 0x11); `control` ran once for each step since.
+                (
+                    t::ROLL_FRAMES_MIN + nerve_rows,
+                    t::ROLL_RESTART_CHARGE + nerve_rows,
+                    1,
+                )
+            }
+            RollNerve::Start | RollNerve::Rolling => {
+                // `restartRolling` empties the frame count in the step that chooses `Start`
+                // and that step's `control` counts it: a restart is one ahead of a start
+                // that `appear` chose.
+                let rows = nerve_rows
+                    + if nerve == RollNerve::Rolling {
+                        clip::ROLLING_START as i32 + 1
+                    } else {
+                        0
+                    };
+                (
+                    rows + i32::from(steps > rows),
+                    rows + i32::from(steps > rows),
+                    0,
+                )
+            }
+            _ => (steps, steps, 0),
+        };
         self.rolling = RollControl {
             nerve,
             steps: nerve_steps,
-            frames: steps.min(t::ROLL_FRAMES_MIN + 1),
-            charge: steps.min(t::ROLL_RESTART_CHARGE + 1),
-            force: steps.min(t::ROLL_RESTART_FORCE),
-            restarts: 0,
+            frames: frames.min(t::ROLL_FRAMES_MIN + 1),
+            charge: charge.min(t::ROLL_RESTART_CHARGE + 1),
+            // Boosts since the roll began are not in the row: the force is counted from the start.
+            force: if landed_into_rolling {
+                nerve_rows
+            } else {
+                steps
+            }
+            .min(t::ROLL_RESTART_FORCE),
+            restarts,
             air_frames: 0,
             control: SlideControl {
                 horizontal_velocity: self.v.with_y(0.),

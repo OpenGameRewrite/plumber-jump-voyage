@@ -62,6 +62,8 @@ pub(super) fn run() {
     dive_roll_landing();
     roll_timing_and_boost();
     roll_winds_down();
+    roll_boost_needs_the_force_to_fill();
+    landing_asks_the_run_judge_before_the_squat();
     roll_jump_is_a_nerve_of_the_roll();
     cap_flight();
     spin_throw();
@@ -609,6 +611,99 @@ fn roll_timing_and_boost() {
     // Releasing crouch stands up once the new roll has run its minimum.
     frames(&mut p, Orders::default(), &floor, 80);
     assert_ne!(p.mode, Move::Roll);
+}
+
+/// The restart boosts only when the restart force (`ReStartForce`, 60 steps since the roll
+/// began or the last boost) or the charge is full: presses 20 steps apart boost on the fourth
+/// (the recorded `roll-boost`), and the roll that began on a landing counts its first boost
+/// as the second.
+#[cfg_attr(test, test)]
+fn roll_boost_needs_the_force_to_fill() {
+    let floor = floor();
+    let held = Orders {
+        crouch: true,
+        ..default()
+    };
+    let press = Orders {
+        throw_pressed: true,
+        ..held.clone()
+    };
+    let mut p = Player::default();
+    frames(&mut p, held.clone(), &floor, 3);
+    p.step(&press, &floor);
+    assert_eq!(chosen(&p), (Move::Roll, "RollingStart"));
+    let mut boosts = vec![];
+    for press_number in 1..=4 {
+        frames(&mut p, held.clone(), &floor, 19);
+        p.events.clear();
+        p.step(&press, &floor);
+        boosts.push(
+            p.events
+                .iter()
+                .filter(|fx| matches!(fx, Fx::RollBoost { .. }))
+                .count(),
+        );
+    }
+    assert_eq!(boosts, [0, 0, 0, 1]);
+    // The charge of a roll that began in `Rolling` (a landing) is full: its first press boosts,
+    // and as the second boost of the roll.
+    let mut q = Player::default();
+    q.start_roll(RollStart::Landing);
+    frames(&mut q, held.clone(), &floor, 12);
+    q.events.clear();
+    q.step(&press, &floor);
+    assert!(
+        q.events
+            .iter()
+            .any(|fx| matches!(fx, Fx::RollBoost { again: true }))
+    );
+}
+
+/// `setNerveOnGround` asks the run judge before the squat judge: with the stick and crouch held at
+/// touchdown the run state is chosen, and it starts the crouch a step later (the recorded
+/// `roll-from-land`). The spin drop's landing (`ForceLand`) vetoes both.
+#[cfg_attr(test, test)]
+fn landing_asks_the_run_judge_before_the_squat() {
+    let floor = floor();
+    let run = fwd(Orders::default());
+    let mut p = Player::default();
+    frames(&mut p, run.clone(), &floor, 30);
+    p.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..run.clone()
+        },
+        &floor,
+    );
+    let crouching = Orders {
+        crouch: true,
+        ..run.clone()
+    };
+    until_landed(&mut p, crouching.clone(), &floor);
+    assert!(
+        matches!(p.mode, Move::Run | Move::Walk),
+        "the stick runs first: {:?}",
+        p.mode
+    );
+    p.step(&crouching, &floor);
+    assert_eq!(p.mode, Move::SquatBrake);
+    // Standing still, crouch alone squats at touchdown.
+    let mut q = Player::default();
+    q.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..default()
+        },
+        &floor,
+    );
+    let held = Orders {
+        crouch: true,
+        ..default()
+    };
+    until_landed(&mut q, held, &floor);
+    assert_eq!(q.mode, Move::SquatBrake);
 }
 
 /// A roll that slows below the end speed with crouch held unrolls, brakes
@@ -1448,7 +1543,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x9f65b70f96b0ae4,
+        hash, 0xd7e78318e36700b1,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

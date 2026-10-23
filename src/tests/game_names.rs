@@ -46,7 +46,9 @@ fn observed_names() {
     // Landing is the Wait nerve's own sub-state while the landing clip plays.
     assert_eq!(nerve(Move::Idle, "Land").name, "Wait/Land");
     assert!(!nerve(Move::Idle, "Land").guess);
-    assert!(!nerve(Move::Idle, "LandJump3").guess && nerve(Move::Idle, "LandDownFall").guess);
+    assert!(!nerve(Move::Idle, "LandJump3").guess && !nerve(Move::Idle, "LandDownFall").guess);
+    // After a spin drop the wait state is in `LandStiffen` (it plays `LandDownFall`).
+    assert_eq!(nerve(Move::Idle, "LandDownFall").name, "Wait/LandStiffen");
     // Second and third jumps, flips and rolls were logged by the real game too.
     assert!(!nerve(Move::DoubleJump, "Jump2").guess && !nerve(Move::TripleJump, "Jump3").guess);
     assert_eq!(nerve(Move::Backflip, "JumpBack").name, "Jump/JumpBack");
