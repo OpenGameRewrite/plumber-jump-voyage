@@ -636,6 +636,10 @@ impl Recorder {
             && ended != p.anim.name
             && !self.stale_clip.is_empty()
         {
+            // The animator restarts the main clip (`endSubAnim`): the fade the
+            // clip had begun is replaced by the restart's own.
+            self.blend.old.clear();
+            interp.clear();
             self.restart = Some((self.stale_clip, 0));
         }
         self.sub_clip = sub_now;
