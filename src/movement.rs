@@ -949,8 +949,6 @@ pub struct Player {
     /// The cap is Mario's spin attack, waiting for the throw frame
     /// (the cap's `SpinAttack` nerve).
     winding: bool,
-    /// The cap reached the head this frame; its landing work is left.
-    caught: bool,
     /// The air throw is over but its state runs on: the fall of the spin cap
     /// state (`PlayerStateSpinCap`'s `Fall` nerve) until the player lands.
     spin_fall: bool,
@@ -1179,7 +1177,6 @@ impl Default for Player {
             launch: None,
             cap_serial: 0,
             winding: false,
-            caught: false,
             spin_fall: false,
             catching: None,
             catch_clip: "CatchCap",
@@ -2056,7 +2053,6 @@ impl Player {
         self.launch = None;
         self.winding = false;
         self.winding_age = 0;
-        self.caught = false;
         self.catching = s.catching;
         self.catch_clip = self.clip_of_catch();
         self.upper_catch = None;
@@ -2449,7 +2445,6 @@ impl Player {
             self.judge_wall_keep(scene);
             self.judge_in_water(scene);
         }
-        self.finish_catch();
         let moved = self.v;
         self.collide(&o, scene);
         self.update_water_finder(scene);
@@ -3840,6 +3835,9 @@ impl Player {
     }
     /// Airborne transitions shared by every free-flight state.
     fn air_actions(&mut self, o: &Orders) -> bool {
+        if self.try_cap_catch_pop(o) {
+            return true;
+        }
         if (self.pre_throw > 0 || o.throw_pressed) && o.crouch && self.dive_possible {
             self.pre_throw = 0;
             self.dive();
@@ -4203,7 +4201,6 @@ impl Player {
     /// The cap's frame, which comes before the player's
     /// (`HackCap::movement` before `PlayerActorHakoniwa::movement`).
     fn update_cap(&mut self, o: &Orders, scene: &Course) {
-        self.caught = false;
         if self.winding {
             self.winding_age += 1;
         }
@@ -4268,7 +4265,6 @@ impl Player {
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {
                     self.cap = None;
-                    self.caught = true;
                     self.catching = Some(-1);
                     self.events.push(Fx::Catch);
                     self.catch_window = t::CAP_CATCH_WINDOW;
@@ -4300,18 +4296,22 @@ impl Player {
     pub fn upper_catch(&self) -> Option<&'static str> {
         self.upper_catch.map(|_| self.catch_clip)
     }
-    /// What the catch leaves for the player's own step: in midair the catch
-    /// gives a small pop.
-    fn finish_catch(&mut self) {
-        if !std::mem::take(&mut self.caught) {
-            return;
+    /// `PlayerJudgeCapCatchPop::judge`, asked by `tryChangeNerveFromAir`: in the
+    /// catch window (`PlayerCounterAfterCapCatch::isCapCatch`), with the cap
+    /// back on the head and no ground under the feet, a jump press pops the
+    /// player up (`PlayerStateCapCatchPop`: `CapCatchPopPower`, then
+    /// `CapCatchPopGravity`). Without the press the catch leaves the jump alone
+    /// (recorded: cap-catch-air). The pop's clip and state label are guesses.
+    fn try_cap_catch_pop(&mut self, o: &Orders) -> bool {
+        if self.catch_window == 0 || !o.jump || self.grounded || !self.mode.airborne_jump() {
+            return false;
         }
-        if !self.grounded && self.mode.airborne_jump() && self.v.y < 0. {
-            self.v.y = t::CAP_CATCH_POP_POWER;
-            self.gravity = t::CAP_CATCH_POP_GRAVITY;
-            self.air.set_gravity(t::CAP_CATCH_POP_GRAVITY);
-            self.play("JumpCapCatchCommon");
-        }
+        self.catch_window = 0;
+        self.v.y = t::CAP_CATCH_POP_POWER;
+        self.gravity = t::CAP_CATCH_POP_GRAVITY;
+        self.air.set_gravity(t::CAP_CATCH_POP_GRAVITY);
+        self.play("JumpCapCatchCommon");
+        true
     }
     /// The hit sensors' phase of the frame, after the cap moved and before the
     /// player does: the foot sensor against the hovering cap's `Trample` sensor
