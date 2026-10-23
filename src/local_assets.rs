@@ -393,6 +393,10 @@ pub fn fallback(name: &str) -> &'static str {
 mod imported {
     use super::*;
     use crate::asset_contract::{self, Bone, Part as AssetPart, Stain, Surface, VisibilityRole};
+    use crate::movement::ground_pose::GroundPose;
+    use crate::movement::look_at::LookAt;
+    use crate::movement::look_joint::Mat34;
+    use crate::skeleton_pose::{JOINT_COUNT, Joint};
     #[derive(Component)]
     struct Imported;
     #[derive(Component)]
@@ -449,11 +453,11 @@ mod imported {
         checks::run();
     }
     pub fn plugin(app: &mut App) {
-        // The head's look-at turns the joint the animation just posed, before the transforms
+        // The joint controllers bend the joints the animation just posed, before the transforms
         // are propagated.
         app.add_systems(
             PostUpdate,
-            aim_head
+            pose_joints
                 .after(bevy::app::AnimationSystems)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
@@ -473,46 +477,23 @@ mod imported {
                 .after(crate::world::animate),
         );
     }
-    /// The player's head look-at, shown. The simulation owns its state (`Player::look`); this
-    /// hands it the head joint as the animation leaves it, in the model's frame (the joint's
-    /// local transform times those of the nodes above it, up to the imported model), and turns
-    /// the joint the way the look-at answers (`look_joint.rs`: the matrix times the turn).
-    fn aim_head(
-        mut player: Single<&mut crate::movement::Player>,
-        bones: Query<(Entity, &Bone)>,
-        parents: Query<&ChildOf>,
-        imported: Query<(), With<Imported>>,
-        mut transforms: Query<&mut Transform>,
-        // The head, the rotation the animation gave it, and the one written back.
-        mut written: Local<Option<(Entity, Quat, Quat)>>,
-    ) {
-        let Some((head, _)) = bones.iter().find(|(_, b)| b.key[0] == "Armature_Head") else {
-            return;
-        };
-        let Ok(mut transform) = transforms.get_mut(head) else {
-            return;
-        };
-        // A clip with no rotation for the head leaves what was written last frame there.
-        let animated = match *written {
-            Some((entity, animated, shown)) if entity == head && transform.rotation == shown => {
-                animated
-            }
-            _ => transform.rotation,
-        };
-        transform.rotation = animated;
-        let mut matrix = Mat4::IDENTITY;
-        let mut node = head;
-        loop {
-            let Ok(local) = transforms.get(node) else {
-                return;
-            };
-            matrix = local.to_matrix() * matrix;
-            match parents.get(node) {
-                Ok(parent) if !imported.contains(parent.parent()) => node = parent.parent(),
-                _ => break,
-            }
-        }
-        let rows = |r: usize| {
+    /// What the joint controllers' pose system remembers between frames.
+    #[derive(Default)]
+    struct JointMemory {
+        /// The joints bent last frame: the transform the animation gave and the one written.
+        written: Vec<(Entity, Transform, Transform)>,
+        /// The step the controllers last advanced for, and their state from before it.
+        step: Option<u32>,
+        before: Option<(GroundPose, LookAt)>,
+    }
+    /// A joint of the model as the animation leaves it: the node's entity, and the matrix of
+    /// the nodes between it and its parent joint (the identity where it is the child itself).
+    struct AnimatedJoint {
+        entity: Entity,
+        lead: Mat4,
+    }
+    fn mat34(matrix: Mat4) -> Mat34 {
+        let row = |r: usize| {
             [
                 matrix.col(0)[r],
                 matrix.col(1)[r],
@@ -520,12 +501,95 @@ mod imported {
                 matrix.col(3)[r],
             ]
         };
-        player.look.set_animated_head([rows(0), rows(1), rows(2)]);
-        let turned = animated * player.look.joint.turn();
-        if let Ok(mut transform) = transforms.get_mut(head) {
-            transform.rotation = turned;
+        [row(0), row(1), row(2)]
+    }
+    fn mat4(rows: &Mat34) -> Mat4 {
+        Mat4::from_cols_array_2d(&[
+            [rows[0][0], rows[1][0], rows[2][0], 0.],
+            [rows[0][1], rows[1][1], rows[2][1], 0.],
+            [rows[0][2], rows[1][2], rows[2][2], 0.],
+            [rows[0][3], rows[1][3], rows[2][3], 1.],
+        ])
+    }
+    /// The player's joint controllers, shown: the ground pose (the body's lean, the sway of
+    /// a landing, the legs planted) and the head's look-at. The animation has just posed the
+    /// joints; this hands their local matrices, in the model's frame, to the controllers
+    /// (`Player::pose_skeleton`, the calculation the trace does without a renderer) and
+    /// writes the joints they bent back, before the transforms are propagated. The
+    /// controllers' state moves once a simulation step, however often the frame is drawn.
+    fn pose_joints(
+        mut player: Single<&mut crate::movement::Player>,
+        bones: Query<(Entity, &Bone)>,
+        parents: Query<&ChildOf>,
+        imported: Query<(), With<Imported>>,
+        mut transforms: Query<&mut Transform>,
+        mut memory: Local<JointMemory>,
+    ) {
+        // A clip with no channel for a joint leaves what was written last frame there.
+        for (entity, animated, shown) in memory.written.drain(..) {
+            if let Ok(mut transform) = transforms.get_mut(entity)
+                && *transform == shown
+            {
+                *transform = animated;
+            }
         }
-        *written = Some((head, animated, turned));
+        let mut nodes = [None; JOINT_COUNT];
+        for (entity, bone) in &bones {
+            if let Some(joint) = Joint::from_node_name(&bone.key[0]) {
+                nodes[joint as usize] = Some(entity);
+            }
+        }
+        let mut joints = Vec::with_capacity(JOINT_COUNT);
+        let mut locals = [crate::skeleton_pose::IDENTITY; JOINT_COUNT];
+        for joint in Joint::ALL {
+            let Some(entity) = nodes[joint as usize] else {
+                return;
+            };
+            let above = joint.parent().and_then(|p| nodes[p as usize]);
+            let Ok(own) = transforms.get(entity) else {
+                return;
+            };
+            let mut lead = Mat4::IDENTITY;
+            let mut matrix = own.to_matrix();
+            let mut node = entity;
+            loop {
+                match parents.get(node) {
+                    Ok(parent)
+                        if Some(parent.parent()) != above
+                            && !imported.contains(parent.parent()) =>
+                    {
+                        node = parent.parent();
+                        let Ok(local) = transforms.get(node) else {
+                            return;
+                        };
+                        lead = local.to_matrix() * lead;
+                        matrix = local.to_matrix() * matrix;
+                    }
+                    _ => break,
+                }
+            }
+            locals[joint as usize] = mat34(matrix);
+            joints.push(AnimatedJoint { entity, lead });
+        }
+        let step = player.step_count();
+        let bent = match (memory.step == Some(step), memory.before.clone()) {
+            (true, Some(mut before)) => player.pose_skeleton_from(&mut before, &locals),
+            _ => {
+                memory.step = Some(step);
+                memory.before = Some(player.controllers());
+                player.pose_skeleton(&locals)
+            }
+        };
+        let actor = player.pose_matrix();
+        for (joint, local) in crate::skeleton_pose::bent_locals(&actor, &locals, &bent) {
+            let AnimatedJoint { entity, lead } = &joints[joint as usize];
+            let Ok(mut transform) = transforms.get_mut(*entity) else {
+                continue;
+            };
+            let animated = *transform;
+            *transform = Transform::from_matrix(lead.inverse() * mat4(&local));
+            memory.written.push((*entity, animated, *transform));
+        }
     }
     fn select(
         mut commands: Commands,

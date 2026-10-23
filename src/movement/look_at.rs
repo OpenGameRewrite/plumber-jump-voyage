@@ -21,7 +21,7 @@
 //! and widens the gate by the sensor's radius), the fixed-direction modes of the bind and demo
 //! states, the entrance camera, and the dead or disregarding hosts: the sensors that replays
 //! know are static placements whose hosts answer neither query.
-use super::look_joint::{HeadLookAt, Mat34, translation, world_matrix};
+use super::look_joint::{HeadLookAt, Mat34, translation};
 use super::vector_lib::converge;
 use bevy::prelude::Vec3;
 
@@ -125,10 +125,6 @@ pub struct LookAt {
     /// The head joint's position after the previous model calculation (cm), which the keeper
     /// reads when it chooses.
     head: Option<Vec3>,
-    /// The head joint's matrix in the model's frame as the renderer's animation leaves it, when
-    /// a renderer provides it: the step then turns the head itself (the headless trace calls
-    /// `turn_head` with the pose it evaluates instead).
-    animated_head: Option<Mat34>,
 }
 
 /// What a recorded row says of the look-at, for a lockstep replay that starts every frame from
@@ -152,18 +148,11 @@ impl Default for LookAt {
             joint: HeadLookAt::default(),
             previous_eye: None,
             head: None,
-            animated_head: None,
         }
     }
 }
 
 impl LookAt {
-    /// The head joint's matrix in the model's frame (cm) after the animation, from the renderer.
-    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
-    pub fn set_animated_head(&mut self, head: Mat34) {
-        self.animated_head = Some(head);
-    }
-
     /// The head joint's position (cm, replay frame) after the model's last calculation.
     pub fn set_head_position(&mut self, head: Vec3) {
         self.head = Some(head);
@@ -279,12 +268,6 @@ impl LookAt {
             if nearer {
                 self.candidate = Some(index);
             }
-        }
-        // The model's calculation that follows, when a renderer provides the animated head.
-        if let Some(local) = self.animated_head {
-            let mut head = world_matrix(actor, &local);
-            self.head = Some(translation(&head));
-            self.joint.apply(&mut head, actor);
         }
     }
 

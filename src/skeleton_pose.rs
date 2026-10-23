@@ -129,6 +129,13 @@ impl Joint {
         NAMES[self as usize]
     }
 
+    /// The joint a node of the model is, by its name in the converted file.
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn from_node_name(name: &str) -> Option<Joint> {
+        let short = name.strip_prefix(JOINT_PREFIX)?;
+        Joint::ALL.into_iter().find(|joint| joint.name() == short)
+    }
+
     /// The joint above this one in the skeleton (none for the root).
     pub fn parent(self) -> Option<Joint> {
         use Joint::*;
@@ -255,6 +262,45 @@ pub fn world_pose(actor: &Mat34, locals: &Matrices, calc: &mut impl JointCalc) -
         worlds[joint as usize] = world;
     }
     worlds
+}
+
+/// The inverse of an affine matrix.
+fn invert34(m: &Mat34) -> Mat34 {
+    let inverse = invert3(m);
+    let mut out = [[0.; 4]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = inverse[r][c];
+        }
+        out[r][3] =
+            -((inverse[r][0] * m[0][3] + inverse[r][1] * m[1][3]) + inverse[r][2] * m[2][3]);
+    }
+    out
+}
+
+/// The local matrices a skeleton the controllers bent needs to show that pose when the
+/// renderer composes the joints itself: only the joints a controller moved (the legs' own
+/// matrices included) change; the others keep their animated local matrix and follow their
+/// bent parents. `bent` is what `world_pose` returned for `locals`.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub fn bent_locals(actor: &Mat34, locals: &Matrices, bent: &Matrices) -> Vec<(Joint, Mat34)> {
+    let mut moved = Vec::new();
+    for joint in Joint::ALL {
+        let mut above = joint.parent().map_or(*actor, |p| bent[p as usize]);
+        if SCALE_COMPENSATING.contains(&joint) {
+            above = without_scale_below_root(&above, &bent[Joint::AllRoot as usize]);
+        }
+        let expected = mul34(&above, &locals[joint as usize]);
+        let same = expected
+            .iter()
+            .flatten()
+            .zip(bent[joint as usize].iter().flatten())
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+        if !same {
+            moved.push((joint, mul34(&invert34(&above), &bent[joint as usize])));
+        }
+    }
+    moved
 }
 
 /// One clip playing: its name, the frame it shows and its share of the blend.

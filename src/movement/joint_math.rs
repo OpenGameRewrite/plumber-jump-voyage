@@ -27,11 +27,6 @@ pub fn calc_rate01(value: f32, from: f32, to: f32) -> f32 {
     }
 }
 
-/// `al::easeIn`.
-pub fn ease_in(t: f32) -> f32 {
-    ((-0.5 * t + 1.5) * t) * t
-}
-
 /// `al::easeOut`.
 pub fn ease_out(t: f32) -> f32 {
     ((-0.5 * t) * t + 1.5) * t
@@ -108,22 +103,6 @@ pub fn make_quat_rotation_limit(from: Vec3, to: Vec3, max_radians: f32) -> Quat 
     let half = (share * angle) * 0.5;
     let (cos, sin) = (cosf(half), sinf(half));
     Quat::from_xyzw(sin * axis.x, sin * axis.y, sin * axis.z, cos)
-}
-
-/// The matrix's x, y or z axis (a column of its rotation part).
-pub fn column(m: &Mat34, index: usize) -> Vec3 {
-    Vec3::new(m[0][index], m[1][index], m[2][index])
-}
-
-/// The matrix's translation.
-pub fn position(m: &Mat34) -> Vec3 {
-    column(m, 3)
-}
-
-pub fn set_position(m: &mut Mat34, at: Vec3) {
-    m[0][3] = at.x;
-    m[1][3] = at.y;
-    m[2][3] = at.z;
 }
 
 /// `sead::Matrix34::multiply(out, rotation, m)`: the rotation turns the whole matrix, the

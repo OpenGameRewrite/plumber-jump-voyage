@@ -269,8 +269,6 @@ pub struct HeadLookAt {
     following: bool,
     /// The actor's front at the last call.
     last_front: Vec3,
-    /// The rotation the last call put on the joint (applied on the right of its matrix).
-    turn: Quat,
 }
 
 impl Default for HeadLookAt {
@@ -285,7 +283,6 @@ impl Default for HeadLookAt {
             wanted: Quat::IDENTITY,
             following: false,
             last_front: Vec3::Z,
-            turn: Quat::IDENTITY,
         }
     }
 }
@@ -341,13 +338,6 @@ impl HeadLookAt {
         self.current
     }
 
-    /// The rotation the last call put on the right of the joint's matrix (none when it left the
-    /// joint alone): a joint's local rotation is turned the same way.
-    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
-    pub fn turn(&self) -> Quat {
-        self.turn
-    }
-
     /// How far that turn is from none, in degrees.
     pub fn turn_degrees(&self) -> f32 {
         2. * self.current.w.abs().min(1.).acos() * RADIANS_TO_DEGREES
@@ -357,7 +347,6 @@ impl HeadLookAt {
     /// animated world matrix and is replaced by the turned one; `actor` is the player's pose
     /// matrix (its third column is the front).
     pub fn apply(&mut self, joint: &mut Mat34, actor: &Mat34) {
-        self.turn = Quat::IDENTITY;
         let axes = axes();
         let to_point = Vec3::new(
             self.target.x - joint[0][3],
@@ -410,7 +399,6 @@ impl HeadLookAt {
             self.current = super::pose_math::slerp(self.current, wanted, FOLLOW_SHARE);
         }
         let turn = conjugated_by_basis(self.current, axes);
-        self.turn = turn;
         let rotation = rotation_rows(turn);
         // The matrix times the turn, each element a product and two fused multiply-adds.
         let old = *joint;
@@ -488,19 +476,6 @@ impl HeadLookAt {
         // `makeQuatFrontSide` for a front along the up axis cannot happen inside the head's range.
         Some(super::pose_math::quat_front_up(front, Vec3::Y))
     }
-}
-
-/// A joint's matrix in the frame of the actor's pose: the actor's pose matrix (a rotation with
-/// the position in its last column) applied to the joint's matrix in the actor's frame.
-pub fn world_matrix(actor: &Mat34, local: &Mat34) -> Mat34 {
-    let mut out = [[0.; 4]; 3];
-    for r in 0..3 {
-        for c in 0..3 {
-            out[r][c] = (0..3).map(|k| actor[r][k] * local[k][c]).sum();
-        }
-        out[r][3] = (0..3).map(|k| actor[r][k] * local[k][3]).sum::<f32>() + actor[r][3];
-    }
-    out
 }
 
 /// The matrix's translation column.

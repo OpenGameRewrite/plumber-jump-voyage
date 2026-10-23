@@ -2895,6 +2895,37 @@ impl Player {
         };
         crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
     }
+
+    /// The controllers' state a pose calculation advances: the ground pose's and the look-at's.
+    /// A renderer that shows one step's pose over several frames keeps a copy from before the
+    /// calculation and poses with it (`pose_skeleton_from`), so that the state moves once a step.
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn controllers(&self) -> (ground_pose::GroundPose, look_at::LookAt) {
+        (self.joints.ground.clone(), self.look.clone())
+    }
+
+    /// `pose_skeleton` with the controllers' state from `controllers`, which it advances; the
+    /// player's own does not move.
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn pose_skeleton_from(
+        &self,
+        controllers: &mut (ground_pose::GroundPose, look_at::LookAt),
+        locals: &crate::skeleton_pose::Matrices,
+    ) -> crate::skeleton_pose::Matrices {
+        let actor = self.pose_matrix();
+        let mut controls = joint_controls::Controls {
+            ground: &mut controllers.0,
+            look: &mut controllers.1,
+            actor,
+        };
+        crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
+    }
+
+    /// The steps taken since the player was placed (a renderer poses once per step).
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn step_count(&self) -> u32 {
+        self.age
+    }
     /// `rs::waitGround`'s pose (every nerve of the standing state): the pose's
     /// up follows the floor's normal (at most 45 degrees from vertical) by the
     /// slerp rate; its front is the one it has.
