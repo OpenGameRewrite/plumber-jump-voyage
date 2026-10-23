@@ -542,18 +542,16 @@ struct Live {
 /// The material the water prefix picks effect variants by.
 const WATER_MATERIAL: &str = "Water";
 /// Effect resources whose whole span (emission, particles and the report lag) was recorded:
-/// the particles of their nested child emitters depend on the effect system's random draws,
-/// so the table's lives cannot give it (the hip drop landing in water, three recordings,
-/// 73 steps each).
-const MEASURED_SPANS: [(&str, u32); 1] = [("PlayerHipDropLandWater", 73)];
-/// The hit-reaction effects recorded to end: the roll boost's `Accel` and
-/// `AccelSecond` read as live for 37 steps, the emission, the longest particle
-/// life of the resource (34 and 32 frames) and the report lag. Why these end
-/// while the landings' and the dive's bubbles do not is not known: a guess that
-/// stays to the recorded names.
-fn ends_with_its_particles(effect: &str) -> bool {
-    matches!(effect, "Accel" | "AccelSecond")
-}
+/// the particles of their nested child emitters or randomised lives depend on the effect
+/// system's random draws, so the table's lives cannot give it (the hip drop landing in water,
+/// three recordings, 73 steps each; the roll boosts' `Accel` and `AccelSecond`, 37 steps in
+/// one recording each: both end alike although their base lives differ (34 and 32 frames), which
+/// suggests the spark particles' randomised lives, 30 +-60%, set the end; a guess).
+const MEASURED_SPANS: [(&str, u32); 3] = [
+    ("PlayerHipDropLandWater", 73),
+    ("PlayerAccel", 37),
+    ("PlayerAccelSecond", 37),
+];
 fn measured_span(resource: &str) -> Option<u32> {
     MEASURED_SPANS
         .iter()
@@ -691,13 +689,12 @@ impl Tracker {
                     // The effects a hit reaction starts (`Land`, `HipDropLand`,
                     // `SwimBubbleFirstDive`) never leave the player's list in any
                     // recording of up to 190 frames; only starting the same effect
-                    // again renews them. The roll boost's are the recorded
-                    // exceptions (see `ends_with_its_particles`); the others end
-                    // when their emitters and particles do.
+                    // again renews them, except the resources with a recorded span.
+                    // The others end when their emitters and particles do.
                     let measured = choice.and_then(|c| measured_span(&c.name));
                     let left = match source {
                         _ if measured.is_some() => measured,
-                        Source::Reaction if !ends_with_its_particles(&key.effect) => None,
+                        Source::Reaction => None,
                         _ if self.triggers.lives_with_clip(&key) => None,
                         _ => emitting.map(|e| e + timing.linger + REPORT_LAG),
                     };

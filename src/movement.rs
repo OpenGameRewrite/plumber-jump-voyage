@@ -2691,6 +2691,16 @@ impl Player {
             self.run_step(o);
         }
     }
+    /// `PlayerStateWait::isEnableCancelAction` in the `LandStiffen` nerve: the hard landing
+    /// cannot be cancelled until its clip ends, and the one after a spin drop (cancel frame
+    /// `HipDropLandCancelFrame`, read at the nerve's first step) from its 24th step on.
+    fn land_stiffen_holds(&self) -> bool {
+        match self.clip() {
+            "LandStiffen" => self.standing_clip_playing(),
+            "LandDownFall" => self.nerve.step + 1 < t::HIP_DROP_LAND_CANCEL,
+            _ => false,
+        }
+    }
     /// Standing: the stick starts the run (the start-run judge), which is a
     /// new nerve, chosen now and moving from its first step.
     fn stand(&mut self, o: &Orders) {
@@ -2707,7 +2717,7 @@ impl Player {
             self.go(Move::Walk, "Move");
             return;
         }
-        if self.ground_actions(o) {
+        if !self.land_stiffen_holds() && self.ground_actions(o) {
             return;
         }
         self.run_frames = 0;
@@ -4402,9 +4412,13 @@ impl Player {
                 });
                 return;
             }
+            // The spin jump's drop (the `JumpSpinGroundDownFall` nerve, ZL held) ends on the
+            // ground: `PlayerActorHakoniwa::exeJump` sets action trigger 11 for
+            // `isEndJumpDownFallLand`, which makes `PlayerJudgeForceLand` true, so no run or
+            // squat starts and the wait state appears in its `LandStiffen` nerve. That nerve
+            // plays `LandDownFall` after a drop and raises no landing reaction.
             Move::SpinDrop => {
                 self.go(Move::Idle, "LandDownFall");
-                self.events.push(Fx::PoundLand);
                 return;
             }
             // Holding crouch turns the momentum into a real roll; otherwise a

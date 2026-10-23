@@ -89,7 +89,8 @@ fn idle(anim: &str) -> Nerve {
     match anim {
         // The landing clip and its variants after a triple jump and a flip.
         "Land" | "LandJump3" | "LandTurn" | "LandRolling" => known("Wait/Land"),
-        "LandDownFall" => guessed("Wait/Land"),
+        // After a spin drop the wait state's `LandStiffen` nerve plays the `LandDownFall` clip.
+        "LandDownFall" => known("Wait/LandStiffen"),
         "LandStiffen" => known("Wait/LandStiffen"),
         "SquatEnd" => known("Squat/StandUp"),
         // The idle sequence: each sub-nerve of the wait state plays one clip.
