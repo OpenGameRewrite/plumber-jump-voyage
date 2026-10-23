@@ -949,6 +949,10 @@ pub struct Player {
     pub cap: Option<Cap>,
     /// A throw started last frame; the cap appears when it updates.
     launch: Option<Launch>,
+    /// The cap was put on the head without a catch (`HackCap::forcePutOn`) in
+    /// the last frame's sensor phase: the frame is still reported with the
+    /// cap, which is gone from the next one.
+    cap_put_on: bool,
     /// The last number given to a clip start of the cap (they count on).
     cap_serial: u32,
     /// The cap is Mario's spin attack, waiting for the throw frame
@@ -1180,6 +1184,7 @@ impl Default for Player {
             grounded: true,
             cap: None,
             launch: None,
+            cap_put_on: false,
             cap_serial: 0,
             winding: false,
             spin_fall: false,
@@ -4221,6 +4226,9 @@ impl Player {
             self.catching =
                 (frames <= crate::cap::catch_frames(self.catch_clip) as i32).then_some(frames);
         }
+        if std::mem::take(&mut self.cap_put_on) {
+            self.cap = None;
+        }
         // A throw started last frame: the cap's throw start places it and
         // sets it flying; the throw nerve itself runs from the next frame.
         if let Some(launch) = self.launch.take() {
@@ -4275,13 +4283,15 @@ impl Player {
                 CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {
-                    self.cap = None;
                     self.catch_window = t::CAP_CATCH_WINDOW;
                     if !self.catch_reacts() {
-                        // The cap goes on the head at once (`putOnCapPlayer`):
-                        // no catch animation, hit reaction or effect.
+                        // The cap goes on the head (`putOnCapPlayer`): no catch
+                        // animation, hit reaction or effect. It is reported
+                        // once more where this frame left it.
+                        self.cap_put_on = true;
                         break;
                     }
+                    self.cap = None;
                     self.catching = Some(-1);
                     self.events.push(Fx::Catch);
                     // Standing in the wait nerve, the catch plays its sub

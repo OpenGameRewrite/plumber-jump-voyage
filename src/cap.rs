@@ -461,13 +461,8 @@ impl Cap {
             self.returning = next == CapNerve::Return;
         }
         self.advance(world.mesh);
-        // The sensors touch where the cap has come to. A cap that has just started
-        // back is not caught in its first step (recorded: cap-jump-dive, a cap
-        // 133 from the body at its first move came on a frame later; the
-        // `Catch` sensor most likely joins the sensor groups only after that
-        // step, which is a guess).
+        // The sensors touch where the cap has come to.
         if self.nerve == CapNerve::Return
-            && self.step >= 2
             && (self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
         {
             events.push(CapEvent::Caught);
