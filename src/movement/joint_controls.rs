@@ -108,9 +108,6 @@ impl Player {
     pub(super) fn update_joint_controls(&mut self) {
         let inputs = self.ground_pose_inputs();
         let center = std::mem::take(&mut self.joints.center);
-        if std::env::var("PJV_DEBUG_IK").is_ok() {
-            eprintln!("{} {:?} {:?} {:?} ground={:?} land={} active={} landing={} contact={} was={} jl={}", self.nerve_name().name, inputs, self.joints.run, self.joints.center, self.joints.ground, self.is_just_land(), self.joints.run_active, self.joints.run_landing, self.ground_contact, self.joints.was_running, self.joints.just_landed);
-        }
         self.joints.ground.update(inputs, &center);
     }
 
