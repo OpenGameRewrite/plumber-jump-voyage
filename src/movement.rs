@@ -346,8 +346,10 @@ fn throw_clip(kind: Throw, air: bool, count: u32, continuous: bool) -> &'static 
         (Throw::Forward, false, 2, false) => "SpinCapStart2Right",
         (Throw::Forward, false, _, _) => "SpinCapStart3Right",
         (Throw::Forward, true, 1, false) => "SpinCapAirStart",
-        (Throw::Forward, true, 2, false) => "SpinCapAirStart2Right",
-        (Throw::Forward, true, _, _) => "SpinCapAirStart3Right",
+        // The builder spells the second and third throw out of the ground
+        // clip's name even in the air.
+        (Throw::Forward, true, 2, false) => "SpinCapStart2Right",
+        (Throw::Forward, true, _, _) => "SpinCapStart3Right",
     }
 }
 
@@ -376,7 +378,6 @@ pub mod clip {
             "SpinCapStartLeft" | "SpinCapStartRight" => 17,
             "SpinCapStart2Left" | "SpinCapStart2Right" => 32,
             "SpinCapStart3Left" | "SpinCapStart3Right" => 42,
-            "SpinCapAirStart2Right" | "SpinCapAirStart3Right" => 72,
             "SpinCapStartDoubleUp" | "SpinCapStartDoubleDown" | "SpinCapAirStartDoubleUp" => 26,
             "SpinCapAirStartDoubleDown" => 28,
             "SpinCapStartDoubleLeft" | "SpinCapStartDoubleRight" => 44,
@@ -2224,6 +2225,9 @@ impl Player {
         }
         if self.is_roll_brake() {
             return crate::game_names::known("Rolling/Brake");
+        }
+        if self.mode == Move::Throw && self.throwing.in_air {
+            return crate::game_names::known("SpinCap/SpinAir");
         }
         if self.mode == Move::Ledge {
             return crate::game_names::known(self.catch_nerve().name());
@@ -4142,11 +4146,15 @@ impl Player {
             self.ground_jump(o);
         } else if o.crouch {
             self.start_squat();
-        } else if self.tilt >= STICK_DEADZONE {
-            self.go(Move::Walk, "Move");
         } else if self.anim_done(clip::throw(self.anim.name)) {
-            // The state ends when its clip has, once the cap is away.
-            self.go(Move::Idle, "Wait");
+            // The state ends when its clip has, once the cap is away
+            // (`exeSpinGround`), and the actor picks the next state
+            // (`setNerveOnGround`): the run when the stick is held.
+            if self.tilt >= STICK_DEADZONE {
+                self.go(Move::Walk, "Move");
+            } else {
+                self.go(Move::Idle, "Wait");
+            }
         }
     }
     /// `PlayerStateSpinCap::exeSpinAir`: the small hang, the cap leaving on

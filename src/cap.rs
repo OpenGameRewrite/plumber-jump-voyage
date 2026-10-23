@@ -50,18 +50,14 @@ const START_DISTANCE: f32 = 150.;
 /// Height of the player's head above the feet (`rs::getPlayerHeadPos`
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
-/// The cap is caught when it starts a frame this close to the player's `Body` sensor (centred
-/// 75 above the feet): the contact is found at the end of the frame the cap flew into range, and
-/// the catch itself runs when the next frame begins (`HackCap::receiveMsg` takes
-/// `PlayerCapCatch` on its `Catch` sensor and flags the cap, the player's movement then puts it
-/// on). The sensors are a sphere of 100 on the cap and one of 50 on the body, which would touch
-/// at 150, but the recordings do not show that: 32 catches (standing, spin and air throws and
-/// a cap jump) were made from up to 205.9 away, and
-/// returns that were not caught stayed outside 216.4, so the reach is read off them as 210.
-/// Nothing in the code explains the difference (guess: the cap's sensor is scaled), so this is a
-/// reading of the recordings and not of the code. Measured to the head the same data leave a gap
-/// of only 1.2 (202.8 to 204.0), to the feet none.
-const CATCH_DISTANCE: f32 = 210.;
+/// The cap is caught when its `Catch` hit sensor (a sphere of 100 around the cap's centre,
+/// added by `PlayerFunction::initCapModelActor`) touches the player's `Body` sensor (50, see
+/// `CATCH_CENTER_HEIGHT`). The sensors' contact is read after the cap has moved in the frame
+/// and before the player's movement (`HackCap::receiveMsg` takes `PlayerCapCatch` and flags the
+/// cap, the player's movement then puts it on), so a cap that flew into range this frame is
+/// caught in it.
+const CATCH_SENSOR_RADIUS: f32 = 100.;
+const BODY_SENSOR_RADIUS: f32 = 50.;
 /// Height of the player's `Body` sensor above the feet (`PlayerActorHakoniwa/InitSensor`).
 const CATCH_CENTER_HEIGHT: f32 = 75.;
 /// The return only slows down this near the head: speed is limited to a
@@ -444,12 +440,6 @@ impl Cap {
         let head = world.player / UNIT + Vec3::Y * HEAD_HEIGHT;
         let body = world.player / UNIT + Vec3::Y * CATCH_CENTER_HEIGHT;
         let mut events = Vec::new();
-        // In range at the start of the frame: the catch happens before the
-        // cap moves any further.
-        if self.nerve == CapNerve::Return && (self.spot - body).length() <= CATCH_DISTANCE {
-            events.push(CapEvent::Caught);
-            return events;
-        }
         if std::mem::take(&mut self.trampled) {
             self.nerve = CapNerve::Trample;
             self.step = 0;
@@ -470,6 +460,12 @@ impl Cap {
             self.returning = next == CapNerve::Return;
         }
         self.advance(world.mesh);
+        // The sensors touch where the cap has come to.
+        if self.nerve == CapNerve::Return
+            && (self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
+        {
+            events.push(CapEvent::Caught);
+        }
         events
     }
     /// The collider moves the cap by its velocity: in a stage's collision it
