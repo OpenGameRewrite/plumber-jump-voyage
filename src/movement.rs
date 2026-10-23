@@ -4276,9 +4276,14 @@ impl Player {
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {
                     self.cap = None;
+                    self.catch_window = t::CAP_CATCH_WINDOW;
+                    if !self.catch_reacts() {
+                        // The cap goes on the head at once (`putOnCapPlayer`):
+                        // no catch animation, hit reaction or effect.
+                        break;
+                    }
                     self.catching = Some(-1);
                     self.events.push(Fx::Catch);
-                    self.catch_window = t::CAP_CATCH_WINDOW;
                     // Standing in the wait nerve, the catch plays its sub
                     // animation; otherwise it plays an upper-body one. Either
                     // starts before this frame's advance.
@@ -4291,6 +4296,22 @@ impl Player {
                     break;
                 }
             }
+        }
+    }
+    /// Whether the catch shows (`PlayerActorHakoniwa::isEnableReactionCapCatch`,
+    /// asked by its `attackSensor` after the cap's `Catch` sensor was taken):
+    /// standing, running, spinning, falling, in the ground pound, the long jump,
+    /// a plain jump or wall jump, and swimming play the catch; in any other
+    /// state (squat, roll, dive, flips, spin jump, slide, ledge, pole) the cap
+    /// is simply put on.
+    fn catch_reacts(&self) -> bool {
+        let label = self.nerve_name().name;
+        let (actor, sub) = label.split_once('/').unwrap_or((label, ""));
+        match actor {
+            "Wait" | "Run" | "SpinCap" | "HipDrop" | "LongJump" | "Fall" | "Swim" => true,
+            "Jump" => sub == "Jump",
+            "WallAir" => sub == "Jump",
+            _ => false,
         }
     }
     /// The catch clip of the player's state.
