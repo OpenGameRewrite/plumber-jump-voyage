@@ -465,8 +465,8 @@ pub fn code_calls(p: &Player) -> Vec<&'static str> {
 
 /// Reaction names the effect tables listen to for one movement event: the
 /// ones the sound tables use (shared through `fx_cues`) and a few more.
-pub fn reactions_of(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Raised> {
-    let mut raised: Vec<Raised> = fx_cues(fx, context, boosts)
+pub fn reactions_of(fx: Fx, context: FxContext) -> Vec<Raised> {
+    let mut raised: Vec<Raised> = fx_cues(fx, context)
         .into_iter()
         .filter_map(|cue| match cue {
             Cue::Reaction { cap, name } => Some(Raised { cap, name }),
@@ -546,6 +546,14 @@ const WATER_MATERIAL: &str = "Water";
 /// so the table's lives cannot give it (the hip drop landing in water, three recordings,
 /// 73 steps each).
 const MEASURED_SPANS: [(&str, u32); 1] = [("PlayerHipDropLandWater", 73)];
+/// The hit-reaction effects recorded to end: the roll boost's `Accel` and
+/// `AccelSecond` read as live for 37 steps, the emission, the longest particle
+/// life of the resource (34 and 32 frames) and the report lag. Why these end
+/// while the landings' and the dive's bubbles do not is not known: a guess that
+/// stays to the recorded names.
+fn ends_with_its_particles(effect: &str) -> bool {
+    matches!(effect, "Accel" | "AccelSecond")
+}
 fn measured_span(resource: &str) -> Option<u32> {
     MEASURED_SPANS
         .iter()
@@ -567,7 +575,6 @@ fn owner(source: Source) -> &'static str {
 pub struct Tracker {
     triggers: Triggers,
     library: Library,
-    boosts: u32,
     right_hand: bool,
     /// Effect name, entry, and frames of life left (none: until stopped).
     live: Vec<Live>,
@@ -584,7 +591,6 @@ impl Tracker {
         Self {
             triggers: Triggers::new(&library),
             library,
-            boosts: 0,
             right_hand: true,
             live: Vec::new(),
             floor: None,
@@ -608,7 +614,7 @@ impl Tracker {
         let mut reactions = vec![];
         let mut emitted = vec![];
         for fx in events {
-            reactions.extend(reactions_of(*fx, context, &mut self.boosts));
+            reactions.extend(reactions_of(*fx, context));
             emitted.extend(emitted_by(*fx));
             if matches!(fx, Fx::Throw(_)) {
                 self.right_hand = !p.anim.name.contains("Left");
@@ -682,14 +688,16 @@ impl Tracker {
                         None if once => Some(ONE_SHOT_LIMIT),
                         None => None,
                     };
-                    // The effects a hit reaction starts (`Land`, `HipDropLand`)
-                    // never leave the player's list in any recording of up to
-                    // 190 frames; only starting the same effect again renews
-                    // them. The others end when their emitters and particles do.
+                    // The effects a hit reaction starts (`Land`, `HipDropLand`,
+                    // `SwimBubbleFirstDive`) never leave the player's list in any
+                    // recording of up to 190 frames; only starting the same effect
+                    // again renews them. The roll boost's are the recorded
+                    // exceptions (see `ends_with_its_particles`); the others end
+                    // when their emitters and particles do.
                     let measured = choice.and_then(|c| measured_span(&c.name));
                     let left = match source {
                         _ if measured.is_some() => measured,
-                        Source::Reaction => None,
+                        Source::Reaction if !ends_with_its_particles(&key.effect) => None,
                         _ if self.triggers.lives_with_clip(&key) => None,
                         _ => emitting.map(|e| e + timing.linger + REPORT_LAG),
                     };
@@ -890,19 +898,15 @@ pub fn self_check() {
     assert!(code_driven(&p).is_empty());
     // Reaction names share the sound rules and add the effect-only ones.
     let context = FxContext { mode: Move::Run };
-    let mut boosts = 0;
     let names = |raised: Vec<Raised>| raised.iter().map(|r| r.name).collect::<Vec<_>>();
     assert_eq!(
-        names(reactions_of(Fx::Land { hard: true }, context, &mut boosts)),
+        names(reactions_of(Fx::Land { hard: true }, context)),
         ["LandFall"]
     );
-    assert_eq!(
-        names(reactions_of(Fx::PoundLand, context, &mut boosts)),
-        ["HipDropLand"]
-    );
+    assert_eq!(names(reactions_of(Fx::PoundLand, context)), ["HipDropLand"]);
     // The catch is a reaction of the cap.
     assert_eq!(
-        reactions_of(Fx::Catch, context, &mut boosts),
+        reactions_of(Fx::Catch, context),
         [Raised {
             cap: true,
             name: "Catch"

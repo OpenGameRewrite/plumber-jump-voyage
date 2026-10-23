@@ -191,9 +191,8 @@ fn landing_reaction(mode: Move) -> Option<&'static str> {
         _ => Some("Land"),
     }
 }
-/// Sounds for one movement event. `boosts` counts roll boosts since the roll
-/// began: the first boost sounds different from the following ones.
-pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
+/// Sounds for one movement event.
+pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
     let reaction = |name| vec![Cue::Reaction { cap: false, name }];
     match fx {
         // The footfall, its material variant and the clothes' rustle.
@@ -217,20 +216,14 @@ pub fn fx_cues(fx: Fx, context: FxContext, boosts: &mut u32) -> Vec<Cue> {
         // (`PlayerStateWait::exeLandStiffen`); its sounds are the clip's.
         Fx::Land { hard: true } => reaction("LandFall"),
         Fx::Land { hard: false } => landing_reaction(context.mode).map_or(vec![], reaction),
+        Fx::RollJumpLand => reaction("Land"),
         Fx::RollLand => reaction("RollLand"),
         Fx::PoundLand => reaction("HipDropLand"),
-        Fx::RollStart => {
-            *boosts = 0;
-            vec![]
-        }
-        Fx::RollBoost { .. } => {
-            *boosts += 1;
-            reaction(if *boosts == 1 {
-                "RollBoost"
-            } else {
-                "RollBoostAgain"
-            })
-        }
+        Fx::RollStart => vec![],
+        // `PlayerStateRolling::restartRolling` names the reaction by its restart counter:
+        // `[1回目]` for the first boost of a roll, `[2回目以降]` after that (a roll that
+        // began with a landing or a pound cancel starts with the counter at one).
+        Fx::RollBoost { again } => reaction(if again { "RollBoostAgain" } else { "RollBoost" }),
         Fx::Throw(_) => vec![Cue::Reaction {
             cap: true,
             name: "Throw",

@@ -164,13 +164,13 @@ impl Player {
                 1,
             ),
         };
-        // The step that chooses the roll also runs the state's `control`, so
-        // its counters are one on when the first step reads them.
+        // `appear` sets the counters in the step that chooses the roll; the
+        // state's `control` first runs with the nerve's first step, after it.
         self.rolling = RollControl {
             nerve,
-            frames: frames + 1,
-            charge: charge + 1,
-            force: 1,
+            frames,
+            charge,
+            force: 0,
             restarts,
             control: self.slide_control_setup(),
             ..RollControl::default()
@@ -212,7 +212,7 @@ impl Player {
                 self.rolling.effect_on = false;
                 self.events.push(Fx::RollStart);
             }
-            RollNerve::BoostStart => self.events.push(Fx::RollBoost { perfect: true }),
+            RollNerve::BoostStart => self.events.push(Fx::RollBoost { again: true }),
             // These nerves stop the rolling effect as their first step.
             RollNerve::UnRoll | RollNerve::Land => self.rolling.effect_on = false,
             _ => {}
@@ -396,14 +396,12 @@ impl Player {
         self.nerve.keep_actor_steps();
     }
     /// One step of the roll's jump: the long jump's flight, then the state's
-    /// own `control` (the frame count and the restart force run on in the air;
-    /// the charge does not).
+    /// own `control` (only the frame count runs on in the air).
     pub(super) fn roll_jump_step(&mut self, o: &Orders) {
         self.rolling.steps += 1;
         if self.rolling.steps == 1 {
-            // `exeJump`'s first step: the rolling effect stops, the charge empties.
+            // `exeJump`'s first step: the rolling effect stops.
             self.rolling.effect_on = false;
-            self.rolling.charge = 0;
         }
         self.long_jump_air(o);
         self.roll_control(false);
@@ -433,7 +431,7 @@ impl Player {
             self.rolling.restarts = converge_int(self.rolling.restarts, 2, 1);
             self.rolling.force = 0;
             self.events.push(Fx::RollBoost {
-                perfect: self.rolling.restarts >= 2,
+                again: self.rolling.restarts >= 2,
             });
             self.rolling.restarts as f32
         } else {
@@ -483,8 +481,14 @@ impl Player {
         if r.frames <= t::ROLL_FRAMES_MIN.max(t::ROLL_RESTART_INTERVAL) {
             r.frames += 1;
         }
-        // The charge fills outside the jump.
-        if r.charge <= t::ROLL_RESTART_CHARGE && r.nerve != RollNerve::Jump {
+        // The jump nerve empties the charge and the restart force on every step and
+        // leaves `control` there (no charge, judge or force update, no landing check).
+        if r.nerve == RollNerve::Jump {
+            r.charge = 0;
+            r.force = 0;
+            return;
+        }
+        if r.charge <= t::ROLL_RESTART_CHARGE {
             r.charge += 1;
         }
         if pressed {

@@ -330,7 +330,7 @@ fn react(
                 shake.0 = shake.0.max(0.65);
             }
             Fx::RollStart => s.dust_ring(feet, 6, 3.5, 0.4),
-            Fx::RollBoost { perfect } => {
+            Fx::RollBoost { again } => {
                 for _ in 0..4 {
                     let side = Vec3::new(s.rand() - 0.5, 0., s.rand() - 0.5);
                     s.particle(
@@ -343,7 +343,7 @@ fn react(
                         0,
                     );
                 }
-                if perfect {
+                if again {
                     s.ring(feet + Vec3::Y * 0.5, 1.8, 0.3, true);
                     s.sparks(feet + Vec3::Y * 0.6, 8, 4., 1);
                 }
@@ -661,10 +661,10 @@ pub fn burst_names(fx: Fx, flat_speed: f32) -> Vec<&'static str> {
         Fx::PoundStart => vec!["PoundSparks"],
         Fx::PoundLand => vec!["PoundDust", "PoundRing", "PoundSparks"],
         Fx::RollStart => vec!["RollDust"],
-        Fx::RollBoost { perfect: true } => {
+        Fx::RollBoost { again: true } => {
             vec!["RollBoostDust", "RollBoostRing", "RollBoostSparks"]
         }
-        Fx::RollBoost { perfect: false } => vec!["RollBoostDust"],
+        Fx::RollBoost { again: false } => vec!["RollBoostDust"],
         Fx::Dive => vec!["DiveSparks"],
         Fx::Throw(Throw::Spin) => vec!["ThrowSwoosh", "ThrowSwooshBack", "ThrowSparks"],
         Fx::Throw(_) => vec!["ThrowSwoosh", "ThrowSparks"],

@@ -208,7 +208,6 @@ pub struct Recorder {
     cursor: AnimCursor,
     /// Where the cap's clip stands, for the sounds its frames start.
     cap_cursor: AnimCursor,
-    boosts: u32,
     blend: Blend<Pose>,
     overlay: f32,
     /// Name of the latest sub clip (the probe keeps it after the clip ends).
@@ -250,7 +249,6 @@ impl Recorder {
             effects: library.map(|library| Tracker::new(library).on_floor(floor)),
             cursor: AnimCursor::default(),
             cap_cursor: AnimCursor::default(),
-            boosts: 0,
             blend: Blend::default(),
             last_sub: "",
             last_state: None,
@@ -509,7 +507,7 @@ impl Recorder {
             if matches!(f, Fx::Throw(_)) {
                 self.right_hand = !p.anim.name.contains("Left");
             }
-            for cue in fx_cues(*f, context, &mut self.boosts) {
+            for cue in fx_cues(*f, context) {
                 match cue {
                     Cue::Play(name) | Cue::Hold(name) => {
                         self.play(false, name, speed, &mut events, &mut mix)

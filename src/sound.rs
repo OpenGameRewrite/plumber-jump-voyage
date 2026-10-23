@@ -28,7 +28,6 @@ struct Tracker {
     /// Where the cap's clip stands, and whether the cap was out last frame.
     cap_cursor: AnimCursor,
     had_cap: bool,
-    boosts: u32,
     rng: u32,
     pending: Vec<(f32, String, bool, f32)>,
 }
@@ -250,9 +249,7 @@ fn play(
     let context = FxContext { mode: p.mode };
     let mut held: Vec<&'static str> = Vec::new();
     for f in fx {
-        let mut boosts = t.boosts;
-        let cues = fx_cues(f, context, &mut boosts);
-        t.boosts = boosts;
+        let cues = fx_cues(f, context);
         for cue in cues {
             match cue {
                 Cue::Play(name) => ctx.start(false, name, None, &mut t),

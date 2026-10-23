@@ -70,7 +70,6 @@ pub struct Effects {
     flat: HashMap<String, Arc<Flat>>,
     triggers: Triggers,
     live: Vec<Live>,
-    boosts: u32,
     right_hand: bool,
     last_cap: Vec3,
     seed: u64,
@@ -116,7 +115,6 @@ impl Effects {
             installed: library.textures.iter().cloned().collect(),
             library,
             live: Vec::new(),
-            boosts: 0,
             right_hand: true,
             last_cap: Vec3::ZERO,
             seed: 1,
@@ -314,7 +312,7 @@ fn tick(
     let mut reactions = vec![];
     let mut emitted = vec![];
     for f in &fx {
-        reactions.extend(reactions_of(*f, context, &mut effects.boosts));
+        reactions.extend(reactions_of(*f, context));
         emitted.extend(crate::effect_triggers::emitted_by(*f));
         if matches!(f, Fx::Throw(_)) {
             effects.right_hand = !p.anim.name.contains("Left");

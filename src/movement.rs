@@ -729,6 +729,9 @@ pub enum Fx {
     Land {
         hard: bool,
     },
+    /// The roll's jump touched down (`PlayerStateRolling::exeJump` raises the plain landing
+    /// reaction itself); the state that takes over then raises its own.
+    RollJumpLand,
     /// A roll touched down after a long flight: the roll's own landing
     /// reaction (`PlayerStateRolling::control`), not the ground landing's.
     RollLand,
@@ -751,8 +754,10 @@ pub enum Fx {
     PoundStart,
     PoundLand,
     RollStart,
+    /// A restart boost (`restartRolling`); `again` when the roll's restart counter
+    /// was already one or more (`[2回目以降]`).
     RollBoost {
-        perfect: bool,
+        again: bool,
     },
     Dive,
     /// The cap starts flying: its hit reaction.
@@ -4382,6 +4387,9 @@ impl Player {
                 Move::GroundPound | Move::Dive | Move::BurnJump | Move::BurnBounce | Move::FireRun
             );
         let mode = self.mode;
+        if mode == Move::RollJump && !rolls {
+            self.events.push(Fx::RollJumpLand);
+        }
         match mode {
             // The pound's landing is a sub-state of its nerve: the impact and
             // the landing clip are its first step (the game's logic does not
@@ -4443,7 +4451,23 @@ impl Player {
                 return;
             }
             _ => {
-                if self.hard_land {
+                // `PlayerActorHakoniwa::setNerveOnGround` asks its judges in
+                // this order: the buffered jump, `PlayerJudgeStartRun` (which
+                // the force-land judge vetoes), `PlayerJudgeStartSquat` (also
+                // vetoed), then the wait state. So a stick held at touchdown
+                // runs first and the run state starts the crouch one step
+                // later.
+                if self.pre_jump > 0 {
+                    // A jump pressed just before landing goes straight on.
+                    self.ground_jump(o);
+                } else if !self.hard_land && self.tilt > 0.05 && speed > 0.5 {
+                    self.run_frames = t::BRAKE_ON_COUNTER;
+                    self.pull = GRAVITY_MOVE;
+                    self.run_appear(true);
+                    self.go(Move::Run, "Move");
+                } else if !self.hard_land && o.crouch {
+                    self.start_squat();
+                } else if self.hard_land {
                     // `PlayerStateWait::appear` with the force-land judge true
                     // keeps the velocity along the floor and raises no landing
                     // reaction; the `LandStiffen` nerve's first step stops the
@@ -4453,16 +4477,6 @@ impl Player {
                         p.events.push(Fx::Land { hard: true });
                     });
                     return;
-                } else if o.crouch {
-                    self.start_squat();
-                } else if self.pre_jump > 0 {
-                    // A jump pressed just before landing goes straight on.
-                    self.ground_jump(o);
-                } else if self.tilt > 0.05 && speed > 0.5 {
-                    self.run_frames = t::BRAKE_ON_COUNTER;
-                    self.pull = GRAVITY_MOVE;
-                    self.run_appear(true);
-                    self.go(Move::Run, "Move");
                 } else {
                     // The landing clip depends on the clip the jump was playing
                     // (`PlayerStateWait::exeLand`); landing stops the player.
