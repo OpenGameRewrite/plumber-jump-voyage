@@ -21,7 +21,7 @@ mod fx;
 mod game_columns;
 mod game_names;
 mod geometry;
-mod head_pose;
+mod skeleton_pose;
 mod input;
 #[cfg(feature = "local-assets")]
 mod legacy_assets;
@@ -68,7 +68,7 @@ fn main() {
         cap::self_check();
         cap_joint::self_check();
         geometry::self_check();
-        head_pose::self_check();
+        skeleton_pose::self_check();
         collider::self_check();
         prism::self_check();
         movement::self_check();

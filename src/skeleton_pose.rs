@@ -1,22 +1,21 @@
-//! The animated head: where the model's `Head` joint stands for a given blend of clips.
+//! The animated skeleton: where the model's joints stand for a given blend of clips, before and
+//! after the joint controllers have bent them.
 //!
 //! The windowed game poses the skeleton in the renderer, but the headless trace has no
-//! skeleton, and the head's look-at turns the matrix the animation leaves, so the trace
-//! evaluates the head joint itself from the clips of the player's own installation (the
-//! converter writes them into `assets/local/Mario.glb`, which this module reads the first time a
-//! pose is asked for; nothing of it is kept in the repository). Nothing is returned when the
-//! file or a needed clip is missing.
+//! skeleton, so the trace evaluates the joints itself from the clips of the player's own
+//! installation (the converter writes them into `assets/local/Mario.glb`, which this module
+//! reads the first time a pose is asked for; nothing of it is kept in the repository). Nothing
+//! is returned when the file or a needed clip is missing.
 //!
-//! The chain is the model's `nw4f_root`, `AllRoot`, `JointRoot`, `Spine1`, `Spine2` and `Head`
-//! joints: each takes its translation and rotation from the clips (the bind pose where a clip has
-//! no key for it), blended by the clips' weights (translations linearly, rotations as a
-//! normalised weighted sum), and the head's matrix is the product down the chain. The clips are
-//! sampled at 60 keys a second and linear between keys.
+//! The joints are the ones the probe logs in `bones` (`nw4f_root` down to `HandR`): each takes
+//! its translation and rotation from the clips (the bind pose where a clip has no key for it),
+//! blended by the clips' weights (translations linearly, rotations as a normalised weighted
+//! sum), and the clips are sampled at 60 keys a second, linear between keys.
 //!
-//! Limits: only the animation. The original's joint controllers that run before the head's
-//! (the swim and ground poses, the cap throw, the pole climb: `PlayerJointControlKeeper`) bend
-//! the same joints, and a pose that leans on them (running down a slope, swimming) deviates by
-//! what they add; the trace's `bones` column of the original shows where.
+//! `world_pose` then walks the joints parents first, as the model's world calculation does: a
+//! joint's world matrix is its parent's times its own, and the player's joint controllers
+//! (`PlayerJointControlKeeper`) are given the matrix to bend before its children use it, in
+//! the same order (`al::JointControllerKeeper::Exec`).
 use crate::movement::look_joint::Mat34;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -26,9 +25,186 @@ use std::sync::{Mutex, OnceLock};
 const MODEL: &str = "local/Mario.glb";
 /// The clips are sampled at this many keys a second.
 const KEYS_PER_SECOND: f32 = 60.;
-/// The joints from the root down to the head, as the converter names them.
-const CHAIN_END: &str = "Armature_Head";
-const CHAIN_ROOT: &str = "Armature_nw4f_root";
+/// The converter prefixes the joints' names with the armature's.
+const JOINT_PREFIX: &str = "Armature_";
+
+/// The joints the probe logs, in its order (the model's joint order: a joint comes after its
+/// parent).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum Joint {
+    Nw4fRoot,
+    AllRoot,
+    JointRoot,
+    Hip,
+    LegL1,
+    LegL2,
+    FootL,
+    ToeL,
+    LegR1,
+    LegR2,
+    FootR,
+    ToeR,
+    Spine1,
+    Spine2,
+    Head,
+    ShoulderL,
+    ArmL1,
+    ArmL1Sub,
+    ArmL2,
+    ArmL2Sub,
+    HandL,
+    ShoulderR,
+    ArmR1,
+    ArmR1Sub,
+    ArmR2,
+    ArmR2Sub,
+    HandR,
+}
+
+pub const JOINT_COUNT: usize = 27;
+
+impl Joint {
+    pub const ALL: [Joint; JOINT_COUNT] = [
+        Joint::Nw4fRoot,
+        Joint::AllRoot,
+        Joint::JointRoot,
+        Joint::Hip,
+        Joint::LegL1,
+        Joint::LegL2,
+        Joint::FootL,
+        Joint::ToeL,
+        Joint::LegR1,
+        Joint::LegR2,
+        Joint::FootR,
+        Joint::ToeR,
+        Joint::Spine1,
+        Joint::Spine2,
+        Joint::Head,
+        Joint::ShoulderL,
+        Joint::ArmL1,
+        Joint::ArmL1Sub,
+        Joint::ArmL2,
+        Joint::ArmL2Sub,
+        Joint::HandL,
+        Joint::ShoulderR,
+        Joint::ArmR1,
+        Joint::ArmR1Sub,
+        Joint::ArmR2,
+        Joint::ArmR2Sub,
+        Joint::HandR,
+    ];
+
+    /// The joint's name in the model (and in the probe's `bones`).
+    pub fn name(self) -> &'static str {
+        const NAMES: [&str; JOINT_COUNT] = [
+            "nw4f_root",
+            "AllRoot",
+            "JointRoot",
+            "Hip",
+            "LegL1",
+            "LegL2",
+            "FootL",
+            "ToeL",
+            "LegR1",
+            "LegR2",
+            "FootR",
+            "ToeR",
+            "Spine1",
+            "Spine2",
+            "Head",
+            "ShoulderL",
+            "ArmL1",
+            "ArmL1Sub",
+            "ArmL2",
+            "ArmL2Sub",
+            "HandL",
+            "ShoulderR",
+            "ArmR1",
+            "ArmR1Sub",
+            "ArmR2",
+            "ArmR2Sub",
+            "HandR",
+        ];
+        NAMES[self as usize]
+    }
+
+    /// The joint above this one in the skeleton (none for the root).
+    pub fn parent(self) -> Option<Joint> {
+        use Joint::*;
+        Some(match self {
+            Nw4fRoot => return None,
+            AllRoot => Nw4fRoot,
+            JointRoot => AllRoot,
+            Hip | Spine1 => JointRoot,
+            LegL1 | LegR1 => Hip,
+            LegL2 => LegL1,
+            FootL => LegL2,
+            ToeL => FootL,
+            LegR2 => LegR1,
+            FootR => LegR2,
+            ToeR => FootR,
+            Spine2 => Spine1,
+            Head | ShoulderL | ShoulderR => Spine2,
+            ArmL1 => ShoulderL,
+            ArmL1Sub | ArmL2 => ArmL1,
+            ArmL2Sub | HandL => ArmL2,
+            ArmR1 => ShoulderR,
+            ArmR1Sub | ArmR2 => ArmR1,
+            ArmR2Sub | HandR => ArmR2,
+        })
+    }
+}
+
+/// Every joint's matrix: local ones from the clips, world ones from `world_pose`.
+pub type Matrices = [Mat34; JOINT_COUNT];
+
+/// What bends a joint's world matrix once it is computed (the model's joint controllers).
+pub trait JointCalc {
+    /// `world` is the joint's matrix, replaced by the bent one; `solved` holds the world
+    /// matrices of the joints before this one (and may be written, as
+    /// `alModelJointFunction::setDirectJointMtx` does for the legs).
+    fn calc(&mut self, joint: Joint, world: &mut Mat34, solved: &mut Matrices);
+}
+
+/// No controllers: the skeleton as the animation leaves it.
+pub struct Unbent;
+
+impl JointCalc for Unbent {
+    fn calc(&mut self, _: Joint, _: &mut Mat34, _: &mut Matrices) {}
+}
+
+pub const IDENTITY: Mat34 = [
+    [1., 0., 0., 0.],
+    [0., 1., 0., 0.],
+    [0., 0., 1., 0.],
+];
+
+/// `a` times `b`, both affine (a rotation or scale part and a translation column).
+pub fn mul34(a: &Mat34, b: &Mat34) -> Mat34 {
+    let mut out = [[0.; 4]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = (a[r][0] * b[0][c] + a[r][1] * b[1][c]) + a[r][2] * b[2][c];
+        }
+        out[r][3] = ((a[r][0] * b[0][3] + a[r][1] * b[1][3]) + a[r][2] * b[2][3]) + a[r][3];
+    }
+    out
+}
+
+/// The world matrices of all joints for the local ones in `locals` under the actor's matrix
+/// `actor`, walking the joints parents first and giving `calc` each matrix before its children
+/// are computed from it.
+pub fn world_pose(actor: &Mat34, locals: &Matrices, calc: &mut impl JointCalc) -> Matrices {
+    let mut worlds = [IDENTITY; JOINT_COUNT];
+    for joint in Joint::ALL {
+        let above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
+        let mut world = mul34(&above, &locals[joint as usize]);
+        calc.calc(joint, &mut world, &mut worlds);
+        worlds[joint as usize] = world;
+    }
+    worlds
+}
 
 /// One clip playing: its name, the frame it shows and its share of the blend.
 #[derive(Clone, Copy, Debug)]
@@ -136,12 +312,12 @@ struct ClipTracks {
     rotation: Vec<Option<Track<4>>>,
 }
 
-pub struct HeadPose {
+pub struct SkeletonPose {
     document: Document,
     bytes: Vec<u8>,
     bin_start: usize,
-    /// The chain's node indices, root first, and each joint's bind pose.
-    chain: Vec<usize>,
+    /// The glTF node of each joint (in `Joint` order) and each joint's bind pose.
+    nodes: Vec<usize>,
     bind: Vec<Local>,
     clips: Mutex<HashMap<String, Option<std::sync::Arc<ClipTracks>>>>,
 }
@@ -167,16 +343,6 @@ fn rotation_matrix(q: [f64; 4]) -> [[f64; 3]; 3] {
             1. - 2. * (x * x + y * y),
         ],
     ]
-}
-
-fn multiply(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
-    let mut out = [[0.; 3]; 3];
-    for (r, row) in out.iter_mut().enumerate() {
-        for (c, cell) in row.iter_mut().enumerate() {
-            *cell = (0..3).map(|k| a[r][k] * b[k][c]).sum();
-        }
-    }
-    out
 }
 
 /// The quaternion of a rotation matrix whose columns may carry a uniform scale.
@@ -222,7 +388,7 @@ fn matrix_quaternion(columns: [[f64; 3]; 3]) -> [f64; 4] {
     }
 }
 
-impl HeadPose {
+impl SkeletonPose {
     fn open() -> Option<Self> {
         let path = crate::local_assets::asset_dir().join(MODEL);
         let bytes = std::fs::read(path).ok()?;
@@ -239,21 +405,11 @@ impl HeadPose {
                 .iter()
                 .position(|n| n.name.as_deref() == Some(name))
         };
-        let mut parent = vec![None; document.nodes.len()];
-        for (index, node) in document.nodes.iter().enumerate() {
-            for child in node.children.iter().flatten() {
-                parent[*child] = Some(index);
-            }
-        }
-        let mut chain = vec![find(CHAIN_END)?];
-        while let Some(up) = parent[*chain.last()?] {
-            chain.push(up);
-            if document.nodes[up].name.as_deref() == Some(CHAIN_ROOT) {
-                break;
-            }
-        }
-        chain.reverse();
-        let bind = chain
+        let nodes: Vec<usize> = Joint::ALL
+            .iter()
+            .map(|joint| find(&format!("{JOINT_PREFIX}{}", joint.name())))
+            .collect::<Option<_>>()?;
+        let bind = nodes
             .iter()
             .map(|&i| {
                 let node = &document.nodes[i];
@@ -277,15 +433,15 @@ impl HeadPose {
             document,
             bytes,
             bin_start,
-            chain,
+            nodes,
             bind,
             clips: Mutex::new(HashMap::new()),
         })
     }
 
     /// The installation's model, read once; `None` without game data.
-    pub fn installed() -> Option<&'static HeadPose> {
-        static MODEL_POSE: OnceLock<Option<HeadPose>> = OnceLock::new();
+    pub fn installed() -> Option<&'static SkeletonPose> {
+        static MODEL_POSE: OnceLock<Option<SkeletonPose>> = OnceLock::new();
         MODEL_POSE.get_or_init(Self::open).as_ref()
     }
 
@@ -337,14 +493,14 @@ impl HeadPose {
             .iter()
             .find(|a| a.name.as_deref() == Some(name))?;
         let mut tracks = ClipTracks {
-            translation: (0..self.chain.len()).map(|_| None).collect(),
-            rotation: (0..self.chain.len()).map(|_| None).collect(),
+            translation: (0..self.nodes.len()).map(|_| None).collect(),
+            rotation: (0..self.nodes.len()).map(|_| None).collect(),
         };
         for channel in &animation.channels {
             let Some(slot) = channel
                 .target
                 .node
-                .and_then(|n| self.chain.iter().position(|c| *c == n))
+                .and_then(|n| self.nodes.iter().position(|c| *c == n))
             else {
                 continue;
             };
@@ -357,9 +513,9 @@ impl HeadPose {
         Some(tracks)
     }
 
-    /// The head's matrix in the frame of the player's root joint (cm), for the blend of `layers`;
-    /// `None` when no layer's clip is in the model.
-    pub fn head_in_actor_frame(&self, layers: &[PoseLayer]) -> Option<Mat34> {
+    /// Every joint's matrix relative to its parent (cm), for the blend of `layers`; `None` when
+    /// no layer's clip is in the model.
+    pub fn locals(&self, layers: &[PoseLayer]) -> Option<Matrices> {
         let playing: Vec<(std::sync::Arc<ClipTracks>, f32, f32)> = layers
             .iter()
             .filter(|l| l.weight > 0.)
@@ -369,8 +525,7 @@ impl HeadPose {
         if playing.is_empty() || total <= 0. {
             return None;
         }
-        let mut rotation = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
-        let mut position = [0.; 3];
+        let mut out = [IDENTITY; JOINT_COUNT];
         for (slot, bind) in self.bind.iter().enumerate() {
             let mut translation = [0.; 3];
             let mut blended = [0.; 4];
@@ -401,31 +556,15 @@ impl HeadPose {
                     blended[i] += share * sign * q[i];
                 }
             }
+            let rotation = rotation_matrix(blended);
             for r in 0..3 {
-                position[r] += (0..3).map(|c| rotation[r][c] * translation[c]).sum::<f64>();
+                for c in 0..3 {
+                    out[slot][r][c] = rotation[r][c] as f32;
+                }
+                out[slot][r][3] = translation[r] as f32;
             }
-            rotation = multiply(rotation, rotation_matrix(blended));
         }
-        Some([
-            [
-                rotation[0][0] as f32,
-                rotation[0][1] as f32,
-                rotation[0][2] as f32,
-                position[0] as f32,
-            ],
-            [
-                rotation[1][0] as f32,
-                rotation[1][1] as f32,
-                rotation[1][2] as f32,
-                position[1] as f32,
-            ],
-            [
-                rotation[2][0] as f32,
-                rotation[2][1] as f32,
-                rotation[2][2] as f32,
-                position[2] as f32,
-            ],
-        ])
+        Some(out)
     }
 }
 
@@ -451,7 +590,7 @@ fn slerp(a: [f64; 4], mut b: [f64; 4], t: f64) -> [f64; 4] {
     std::array::from_fn(|i| (wa * a[i] + wb * b[i]) / sine)
 }
 
-#[path = "tests/head_pose.rs"]
+#[path = "tests/skeleton_pose.rs"]
 mod checks;
 
 pub fn self_check() {

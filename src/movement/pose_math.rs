@@ -127,7 +127,7 @@ pub fn get_axis_angle_from_two_vec(from: Vec3, to: Vec3) -> Option<(Vec3, f32)> 
 
 /// The vector `v` turned by the unit quaternion `q`, as `alongVectorNormalH` and
 /// `turnVecToVecDegree` do it.
-fn rotate_by_quat(v: Vec3, q: Quat) -> Vec3 {
+pub(super) fn rotate_by_quat(v: Vec3, q: Quat) -> Vec3 {
     let (qx, qy, qz, qw) = (q.x, q.y, q.z, q.w);
     let tx = qw * v.x + (qy * v.z - qz * v.y);
     let ty = qw * v.y + (qz * v.x - qx * v.z);

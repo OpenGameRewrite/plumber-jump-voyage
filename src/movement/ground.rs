@@ -280,6 +280,12 @@ impl TurnControl {
     fn power(&self) -> f32 {
         ease_in(rate01(self.rate, self.tuning.min_degrees, self.limit))
     }
+    /// `PlayerActionTurnControl::calcTurnPowerRate(up)`: the turn power, negative when the turn's
+    /// axis points up the same way as `up`.
+    pub fn power_signed(&self, up: Vec3) -> f32 {
+        let power = self.power();
+        if up.dot(self.last_axis) > 0. { -power } else { power }
+    }
     /// One frame of `PlayerActionTurnControl::update` on the floor with the
     /// normal `up`: the facing is taken into that plane and so is the stick's
     /// last direction, which was stored in the plane of the frame before.
@@ -601,6 +607,11 @@ impl GroundMove {
             }
         }
         self.hill = converge(self.hill, target, 1. / frames as f32);
+    }
+    /// `PlayerActionGroundMoveControl::calcTurnTiltRate`: how far into a turn the control is,
+    /// signed by the side it turns to (the joint controllers lean the body by it).
+    pub fn turn_tilt_rate(&self, up: Vec3) -> f32 {
+        self.turn.power_signed(up)
     }
     /// What the hill factor adds to the top speed (`calcMaxSpeed`).
     fn hill_speed(&self) -> f32 {

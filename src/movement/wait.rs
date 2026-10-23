@@ -77,7 +77,7 @@ pub(super) struct WaitControl {
     /// Steps the current sub-nerve has run (`al::NerveKeeper`'s step counter).
     /// It starts over whenever a sub-nerve is chosen; the new nerve's first
     /// step, which starts its clip, is step 0.
-    steps: u32,
+    pub(super) steps: u32,
 }
 
 impl Player {

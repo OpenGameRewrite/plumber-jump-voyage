@@ -240,8 +240,14 @@ mod t {
 pub(crate) mod cap_pose;
 #[path = "movement/ground.rs"]
 mod ground;
+#[path = "movement/ground_pose.rs"]
+pub(crate) mod ground_pose;
+#[path = "movement/joint_controls.rs"]
+pub(crate) mod joint_controls;
 #[path = "movement/ledge.rs"]
 mod ledge;
+#[path = "movement/joint_math.rs"]
+pub(crate) mod joint_math;
 #[path = "movement/look_at.rs"]
 pub(crate) mod look_at;
 #[path = "movement/look_joint.rs"]
@@ -939,6 +945,8 @@ pub struct Player {
     throwing: ThrowControl,
     /// The head's look-at (holder, keeper and joint controller).
     pub look: look_at::LookAt,
+    /// The joint controllers that pose the body (`PlayerJointControlKeeper`).
+    pub joints: joint_controls::JointState,
     /// Metres.
     pub pos: Vec3,
     /// Metres per second, derived each frame from `v`.
@@ -1182,6 +1190,7 @@ impl Default for Player {
             wait: WaitControl::default(),
             throwing: ThrowControl::default(),
             look: look_at::LookAt::default(),
+            joints: joint_controls::JointState::default(),
             pos: SPAWN,
             vel: Vec3::ZERO,
             facing: Vec3::NEG_Z,
@@ -2425,6 +2434,7 @@ impl Player {
             self.reset();
             return;
         }
+        self.note_frame_start_for_joints();
         let low_ceiling = self.grounded
             && scene.solids.iter().any(|b| {
                 let bottom = b.center.y - b.half.y;
@@ -2669,6 +2679,8 @@ impl Player {
             && !self.sub.active;
         let actor = self.pose_matrix();
         self.look.step(&actor, enabled, scene.look_sensors());
+        self.run_state_frame();
+        self.update_joint_controls();
     }
 
     // ---- Ground movement ------------------------------------------------
@@ -2869,6 +2881,20 @@ impl Player {
             [side.z, up.z, front.z, feet.z],
         ]
     }
+    /// The skeleton posed for this frame: the model's world matrices for the clips' local ones,
+    /// with the joint controllers bending each joint as the model's calculation gives it to them.
+    pub fn pose_skeleton(
+        &mut self,
+        locals: &crate::skeleton_pose::Matrices,
+    ) -> crate::skeleton_pose::Matrices {
+        let actor = self.pose_matrix();
+        let mut controls = joint_controls::Controls {
+            ground: &mut self.joints.ground,
+            look: &mut self.look,
+            actor,
+        };
+        crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
+    }
     /// `rs::waitGround`'s pose (every nerve of the standing state): the pose's
     /// up follows the floor's normal (at most 45 degrees from vertical) by the
     /// slerp rate; its front is the one it has.
@@ -2950,6 +2976,9 @@ impl Player {
             accel_frames,
         });
         self.run_steps += 1;
+        self.joints
+            .run
+            .run_step(step == 0, steer.speed, self.ground.turn_tilt_rate(up));
         self.steer_pose(up, steer.front);
         self.set_h(steer.velocity);
         self.v.y = -GRAVITY_MOVE;
@@ -3006,13 +3035,18 @@ impl Player {
         self.run_nerve = nerve;
         self.run_steps = 0;
         match nerve {
-            RunNerve::Brake => self.events.push(Fx::Skid),
+            RunNerve::Brake => {
+                self.joints.run.stopped();
+                self.events.push(Fx::Skid)
+            }
             RunNerve::Turn => {
+                self.joints.run.stopped();
                 // The turn faces the other way at once and slides on.
                 self.facing = -self.brake_dir;
                 self.events.push(Fx::TurnDust);
             }
             RunNerve::Pivot => {
+                self.joints.run.stopped();
                 let front = self.facing;
                 self.pivot.reset(front);
             }
@@ -3125,6 +3159,7 @@ impl Player {
     }
     /// `PlayerStateRunHakoniwa::exePivot`: turn on the spot toward the stick.
     fn pivot_step(&mut self) {
+        self.joints.run.pivoting();
         let flat_velocity = Vec3::new(self.v.x, 0., self.v.z);
         let step = self
             .pivot

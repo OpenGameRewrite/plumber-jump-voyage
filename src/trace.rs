@@ -12,7 +12,7 @@ use crate::{
     fx,
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
-    head_pose::{HeadPose, PoseLayer},
+    skeleton_pose::{Joint, Matrices, PoseLayer, SkeletonPose},
     local_assets::{Blend, Posed, looping},
     movement::{
         Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip,
@@ -344,13 +344,9 @@ impl Recorder {
         }
     }
 
-    /// The head's cells: the animated head joint with the look-at turned on it, and what the
-    /// look-at asked for. Without the model (no installed game data) the head columns stay empty
-    /// but the keeper's and sensors' do not.
-    fn head_cells(&mut self, p: &mut Player, cells: &mut Cells, covering: Option<Anim>, kept: f32) {
-        let actor = p.pose_matrix();
-        // The clips and shares the pose is made of (the renderer's weights: outgoing poses keep
-        // their share, the current one the rest).
+    /// The clips and shares the skeleton's pose is made of (the renderer's weights: outgoing
+    /// poses keep their share, the current one the rest).
+    fn pose_layers(&self, p: &Player, covering: Option<Anim>, kept: f32) -> Vec<PoseLayer<'static>> {
         let mut playing: Vec<PoseLayer> = Vec::new();
         if let Some(sub) = covering {
             playing.push(PoseLayer {
@@ -382,14 +378,42 @@ impl Recorder {
                 });
             }
         }
-        let head = HeadPose::installed()
-            .and_then(|model| model.head_in_actor_frame(&playing))
-            .map(|local| look_joint::world_matrix(&actor, &local));
-        match head {
-            Some(mut matrix) => {
-                // The keeper reads this row's head position at the next step.
-                p.look.set_head_position(look_joint::translation(&matrix));
-                p.look.turn_head(&mut matrix, &actor);
+        playing
+    }
+
+    /// The skeleton as the model's calculation leaves it this row, controllers included; `None`
+    /// without the installed model.
+    fn posed_skeleton(&self, p: &mut Player, covering: Option<Anim>, kept: f32) -> Option<Matrices> {
+        let playing = self.pose_layers(p, covering, kept);
+        let locals = SkeletonPose::installed()?.locals(&playing)?;
+        Some(p.pose_skeleton(&locals))
+    }
+
+    /// The `bones` cell: every joint's position (cm, replay frame) as the probe prints them,
+    /// and the actor itself.
+    fn bones_cell(skeleton: Option<&Matrices>, p: &Player) -> String {
+        let Some(skeleton) = skeleton else {
+            return String::new();
+        };
+        let at = |x: f32, y: f32, z: f32| format!("{}/{}/{}", num(x), num(y), num(z));
+        let mut items: Vec<String> = Joint::ALL
+            .iter()
+            .map(|joint| {
+                let m = &skeleton[*joint as usize];
+                format!("{}:{}", joint.name(), at(m[0][3], m[1][3], m[2][3]))
+            })
+            .collect();
+        let feet = p.pos / UNIT;
+        items.push(format!("Mario:{}", at(feet.x, feet.y, feet.z)));
+        items.join("|")
+    }
+
+    /// The head's cells: the animated head joint with the look-at turned on it, and what the
+    /// look-at asked for. Without the model (no installed game data) the head columns stay empty
+    /// but the keeper's and sensors' do not.
+    fn head_cells(&mut self, p: &mut Player, cells: &mut Cells, skeleton: Option<&Matrices>) {
+        match skeleton.map(|joints| joints[Joint::Head as usize]) {
+            Some(matrix) => {
                 let at = look_joint::translation(&matrix);
                 cells.text(&format!("{}/{}/{}", num(at.x), num(at.y), num(at.z)));
                 cells.num(p.look.joint.turn_degrees());
@@ -723,7 +747,8 @@ impl Recorder {
         }
         cells.int(looping(p.anim.name) as i64 | (p.anim.name == "Move") as i64);
         cells.text(&parts);
-        cells.empty(); // bones need the skeleton
+        let skeleton = self.posed_skeleton(p, covering, kept);
+        cells.text(&Self::bones_cell(skeleton.as_ref(), p));
         let cap = p.cap_row();
         cells.text(cap.as_ref().map_or("", |c| c.state));
         for axis in 0..3 {
@@ -777,7 +802,7 @@ impl Recorder {
         for _ in 0..5 {
             cells.empty(); // random, model, face, cam_mode, cam_fov
         }
-        self.head_cells(p, &mut cells, covering, kept);
+        self.head_cells(p, &mut cells, skeleton.as_ref());
         cells.finish()
     }
 }
