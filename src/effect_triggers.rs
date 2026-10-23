@@ -25,6 +25,10 @@ pub const EMPTY_RESOURCE: &str = "DummyEmitter";
 /// life: the emitter starts a frame late and the check runs a frame behind
 /// (recorded: a one-shot of 17 frames reads as live for 19).
 const REPORT_LAG: u32 = 2;
+/// The extra frames an effect flagged `OneTimeFade` stays up after its particles are gone
+/// (guess: one recording, the air throw's `SpinCapAirStartRight`, up 23 frames where its
+/// emitter and the lag give 19).
+const ONE_TIME_FADE_FRAMES: u32 = 4;
 
 /// The run state's dust: the run control picks which one the pose asks for
 /// (`code_driven`), whoever started it. The turn clip's own entry for
@@ -696,7 +700,12 @@ impl Tracker {
                         _ if measured.is_some() => measured,
                         Source::Reaction => None,
                         _ if self.triggers.lives_with_clip(&key) => None,
-                        _ => emitting.map(|e| e + timing.linger + REPORT_LAG),
+                        _ => emitting.map(|e| {
+                            let fade = trigger.is_some_and(|t| t.has_flag("OneTimeFade"));
+                            e + timing.linger
+                                + REPORT_LAG
+                                + if fade { ONE_TIME_FADE_FRAMES } else { 0 }
+                        }),
                     };
                     // An emitter that never finishes is swapped for the water's when the
                     // material code changes, which ends the effect.
