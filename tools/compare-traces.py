@@ -76,9 +76,16 @@ SETS = OrderedDict([("events", ";"), ("effects_live", "|"), ("in_buttons", "+")]
 KEYED = OrderedDict(
     [
         ("blend", 0.02), ("interp", 0.02), ("anim_layers", 0.02), ("parts", 0.05),
-        ("bones", 2.0), ("random", 0),
+        ("random", 0),
     ]
 )
+# The skeleton: every joint's position (cm) in the `bones` cell, compared as one column. A joint is
+# off when its position is more than this far (straight-line distance) from the game's; a frame
+# fails when any joint is. The animation, the ground pose and the head's look-at all end up here,
+# and where they agree the joints are within a few millimetres (the ground pose is bit-exact
+# against the executable's own code), so a couple of centimetres leaves room only for the clips'
+# own sampling and the position's float rounding.
+BONES_TOLERANCE = 2.0
 # `key=value` columns: name -> (item separator, tolerance of the numbers inside).
 KEY_VALUE = OrderedDict([
     ("counters", ("|", 0)), ("collision", (";", 0.01)), ("triggers", (";", 0)),
@@ -93,10 +100,13 @@ VECTORS = OrderedDict([
 # Rotations as x/y/z/w quaternions: the angle between the two, in degrees (the sign of a
 # quaternion does not matter). `head_q` is the Head joint's world rotation after the look-at.
 ROTATIONS = OrderedDict([("head_q", 1.0)])
-# head_q is compared only where the animated head is where the game's is: the rewrite poses the
-# head from the clips alone, while the game's joint controllers (ground and swim poses...) bend the
-# spine on slopes and in the water, which moves the head by more than the look-at turns it. The
-# head joint's position does not depend on the look-at, so it tells which frames are comparable.
+# head_q is compared only where the rewrite's head is where the game's is. The rewrite poses the
+# skeleton with the ground pose (the lean, the sway of a landing, the planted legs) and the
+# look-at; on the ground the head then agrees to within a few millimetres, so the gate only
+# leaves out the states whose joint controllers are not ported (the swim pose, the cap throw,
+# the pole climb and the grab), where the game's head is somewhere else by more than the
+# look-at turns it. The head joint's position does not depend on the look-at, so it tells
+# which frames are comparable.
 HEAD_POSITION_GATE = 1.0  # cm, rewrite `head_pos` against the game's `bones` Head
 # Outside the look-at the head's rotation is the skeleton's animation alone, which this column is not
 # about: head_q is compared where the game asked for a look (`requested=1` in look_keeper) or the
@@ -135,7 +145,8 @@ GROUPS = OrderedDict(
                       "ux", "uy", "uz", "ground", "floor_normal", "collision"}),
         ("state", {"state", "state_nerve", "state_step", "sub_step", "counters", "triggers", "pre_input"}),
         ("animation", {"anim", "anim_frame", "anim_rate", "anim_len", "anim_loop", "blend", "interp",
-                       "anim_layers", "sub_anim", "sub_frame", "parts", "bones", "face", "model"}),
+                       "anim_layers", "sub_anim", "sub_frame", "parts", "face", "model"}),
+        ("skeleton", {"bones"}),
         ("cap", {"cap_state", "cap_anim", "cap_px", "cap_py", "cap_pz", "cap_out"}),
         ("events/sound", {"events", "sounds"}),
         ("effects", {"effects_live"}),
@@ -384,6 +395,29 @@ def compare_keyed(g, r, tol):
     return worst, problems
 
 
+def compare_bones(g, r, tol):
+    """The joints both sides log, by straight-line distance; the worst distance and the joints
+    that are further than `tol` apart. A joint only one side has (an older probe did not log
+    `nw4f_root` and `Mario`) is left out, but a side with no joint at all is a mismatch."""
+    gp = {k: bone_position(g, k) for k in joint_names(g)}
+    rp = {k: bone_position(r, k) for k in joint_names(r)}
+    shared = [k for k in gp if k in rp and gp[k] is not None and rp[k] is not None]
+    if not shared:
+        return None, [f"no joint in common ({g[:60] or 'none'} vs {r[:60] or 'none'})"]
+    worst, problems = 0.0, []
+    for key in shared:
+        err = math.dist(gp[key], rp[key])
+        worst = max(worst, err)
+        if err > tol:
+            problems.append(f"{key}: {err:.1f} cm ({'/'.join(f'{v:g}' for v in gp[key])} vs "
+                            f"{'/'.join(f'{v:g}' for v in rp[key])})")
+    return worst, problems
+
+
+def joint_names(bones):
+    return [item.partition(":")[0] for item in split_items(bones, "|")]
+
+
 def quaternion_angle(g, r):
     """Degrees between two x/y/z/w quaternions (None when a cell is not one)."""
     gv = [as_float(x) for x in g.split("/")] if g else []
@@ -545,6 +579,7 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
     tolerances = dict(NUMERIC)
     tolerances.update(CAP_NUMERIC)
     tolerances.update(KEYED)
+    tolerances["bones"] = BONES_TOLERANCE
     tolerances.update({k: v[1] for k, v in KEY_VALUE.items()})
     tolerances.update(VECTORS)
     tolerances.update(ROTATIONS)
@@ -691,6 +726,11 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
             continue
         for f in use:
             err, problems = compare_keyed(res.game[f], res.rewrite[f], tolerances[name])
+            res.add(f, err, problems)
+    res, use = prepare("bones", "bones")
+    if res is not None and res.status != "N/C":
+        for f in use:
+            err, problems = compare_bones(res.game[f], res.rewrite[f], tolerances["bones"])
             res.add(f, err, problems)
     if "sounds" in gcols or "sounds" in rcols:
         res, use = prepare("sounds", "names")
@@ -964,6 +1004,11 @@ def self_check():
         negated = "/".join(v[1:] if v.startswith("-") else "-" + v for v in half(10).split("/"))
         assert abs(quaternion_angle(half(0), half(10)) - 10) < 1e-3 and quaternion_angle(half(10), negated) < 1e-3
         assert quaternion_angle("", half(10)) is None
+    # The skeleton: joints by straight-line distance; a joint only one side logs is left out.
+    worst, problems = compare_bones("Head:1/2/3|Hip:0/0/0|Mario:0/0/0", "Head:1/2/4|Hip:0/0/3|nw4f_root:0/0/0", 2.0)
+    assert abs(worst - 3.0) < 1e-6 and len(problems) == 1 and problems[0].startswith("Hip: 3.0 cm"), (worst, problems)
+    assert compare_bones("Head:1/2/3", "Head:1/2/4", 2.0) == (1.0, [])
+    assert compare_bones("Head:1/2/3", "Hip:1/2/3", 2.0)[0] is None
     # The game's Japanese reaction names compare with the rewrite's English ones.
     jp, en = "reaction:着地[走り];se:Land", "se:Land;reaction:LandRun"
     assert compare_set(jp, en, ";", set())[1] == [], compare_set(jp, en, ";", set())
