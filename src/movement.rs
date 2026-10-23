@@ -4846,5 +4846,6 @@ pub fn self_check() {
     ledge_checks::run();
     pose_math::self_check();
     look_joint::self_check();
+    ground_pose::self_check();
     look_at::self_check();
 }

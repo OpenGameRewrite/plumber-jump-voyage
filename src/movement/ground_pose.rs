@@ -75,7 +75,7 @@ const BLEND_STEPS: [f32; 2] = [0.033_333_335, 0.05];
 /// `calcCenterBalance`: the most the sway turns the stood-up joint root in one frame (25
 /// degrees), the shortest reach (60 cm), the shares of the turn the hip (a quarter), the spine
 /// (the whole) and the shift take, the damping of the sway and the spring stiffness.
-const SWAY_TURN_LIMIT: f32 = 0.436_332_3;
+const SWAY_TURN_LIMIT: f32 = 0.436_332_32;
 const SWAY_MIN_REACH: f32 = 60.;
 const HIP_SWAY_SHARE: f32 = 0.25;
 const SWAY_DAMPING: f32 = 0.9;
@@ -209,6 +209,32 @@ impl GroundPose {
         self.leg_ik = converge(self.leg_ik, input.leg_ik, follow_step);
         self.stiff_landing = input.stiff_landing;
         self.balance.update(center);
+    }
+
+    /// The numbers the oracle compares after a frame: the tilt, the two strengths, the blend,
+    /// the sway, the hold and the shift.
+    #[allow(dead_code)]
+    pub fn state(&self) -> Vec<f32> {
+        let (b, f) = (&self.balance, &self.frame);
+        let mut out = vec![
+            self.tilt,
+            self.ik,
+            self.leg_ik,
+            b.blend,
+            b.sway.x,
+            b.sway.y,
+            b.sway.z,
+            b.offset.x,
+            b.offset.y,
+            b.offset.z,
+            f.shift.x,
+            f.shift.y,
+            f.shift.z,
+        ];
+        for turn in [&f.hip.forward, &f.hip.back, &f.spine.forward] {
+            out.extend(turn.iter().flatten());
+        }
+        out
     }
 
     /// The frame the root worked out (the tests read it).
@@ -431,6 +457,12 @@ impl GroundPose {
         let balance = &mut self.balance;
         balance.sway = balance.sway * SWAY_DAMPING;
         let sway_now = new_sway;
+        if std::env::var("PJV_DEBUG_BALANCE").is_ok() {
+            let (across_dbg, along_dbg) = separate_vector_hv(to, sway_now);
+            eprintln!(
+                "BAL stood={stood_at:?} v={stood_direction:?} moved={moved:?} dir1={moved_direction:?} moved2={pulled:?} dir2={pulled_direction:?} wanted={wanted:?} qdir={wanted_direction:?} turn={turn:?} to={to:?} fv={sway_direction:?} fnew={new_sway:?} across={across_dbg:?} along={along_dbg:?} len1={moved_length:?} len2={pulled_length:?}"
+            );
+        }
         let (_, along_sway) = separate_vector_hv(to, sway_now);
         let gained = reach - reach_now;
         let along_speed = dot(to, along_sway);
@@ -827,4 +859,11 @@ fn calc_between_two_link_pos(from: Vec3, to: Vec3, first: f32, second: f32, hint
         middle.y + unit.y * height,
         middle.z + unit.z * height,
     )
+}
+
+#[path = "../tests/ground_pose.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

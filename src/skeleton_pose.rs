@@ -180,6 +180,23 @@ pub const IDENTITY: Mat34 = [
     [0., 0., 1., 0.],
 ];
 
+fn invert3(m: &Mat34) -> [[f32; 3]; 3] {
+    let c = |r: usize, k: usize| m[r][k];
+    let cof = |a: usize, b: usize| {
+        let (r1, r2) = ((a + 1) % 3, (a + 2) % 3);
+        let (c1, c2) = ((b + 1) % 3, (b + 2) % 3);
+        c(r1, c1) * c(r2, c2) - c(r1, c2) * c(r2, c1)
+    };
+    let det = c(0, 0) * cof(0, 0) + c(0, 1) * cof(0, 1) + c(0, 2) * cof(0, 2);
+    let mut out = [[0.; 3]; 3];
+    for r in 0..3 {
+        for k in 0..3 {
+            out[r][k] = cof(k, r) / det;
+        }
+    }
+    out
+}
+
 /// `a` times `b`, both affine (a rotation or scale part and a translation column).
 pub fn mul34(a: &Mat34, b: &Mat34) -> Mat34 {
     let mut out = [[0.; 4]; 3];
@@ -192,13 +209,51 @@ pub fn mul34(a: &Mat34, b: &Mat34) -> Mat34 {
     out
 }
 
+/// The joints that do not take the scale of the joints between them and the root over (the
+/// skeleton's segment scale compensation): the upper arms keep their length when the body is
+/// squashed into the rolling ball. The root's own scale (the squash and stretch of a jump)
+/// still reaches them.
+const SCALE_COMPENSATING: [Joint; 2] = [Joint::ArmL1, Joint::ArmR1];
+
+/// The matrix of a joint's parent without the scale its joints below the root add: the
+/// columns of its part below the root's matrix are made unit length.
+fn without_scale_below_root(parent: &Mat34, root: &Mat34) -> Mat34 {
+    let inverse = invert3(root);
+    let mut relative = [[0.; 3]; 3];
+    for (r, row) in relative.iter_mut().enumerate() {
+        for (c, cell) in row.iter_mut().enumerate() {
+            *cell = (inverse[r][0] * parent[0][c] + inverse[r][1] * parent[1][c])
+                + inverse[r][2] * parent[2][c];
+        }
+    }
+    for c in 0..3 {
+        let length =
+            ((relative[0][c] * relative[0][c] + relative[1][c] * relative[1][c]) + relative[2][c] * relative[2][c])
+                .sqrt();
+        for row in &mut relative {
+            row[c] /= length;
+        }
+    }
+    let mut out = *parent;
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = (root[r][0] * relative[0][c] + root[r][1] * relative[1][c])
+                + root[r][2] * relative[2][c];
+        }
+    }
+    out
+}
+
 /// The world matrices of all joints for the local ones in `locals` under the actor's matrix
 /// `actor`, walking the joints parents first and giving `calc` each matrix before its children
 /// are computed from it.
 pub fn world_pose(actor: &Mat34, locals: &Matrices, calc: &mut impl JointCalc) -> Matrices {
     let mut worlds = [IDENTITY; JOINT_COUNT];
     for joint in Joint::ALL {
-        let above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
+        let mut above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
+        if SCALE_COMPENSATING.contains(&joint) {
+            above = without_scale_below_root(&above, &worlds[Joint::AllRoot as usize]);
+        }
         let mut world = mul34(&above, &locals[joint as usize]);
         calc.calc(joint, &mut world, &mut worlds);
         worlds[joint as usize] = world;
@@ -229,7 +284,7 @@ struct NodeDef {
     matrix: Option<[f32; 16]>,
     translation: Option<[f32; 3]>,
     rotation: Option<[f32; 4]>,
-    children: Option<Vec<usize>>,
+    scale: Option<[f32; 3]>,
 }
 
 #[derive(Deserialize)]
@@ -272,11 +327,12 @@ struct ViewDef {
     byte_offset: Option<usize>,
 }
 
-/// A joint's local pose: translation and rotation (x, y, z, w).
+/// A joint's local pose: translation, rotation (x, y, z, w) and scale.
 #[derive(Clone, Copy)]
 struct Local {
     translation: [f64; 3],
     rotation: [f64; 4],
+    scale: [f64; 3],
 }
 
 /// Keys of one channel.
@@ -310,6 +366,7 @@ impl<const N: usize> Track<N> {
 struct ClipTracks {
     translation: Vec<Option<Track<3>>>,
     rotation: Vec<Option<Track<4>>>,
+    scale: Vec<Option<Track<3>>>,
 }
 
 pub struct SkeletonPose {
@@ -417,14 +474,17 @@ impl SkeletonPose {
                     let m = m.map(f64::from);
                     // Column-major: the first three columns are the axes, the fourth the offset.
                     let columns = [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]];
+                    let length = |c: [f64; 3]| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
                     Local {
                         translation: [m[12], m[13], m[14]],
                         rotation: matrix_quaternion(columns),
+                        scale: columns.map(length),
                     }
                 } else {
                     Local {
                         translation: node.translation.unwrap_or([0.; 3]).map(f64::from),
                         rotation: node.rotation.unwrap_or([0., 0., 0., 1.]).map(f64::from),
+                        scale: node.scale.unwrap_or([1.; 3]).map(f64::from),
                     }
                 }
             })
@@ -495,6 +555,7 @@ impl SkeletonPose {
         let mut tracks = ClipTracks {
             translation: (0..self.nodes.len()).map(|_| None).collect(),
             rotation: (0..self.nodes.len()).map(|_| None).collect(),
+            scale: (0..self.nodes.len()).map(|_| None).collect(),
         };
         for channel in &animation.channels {
             let Some(slot) = channel
@@ -507,6 +568,7 @@ impl SkeletonPose {
             match channel.target.path.as_str() {
                 "translation" => tracks.translation[slot] = self.track::<3>(animation, channel),
                 "rotation" => tracks.rotation[slot] = self.track::<4>(animation, channel),
+                "scale" => tracks.scale[slot] = self.track::<3>(animation, channel),
                 _ => {}
             }
         }
@@ -528,6 +590,7 @@ impl SkeletonPose {
         let mut out = [IDENTITY; JOINT_COUNT];
         for (slot, bind) in self.bind.iter().enumerate() {
             let mut translation = [0.; 3];
+            let mut scale = [0.; 3];
             let mut blended = [0.; 4];
             for (clip, frame, weight) in &playing {
                 let share = f64::from(*weight) / total;
@@ -542,6 +605,17 @@ impl SkeletonPose {
                     });
                 for i in 0..3 {
                     translation[i] += share * t[i];
+                }
+                let sc = clip.scale[slot]
+                    .as_ref()
+                    .and_then(|track| track.around(time))
+                    .map_or(bind.scale, |(a, b, k)| {
+                        std::array::from_fn(|i| {
+                            f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k)
+                        })
+                    });
+                for i in 0..3 {
+                    scale[i] += share * sc[i];
                 }
                 let q = clip.rotation[slot]
                     .as_ref()
@@ -559,7 +633,7 @@ impl SkeletonPose {
             let rotation = rotation_matrix(blended);
             for r in 0..3 {
                 for c in 0..3 {
-                    out[slot][r][c] = rotation[r][c] as f32;
+                    out[slot][r][c] = (rotation[r][c] * scale[c]) as f32;
                 }
                 out[slot][r][3] = translation[r] as f32;
             }
