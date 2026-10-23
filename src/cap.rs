@@ -103,11 +103,12 @@ const RETURN_EASE_FRAMES: f32 = 10.;
 /// has run longer than that. The cap plays the clip of the way the player
 /// takes it (`PlayerActorHakoniwa::attackSensor`, the cap's catch message):
 /// `CatchCap` standing, `CatchCapJumpParts` in the air, `CatchCapParts` on the
-/// ground in any other state. The first two lengths are recorded; the
-/// last one is a guess (the standing one's).
+/// ground in any other state. The lengths are those of the cap's own clips
+/// (`MarioCapAnimation`: `CatchCap` 5, `CatchCapParts` 2, `CatchCapJumpParts` 3).
 pub fn catch_frames(clip: &str) -> u32 {
     match clip {
         "CatchCapJumpParts" => 3,
+        "CatchCapParts" => 2,
         _ => 5,
     }
 }
@@ -460,8 +461,13 @@ impl Cap {
             self.returning = next == CapNerve::Return;
         }
         self.advance(world.mesh);
-        // The sensors touch where the cap has come to.
+        // The sensors touch where the cap has come to. A cap that has just started
+        // back is not caught in its first step (recorded: cap-jump-dive, a cap
+        // 133 from the body at its first move came on a frame later; the
+        // `Catch` sensor most likely joins the sensor groups only after that
+        // step, which is a guess).
         if self.nerve == CapNerve::Return
+            && self.step >= 2
             && (self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
         {
             events.push(CapEvent::Caught);

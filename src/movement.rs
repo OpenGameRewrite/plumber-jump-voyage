@@ -353,9 +353,14 @@ fn throw_clip(kind: Throw, air: bool, count: u32, continuous: bool) -> &'static 
     }
 }
 
-/// The last frame of the upper-body catch animation
-/// (`CatchCapJumpParts` plays frames 0 to 12).
-const UPPER_CATCH_LAST: i32 = 12;
+/// The last frame of the upper-body catch animation: the model's clip of that
+/// name runs frames 0 to its length (`CatchCapParts` 10, `CatchCapJumpParts` 12).
+fn upper_catch_last(clip: &str) -> i32 {
+    match clip {
+        "CatchCapJumpParts" => 12,
+        _ => 10,
+    }
+}
 
 /// Frame counts of clips whose end the controller waits for.
 pub mod clip {
@@ -1798,7 +1803,13 @@ impl Player {
                 // The cap moves before the player, so it sits where the
                 // player was when the frame began.
                 pos: self.prev,
-                clip: self.catch_clip,
+                // (A throw begun in the catch's rows has started the cap's spin
+                // attack action already; the cap's nerve follows a frame later.)
+                clip: if self.winding {
+                    self.throw_clip
+                } else {
+                    self.catch_clip
+                },
             });
         }
         // The spin attack shows once the cap's nerve has been applied, the frame
@@ -2309,10 +2320,10 @@ impl Player {
                 }
             }
         }
-        // The upper-body catch animation runs 13 frames.
+        // The upper-body catch animation runs the length of its clip.
         if let Some(frame) = &mut self.upper_catch {
             *frame += 1;
-            if *frame > UPPER_CATCH_LAST {
+            if *frame > upper_catch_last(self.catch_clip) {
                 self.upper_catch = None;
             }
         }
