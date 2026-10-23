@@ -32,6 +32,8 @@ const JOINT_PREFIX: &str = "Armature_";
 /// parent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
+// (The names are the model's own: `JointRoot` is a joint of the skeleton, not of this enum.)
+#[allow(clippy::enum_variant_names)]
 pub enum Joint {
     Nw4fRoot,
     AllRoot,
@@ -192,9 +194,9 @@ fn invert3(m: &Mat34) -> [[f32; 3]; 3] {
     };
     let det = c(0, 0) * cof(0, 0) + c(0, 1) * cof(0, 1) + c(0, 2) * cof(0, 2);
     let mut out = [[0.; 3]; 3];
-    for r in 0..3 {
-        for k in 0..3 {
-            out[r][k] = cof(k, r) / det;
+    for (r, row) in out.iter_mut().enumerate() {
+        for (k, cell) in row.iter_mut().enumerate() {
+            *cell = cof(k, r) / det;
         }
     }
     out

@@ -17,14 +17,7 @@ pub fn calc_rate01(value: f32, from: f32, to: f32) -> f32 {
     if span.abs() < 0.001 {
         return 1.;
     }
-    let rate = (value - from) / span;
-    if rate < 0. {
-        0.
-    } else if rate > 1. {
-        1.
-    } else {
-        rate
-    }
+    ((value - from) / span).clamp(0., 1.)
 }
 
 /// `al::easeOut`.

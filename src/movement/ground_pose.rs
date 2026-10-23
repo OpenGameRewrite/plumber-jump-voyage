@@ -460,14 +460,8 @@ impl GroundPose {
         // The sway damps, then the springs push it: along the direction to the stood-up
         // position by the distance gained, and across by the angle it is turned.
         let balance = &mut self.balance;
-        balance.sway = balance.sway * SWAY_DAMPING;
+        balance.sway *= SWAY_DAMPING;
         let sway_now = new_sway;
-        if std::env::var("PJV_DEBUG_BALANCE").is_ok() {
-            let (across_dbg, along_dbg) = separate_vector_hv(to, sway_now);
-            eprintln!(
-                "BAL stood={stood_at:?} v={stood_direction:?} moved={moved:?} dir1={moved_direction:?} moved2={pulled:?} dir2={pulled_direction:?} wanted={wanted:?} qdir={wanted_direction:?} turn={turn:?} to={to:?} fv={sway_direction:?} fnew={new_sway:?} across={across_dbg:?} along={along_dbg:?} len1={moved_length:?} len2={pulled_length:?}"
-            );
-        }
         let (_, along_sway) = separate_vector_hv(to, sway_now);
         let gained = reach - reach_now;
         let along_speed = dot(to, along_sway);
