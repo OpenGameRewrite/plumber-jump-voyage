@@ -394,6 +394,7 @@ impl Player {
         }
         self.swim_underwater_motion();
         self.swim_turn(1.);
+        self.update_swim_pose();
         let finder = self.water_finder;
         if finder.found && finder.distance < k::SURFACE_START_DIST {
             self.set_swim_nerve(SwimNerve::Surface);

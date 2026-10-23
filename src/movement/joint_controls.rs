@@ -11,6 +11,7 @@ use super::joint_math::{calc_rate01, lerp_value};
 use super::look_at::LookAt;
 use super::look_joint::{Mat34, translation};
 use super::pose_math::{along_vector_normal_h, try_normalize_or_zero};
+use super::swim_pose::SwimPose;
 use super::vector_lib::verticalize_vec;
 use super::*;
 use crate::skeleton_pose::{Joint, JointCalc, Matrices};
@@ -88,6 +89,9 @@ fn converge_int(value: i32, target: i32, step: i32) -> i32 {
 /// The joint controllers' state, kept by the player.
 #[derive(Clone, Debug, Default)]
 pub struct JointState {
+    /// The swim pose's angles (`PlayerJointParamSwim`): the swim state steers them while it
+    /// lives.
+    pub swim: SwimPose,
     pub ground: GroundPose,
     pub run: RunPose,
     /// The centre dynamics' parameter the states write to during a frame
@@ -111,6 +115,10 @@ impl Player {
     /// `PlayerActorHakoniwa::movement`'s hand-over to the keeper: the numbers the states give
     /// the ground pose this frame, then `PlayerJointControlKeeper::update`.
     pub(super) fn update_joint_controls(&mut self) {
+        // The swim state clears the angles when it starts and when it ends.
+        if self.actor_name() != "Swim" {
+            self.joints.swim.reset();
+        }
         let inputs = self.ground_pose_inputs();
         let center = std::mem::take(&mut self.joints.center);
         self.joints.ground.update(inputs, &center);
@@ -236,6 +244,15 @@ impl Player {
         }
     }
 
+    /// The helper the swimming nerves (the move and the paddle) call after they turn the body:
+    /// the swim pose follows the speed along the front and the turn.
+    pub(super) fn update_swim_pose(&mut self) {
+        let (_, front) = self.pose_axes();
+        // (The up axis the turn is measured against is the gravity's, not the pose's.)
+        let power = self.swim.turn.power_signed(Vec3::Y);
+        self.joints.swim.update(front, self.v, power);
+    }
+
     /// `PlayerStateWait::getInverseKinematicsRate`: whole while standing, gone while asleep, and
     /// fading over the sleep start.
     fn wait_inverse_kinematics_rate(&self, sub: &str) -> f32 {
@@ -252,6 +269,7 @@ impl Player {
 
 /// The controllers bending one pose: borrowed from the player for the calculation of one frame.
 pub struct Controls<'a> {
+    pub swim: &'a SwimPose,
     pub ground: &'a mut GroundPose,
     pub look: &'a mut LookAt,
     /// The actor's pose matrix.
@@ -260,6 +278,8 @@ pub struct Controls<'a> {
 
 impl JointCalc for Controls<'_> {
     fn calc(&mut self, joint: Joint, world: &mut Mat34, solved: &mut Matrices) {
+        // (The keeper registers the swim pose first, then the ground pose.)
+        self.swim.calc(joint, world);
         self.ground.calc(joint, world, solved);
         if joint == Joint::Head {
             // The keeper reads this frame's head position at the next step.

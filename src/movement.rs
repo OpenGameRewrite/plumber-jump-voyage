@@ -286,6 +286,8 @@ mod swim_dive;
 mod swim_ground;
 #[path = "movement/swim_move.rs"]
 mod swim_move;
+#[path = "movement/swim_pose.rs"]
+pub(crate) mod swim_pose;
 #[path = "movement/terrain.rs"]
 mod terrain;
 #[path = "movement/vector_lib.rs"]
@@ -2889,6 +2891,7 @@ impl Player {
     ) -> crate::skeleton_pose::Matrices {
         let actor = self.pose_matrix();
         let mut controls = joint_controls::Controls {
+            swim: &self.joints.swim,
             ground: &mut self.joints.ground,
             look: &mut self.look,
             actor,
@@ -2914,6 +2917,7 @@ impl Player {
     ) -> crate::skeleton_pose::Matrices {
         let actor = self.pose_matrix();
         let mut controls = joint_controls::Controls {
+            swim: &self.joints.swim,
             ground: &mut controllers.0,
             look: &mut controllers.1,
             actor,
@@ -4882,5 +4886,6 @@ pub fn self_check() {
     pose_math::self_check();
     look_joint::self_check();
     ground_pose::self_check();
+    swim_pose::self_check();
     look_at::self_check();
 }
