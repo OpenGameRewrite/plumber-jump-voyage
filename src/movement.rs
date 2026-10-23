@@ -949,6 +949,11 @@ pub struct Player {
     pub cap: Option<Cap>,
     /// A throw started last frame; the cap appears when it updates.
     launch: Option<Launch>,
+    /// The throw button was held in the last frame.
+    throw_held_before: bool,
+    /// An upper-body animation was cleared in this step (not ended by its
+    /// length, so the main clip is not restarted).
+    upper_cleared: bool,
     /// The cap was put on the head without a catch (`HackCap::forcePutOn`) in
     /// the last frame's sensor phase: the frame is still reported with the
     /// cap, which is gone from the next one.
@@ -1185,6 +1190,8 @@ impl Default for Player {
             cap: None,
             launch: None,
             cap_put_on: false,
+            upper_cleared: false,
+            throw_held_before: false,
             cap_serial: 0,
             winding: false,
             spin_fall: false,
@@ -2438,6 +2445,7 @@ impl Player {
         self.sensor_restart = false;
         self.sub_restarted = false;
         self.interpolation_cleared = false;
+        self.upper_cleared = false;
         self.age = self.age.saturating_add(1);
         let was_grounded = self.grounded;
         // The game animates first, then the state runs; a state chosen last
@@ -4047,6 +4055,11 @@ impl Player {
             // First step of the state (`updateSpinGroundNerve` and
             // `updateSpinAirNerve`): the actor turns to the throw direction.
             p.face_throw_direction();
+            // Both spin starts clear an upper-body animation still attached
+            // (`isUpperBodyAnimAttached`, `clearUpperBodyAnim`): a catch's.
+            if p.upper_catch.take().is_some() {
+                p.upper_cleared = true;
+            }
             if air {
                 // `PlayerActionAirMoveControl::setup` with the spin's values:
                 // the small lift of every air throw.
@@ -4217,6 +4230,9 @@ impl Player {
     /// The cap's frame, which comes before the player's
     /// (`HackCap::movement` before `PlayerActorHakoniwa::movement`).
     fn update_cap(&mut self, o: &Orders, scene: &Course) {
+        // The cap reads the throw button as the last frame left it (recorded: a
+        // press in the stay's first step starts the hold reaction one step later).
+        let hold = std::mem::replace(&mut self.throw_held_before, o.throw_held);
         if self.winding {
             self.winding_age += 1;
         }
@@ -4259,7 +4275,7 @@ impl Player {
         }
         let world = CapWorld {
             player: self.pos,
-            hold: o.throw_held,
+            hold,
             mesh: scene.mesh.as_deref(),
         };
         let moments = cap.update(&world);
@@ -4333,6 +4349,14 @@ impl Player {
         } else {
             "CatchCapJumpParts"
         }
+    }
+    /// An upper-body animation was cleared in this step (a throw began).
+    pub fn upper_cleared(&self) -> bool {
+        self.upper_cleared
+    }
+    /// The cap went on the head without a catch in this frame (see `cap_put_on`).
+    pub fn cap_put_on(&self) -> bool {
+        self.cap_put_on
     }
     /// The upper-body catch animation while it plays.
     pub fn upper_catch(&self) -> Option<&'static str> {
@@ -4494,6 +4518,11 @@ impl Player {
         let speed = self.speed_h();
         self.land_frames = 0;
         self.dive_possible = true;
+        if self.mode == Move::Dive {
+            // `exeHeadSliding` clears the cap jump limit on every step it has
+            // the ground (`clearLandLimitStandAngle`), the landing step included.
+            self.cap_jump_possible = true;
+        }
         self.gravity = t::GRAVITY_AIR;
         self.hard_land = self.fall.distance >= t::LONG_FALL
             && !matches!(

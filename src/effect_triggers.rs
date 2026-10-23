@@ -735,6 +735,11 @@ impl Tracker {
             }
             None => true,
         });
+        // `HackCap::forcePutOn` kills every emitter of the cap at once; the stop
+        // of the table entries is logged by the next frame's clip change.
+        if p.cap_put_on() {
+            self.live.retain(|l| l.owner != "cap");
+        }
         let mut alive: Vec<String> = self
             .live
             .iter()

@@ -633,6 +633,7 @@ impl Recorder {
         }
         if let Some(ended) = self.sub_clip
             && sub_now.is_none()
+            && !p.upper_cleared()
             && ended != p.anim.name
             && !self.stale_clip.is_empty()
         {
