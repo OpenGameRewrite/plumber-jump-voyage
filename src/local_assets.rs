@@ -396,8 +396,7 @@ pub fn fallback(name: &str) -> &'static str {
 mod imported {
     use super::*;
     use crate::asset_contract::{self, Bone, Part as AssetPart, Stain, Surface, VisibilityRole};
-    use crate::movement::ground_pose::GroundPose;
-    use crate::movement::look_at::LookAt;
+    use crate::movement::ControllerState;
     use crate::movement::look_joint::Mat34;
     use crate::skeleton_pose::{JOINT_COUNT, Joint};
     #[derive(Component)]
@@ -487,7 +486,7 @@ mod imported {
         written: Vec<(Entity, Transform, Transform)>,
         /// The step the controllers last advanced for, and their state from before it.
         step: Option<u32>,
-        before: Option<(GroundPose, LookAt)>,
+        before: Option<ControllerState>,
     }
     /// A joint of the model as the animation leaves it: the node's entity, and the matrix of
     /// the nodes between it and its parent joint (the identity where it is the child itself).

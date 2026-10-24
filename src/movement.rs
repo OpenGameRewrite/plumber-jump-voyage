@@ -238,10 +238,18 @@ mod t {
 
 #[path = "movement/cap_pose.rs"]
 pub(crate) mod cap_pose;
+/// What a pose calculation advances (the controllers that keep state between frames).
+pub type ControllerState = (
+    ground_pose::GroundPose,
+    look_at::LookAt,
+    hip_spring::HipSpring,
+);
 #[path = "movement/ground.rs"]
 mod ground;
 #[path = "movement/ground_pose.rs"]
 pub(crate) mod ground_pose;
+#[path = "movement/hip_spring.rs"]
+pub(crate) mod hip_spring;
 #[path = "movement/joint_controls.rs"]
 pub(crate) mod joint_controls;
 #[path = "movement/joint_math.rs"]
@@ -2897,17 +2905,23 @@ impl Player {
             ground: &mut self.joints.ground,
             look: &mut self.look,
             pole: &self.joints.pole,
+            spring: &mut self.joints.spring,
             actor,
         };
         crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
     }
 
-    /// The controllers' state a pose calculation advances: the ground pose's and the look-at's.
+    /// The controllers' state a pose calculation advances: the ground pose's, the look-at's and
+    /// the hip spring's.
     /// A renderer that shows one step's pose over several frames keeps a copy from before the
     /// calculation and poses with it (`pose_skeleton_from`), so that the state moves once a step.
     #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
-    pub fn controllers(&self) -> (ground_pose::GroundPose, look_at::LookAt) {
-        (self.joints.ground.clone(), self.look.clone())
+    pub fn controllers(&self) -> ControllerState {
+        (
+            self.joints.ground.clone(),
+            self.look.clone(),
+            self.joints.spring,
+        )
     }
 
     /// `pose_skeleton` with the controllers' state from `controllers`, which it advances; the
@@ -2915,7 +2929,7 @@ impl Player {
     #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
     pub fn pose_skeleton_from(
         &self,
-        controllers: &mut (ground_pose::GroundPose, look_at::LookAt),
+        controllers: &mut ControllerState,
         locals: &crate::skeleton_pose::Matrices,
     ) -> crate::skeleton_pose::Matrices {
         let actor = self.pose_matrix();
@@ -2924,6 +2938,7 @@ impl Player {
             ground: &mut controllers.0,
             look: &mut controllers.1,
             pole: &self.joints.pole,
+            spring: &mut controllers.2,
             actor,
         };
         crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
@@ -4892,5 +4907,6 @@ pub fn self_check() {
     ground_pose::self_check();
     swim_pose::self_check();
     pole_pose::self_check();
+    hip_spring::self_check();
     look_at::self_check();
 }

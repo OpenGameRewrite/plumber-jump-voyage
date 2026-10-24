@@ -3,9 +3,10 @@
 //! states hand the keeper every frame to steer them.
 //!
 //! Registered in the original, in this order: the swim pose, the ground pose, the cap throw, the
-//! head's look-at, the pole climb pose and the grab pose. The cap throw and the grab pose are not
-//! ported yet.
+//! head's look-at, the pole climb pose and the grab pose; the wall catch's hip spring comes
+//! after them. The cap throw and the grab pose are not ported yet.
 use super::ground_pose::{CenterInput, GroundInputs, GroundPose};
+use super::hip_spring::{GrabDynamics, HipSpring};
 use super::joint_math::{calc_rate01, lerp_value};
 use super::look_at::LookAt;
 use super::look_joint::{Mat34, translation};
@@ -95,6 +96,9 @@ pub struct JointState {
     pub ground: GroundPose,
     /// The pole climb pose and the angle block the pole state writes for it.
     pub pole: PolePose,
+    /// The wall catch's hip spring and the block the wall catch state steers its rate with.
+    pub grab: GrabDynamics,
+    pub spring: HipSpring,
     pub run: RunPose,
     /// The centre dynamics' parameter the states write to during a frame
     /// (`PlayerJointParamCenterDynamics`): the keeper reads it and clears it.
@@ -126,6 +130,12 @@ impl Player {
             self.joints.pole.release();
         }
         self.joints.pole.update();
+        // `PlayerStateWallCatch::kill` leaves the target at nothing; the spring follows it.
+        if self.mode != Move::Ledge || self.catch.is_killed() {
+            self.joints.grab.release();
+        }
+        let rate = self.joints.grab.update();
+        self.joints.spring.set_control_rate(rate);
         let inputs = self.ground_pose_inputs();
         let center = std::mem::take(&mut self.joints.center);
         self.joints.ground.update(inputs, &center);
@@ -239,8 +249,12 @@ impl Player {
             ("Run", "Run3D") => (self.joints.run.ik, 0., self.joints.run.turn_tilt),
             ("Rolling", "StandUp") => (1., 0., 0.),
             ("Squat", _) | ("HipDrop", "Land") => (1., 1., 0.),
-            // (`PlayerStateWallCatch::isEnableIK` is on for the climb after its first 40 steps
-            // and the fast one after 16; the rewrite does not tell the two apart. Guess: off.)
+            // The movement block gives the wall catch's body and legs the whole rate while
+            // `PlayerStateWallCatch::isEnableIK` holds.
+            ("WallCatch", _) => {
+                let rate = if self.catch.is_enable_ik() { 1. } else { 0. };
+                (rate, rate, 0.)
+            }
             _ => (0., 0., 0.),
         };
         GroundInputs {
@@ -280,6 +294,7 @@ pub struct Controls<'a> {
     pub ground: &'a mut GroundPose,
     pub look: &'a mut LookAt,
     pub pole: &'a PolePose,
+    pub spring: &'a mut HipSpring,
     /// The actor's pose matrix.
     pub actor: Mat34,
 }
@@ -295,5 +310,6 @@ impl JointCalc for Controls<'_> {
             self.look.turn_head(world, &self.actor);
         }
         self.pole.calc(joint, world);
+        self.spring.calc(joint, world);
     }
 }

@@ -69,6 +69,10 @@ const JUMP_MOVE_SPEED_MAX: f32 = 30.;
 /// body is on the ledge and the ordinary collision form comes back.
 const CLIMB_HANG_STEPS: u32 = 25;
 const CLIMB_FAST_HANG_STEPS: u32 = 15;
+/// `isEnableIK`: the steps of the climb and of the fast climb after which the ground pose's
+/// inverse kinematics are on.
+const IK_AFTER_CLIMB_STEPS: u32 = 40;
+const IK_AFTER_CLIMB_FAST_STEPS: u32 = 16;
 /// Lengths of the catch clips in steps (the clip is over when its counter
 /// reaches the frame).
 const START_CLIP: u32 = 55;
@@ -167,6 +171,20 @@ pub(super) struct WallCatchControl {
 impl WallCatchControl {
     pub(super) fn nerve(&self) -> CatchNerve {
         self.nerve
+    }
+    /// The state has ended (`kill`).
+    pub(super) fn is_killed(&self) -> bool {
+        self.killed
+    }
+    /// `PlayerStateWallCatch::isEnableIK`: the climbs let the ground pose's inverse kinematics
+    /// work once they have been going for a while (40 steps of the climb, 16 of the fast one).
+    pub(super) fn is_enable_ik(&self) -> bool {
+        !self.killed
+            && match self.nerve {
+                CatchNerve::Climb => self.steps >= IK_AFTER_CLIMB_STEPS,
+                CatchNerve::ClimbFast => self.steps >= IK_AFTER_CLIMB_FAST_STEPS,
+                _ => false,
+            }
     }
     /// `isWallCatchForm`: the body hangs in the ledge's collision form until
     /// the climbs put it on the ledge.
@@ -571,6 +589,7 @@ impl Player {
         self.v = Vec3::ZERO;
         self.grounded = false;
         self.catch = catch;
+        self.joints.grab.appear();
         self.catch_collider_at = None;
         // `PlayerStateWallCatch::appear` (0x48fad8): `rs::resetCollisionExpandCheck`.
         self.collider
@@ -863,7 +882,9 @@ impl Player {
         }
         self.catch.moving = self.catch.snap.moving();
         self.catch.snap.update_move();
+        self.joints.grab.ease_down();
         if !self.update_wall_catch_keep(mesh) && !self.catch.moving {
+            self.joints.grab.restore();
             self.set_catch_nerve(CatchNerve::Wait, "WallCatch");
         }
     }
@@ -876,6 +897,7 @@ impl Player {
     }
 
     fn exe_climb(&mut self, mesh: Option<&TriangleMesh>) {
+        self.joints.grab.ease_down();
         if !self.climb_holds() {
             self.end_fall_from_wall(mesh);
             return;
