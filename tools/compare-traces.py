@@ -135,6 +135,7 @@ PROBE_EVENT_KINDS = {"anim", "parts", "subanim", "upper", "endsub", "effect_stop
 PROBE_ONLY = [
     "game_frame", "tick", "cam_real_yaw", "cam_real_pitch", "late_sample", "other_events",
     "anim_slots", "floor_y", "cap_step", "cap_hidden", "contacts", "hit_hosts",
+    "fx_sets", "fx_kills",
 ]
 # Position columns: a contact changes them for good, so they are left out after it.
 DRIFT = {"px", "py", "pz", "cap_px", "cap_py", "cap_pz"}

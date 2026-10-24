@@ -243,10 +243,19 @@ Empty cells mean the rewrite has no equivalent:
   equals `state_step`.
 - Not available headless: `bones` (the head joint alone is evaluated, see "Head look-at"), camera position and pitch, clip lengths
   other than the run cycle's, hand/face/eye part clips, model offsets and the face.
-- `effects_live` is approximate: bursts for their nominal lifetime plus the
-  state's trail effects. The effects a hit reaction starts (`Land`,
-  `HipDropLand`, listed as `player:...`) stay live until the same reaction
-  starts them again, as in every recording of the game.
+- `effects_live` follows the original's effect system (`src/effect_life.rs`): an effect is
+  listed while its emitter set has an emitter left alive after the frame's particle
+  calculation. A one-time emitter is alive until `start + duration + life` frames of the set's
+  age (plus the fade time of an emitter that fades its alpha or scale), an emitter that never
+  stops emitting or whose particles never die is always alive, and a child emitter lives to its
+  last emission plus its life. The calculation runs after the probe's sample, so an effect is
+  first listed with age 0, or age 1 when Cappy's own update started it. The explicit stops
+  (a clip change, the table's end frame) are the original's `tryDeleteEffect` calls. Limits: the
+  randomised particle lives come from a global random generator the rewrite cannot reproduce
+  (the longest life is assumed, only a child emitter depends on it), and a recorded
+  teleport that skips game frames in one row is not modelled.
+- `fx_sets` and `fx_kills` are probe-only (the emitter sets' state and the kill calls); the
+  rewrite writes neither.
 - `qx..qw` is the facing yaw only; the renderer's smoothed lean is not part of
   the simulation.
 

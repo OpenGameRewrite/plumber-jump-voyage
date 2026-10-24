@@ -8,11 +8,11 @@
 //! stand-ins.
 use crate::{
     effect_data::{Library, ResourceChoice, Trigger},
+    effect_life::{EMPTY_RESOURCE, Timing},
     effect_render::{Painter, ParticleMaterial, View},
     effect_sim::{Attach, Draw, Flat, Instance, Pose},
     effect_triggers::{
-        Change, Frame, Key, ONE_SHOT_LIMIT, Triggers, cap_clip, code_calls, code_driven,
-        reactions_of,
+        Change, Frame, Key, Triggers, cap_clip, code_calls, code_driven, reactions_of,
     },
     fx::OriginalEffects,
     movement::{Course, Fx, Player},
@@ -27,8 +27,10 @@ use std::{
 
 /// Effects alive at once; the oldest end first beyond this.
 const MAX_LIVE: usize = 96;
-/// Resources that emit nothing.
-use crate::effect_triggers::EMPTY_RESOURCE;
+/// Frames after which a one-shot effect with a never-ending emitter stops emitting in the
+/// windowed game (a safeguard for the particle simulation; the headless trace's live rule has no
+/// such limit).
+const ONE_SHOT_LIMIT: u32 = 120;
 /// Jump dust stays where Mario took off. The tables let it follow him, but the
 /// controller leaves the ground at once while the original's dust emitter runs
 /// for six frames, which would stack puffs up in a column.
@@ -255,13 +257,10 @@ impl Effects {
             follow_rotation: trigger.has_flag("FollowRotate"),
             fade_on_stop: trigger.has_flag("OneTimeFade"),
         };
-        let timing = self
-            .library
-            .timing(Some(choice))
-            .unwrap_or(crate::effect_triggers::Timing {
-                emitting: Some(0),
-                linger: 0,
-            });
+        let timing = self.library.timing(Some(choice)).unwrap_or(Timing {
+            emitting: Some(0),
+            last_alive: Some(0),
+        });
         self.seed = self.seed.wrapping_add(1);
         let place = Placement {
             anchor,

@@ -441,6 +441,9 @@ def describe_emitter(emitter, names):
             'interval': emission['interval'] + 1, 'interval_random': emission['interval_random'],
             'rate': emission['rate'], 'rate_random': emission['rate_random'],
             'child_timing': emission['timing'] if emitter['inherit']['enable_emitter_particle'] else None,
+            # Percent of the parent particle's life at which an ordinary child emits (the field is
+            # read for every emitter; only the ones inside a parent use it).
+            'timing': emission['timing'],
             'position_random': emission['position_random']},
         'life': {'frames': particle['life'], 'random': particle['life_random'], 'infinite': bool(particle['infinite_life'])},
         'shape': {

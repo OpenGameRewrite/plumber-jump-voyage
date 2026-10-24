@@ -9,6 +9,9 @@ mod collider;
 // The original's effects: their data and trigger rules also serve the headless trace.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 mod effect_data;
+// How long an effect's emitter set lives: shared by the headless trace and the windowed game.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+mod effect_life;
 #[cfg(feature = "local-assets")]
 mod effect_render;
 #[cfg(feature = "local-assets")]
@@ -78,6 +81,7 @@ fn main() {
         asset_contract::self_check();
         fx::self_check();
         effect_data::self_check();
+        effect_life::self_check();
         effect_triggers::self_check();
         sound_table::self_check();
         se_ctrl::self_check();

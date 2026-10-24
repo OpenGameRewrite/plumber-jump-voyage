@@ -70,8 +70,12 @@ pub struct Emission {
     pub rate: f32,
     /// Percent of the rate that may be randomly removed per emission.
     pub rate_random: f32,
-    /// Child emitters: percent of the parent particle's life they begin at.
+    /// Child emitters that start from the parent's particles (the data's "emitter particle"
+    /// children): percent of the parent particle's life they begin at.
     pub child_timing: Option<f32>,
+    /// The same field for every emitter. An ordinary child (`child_timing` none) emits from each
+    /// parent particle once the particle has lived this percent of its life.
+    pub timing: f32,
     pub position_random: f32,
 }
 
@@ -190,6 +194,8 @@ pub struct Color {
     pub fade_in_time: i32,
     pub alpha_fade: u8,
     pub alpha_fade_in: u8,
+    /// Whether the scale fades out over `alpha_fade_time` too (`is_scale_fade`).
+    pub scale_fade: u8,
 }
 
 #[derive(Deserialize, Default, Clone, Debug, PartialEq, Eq)]

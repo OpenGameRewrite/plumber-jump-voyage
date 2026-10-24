@@ -12,23 +12,12 @@
 //!   entry says to keep the emitter;
 //! - a reaction trigger starts a one-shot effect;
 //! - the controller itself keeps a few effects running (run dust, burning).
-use crate::effect_data::{Library, ResourceChoice};
+use crate::effect_data::Library;
 use crate::movement::{Cap, Fx, Move, Player};
 use crate::sound_table::{Cue, FxContext, fx_cues};
 use std::collections::{HashMap, HashSet};
 
-/// Frames after which a one-shot effect with a never-ending emitter is stopped.
-pub const ONE_SHOT_LIMIT: u32 = 120;
-/// The resource the tables name for floors that raise nothing.
-pub const EMPTY_RESOURCE: &str = "DummyEmitter";
-/// Frames an effect keeps reporting itself emitting after its last particle's
-/// life: the emitter starts a frame late and the check runs a frame behind
-/// (recorded: a one-shot of 17 frames reads as live for 19).
-const REPORT_LAG: u32 = 2;
-/// The extra frames an effect flagged `OneTimeFade` stays up after its particles are gone
-/// (guess: one recording, the air throw's `SpinCapAirStartRight`, up 23 frames where its
-/// emitter and the lag give 19).
-const ONE_TIME_FADE_FRAMES: u32 = 4;
+use crate::effect_life::EMPTY_RESOURCE;
 
 /// The run state's dust: the run control picks which one the pose asks for
 /// (`code_driven`), whoever started it. The turn clip's own entry for
@@ -52,14 +41,27 @@ pub enum Source {
     /// Started by a hit reaction of the player actor itself (landings): the
     /// game logs these without the model's owner mark.
     Reaction,
-    /// Started by a hit reaction raised on Cappy (the catch): its effect keeper's.
+    /// Started by a hit reaction Mario's code raised on Cappy (the catch): its effect keeper's.
     CapReaction,
+    /// Started by a hit reaction Cappy's own update raised on itself (a wall hit, the throw, the
+    /// trample): its effect keeper's, started after the frame's sample.
+    CapOwnReaction,
     /// Kept running by the controller's own conditions.
     Code,
     /// Started by the controller's own call through the player's effect keeper (the splash of
     /// entering and leaving the water): logged without the model's owner mark, and it ends
     /// with its particles.
     Emitted,
+}
+
+impl Source {
+    /// Whether the effect is started after the sample the probe takes in the player's update and
+    /// before the same frame's particle calculation: Cappy's own update runs there, so its
+    /// effects have already been calculated once when they are first listed. Everything the
+    /// player's update starts is first listed one calculation younger.
+    fn after_sample(self) -> bool {
+        matches!(self, Source::Cap | Source::CapOwnReaction)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,6 +87,8 @@ pub enum Change {
 pub struct Raised {
     /// Raised on Cappy rather than on the player.
     pub cap: bool,
+    /// Raised by Cappy's own update (not by the player's code, as the catch is).
+    pub by_cap_update: bool,
     pub name: &'static str,
 }
 
@@ -139,9 +143,6 @@ pub struct Triggers {
     /// Entries that follow the actor: only these end when their clip does,
     /// the others (dust left behind) live out their own particles.
     follows: HashSet<Key>,
-    /// Entries running that their clip started with itself (start frame -1),
-    /// that follow the actor and are not kept.
-    clip_bound: HashSet<Key>,
     /// Entries with an end frame that run in the clip now playing: the effect
     /// stops when the clip reaches the frame.
     ending: Vec<(Source, Key, i32)>,
@@ -169,7 +170,7 @@ impl Triggers {
                 let endless = trigger.resources.iter().any(|r| {
                     library
                         .timing(Some(r))
-                        .is_some_and(|t| t.emitting.is_none())
+                        .is_some_and(|t| t.last_alive.is_none())
                 });
                 for action in &trigger.actions {
                     let table = if trigger.table == "Cap" {
@@ -214,11 +215,6 @@ impl Triggers {
     }
 
     fn start_action(&mut self, changes: &mut Vec<Change>, source: Source, entry: &ActionEntry) {
-        if entry.start < 0 && !entry.keep && self.follows.contains(&entry.key) {
-            self.clip_bound.insert(entry.key.clone());
-        } else {
-            self.clip_bound.remove(&entry.key);
-        }
         if self
             .running
             .insert(entry.key.clone(), (source, entry.keep))
@@ -266,7 +262,6 @@ impl Triggers {
                 .collect();
             for key in ended {
                 self.running.remove(&key);
-                self.clip_bound.remove(&key);
                 if self.follows.contains(&key) {
                     changes.push(Change::Stop { key });
                 }
@@ -325,17 +320,8 @@ impl Triggers {
         self.ending = running;
         for (_, key, _) in over {
             self.running.remove(&key);
-            self.clip_bound.remove(&key);
             changes.push(Change::Stop { key });
         }
-    }
-
-    /// The effect the clip started with itself and that follows the actor: it
-    /// is alive until the clip ends and has no life of its own (recorded: the
-    /// jump's dust is still there after the hundred frames of a spin jump,
-    /// longer than its particles live).
-    fn lives_with_clip(&self, key: &Key) -> bool {
-        self.clip_bound.contains(key)
     }
 
     pub fn evaluate(&mut self, input: &Frame) -> Vec<Change> {
@@ -356,10 +342,10 @@ impl Triggers {
             input.cap_wrapped,
         );
         for reaction in input.reactions {
-            let source = if reaction.cap {
-                Source::CapReaction
-            } else {
-                Source::Reaction
+            let source = match (reaction.cap, reaction.by_cap_update) {
+                (false, _) => Source::Reaction,
+                (true, false) => Source::CapReaction,
+                (true, true) => Source::CapOwnReaction,
             };
             for key in self.reactions.get(reaction.name).into_iter().flatten() {
                 changes.push(Change::Start {
@@ -470,14 +456,24 @@ pub fn code_calls(p: &Player) -> Vec<&'static str> {
 /// Reaction names the effect tables listen to for one movement event: the
 /// ones the sound tables use (shared through `fx_cues`) and a few more.
 pub fn reactions_of(fx: Fx, context: FxContext) -> Vec<Raised> {
+    // Cappy's reactions come from its own update, except the catch (the player's code raises it).
+    let by_cap_update = !matches!(fx, Fx::Catch);
     let mut raised: Vec<Raised> = fx_cues(fx, context)
         .into_iter()
         .filter_map(|cue| match cue {
-            Cue::Reaction { cap, name } => Some(Raised { cap, name }),
+            Cue::Reaction { cap, name } => Some(Raised {
+                cap,
+                by_cap_update: cap && by_cap_update,
+                name,
+            }),
             _ => None,
         })
         .collect();
-    let on_player = |name| Raised { cap: false, name };
+    let on_player = |name| Raised {
+        cap: false,
+        by_cap_update: false,
+        name,
+    };
     if let Fx::Quenched = fx {
         raised.push(on_player("SootWash"));
     }
@@ -490,87 +486,27 @@ pub fn cap_clip(cap: &Cap, _right_hand: bool) -> &'static str {
     cap.clip()
 }
 
-/// How long an effect emits and how long its particles outlive that.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Timing {
-    /// Frames until every emitter has finished; none while one never does.
-    pub emitting: Option<u32>,
-    /// Longest particle life in frames.
-    pub linger: u32,
-}
-
-impl Library {
-    /// Timing of the effect a resource choice starts; none when the choice
-    /// emits nothing (an entry without a resource for the floor, or the empty
-    /// dummy the tables name for floors that raise no dust).
-    pub fn timing(&self, choice: Option<&ResourceChoice>) -> Option<Timing> {
-        let mut timing = Timing {
-            emitting: Some(0),
-            linger: 0,
-        };
-        let resource = choice
-            .filter(|c| c.name != EMPTY_RESOURCE)
-            .and_then(|c| self.resources.get(&c.name))?;
-        fn visit(timing: &mut Timing, emitters: &[crate::effect_data::Emitter]) {
-            for e in emitters {
-                if e.emission.one_time {
-                    let end = e.emission.start + e.emission.duration.max(1);
-                    timing.emitting = timing.emitting.map(|t| t.max(end));
-                } else {
-                    timing.emitting = None;
-                }
-                let life = if e.life.infinite {
-                    30
-                } else {
-                    e.life.frames.max(0) as u32
-                };
-                timing.linger = timing.linger.max(life);
-                visit(timing, &e.children);
-            }
-        }
-        visit(&mut timing, &resource.emitters);
-        Some(timing)
-    }
-}
-
 /// An effect the tracker keeps alive: its table entry, the actor whose effect
-/// keeper owns it and the frames of life left (none: until stopped).
+/// keeper owns it and how old its emitter set is.
 struct Live {
     key: Key,
     owner: &'static str,
-    left: Option<u32>,
+    /// Frames of the emitter set's calculation so far (`nn::vfx` emitter age).
+    age: u32,
+    /// The last age at which an emitter of the set is alive (`effect_life`); none: until
+    /// stopped.
+    last_alive: Option<u32>,
     /// Started in the water, with the variant the material code's water prefix picks: the
     /// effect ends when the prefix goes (`al::Effect::tryUpdateMaterial` replaces the emitter).
     water_bound: bool,
 }
 /// The material the water prefix picks effect variants by.
 const WATER_MATERIAL: &str = "Water";
-/// Effect resources whose whole span (emission, particles and the report lag) was recorded:
-/// the particles of their nested child emitters or randomised lives depend on the effect
-/// system's random draws, so the table's lives cannot give it (the hip drop landing in water,
-/// three recordings, 73 steps each; the roll boosts' `Accel` and `AccelSecond`, 37 steps in
-/// one recording each: both end alike although their base lives differ (34 and 32 frames), which
-/// suggests the spark particles' randomised lives, 30 +-60%, set the end; a guess). The
-/// run's brake dust on the two lawns was recorded in the long area runs: it is up for 192
-/// steps every time (six brakes), where the table gives 84.
-const MEASURED_SPANS: [(&str, u32); 5] = [
-    ("PlayerHipDropLandWater", 73),
-    ("PlayerAccel", 37),
-    ("PlayerAccelSecond", 37),
-    ("PlayerDashBrakeLawnCap", 192),
-    ("PlayerDashBrakeLawnWaterfall", 192),
-];
-fn measured_span(resource: &str) -> Option<u32> {
-    MEASURED_SPANS
-        .iter()
-        .find(|(name, _)| *name == resource)
-        .map(|(_, span)| *span)
-}
 /// The real game's name for the actor whose effect keeper runs an effect: its
 /// model for Mario's own and the controller's, its cap for Cappy's.
 fn owner(source: Source) -> &'static str {
     match source {
-        Source::Cap | Source::CapReaction => "cap",
+        Source::Cap | Source::CapReaction | Source::CapOwnReaction => "cap",
         Source::Mario | Source::Code => "model",
         Source::Reaction | Source::Emitted => "player",
     }
@@ -582,7 +518,7 @@ pub struct Tracker {
     triggers: Triggers,
     library: Library,
     right_hand: bool,
-    /// Effect name, entry, and frames of life left (none: until stopped).
+    /// The effects whose emitter sets are alive.
     live: Vec<Live>,
     /// The material of the floor the effects start on (their resource variant).
     floor: Option<String>,
@@ -616,6 +552,15 @@ impl Tracker {
     /// (the frame the clip displays in that frame's sample, or the one the
     /// controller holds after its step) so the trace can follow the game.
     pub fn step(&mut self, p: &Player, events: &[Fx], frame: f32) -> (Vec<String>, Vec<String>) {
+        // The particle calculation that follows the previous sample runs before this frame's
+        // update: a set with no emitter left alive in it is gone from this sample on.
+        self.live.retain_mut(|live| {
+            if live.last_alive.is_some_and(|last| live.age > last) {
+                return false;
+            }
+            live.age += 1;
+            true
+        });
         let context = FxContext { mode: p.mode };
         let mut reactions = vec![];
         let mut emitted = vec![];
@@ -645,7 +590,7 @@ impl Tracker {
         let mut started = vec![];
         for change in changes {
             match change {
-                Change::Start { key, source, once } => {
+                Change::Start { key, source, .. } => {
                     let owner = owner(source);
                     if matches!(source, Source::Reaction | Source::Emitted) {
                         started.push(key.effect.clone());
@@ -673,13 +618,17 @@ impl Tracker {
                                 .iter()
                                 .any(|r| r.material.as_deref() == Some(WATER_MATERIAL))
                         });
+                    // The first calculation of an effect started after the sample has already
+                    // run when it is first listed (`Source::after_sample`).
+                    let age = u32::from(source.after_sample());
                     // The empty dummy the water prefix picks keeps the effect alive without
                     // emitting anything (recorded: the jump out of the water).
                     if water_variant && choice.is_some_and(|c| c.name == EMPTY_RESOURCE) {
                         self.live.push(Live {
                             key,
                             owner,
-                            left: None,
+                            age,
+                            last_alive: None,
                             water_bound: true,
                         });
                         continue;
@@ -689,35 +638,14 @@ impl Tracker {
                     let Some(timing) = choice.and_then(|c| self.library.timing(Some(c))) else {
                         continue;
                     };
-                    let emitting = match timing.emitting {
-                        Some(frames) => Some(frames),
-                        None if once => Some(ONE_SHOT_LIMIT),
-                        None => None,
-                    };
-                    // The effects a hit reaction starts (`Land`, `HipDropLand`,
-                    // `SwimBubbleFirstDive`) never leave the player's list in any
-                    // recording of up to 190 frames; only starting the same effect
-                    // again renews them, except the resources with a recorded span.
-                    // The others end when their emitters and particles do.
-                    let measured = choice.and_then(|c| measured_span(&c.name));
-                    let left = match source {
-                        _ if measured.is_some() => measured,
-                        Source::Reaction => None,
-                        _ if self.triggers.lives_with_clip(&key) => None,
-                        _ => emitting.map(|e| {
-                            let fade = trigger.is_some_and(|t| t.has_flag("OneTimeFade"));
-                            e + timing.linger
-                                + REPORT_LAG
-                                + if fade { ONE_TIME_FADE_FRAMES } else { 0 }
-                        }),
-                    };
                     // An emitter that never finishes is swapped for the water's when the
                     // material code changes, which ends the effect.
                     let water_bound = water_variant && timing.emitting.is_none();
                     self.live.push(Live {
                         key,
                         owner,
-                        left,
+                        age,
+                        last_alive: timing.last_alive,
                         water_bound,
                     });
                 }
@@ -740,14 +668,10 @@ impl Tracker {
             self.live.retain(|l| !l.water_bound);
         }
         self.water = [p.material_water(), self.water[0]];
-        self.live.retain_mut(|live| match &mut live.left {
-            Some(0) => false,
-            Some(frames) => {
-                *frames -= 1;
-                true
-            }
-            None => true,
-        });
+        // The effect keeper holds the material of the last floor the player stood on.
+        if let Some(codes) = p.touched.floor.as_ref().filter(|c| !c.material.is_empty()) {
+            self.floor = Some(codes.material.clone());
+        }
         // `HackCap::forcePutOn` kills every emitter of the cap at once; the stop
         // of the table entries is logged by the next frame's clip change.
         if p.cap_put_on() {
@@ -846,6 +770,7 @@ pub fn self_check() {
     let hit = triggers.evaluate(&Frame {
         reactions: &[Raised {
             cap: false,
+            by_cap_update: false,
             name: "Land",
         }],
         ..frame("Jump", 5, 1.)
@@ -924,11 +849,13 @@ pub fn self_check() {
         reactions_of(Fx::Catch, context),
         [Raised {
             cap: true,
+            by_cap_update: false,
             name: "Catch"
         }]
     );
-    // A hit reaction's effect stays among the player's live effects; only the
-    // same reaction starting it again renews it (no recording shows it end).
+    // A hit reaction's effect is listed while its emitter set lives: the table's emitter fires
+    // for 3 frames and its particles live 10, so the set is alive through age 13 and the
+    // landing's row is followed by 14 more rows (`last alive + 2` in all).
     let mut tracker = Tracker::new(library);
     let mut player = Player::default();
     let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
@@ -936,17 +863,19 @@ pub fn self_check() {
     assert_eq!(started, ["Thud"]);
     assert_eq!(alive, ["player:Thud"]);
     player.anim.serial = 1;
-    let mut last = alive.len();
-    for _ in 0..20 {
-        last = tracker.step(&player, &[], 0.).1.len();
+    let mut rows = 1;
+    while !tracker.step(&player, &[], 0.).1.is_empty() {
+        rows += 1;
+        assert!(rows < 100, "the effect ends with its emitters");
     }
-    assert_eq!(
-        last, 1,
-        "a reaction's effect outlives its emission and life"
-    );
+    assert_eq!(rows, 15);
+    // The same reaction again starts it anew.
     let (started, alive) = tracker.step(&player, &[Fx::Land { hard: false }], 0.);
     assert_eq!(
         (started, alive),
         (vec!["Thud".to_string()], vec!["player:Thud".to_string()])
     );
+    // Cappy's own update runs after the player's sample; the player's code does not.
+    assert!(Source::Cap.after_sample() && Source::CapOwnReaction.after_sample());
+    assert!(!Source::Mario.after_sample() && !Source::CapReaction.after_sample());
 }
