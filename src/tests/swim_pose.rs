@@ -21,6 +21,19 @@ fn the_pose_follows_the_speed_and_the_turn_and_resets() {
     assert!(pose.angles()[0] < pitch);
     pose.reset();
     assert_eq!(pose.angles(), [0.; 4]);
+    // The surface and the bottom's nerves ease every angle off by its own share, the spine's
+    // by the front blend rate.
+    let mut eased = SwimPose {
+        pitch: 20.,
+        heel: 10.,
+        roll: 5.,
+        spine: 8.,
+    };
+    eased.ease_off();
+    let [pitch, heel, roll, spine] = eased.angles();
+    assert!((pitch - 20. * 0.95).abs() < 1e-4, "{pitch}");
+    assert!((heel - 10. * 0.95).abs() < 1e-4 && (roll - 5. * 0.95).abs() < 1e-4);
+    assert!((spine - 8. * 0.96).abs() < 1e-4, "{spine}");
     // The spine is gated by the heel: with no heel it is left alone, whatever its own angle.
     let upright: Mat34 = [[1., 0., 0., 5.], [0., 1., 0., 6.], [0., 0., 1., 7.]];
     let mut matrix = upright;

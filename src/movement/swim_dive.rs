@@ -43,6 +43,7 @@ impl Player {
         if first {
             self.swim_anim("SwimHipDropStart");
             self.v = Vec3::ZERO;
+            self.joints.swim.reset();
             self.swim.keep_depth = if self.water_finder.found {
                 self.water_finder.distance
             } else {
@@ -269,6 +270,7 @@ impl Player {
         if first {
             self.swim_anim("SwimDive");
             self.v = limit_velocity_dir(self.v, GRAVITY, k::DIVE_START_SPEED);
+            self.joints.swim.reset();
         }
         self.swim_down_fall(first, o);
         None

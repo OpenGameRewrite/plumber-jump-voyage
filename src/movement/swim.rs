@@ -669,6 +669,7 @@ impl Player {
         }
         self.swim.surface_at = if finder.found { finder.position } else { here };
         self.swim_turn(1.);
+        self.joints.swim.ease_off();
 
         let mut waiting = false;
         if self.is_move() {

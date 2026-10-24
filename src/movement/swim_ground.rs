@@ -282,6 +282,7 @@ impl Player {
         );
         let speed = lib::length(horizontal);
         self.swim_turn(0.75);
+        self.joints.swim.ease_off();
 
         let finder = self.water_finder;
         if finder.found && finder.distance < k::SURFACE_START_DIST {
@@ -337,6 +338,7 @@ impl Player {
         self.swim.ground_normal = self.ground_normal_or_up();
         self.swim_wait_ground(k::GRAVITY, k::FALL_SPEED_MAX, 0., 0.);
         self.swim_turn(0.75);
+        self.joints.swim.ease_off();
         let finder = self.water_finder;
         if finder.found && finder.distance < k::SURFACE_START_DIST {
             self.set_swim_nerve(SwimNerve::Surface);

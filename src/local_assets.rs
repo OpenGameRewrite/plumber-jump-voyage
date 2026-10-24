@@ -243,6 +243,9 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
         "SwimSurfaceNormal" => 15.,
         "SwimStandSurface" => 10.,
         "SwimStandWait" => 20.,
+        // Recorded on the lake floor (`swim-lake-forward`): the stroke's clip hands over to the
+        // forward swim over fourteen steps.
+        "SwimStandMove" => 14.,
         "PoleWait" => 8.,
         // Recorded on the pole (`pole-climb`, `pole-top`): the turn round the
         // pole after the slide, and the handstand's start and wait.

@@ -5,7 +5,9 @@
 //! swimming nerves, the move and the paddle, steer every step (`update`, the executable's helper
 //! at `0x486a34`): the faster the swimmer goes forward, up to `SwimLowSpeedMaxH`, the further the
 //! pitch follows its limit, and the sideways heel and the spine's turn follow the body's turn
-//! power as well. Starting and ending the state clears them. The model's world calculation then
+//! power as well. Starting and ending the state clears them, so do the first steps of the dive and
+//! of the hip drop's wind-up, and the nerves at the surface and on the bottom ease them off
+//! (`ease_off`); the other nerves leave them as they are. The model's world calculation then
 //! gives the controller the root's matrix, which it turns about a point 80 cm above it (the pitch
 //! about the root's own x axis, the heel about its y axis, the roll about its z axis), and the
 //! first spine joint's, which it turns about its own y axis (`calc`).
@@ -29,6 +31,8 @@ const BENT_FORWARD_BLEND_RATE: f32 = 0.05;
 const BENT_SIDE_MAX: f32 = 60.;
 const BENT_SPINE_MAX: f32 = 40.;
 const BENT_SIDE_BLEND_RATE: f32 = 0.05;
+/// `SwimBentFrontBlendRate`: how fast the nerves that let the pose go ease the spine's turn back.
+const BENT_FRONT_BLEND_RATE: f32 = 0.04;
 /// The point the root turns about, in its own frame (`+0x30` of the controller).
 const PIVOT: Vec3 = Vec3::new(0., 80., 0.);
 /// `al::isNearZero`'s limit for the angles.
@@ -51,6 +55,16 @@ impl SwimPose {
     /// `PlayerStateSwim::appear` and `kill`: no pose.
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    /// What the nerves that are not swimming forward do every step (the surface, the bottom's
+    /// standing and walking): each angle eases toward zero by its rate, the spine's by the front
+    /// blend rate (`lerpValue(angle, 0, rate)` inlined in those `PlayerStateSwim` functions).
+    pub fn ease_off(&mut self) {
+        self.pitch = lerp_value(self.pitch, 0., BENT_FORWARD_BLEND_RATE);
+        self.heel = lerp_value(self.heel, 0., BENT_SIDE_BLEND_RATE);
+        self.roll = lerp_value(self.roll, 0., BENT_SIDE_BLEND_RATE);
+        self.spine = lerp_value(self.spine, 0., BENT_FRONT_BLEND_RATE);
     }
 
     /// The angles in the executable's order, for the tests.
