@@ -989,6 +989,10 @@ pub struct Player {
     /// The cap is Mario's spin attack, waiting for the throw frame
     /// (the cap's `SpinAttack` nerve).
     winding: bool,
+    /// The ground spin's clip is within three frames of its end: from then on the state asks for
+    /// the inverse kinematics (`PlayerStateSpinCap`'s flag at `+0xa8`, cleared when the state
+    /// appears, read by the actor's movement for the ground pose's rates).
+    spin_ik: bool,
     /// The air throw is over but its state runs on: the fall of the spin cap
     /// state (`PlayerStateSpinCap`'s `Fall` nerve) until the player lands.
     spin_fall: bool,
@@ -1221,6 +1225,7 @@ impl Default for Player {
             throw_held_before: false,
             cap_serial: 0,
             winding: false,
+            spin_ik: false,
             spin_fall: false,
             catching: None,
             catch_clip: "CatchCap",
@@ -4175,6 +4180,7 @@ impl Player {
             }
             p.winding = true;
             p.winding_age = 0;
+            p.spin_ik = false;
             p.throw_clip = name;
             if air {
                 // The air spin has no sub animation (`startCapSpinAttackAir`).
@@ -4274,6 +4280,11 @@ impl Player {
         }
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
+        // The tail of `updateSpinGroundNerve`: within three frames of the clip's end the state
+        // keeps asking for the inverse kinematics until it is chosen again.
+        if clip::throw(self.anim.name) as f32 - self.anim.frame <= 3. {
+            self.spin_ik = true;
+        }
         // Once the cap is away the other actions may cancel the spin
         // (`isEnableCancelGround`): jump, crouch, then the run.
         if self.winding {

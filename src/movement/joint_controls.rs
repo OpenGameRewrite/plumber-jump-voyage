@@ -253,6 +253,11 @@ impl Player {
             ("Run", "Run3D") => (self.joints.run.ik, 0., self.joints.run.turn_tilt),
             ("Rolling", "StandUp") => (1., 0., 0.),
             ("Squat", _) | ("HipDrop", "Land") => (1., 1., 0.),
+            // `PlayerStateSpinCap`'s flag, set near the end of the ground spin's clip.
+            ("SpinCap", _) => {
+                let rate = if self.spin_ik { 1. } else { 0. };
+                (rate, rate, 0.)
+            }
             // The movement block gives the wall catch's body and legs the whole rate while
             // `PlayerStateWallCatch::isEnableIK` holds.
             ("WallCatch", _) => {
