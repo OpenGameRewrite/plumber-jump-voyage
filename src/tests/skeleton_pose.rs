@@ -4,6 +4,7 @@ pub(super) fn run() {
     the_standing_head_is_over_the_shoulders_in_the_installed_model();
     the_blend_ignores_idle_layers_and_the_scale_of_the_weights();
     the_joint_order_puts_every_parent_first();
+    a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm();
 }
 
 /// The model is the player's own installation; without it there is nothing to check.
@@ -61,4 +62,27 @@ fn the_blend_ignores_idle_layers_and_the_scale_of_the_weights() {
     for (a, b) in halves.iter().flatten().zip(whole.iter().flatten()) {
         assert!((a - b).abs() < 1e-4);
     }
+}
+
+#[cfg_attr(test, test)]
+fn a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm() {
+    // The upper arm is stretched along its x axis (the bone's); the forearm's own rotation is a
+    // quarter turn about y. The elbow lies farther out by the stretch; the hand, along the
+    // forearm's x, is carried by the unstretched frame: still as far as the hand's offset times
+    // the stretch (the forearm's scale carries the upper arm's), but not along z.
+    let mut locals = [IDENTITY; JOINT_COUNT];
+    locals[Joint::ArmL1 as usize] = [[2., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]];
+    locals[Joint::ArmL2 as usize] = [[0., 0., 0.5, 10.], [0., 0.5, 0., 0.], [-0.5, 0., 0., 0.]];
+    locals[Joint::HandL as usize] = [[1., 0., 0., 4.], [0., 1., 0., 0.], [0., 0., 1., 0.]];
+    let worlds = world_pose(&IDENTITY, &locals, &mut Unbent);
+    let elbow = worlds[Joint::ArmL2 as usize];
+    assert!((elbow[0][3] - 20.).abs() < 1e-4, "{elbow:?}");
+    let hand = worlds[Joint::HandL as usize];
+    // The forearm's x column (before its scale) points along -z; its scale is 0.5 * 2 = 1
+    // along that column, so the hand is 4 away along it and stays level.
+    assert!(
+        (hand[0][3] - 20.).abs() < 1e-4 && hand[1][3].abs() < 1e-4,
+        "{hand:?}"
+    );
+    assert!((hand[2][3] + 4.).abs() < 1e-4, "{hand:?}");
 }

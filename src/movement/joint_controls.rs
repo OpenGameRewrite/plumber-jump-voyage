@@ -3,13 +3,13 @@
 //! states hand the keeper every frame to steer them.
 //!
 //! Registered in the original, in this order: the swim pose, the ground pose, the cap throw, the
-//! head's look-at, the pole climb pose and the grab pose. The cap throw, the pole climb and the
-//! grab pose are not ported (the cap throw and the grab pose belong to states whose joint poses
-//! this rewrite does not show yet).
+//! head's look-at, the pole climb pose and the grab pose. The cap throw and the grab pose are not
+//! ported yet.
 use super::ground_pose::{CenterInput, GroundInputs, GroundPose};
 use super::joint_math::{calc_rate01, lerp_value};
 use super::look_at::LookAt;
 use super::look_joint::{Mat34, translation};
+use super::pole_pose::PolePose;
 use super::pose_math::{along_vector_normal_h, try_normalize_or_zero};
 use super::swim_pose::SwimPose;
 use super::vector_lib::verticalize_vec;
@@ -93,6 +93,8 @@ pub struct JointState {
     /// lives.
     pub swim: SwimPose,
     pub ground: GroundPose,
+    /// The pole climb pose and the angle block the pole state writes for it.
+    pub pole: PolePose,
     pub run: RunPose,
     /// The centre dynamics' parameter the states write to during a frame
     /// (`PlayerJointParamCenterDynamics`): the keeper reads it and clears it.
@@ -119,6 +121,11 @@ impl Player {
         if self.actor_name() != "Swim" {
             self.joints.swim.reset();
         }
+        // The pole state's `kill` leaves the block clear; the controller follows it either way.
+        if self.mode != Move::Pole {
+            self.joints.pole.release();
+        }
+        self.joints.pole.update();
         let inputs = self.ground_pose_inputs();
         let center = std::mem::take(&mut self.joints.center);
         self.joints.ground.update(inputs, &center);
@@ -272,6 +279,7 @@ pub struct Controls<'a> {
     pub swim: &'a SwimPose,
     pub ground: &'a mut GroundPose,
     pub look: &'a mut LookAt,
+    pub pole: &'a PolePose,
     /// The actor's pose matrix.
     pub actor: Mat34,
 }
@@ -286,5 +294,6 @@ impl JointCalc for Controls<'_> {
             self.look.set_head_position(translation(world));
             self.look.turn_head(world, &self.actor);
         }
+        self.pole.calc(joint, world);
     }
 }

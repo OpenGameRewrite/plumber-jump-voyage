@@ -31,9 +31,10 @@
 //! (it is asked where the air nerves ask it), moving poles, and the
 //! trigger of a fire damage jump (`0x1f`).
 use super::pole_find::{
-    Actor, Fit, Touch, TurnAt, find_from_top_pos, find_move_pos, find_start_pos, find_turn_pos,
-    is_climbable, is_parallel, try_normalize, verticalize,
+    Actor, Fit, Touch, TurnAt, code_angle_offset, find_from_top_pos, find_move_pos, find_start_pos,
+    find_turn_pos, is_climbable, is_parallel, try_normalize, verticalize,
 };
+use super::pole_pose::joint_angle;
 use super::snap::Snap;
 use super::wall_air::wall_jump_takeoff;
 use super::*;
@@ -67,6 +68,9 @@ const TOP_END_UNDER_OFFSET_Y: f32 = 60.;
 /// the pole lets go of it.
 const COLLISION_RADIUS: f32 = 55.;
 const STICK_DEEP: f32 = 0.64;
+/// The share of the way the limbs' pose follows its angles per step while a move runs
+/// (the immediate `0.1` the move functions write into the keeper's block).
+const CLIMB_MOVE_POSE_RATE: f32 = 0.1;
 
 /// Lengths of the pole clips in steps (the game's own `anim_len` where it
 /// was recorded, else the clip's duration in the converted model: the
@@ -295,11 +299,13 @@ impl Player {
         let up = Vec3::Y;
         let standing_elsewhere =
             (self.grounded || self.collider.floor.is_some()) && ground.is_none();
-        let (normal, pos, up) = if let Some(wall) = wall {
+        // The surface the judge reads its angle offset from (`getPoleCodeAngleOffsetWall`,
+        // `...Ceiling` and `...Ground` look at the face of their own contact).
+        let (surface, (normal, pos, up)) = if let Some(wall) = wall {
             if standing_elsewhere || toward.dot(wall.normal) >= 0. {
                 return None;
             }
-            (wall.normal, wall.position, up)
+            (&self.touched.wall, (wall.normal, wall.position, up))
         } else if let Some(ceiling) = ceiling {
             if standing_elsewhere {
                 return None;
@@ -309,21 +315,33 @@ impl Player {
                 return None;
             }
             let slide = try_normalize(verticalize(ceiling.normal, DOWN)).unwrap_or(Vec3::ZERO);
-            (ceiling.normal, ceiling.position, -slide)
+            (
+                &self.touched.ceiling,
+                (ceiling.normal, ceiling.position, -slide),
+            )
         } else {
             let ground = ground?;
             if is_parallel(toward, ground.normal) || is_parallel(ground.normal, DOWN) {
                 return None;
             }
             let slide = try_normalize(verticalize(ground.normal, DOWN)).unwrap_or(Vec3::ZERO);
-            (ground.normal, ground.position, -slide)
+            (
+                &self.touched.floor,
+                (ground.normal, ground.position, -slide),
+            )
         };
         // It must be moving into the surface.
         let heading = try_normalize(self.v)?;
         if heading.dot(normal) >= 0. {
             return None;
         }
-        Some(Touch { normal, pos, up })
+        let angle_offset = surface.as_ref().map_or(0., code_angle_offset);
+        Some(Touch {
+            normal,
+            pos,
+            up,
+            angle_offset,
+        })
     }
 
     /// `PlayerStatePoleClimb::setup`, `appear` and the actor's `setNerve`: the
@@ -335,6 +353,11 @@ impl Player {
             ..PoleControl::default()
         };
         pole.snap.setup(fit.pos, fit.front, fit.axis);
+        // `setup` hands the pose its angles (`updatePoleDepth`), `appear` its whole rate.
+        self.joints
+            .pole
+            .ask_angle(joint_angle(pole.depth, fit.angle_offset));
+        self.joints.pole.ask_rate(1.);
         // `PlayerActionCollisionSnap::start`: the actor goes to the point and
         // turns to face, standing still, with the collision forgotten.
         pole.snap.previous = fit.pos;
@@ -539,6 +562,9 @@ impl Player {
     }
 
     fn exe_pole_wait(&mut self, o: &Orders, mesh: Option<&TriangleMesh>) {
+        if self.pole.steps == 0 {
+            self.joints.pole.ask_rate(1.);
+        }
         self.pole_follow();
         if self.pole_jump_pressed() {
             self.set_pole_nerve(PoleNerve::Jump, "WallJump", false);
@@ -660,6 +686,9 @@ impl Player {
 
     // ---- The top -------------------------------------------------------------
     fn exe_top_start(&mut self, _o: &Orders, _mesh: Option<&TriangleMesh>) {
+        if self.pole.steps == 0 {
+            self.joints.pole.free_legs();
+        }
         self.pole_hold();
         self.reset_collision();
         if self.pole_jump_pressed() {
@@ -696,6 +725,7 @@ impl Player {
         self.pole_hold();
         self.reset_collision();
         if self.anim_done(HAND_STAND_END_CLIP) {
+            self.joints.pole.ask_rate(1.);
             self.set_pole_nerve(PoleNerve::Wait, "PoleWait", false);
         }
     }
@@ -722,6 +752,10 @@ impl Player {
                     return false;
                 };
                 self.pole.depth = fit.width.clamp(CATCH_RANGE_MIN, CATCH_RANGE_MAX);
+                self.joints
+                    .pole
+                    .ask_angle(joint_angle(self.pole.depth, fit.angle_offset));
+                self.joints.pole.ask_rate(CLIMB_MOVE_POSE_RATE);
                 let yaw = self.facing.x.atan2(self.facing.z);
                 self.pole
                     .snap
@@ -839,6 +873,14 @@ impl Player {
         if measured || nerve == PoleNerve::Turn {
             self.pole.depth = fit.width.clamp(CATCH_RANGE_MIN, CATCH_RANGE_MAX);
         }
+        // `updatePoleDepth` gives the limbs their angle; every move but the slide down slows
+        // the pose's following.
+        self.joints
+            .pole
+            .ask_angle(joint_angle(self.pole.depth, fit.angle_offset));
+        if nerve != PoleNerve::Down {
+            self.joints.pole.ask_rate(CLIMB_MOVE_POSE_RATE);
+        }
         let yaw = self.facing.x.atan2(self.facing.z);
         self.pole
             .snap
@@ -861,6 +903,7 @@ impl Player {
     fn exe_pole_jump(&mut self, o: &Orders) {
         let top = self.pole.nerve == PoleNerve::TopJump;
         if self.pole.steps == 0 {
+            self.joints.pole.release();
             if !top && self.pole.is_form() {
                 // `updateLeavePoleTrans`.
                 self.pos -= self.facing * (COLLISION_RADIUS * UNIT);

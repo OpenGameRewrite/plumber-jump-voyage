@@ -158,3 +158,28 @@ pub fn rotate_own_y(m: &mut Mat34, degrees: f32) {
 pub fn rotate_own_z(m: &mut Mat34, degrees: f32) {
     rotate_own_axis(m, [0., 0., 1.], degrees);
 }
+
+/// Let `turn` bend the joint matrix's rotation without its scale. The skeleton's joints carry
+/// their own scale in the matrix's columns (a stretched upper arm is longer along its bone), but
+/// the executable's controllers turn the joint's scale-free frame: a turn of the scaled matrix
+/// would shear it and change the length of what hangs from it. The scale goes back on the
+/// columns afterwards, for the children's offsets.
+pub fn turn_scale_free(m: &mut Mat34, turn: impl FnOnce(&mut Mat34)) {
+    let mut scale = [1.; 3];
+    for (c, length) in scale.iter_mut().enumerate() {
+        *length = ((m[0][c] * m[0][c] + m[1][c] * m[1][c]) + m[2][c] * m[2][c]).sqrt();
+        if *length > 0. {
+            for row in m.iter_mut() {
+                row[c] /= *length;
+            }
+        }
+    }
+    turn(m);
+    for (c, length) in scale.iter().enumerate() {
+        if *length > 0. {
+            for row in m.iter_mut() {
+                row[c] *= *length;
+            }
+        }
+    }
+}

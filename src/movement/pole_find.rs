@@ -8,8 +8,10 @@
 //!
 //! Units are the game's (cm), in the replay's frame.
 //!
-//! Left out: the angle offset the slanted codes give (`getPoleCodeAngleOffset*`),
-//! which only tilts the body's joints, the material name of the touched
+//! The angle offset the slanted codes give (`getPoleCodeAngleOffset*`) is carried along: it only
+//! tilts the body's joints (`pole_pose.rs`).
+//!
+//! Left out: the material name of the touched
 //! face (it picks footstep sounds) and the moving collision parts
 //! (`calcForceMovePower`).
 use super::snap::near_zero_or_greater;
@@ -129,6 +131,21 @@ pub(super) struct Fit {
     pub(super) axis: Vec3,
     /// How wide the touched face is (the two edge-to-edge distances).
     pub(super) width: f32,
+    /// `getPoleCodeAngleOffset` of the face the finder struck: the joint angle the slanted pole
+    /// codes add. (Set by the finders after the fit; the fit itself knows no face.)
+    pub(super) angle_offset: f32,
+}
+
+/// `rs::getPoleCodeAngleOffset*`: the angle (degrees) the pole's floor code adds to the climbing
+/// pose. (The executable gives the two milder slants a negative angle and the steepest a
+/// positive one.)
+pub(super) fn code_angle_offset(codes: &CollisionCodes) -> f32 {
+    match codes.floor.as_str() {
+        "Pole10" => -10.,
+        "Pole20" => -20.,
+        "Pole30Plus" => 30.,
+        _ => 0.,
+    }
 }
 
 /// The faces a sphere of `radius` swept from `start` along `mv` touches and
@@ -240,6 +257,7 @@ pub(super) fn fit_pole(
                 front,
                 axis,
                 width: to_a.length() + to_b.length(),
+                angle_offset: 0.,
             })
         }
         (Some((to_a, axis_a)), None) => Some(Fit {
@@ -247,12 +265,14 @@ pub(super) fn fit_pole(
             front,
             axis: axis_a,
             width: catch,
+            angle_offset: 0.,
         }),
         (None, Some((to_b, axis_b))) => Some(Fit {
             pos: contact + to_b + across * quarter,
             front,
             axis: axis_b,
             width: catch,
+            angle_offset: 0.,
         }),
         (None, None) => None,
     }
@@ -264,6 +284,8 @@ pub(super) struct Touch {
     pub(super) normal: Vec3,
     pub(super) pos: Vec3,
     pub(super) up: Vec3,
+    /// The pole code's angle offset of the touched face (the judge reads it from the collision).
+    pub(super) angle_offset: f32,
 }
 
 /// `rs::findPoleClimbStartPos`: may the body hold on to the pole it touched,
@@ -310,7 +332,9 @@ pub(super) fn find_start_pos(
             contact = below.position;
         }
     }
-    fit_pole(mesh, contact, normal, dir, catch, reach)
+    let mut fit = fit_pole(mesh, contact, normal, dir, catch, reach)?;
+    fit.angle_offset = touch.angle_offset;
+    Some(fit)
 }
 
 /// `0x562a0c`: the middle of the shortest segment between two lines (a point
@@ -374,6 +398,7 @@ fn find_top(
         front: -cap.normal,
         axis: Vec3::Y,
         width: (across.position - from).length(),
+        angle_offset: 0.,
     })
 }
 
@@ -444,7 +469,8 @@ pub(super) fn find_move_pos(
     if !is_climbable(mesh.codes_of(hit.triangle)) {
         return None;
     }
-    let fit = fit_pole(mesh, hit.position, hit.normal, actor.up, width, reach)?;
+    let mut fit = fit_pole(mesh, hit.position, hit.normal, actor.up, width, reach)?;
+    fit.angle_offset = code_angle_offset(mesh.codes_of(hit.triangle));
     if speed <= 0. {
         return Some(Moved { fit, top: false });
     }
@@ -458,10 +484,14 @@ pub(super) fn find_move_pos(
     match find_top(
         mesh, actor, fit.front, margin, fit.width, fit.axis, fit.pos, true,
     ) {
-        Some(top) => Some(Moved {
-            fit: top,
-            top: true,
-        }),
+        Some(mut top) => {
+            // The finder wrote the side face's angle before it looked for the top.
+            top.angle_offset = fit.angle_offset;
+            Some(Moved {
+                fit: top,
+                top: true,
+            })
+        }
         None => Some(Moved { fit, top: false }),
     }
 }
@@ -515,6 +545,7 @@ pub(super) fn find_turn_pos(
         return None;
     }
     let mut fit = fit_pole(mesh, hit.position, hit.normal, actor.up, width, reach)?;
+    fit.angle_offset = code_angle_offset(mesh.codes_of(hit.triangle));
     if !is_parallel(turn.direction, fit.front) {
         // The face turned away from the way round: put the point where the
         // line along the old axis meets the one along the old front.
@@ -556,5 +587,7 @@ pub(super) fn find_from_top_pos(
     if !is_climbable(mesh.codes_of(hit.triangle)) {
         return None;
     }
-    fit_pole(mesh, hit.position, hit.normal, actor.up, width, reach)
+    let mut fit = fit_pole(mesh, hit.position, hit.normal, actor.up, width, reach)?;
+    fit.angle_offset = code_angle_offset(mesh.codes_of(hit.triangle));
+    Some(fit)
 }

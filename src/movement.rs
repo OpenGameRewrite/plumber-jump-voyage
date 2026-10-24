@@ -258,6 +258,8 @@ pub mod plane;
 mod pole;
 #[path = "movement/pole_find.rs"]
 mod pole_find;
+#[path = "movement/pole_pose.rs"]
+pub(crate) mod pole_pose;
 #[path = "movement/pose_math.rs"]
 pub(crate) mod pose_math;
 #[path = "movement/rolling.rs"]
@@ -2894,6 +2896,7 @@ impl Player {
             swim: &self.joints.swim,
             ground: &mut self.joints.ground,
             look: &mut self.look,
+            pole: &self.joints.pole,
             actor,
         };
         crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
@@ -2920,6 +2923,7 @@ impl Player {
             swim: &self.joints.swim,
             ground: &mut controllers.0,
             look: &mut controllers.1,
+            pole: &self.joints.pole,
             actor,
         };
         crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
@@ -4887,5 +4891,6 @@ pub fn self_check() {
     look_joint::self_check();
     ground_pose::self_check();
     swim_pose::self_check();
+    pole_pose::self_check();
     look_at::self_check();
 }

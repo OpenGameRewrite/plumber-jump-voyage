@@ -220,6 +220,75 @@ pub fn mul34(a: &Mat34, b: &Mat34) -> Mat34 {
 /// still reaches them.
 const SCALE_COMPENSATING: [Joint; 2] = [Joint::ArmL1, Joint::ArmR1];
 
+/// The joints of the arm chains below the upper arm. Their rig compensates the segment scale of
+/// the joint above (Maya's rule): a stretched upper arm moves the elbow farther along with it, but
+/// the forearm itself is not sheared by the stretch. The converter divides the parent's scale out
+/// of these joints' own scale, which is exact only when the parent's scale is uniform; the arms
+/// stretch along one axis, so `compose` redoes the rule on the matrices.
+const SEGMENT_COMPENSATED: [Joint; 8] = [
+    Joint::ArmL1Sub,
+    Joint::ArmL2,
+    Joint::ArmL2Sub,
+    Joint::HandL,
+    Joint::ArmR1Sub,
+    Joint::ArmR2,
+    Joint::ArmR2Sub,
+    Joint::HandR,
+];
+
+/// The lengths of a matrix's three columns: the scale a joint carries.
+fn column_lengths(m: &Mat34) -> [f32; 3] {
+    [0, 1, 2].map(|c| ((m[0][c] * m[0][c] + m[1][c] * m[1][c]) + m[2][c] * m[2][c]).sqrt())
+}
+
+/// Where the arm chains' joints go, with the scale each of them truly has (the upper arm's own
+/// scale; below it, its own times the one above, which the converter divided out).
+struct ArmChains {
+    scale: [[f32; 3]; JOINT_COUNT],
+}
+
+impl ArmChains {
+    fn new() -> Self {
+        Self {
+            scale: [[1.; 3]; JOINT_COUNT],
+        }
+    }
+
+    /// A joint's world matrix from its parent's `above` and its own `local` one. Where the rig
+    /// compensates the segment scale, the scale of the joint above (its own, not the root's)
+    /// stretches the joint's offset (the translation column, as the plain product does) but
+    /// not its orientation: the local rotation is carried by the parent's frame without that
+    /// scale, and the scale goes back on the joint's own columns.
+    fn place(&mut self, joint: Joint, above: &Mat34, local: &Mat34) -> Mat34 {
+        let own = column_lengths(local);
+        if matches!(joint, Joint::ArmL1 | Joint::ArmR1) {
+            self.scale[joint as usize] = own;
+        }
+        let Some(parent) = joint
+            .parent()
+            .filter(|_| SEGMENT_COMPENSATED.contains(&joint))
+        else {
+            return mul34(above, local);
+        };
+        let parent_scale = self.scale[parent as usize];
+        self.scale[joint as usize] = [0, 1, 2].map(|c| own[c] * parent_scale[c]);
+        let mut free = *above;
+        let mut carried_local = *local;
+        for c in 0..3 {
+            for r in 0..3 {
+                free[r][c] = above[r][c] / parent_scale[c];
+                carried_local[r][c] = local[r][c] * parent_scale[c];
+            }
+        }
+        let rotated = mul34(&free, &carried_local);
+        let mut out = mul34(above, local);
+        for r in 0..3 {
+            out[r][..3].copy_from_slice(&rotated[r][..3]);
+        }
+        out
+    }
+}
+
 /// The matrix of a joint's parent without the scale its joints below the root add: the
 /// columns of its part below the root's matrix are made unit length.
 fn without_scale_below_root(parent: &Mat34, root: &Mat34) -> Mat34 {
@@ -254,12 +323,13 @@ fn without_scale_below_root(parent: &Mat34, root: &Mat34) -> Mat34 {
 /// are computed from it.
 pub fn world_pose(actor: &Mat34, locals: &Matrices, calc: &mut impl JointCalc) -> Matrices {
     let mut worlds = [IDENTITY; JOINT_COUNT];
+    let mut arms = ArmChains::new();
     for joint in Joint::ALL {
         let mut above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
         if SCALE_COMPENSATING.contains(&joint) {
             above = without_scale_below_root(&above, &worlds[Joint::AllRoot as usize]);
         }
-        let mut world = mul34(&above, &locals[joint as usize]);
+        let mut world = arms.place(joint, &above, &locals[joint as usize]);
         calc.calc(joint, &mut world, &mut worlds);
         worlds[joint as usize] = world;
     }
@@ -287,12 +357,13 @@ fn invert34(m: &Mat34) -> Mat34 {
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn bent_locals(actor: &Mat34, locals: &Matrices, bent: &Matrices) -> Vec<(Joint, Mat34)> {
     let mut moved = Vec::new();
+    let mut arms = ArmChains::new();
     for joint in Joint::ALL {
         let mut above = joint.parent().map_or(*actor, |p| bent[p as usize]);
         if SCALE_COMPENSATING.contains(&joint) {
             above = without_scale_below_root(&above, &bent[Joint::AllRoot as usize]);
         }
-        let expected = mul34(&above, &locals[joint as usize]);
+        let expected = arms.place(joint, &above, &locals[joint as usize]);
         let same = expected
             .iter()
             .flatten()
