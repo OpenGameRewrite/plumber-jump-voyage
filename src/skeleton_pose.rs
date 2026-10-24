@@ -214,106 +214,58 @@ pub fn mul34(a: &Mat34, b: &Mat34) -> Mat34 {
     out
 }
 
-/// The joints that do not take the scale of the joints between them and the root over (the
-/// skeleton's segment scale compensation): the upper arms keep their length when the body is
-/// squashed into the rolling ball. The root's own scale (the squash and stretch of a jump)
-/// still reaches them.
-const SCALE_COMPENSATING: [Joint; 2] = [Joint::ArmL1, Joint::ArmR1];
-
-/// The joints of the arm chains below the upper arm. Their rig compensates the segment scale of
-/// the joint above (Maya's rule): a stretched upper arm moves the elbow farther along with it, but
-/// the forearm itself is not sheared by the stretch. The converter divides the parent's scale out
-/// of these joints' own scale, which is exact only when the parent's scale is uniform; the arms
-/// stretch along one axis, so `compose` redoes the rule on the matrices.
-const SEGMENT_COMPENSATED: [Joint; 8] = [
-    Joint::ArmL1Sub,
-    Joint::ArmL2,
-    Joint::ArmL2Sub,
-    Joint::HandL,
-    Joint::ArmR1Sub,
-    Joint::ArmR2,
-    Joint::ArmR2Sub,
-    Joint::HandR,
-];
-
 /// The lengths of a matrix's three columns: the scale a joint carries.
 fn column_lengths(m: &Mat34) -> [f32; 3] {
     [0, 1, 2].map(|c| ((m[0][c] * m[0][c] + m[1][c] * m[1][c]) + m[2][c] * m[2][c]).sqrt())
 }
 
-/// Where the arm chains' joints go, with the scale each of them truly has (the upper arm's own
-/// scale; below it, its own times the one above, which the converter divided out).
-struct ArmChains {
-    scale: [[f32; 3]; JOINT_COUNT],
-}
-
-impl ArmChains {
-    fn new() -> Self {
-        Self {
-            scale: [[1.; 3]; JOINT_COUNT],
-        }
+impl Joint {
+    /// Whether the joint's bone has the skeleton's segment scale compensation (the
+    /// `SegmentScaleCompensate` bone flag, 0x800000, of `Mario.bfres`; the skeleton's scaling
+    /// mode is Maya). Every bone has it except the three roots, which take what is above them.
+    fn compensates_segment_scale(self) -> bool {
+        !matches!(self, Joint::Nw4fRoot | Joint::AllRoot | Joint::JointRoot)
     }
 
-    /// A joint's world matrix from its parent's `above` and its own `local` one. Where the rig
-    /// compensates the segment scale, the scale of the joint above (its own, not the root's)
-    /// stretches the joint's offset (the translation column, as the plain product does) but
-    /// not its orientation: the local rotation is carried by the parent's frame without that
-    /// scale, and the scale goes back on the joint's own columns.
-    fn place(&mut self, joint: Joint, above: &Mat34, local: &Mat34) -> Mat34 {
-        let own = column_lengths(local);
-        if matches!(joint, Joint::ArmL1 | Joint::ArmR1) {
-            self.scale[joint as usize] = own;
+    /// The scale of the joint above that this joint's rule works with, from the parent's true
+    /// scale `above`: the parent's for a compensating joint, none for a root.
+    fn compensated_scale(self, above: [f32; 3]) -> [f32; 3] {
+        if self.compensates_segment_scale() {
+            above
+        } else {
+            [1.; 3]
         }
-        let Some(parent) = joint
-            .parent()
-            .filter(|_| SEGMENT_COMPENSATED.contains(&joint))
-        else {
-            return mul34(above, local);
-        };
-        let parent_scale = self.scale[parent as usize];
-        self.scale[joint as usize] = [0, 1, 2].map(|c| own[c] * parent_scale[c]);
-        let mut free = *above;
-        let mut carried_local = *local;
-        for c in 0..3 {
-            for r in 0..3 {
-                free[r][c] = above[r][c] / parent_scale[c];
-                carried_local[r][c] = local[r][c] * parent_scale[c];
-            }
-        }
-        let rotated = mul34(&free, &carried_local);
-        let mut out = mul34(above, local);
-        for r in 0..3 {
-            out[r][..3].copy_from_slice(&rotated[r][..3]);
-        }
-        out
     }
 }
 
-/// The matrix of a joint's parent without the scale its joints below the root add: the
-/// columns of its part below the root's matrix are made unit length.
-fn without_scale_below_root(parent: &Mat34, root: &Mat34) -> Mat34 {
-    let inverse = invert3(root);
-    let mut relative = [[0.; 3]; 3];
-    for (r, row) in relative.iter_mut().enumerate() {
-        for (c, cell) in row.iter_mut().enumerate() {
-            *cell = (inverse[r][0] * parent[0][c] + inverse[r][1] * parent[1][c])
-                + inverse[r][2] * parent[2][c];
-        }
+/// A joint's world matrix from its parent's `above` and its own `local` one, with the scale
+/// rule of the model's skeleton (Maya's segment scale compensation).
+///
+/// A compensating joint is placed as `above * T * inverse(parent scale) * R * S`: the parent's
+/// own scale (`parent_scale`, its local one, not what the joints above it add) carries the
+/// joint's offset farther or nearer, but neither shears nor scales the joint's own frame, so
+/// a stretched upper arm moves the elbow out along with it while the forearm keeps its
+/// proportions. The roots have no compensation: they inherit the scale above them as a plain
+/// product does. A compensating joint's `local` columns carry the converted scale (the file
+/// stores its scale divided by its parent's, glTF fashion), which times `parent_scale` is the
+/// true one; `parent_scale` is 1 for a root, whose scale is stored as it is.
+fn place(above: &Mat34, local: &Mat34, parent_scale: [f32; 3]) -> Mat34 {
+    if parent_scale == [1.; 3] || parent_scale.contains(&0.) {
+        return mul34(above, local);
     }
+    let mut free = *above;
+    let mut carried_local = *local;
     for c in 0..3 {
-        let length = ((relative[0][c] * relative[0][c] + relative[1][c] * relative[1][c])
-            + relative[2][c] * relative[2][c])
-            .sqrt();
-        for row in &mut relative {
-            row[c] /= length;
+        for r in 0..3 {
+            free[r][c] = above[r][c] / parent_scale[c];
+            carried_local[r][c] = local[r][c] * parent_scale[c];
         }
     }
-    let mut out = *parent;
+    let rotated = mul34(&free, &carried_local);
+    // The offset is the plain product's: it takes the parent's scale.
+    let mut out = mul34(above, local);
     for r in 0..3 {
-        for c in 0..3 {
-            out[r][c] = (root[r][0] * relative[0][c] + root[r][1] * relative[1][c])
-                + root[r][2] * relative[2][c];
-        }
+        out[r][..3].copy_from_slice(&rotated[r][..3]);
     }
     out
 }
@@ -323,13 +275,16 @@ fn without_scale_below_root(parent: &Mat34, root: &Mat34) -> Mat34 {
 /// are computed from it.
 pub fn world_pose(actor: &Mat34, locals: &Matrices, calc: &mut impl JointCalc) -> Matrices {
     let mut worlds = [IDENTITY; JOINT_COUNT];
-    let mut arms = ArmChains::new();
+    let mut scales = [[1.; 3]; JOINT_COUNT];
     for joint in Joint::ALL {
-        let mut above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
-        if SCALE_COMPENSATING.contains(&joint) {
-            above = without_scale_below_root(&above, &worlds[Joint::AllRoot as usize]);
-        }
-        let mut world = arms.place(joint, &above, &locals[joint as usize]);
+        let above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
+        let parent_scale = joint.compensated_scale(
+            joint.parent().map_or([1.; 3], |p| scales[p as usize]),
+        );
+        let local = &locals[joint as usize];
+        let own = column_lengths(local);
+        scales[joint as usize] = [0, 1, 2].map(|c| own[c] * parent_scale[c]);
+        let mut world = place(&above, local, parent_scale);
         calc.calc(joint, &mut world, &mut worlds);
         worlds[joint as usize] = world;
     }
@@ -352,31 +307,31 @@ fn invert34(m: &Mat34) -> Mat34 {
 
 /// The local matrices a skeleton the controllers bent needs to show that pose when the
 /// renderer composes the joints itself: only the joints a controller moved (the legs' own
-/// matrices included) or that the rig places differently from a plain composition change; the others keep their animated local matrix and follow their
-/// bent parents. `bent` is what `world_pose` returned for `locals`.
+/// matrices included) or that the rig places differently from a plain composition (a parent
+/// with a scale of its own, see `place`) change; the others keep their animated local matrix
+/// and follow their bent parents. `bent` is what `world_pose` returned for `locals`.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn bent_locals(actor: &Mat34, locals: &Matrices, bent: &Matrices) -> Vec<(Joint, Mat34)> {
     let mut moved = Vec::new();
     for joint in Joint::ALL {
-        let mut above = joint.parent().map_or(*actor, |p| bent[p as usize]);
-        if SCALE_COMPENSATING.contains(&joint) {
-            above = without_scale_below_root(&above, &bent[Joint::AllRoot as usize]);
-        }
-        // What the renderer's own composition makes of the animated local matrix; the arm
-        // chains' compensation of the segment scale (`ArmChains::place`) differs from it
-        // where the upper arm is stretched, and those joints are written back as well.
+        let above = joint.parent().map_or(*actor, |p| bent[p as usize]);
+        // What the renderer's own composition makes of the animated local matrix.
         let expected = mul34(&above, &locals[joint as usize]);
         let same = expected
             .iter()
             .flatten()
             .zip(bent[joint as usize].iter().flatten())
-            .all(|(a, b)| a.to_bits() == b.to_bits());
+            .all(|(a, b)| (a - b).abs() <= COMPOSITION_TOLERANCE * (1. + b.abs()));
         if !same {
             moved.push((joint, mul34(&invert34(&above), &bent[joint as usize])));
         }
     }
     moved
 }
+
+/// How far (relative, f32 rounding of two ways to the same product) the rig's placement of a
+/// joint may be from the renderer's plain composition before the joint is written back.
+const COMPOSITION_TOLERANCE: f32 = 1e-5;
 
 /// One clip playing: its name, the frame it shows and its share of the blend.
 #[derive(Clone, Copy, Debug)]
@@ -704,10 +659,49 @@ impl SkeletonPose {
         if playing.is_empty() || total <= 0. {
             return None;
         }
+        // The scale each joint truly has in each clip: the file stores a joint's scale divided
+        // by its parent's (see `place`), so it is multiplied back down the chain. The game
+        // blends the true scales, so the blend is made of those and converted afterwards.
+        let compensated = |joint: Joint, scales: &[[f64; 3]]| {
+            match joint.parent().filter(|_| joint.compensates_segment_scale()) {
+                Some(parent) => scales[parent as usize],
+                None => [1.; 3],
+            }
+        };
+        let true_scales: Vec<[[f64; 3]; JOINT_COUNT]> = playing
+            .iter()
+            .map(|(clip, frame, _)| {
+                let time = frame / KEYS_PER_SECOND;
+                let mut scales = [[1.; 3]; JOINT_COUNT];
+                for (slot, joint) in Joint::ALL.iter().enumerate() {
+                    scales[slot] = match clip.scale[slot].as_ref().and_then(|t| t.around(time)) {
+                        Some((a, b, k)) => {
+                            let above = compensated(*joint, &scales);
+                            std::array::from_fn(|i| {
+                                (f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k))
+                                    * above[i]
+                            })
+                        }
+                        None => self.bind[slot].scale,
+                    };
+                }
+                scales
+            })
+            .collect();
+        let blended_scales: Vec<[f64; 3]> = (0..JOINT_COUNT)
+            .map(|slot| {
+                let mut blend = [0.; 3];
+                for ((_, _, weight), scales) in playing.iter().zip(&true_scales) {
+                    for i in 0..3 {
+                        blend[i] += f64::from(*weight) / total * scales[slot][i];
+                    }
+                }
+                blend
+            })
+            .collect();
         let mut out = [IDENTITY; JOINT_COUNT];
         for (slot, bind) in self.bind.iter().enumerate() {
             let mut translation = [0.; 3];
-            let mut scale = [0.; 3];
             let mut blended = [0.; 4];
             for (clip, frame, weight) in &playing {
                 let share = f64::from(*weight) / total;
@@ -723,17 +717,6 @@ impl SkeletonPose {
                 for i in 0..3 {
                     translation[i] += share * t[i];
                 }
-                let sc = clip.scale[slot]
-                    .as_ref()
-                    .and_then(|track| track.around(time))
-                    .map_or(bind.scale, |(a, b, k)| {
-                        std::array::from_fn(|i| {
-                            f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k)
-                        })
-                    });
-                for i in 0..3 {
-                    scale[i] += share * sc[i];
-                }
                 let q = clip.rotation[slot]
                     .as_ref()
                     .and_then(|track| track.around(time))
@@ -747,6 +730,15 @@ impl SkeletonPose {
                     blended[i] += share * sign * q[i];
                 }
             }
+            // Back to the file's convention: the blended scale over the blended parent's.
+            let above = compensated(Joint::ALL[slot], &blended_scales);
+            let scale: [f64; 3] = std::array::from_fn(|i| {
+                if above[i] == 0. {
+                    blended_scales[slot][i]
+                } else {
+                    blended_scales[slot][i] / above[i]
+                }
+            });
             let rotation = rotation_matrix(blended);
             for r in 0..3 {
                 for c in 0..3 {
