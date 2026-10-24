@@ -227,6 +227,9 @@ pub struct Recorder {
     stale_clip: &'static str,
     sub_clip: Option<&'static str>,
     restart: Option<(&'static str, u32)>,
+    /// The sub animation on screen at the previous row (the clip, its shown frame, and whether
+    /// it covered the whole body): when it ends, the main clip fades in from that pose.
+    shown_sub: Option<(Layer, bool)>,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
     /// The original's effects, when their library is installed; the
@@ -257,6 +260,7 @@ impl Recorder {
             stale_clip: "",
             sub_clip: None,
             restart: None,
+            shown_sub: None,
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -586,15 +590,49 @@ impl Recorder {
         // The dive's landing clip covers the whole body while it plays: the
         // pose under it neither blends nor shows, and no upper overlay is meant.
         let covering = p.sub_anim.filter(|s| s.name == "RollingStandUp");
+        // The sub animation on screen in this row (a model sub animation of another clip, or
+        // the cover), for the fade that follows its end.
+        let shown_now = covering
+            .map(|s| (s.name, s.frame, s.rate, true))
+            .or_else(|| {
+                p.model_sub()
+                    .filter(|(name, _)| *name != p.anim.name)
+                    .map(|(name, frame)| (name, frame, 1., false))
+            })
+            .map(|(name, frame, rate, covers)| {
+                (
+                    Layer {
+                        name,
+                        frame,
+                        rate,
+                        weight: 1.,
+                    },
+                    covers,
+                )
+            });
+        let shown_before = std::mem::replace(&mut self.shown_sub, shown_now);
         if covering.is_none() {
             self.blend
                 .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
             if p.interpolation_cleared() {
                 self.blend.old.clear();
             }
+            // The cover just ended: the main clip fades in over the pose the cover left on
+            // screen, not over the pose held under it (`PlayerAnimator` restarts the main
+            // slot at `endSubAnim`; the recorded `interp` still names the main clip's
+            // predecessor). The fade keeps its label (`slot`) and share.
+            if let Some((shown, true)) = shown_before.clone() {
+                for (old, _, _) in &mut self.blend.old {
+                    let held: f32 = old.layers.iter().map(|l| l.weight).sum();
+                    old.layers = vec![Layer {
+                        weight: held,
+                        ..shown.clone()
+                    }];
+                }
+            }
         }
         let pose = &self.blend.current;
-        let kept = self.blend.kept();
+        let mut kept = self.blend.kept();
         if let Some(sub) = p.sub_anim {
             self.last_sub = sub.name;
         } else if let Some((name, _)) = p.model_sub() {
@@ -672,9 +710,22 @@ impl Recorder {
             && !self.stale_clip.is_empty()
         {
             // The animator restarts the main clip (`endSubAnim`): the fade the
-            // clip had begun is replaced by the restart's own.
-            self.blend.old.clear();
+            // clip had begun is replaced by the restart's own, from the pose the sub
+            // animation left on screen (named, as the game records it, after the clip
+            // before it).
             interp.clear();
+            self.blend.old = shown_before
+                .map(|(shown, _)| {
+                    let share = 1. - 1. / RESTART_BLEND_FRAMES as f32;
+                    let fade = FPS / RESTART_BLEND_FRAMES as f32;
+                    let pose = Pose {
+                        slot: self.stale_clip,
+                        layers: vec![shown],
+                    };
+                    vec![(pose, share, fade)]
+                })
+                .unwrap_or_default();
+            kept = self.blend.kept();
             self.restart = Some((self.stale_clip, 0));
         }
         self.sub_clip = sub_now;
