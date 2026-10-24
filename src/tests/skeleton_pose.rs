@@ -5,6 +5,7 @@ pub(super) fn run() {
     the_blend_ignores_idle_layers_and_the_scale_of_the_weights();
     the_joint_order_puts_every_parent_first();
     a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm();
+    a_parents_scale_moves_the_offset_but_not_the_frame_and_roots_inherit();
 }
 
 /// The model is the player's own installation; without it there is nothing to check.
@@ -85,4 +86,30 @@ fn a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm() {
         "{hand:?}"
     );
     assert!((hand[2][3] + 4.).abs() < 1e-4, "{hand:?}");
+}
+
+#[cfg_attr(test, test)]
+fn a_parents_scale_moves_the_offset_but_not_the_frame_and_roots_inherit() {
+    // The hip is squashed to twice its size; the file stores the thigh's scale divided by it
+    // (0.5), so the thigh truly has scale 1 (the rig compensates the hip's segment scale): its
+    // offset is carried out to 20 by the hip's scale, its own frame stays unit.
+    let mut locals = [IDENTITY; JOINT_COUNT];
+    locals[Joint::Hip as usize] = [[2., 0., 0., 0.], [0., 2., 0., 0.], [0., 0., 2., 0.]];
+    locals[Joint::LegL1 as usize] = [[0.5, 0., 0., 10.], [0., 0.5, 0., 0.], [0., 0., 0.5, 0.]];
+    let worlds = world_pose(&IDENTITY, &locals, &mut Unbent);
+    let thigh = worlds[Joint::LegL1 as usize];
+    assert!((thigh[0][3] - 20.).abs() < 1e-4, "{thigh:?}");
+    for c in 0..3 {
+        let length = (thigh[0][c].powi(2) + thigh[1][c].powi(2) + thigh[2][c].powi(2)).sqrt();
+        assert!((length - 1.).abs() < 1e-4, "column {c}: {thigh:?}");
+    }
+    // The roots have no compensation: the scale of the actor's root reaches every joint, the
+    // joint root's own is not divided out of its file scale either.
+    let mut locals = [IDENTITY; JOINT_COUNT];
+    locals[Joint::AllRoot as usize] = [[3., 0., 0., 0.], [0., 3., 0., 0.], [0., 0., 3., 0.]];
+    locals[Joint::JointRoot as usize] = [[1., 0., 0., 0.], [0., 1., 0., 5.], [0., 0., 1., 0.]];
+    let worlds = world_pose(&IDENTITY, &locals, &mut Unbent);
+    assert!((worlds[Joint::JointRoot as usize][1][3] - 15.).abs() < 1e-4);
+    assert!((worlds[Joint::Hip as usize][0][0] - 3.).abs() < 1e-4);
+    assert!((worlds[Joint::Head as usize][0][0] - 3.).abs() < 1e-4);
 }

@@ -278,9 +278,8 @@ pub fn world_pose(actor: &Mat34, locals: &Matrices, calc: &mut impl JointCalc) -
     let mut scales = [[1.; 3]; JOINT_COUNT];
     for joint in Joint::ALL {
         let above = joint.parent().map_or(*actor, |p| worlds[p as usize]);
-        let parent_scale = joint.compensated_scale(
-            joint.parent().map_or([1.; 3], |p| scales[p as usize]),
-        );
+        let parent_scale =
+            joint.compensated_scale(joint.parent().map_or([1.; 3], |p| scales[p as usize]));
         let local = &locals[joint as usize];
         let own = column_lengths(local);
         scales[joint as usize] = [0, 1, 2].map(|c| own[c] * parent_scale[c]);
@@ -662,11 +661,12 @@ impl SkeletonPose {
         // The scale each joint truly has in each clip: the file stores a joint's scale divided
         // by its parent's (see `place`), so it is multiplied back down the chain. The game
         // blends the true scales, so the blend is made of those and converted afterwards.
-        let compensated = |joint: Joint, scales: &[[f64; 3]]| {
-            match joint.parent().filter(|_| joint.compensates_segment_scale()) {
-                Some(parent) => scales[parent as usize],
-                None => [1.; 3],
-            }
+        let compensated = |joint: Joint, scales: &[[f64; 3]]| match joint
+            .parent()
+            .filter(|_| joint.compensates_segment_scale())
+        {
+            Some(parent) => scales[parent as usize],
+            None => [1.; 3],
         };
         let true_scales: Vec<[[f64; 3]; JOINT_COUNT]> = playing
             .iter()
@@ -678,7 +678,8 @@ impl SkeletonPose {
                         Some((a, b, k)) => {
                             let above = compensated(*joint, &scales);
                             std::array::from_fn(|i| {
-                                (f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k))
+                                (f64::from(a[i])
+                                    + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k))
                                     * above[i]
                             })
                         }
