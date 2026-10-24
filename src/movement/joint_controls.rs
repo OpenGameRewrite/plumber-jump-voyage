@@ -4,7 +4,8 @@
 //!
 //! Registered in the original, in this order: the swim pose, the ground pose, the cap throw, the
 //! head's look-at, the pole climb pose and the grab pose; the wall catch's hip spring comes
-//! after them. The cap throw and the grab pose are not ported yet.
+//! after them. The grab pose (the arms' reach, the shoulder turns) is not ported yet.
+use super::cap_throw::CapThrow;
 use super::ground_pose::{CenterInput, GroundInputs, GroundPose};
 use super::hip_spring::{GrabDynamics, HipSpring};
 use super::joint_math::{calc_rate01, lerp_value};
@@ -94,6 +95,8 @@ pub struct JointState {
     /// lives.
     pub swim: SwimPose,
     pub ground: GroundPose,
+    /// The spine's swing of the cap throw.
+    pub cap: CapThrow,
     /// The pole climb pose and the angle block the pole state writes for it.
     pub pole: PolePose,
     /// The wall catch's hip spring and the block the wall catch state steers its rate with.
@@ -125,6 +128,7 @@ impl Player {
         if self.actor_name() != "Swim" {
             self.joints.swim.reset();
         }
+        self.joints.cap.update();
         // The pole state's `kill` leaves the block clear; the controller follows it either way.
         if self.mode != Move::Pole {
             self.joints.pole.release();
@@ -293,6 +297,7 @@ pub struct Controls<'a> {
     pub swim: &'a SwimPose,
     pub ground: &'a mut GroundPose,
     pub look: &'a mut LookAt,
+    pub cap: &'a CapThrow,
     pub pole: &'a PolePose,
     pub spring: &'a mut HipSpring,
     /// The actor's pose matrix.
@@ -304,6 +309,7 @@ impl JointCalc for Controls<'_> {
         // (The keeper registers the swim pose first, then the ground pose.)
         self.swim.calc(joint, world);
         self.ground.calc(joint, world, solved);
+        self.cap.calc(joint, world);
         if joint == Joint::Head {
             // The keeper reads this frame's head position at the next step.
             self.look.set_head_position(translation(world));

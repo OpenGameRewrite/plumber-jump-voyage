@@ -236,8 +236,14 @@ mod t {
     pub const SPIN_BRAKE_RATE: f32 = 0.95;
 }
 
+/// The angle a thrown button gives the spine's swing (`PlayerSpinCapAttack` `+0x58`): only the
+/// left/right throw gesture sets one, and the rewrite's input has none.
+const BUTTON_THROW_SWING_ANGLE: f32 = 0.;
+
 #[path = "movement/cap_pose.rs"]
 pub(crate) mod cap_pose;
+#[path = "movement/cap_throw.rs"]
+pub(crate) mod cap_throw;
 /// What a pose calculation advances (the controllers that keep state between frames).
 pub type ControllerState = (
     ground_pose::GroundPose,
@@ -2904,6 +2910,7 @@ impl Player {
             swim: &self.joints.swim,
             ground: &mut self.joints.ground,
             look: &mut self.look,
+            cap: &self.joints.cap,
             pole: &self.joints.pole,
             spring: &mut self.joints.spring,
             actor,
@@ -2937,6 +2944,7 @@ impl Player {
             swim: &self.joints.swim,
             ground: &mut controllers.0,
             look: &mut controllers.1,
+            cap: &self.joints.cap,
             pole: &self.joints.pole,
             spring: &mut controllers.2,
             actor,
@@ -4133,6 +4141,16 @@ impl Player {
         self.throwing.kind = Some(kind);
         self.throwing.in_air = air;
         let name = throw_clip(kind, air, self.throwing.count, self.throwing.continuous);
+        // `exeSpinGround` and `exeSpinAir` ask the keeper for the spine's swing in their first step;
+        // a thrown button has no swing angle.
+        let swing = if air {
+            cap_throw::Swing::in_air(self.throwing.count)
+        } else {
+            cap_throw::Swing::on_ground(self.throwing.count)
+        };
+        if let Some(swing) = swing {
+            self.joints.cap.ask(swing, BUTTON_THROW_SWING_ANGLE);
+        }
         if !air {
             // The state's ground control pulls the player to the floor from
             // the frame it is chosen.
@@ -4907,6 +4925,7 @@ pub fn self_check() {
     ground_pose::self_check();
     swim_pose::self_check();
     pole_pose::self_check();
+    cap_throw::self_check();
     hip_spring::self_check();
     look_at::self_check();
 }
