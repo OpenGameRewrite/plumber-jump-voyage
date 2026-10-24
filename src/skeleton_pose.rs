@@ -352,18 +352,20 @@ fn invert34(m: &Mat34) -> Mat34 {
 
 /// The local matrices a skeleton the controllers bent needs to show that pose when the
 /// renderer composes the joints itself: only the joints a controller moved (the legs' own
-/// matrices included) change; the others keep their animated local matrix and follow their
+/// matrices included) or that the rig places differently from a plain composition change; the others keep their animated local matrix and follow their
 /// bent parents. `bent` is what `world_pose` returned for `locals`.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn bent_locals(actor: &Mat34, locals: &Matrices, bent: &Matrices) -> Vec<(Joint, Mat34)> {
     let mut moved = Vec::new();
-    let mut arms = ArmChains::new();
     for joint in Joint::ALL {
         let mut above = joint.parent().map_or(*actor, |p| bent[p as usize]);
         if SCALE_COMPENSATING.contains(&joint) {
             above = without_scale_below_root(&above, &bent[Joint::AllRoot as usize]);
         }
-        let expected = arms.place(joint, &above, &locals[joint as usize]);
+        // What the renderer's own composition makes of the animated local matrix; the arm
+        // chains' compensation of the segment scale (`ArmChains::place`) differs from it
+        // where the upper arm is stretched, and those joints are written back as well.
+        let expected = mul34(&above, &locals[joint as usize]);
         let same = expected
             .iter()
             .flatten()
