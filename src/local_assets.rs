@@ -613,7 +613,7 @@ mod imported {
         mut wardrobe: ResMut<Wardrobe>,
         server: Res<AssetServer>,
         models: Res<Assets<bevy::gltf::Gltf>>,
-        clips: Res<Assets<AnimationClip>>,
+        mut clips: ResMut<Assets<AnimationClip>>,
         gltf_nodes: Res<Assets<bevy::gltf::GltfNode>>,
         mut graphs: ResMut<Assets<AnimationGraph>>,
         mut loaded: ResMut<Loaded>,
@@ -669,8 +669,10 @@ mod imported {
             };
             let outfit = &wardrobe.outfits[settings.outfit - 3];
             let mut graph = AnimationGraph::new();
-            loaded.targets = match target_ids(source, &gltf_nodes).and_then(|ids| {
+            let mut node_ids = std::collections::HashMap::new();
+            loaded.targets = match target_ids(source, &gltf_nodes).and_then(|(ids, by_node)| {
                 target_ids(gltf, &gltf_nodes)?;
+                node_ids = by_node;
                 Ok(ids)
             }) {
                 Ok(ids) => ids,
@@ -682,7 +684,17 @@ mod imported {
                     return;
                 }
             };
-            for (name, clip) in &source.named_animations {
+            // Each clip with the original curves in place of the baked ones, where the installation
+            // has them: the game evaluates those between frames.
+            let named: std::collections::BTreeMap<String, Handle<AnimationClip>> = source
+                .named_animations
+                .iter()
+                .map(|(name, clip)| {
+                    let exact = exact_clip(name, clip, &node_ids, &mut clips);
+                    (name.to_string(), exact.unwrap_or_else(|| clip.clone()))
+                })
+                .collect();
+            for (name, clip) in &named {
                 let node = graph.add_clip(clip.clone(), 1., graph.root);
                 let length = clips.get(clip).map_or(1., |c| c.duration());
                 loaded.nodes.insert(name.to_string(), (node, length));
@@ -704,7 +716,7 @@ mod imported {
             // running legs from the locomotion clip underneath.
             let upper = |key: &str, default: &str| {
                 let name = outfit.animations.get(key).map_or(default, String::as_str);
-                source.named_animations.get(name).cloned()
+                named.get(name).cloned()
             };
             if let (Some(ground), Some(air)) = (
                 upper("throw_upper", "ThrowCapParts"),
@@ -768,13 +780,18 @@ mod imported {
             loaded.ready = true;
         }
     }
-    /// Target ids the clip file's animations use, keyed by bone and parent name.
-    /// The loader derives them from each bone's name path below the root.
+    /// The animation targets of a file: by bone and parent name, and by node name.
+    type TargetIds = (
+        std::collections::HashMap<[String; 2], bevy::animation::AnimationTargetId>,
+        std::collections::HashMap<String, bevy::animation::AnimationTargetId>,
+    );
+    /// Target ids the clip file's animations use, keyed by bone and parent name (and, in the
+    /// second map, by the node's own name). The loader derives them from each bone's name path
+    /// below the root.
     fn target_ids(
         source: &bevy::gltf::Gltf,
         nodes: &Assets<bevy::gltf::GltfNode>,
-    ) -> Result<std::collections::HashMap<[String; 2], bevy::animation::AnimationTargetId>, String>
-    {
+    ) -> Result<TargetIds, String> {
         let all: Vec<&bevy::gltf::GltfNode> =
             source.nodes.iter().filter_map(|h| nodes.get(h)).collect();
         let by_index: std::collections::HashMap<usize, &bevy::gltf::GltfNode> =
@@ -786,6 +803,7 @@ mod imported {
             }
         }
         let mut ids = std::collections::HashMap::new();
+        let mut by_node = std::collections::HashMap::new();
         for n in &all {
             let mut path = vec![Name::new(n.name.clone())];
             let mut at = n.index;
@@ -807,17 +825,82 @@ mod imported {
             if spec.key[0].is_empty() {
                 return Err("Empty bone identity".into());
             }
-            if ids
-                .insert(
-                    spec.key.clone(),
-                    bevy::animation::AnimationTargetId::from_names(path.iter()),
-                )
-                .is_some()
-            {
+            let id = bevy::animation::AnimationTargetId::from_names(path.iter());
+            by_node.insert(n.name.clone(), id);
+            if ids.insert(spec.key.clone(), id).is_some() {
                 return Err(format!("Ambiguous bone identity {:?}", spec.key));
             }
         }
-        Ok(ids)
+        Ok((ids, by_node))
+    }
+    /// A copy of a clip whose joints follow the original curves (`clip_curves`) instead of the
+    /// baked keys, or `None` when the installation has no curves for it. The curves are sampled
+    /// at the playback time, so the pose between whole frames is the game's, not a line between
+    /// two baked samples.
+    fn exact_clip(
+        name: &str,
+        baked: &Handle<AnimationClip>,
+        node_ids: &std::collections::HashMap<String, bevy::animation::AnimationTargetId>,
+        clips: &mut Assets<AnimationClip>,
+    ) -> Option<Handle<AnimationClip>> {
+        use bevy::animation::{animated_field, animation_curves::AnimatableCurve};
+        use bevy::curve::{FunctionCurve, Interval};
+        let curves = crate::clip_curves::Curves::installed()?;
+        let curve_clip = curves.clip(name)?;
+        let mut clip = clips.get(baked)?.clone();
+        let domain = Interval::new(0., clip.duration()).ok()?;
+        for joint in 0..curves.joint_count() {
+            let Some(target) = curves
+                .joint_name(joint)
+                .and_then(|joint_name| node_ids.get(&format!("Armature_{joint_name}")))
+            else {
+                continue;
+            };
+            if curves.sample(curve_clip, joint, 0.).is_none() {
+                continue;
+            }
+            // (Every sample is asked for a whole joint at the clip's frame: 60 a second.)
+            let sample = move |time: f32| {
+                curves
+                    .sample_for_file(
+                        curve_clip,
+                        joint,
+                        time * crate::clip_curves::FRAMES_PER_SECOND,
+                    )
+                    .expect("the clip animates the joint")
+            };
+            if let Some(baked_curves) = clip.curves_for_target_mut(*target) {
+                baked_curves.clear();
+            }
+            clip.add_curve_to_target(
+                *target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::translation),
+                    FunctionCurve::new(domain, move |t| {
+                        Vec3::from_array(sample(t).translation.map(|c| c as f32))
+                    }),
+                ),
+            );
+            clip.add_curve_to_target(
+                *target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::rotation),
+                    FunctionCurve::new(domain, move |t| {
+                        Quat::from_array(sample(t).rotation.map(|c| c as f32))
+                    }),
+                ),
+            );
+            clip.add_curve_to_target(
+                *target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::scale),
+                    FunctionCurve::new(domain, move |t| {
+                        Vec3::from_array(sample(t).scale.map(|c| c as f32))
+                    }),
+                ),
+            );
+        }
+        Some(clips.add(clip))
     }
     fn bind_metadata(
         mut commands: Commands,

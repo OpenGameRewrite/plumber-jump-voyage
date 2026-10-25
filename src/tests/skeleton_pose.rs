@@ -8,6 +8,7 @@ pub(super) fn run() {
     a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm();
     a_parents_scale_moves_the_offset_but_not_the_frame_and_roots_inherit();
     the_original_curves_agree_with_the_baked_tracks_on_whole_frames();
+    a_blend_of_one_layer_is_its_own_rotation_and_a_blend_of_several_sums_rows();
 }
 
 /// The model is the player's own installation; without it there is nothing to check.
@@ -21,6 +22,7 @@ fn layer(clip: &str, frame: f32, weight: f32) -> PoseLayer<'_> {
         frame,
         weight,
         region: Region::Whole,
+        group: 0,
     }
 }
 
@@ -249,4 +251,60 @@ fn the_original_curves_agree_with_the_baked_tracks_on_whole_frames() {
     }
     // (Nothing is compared when the installation predates the curve file or the clips.)
     assert!(compared == 0 || compared > 100, "{compared}");
+}
+
+fn quaternion_about(axis: [f64; 3], angle: f64) -> [f64; 4] {
+    let (s, c) = (angle / 2.).sin_cos();
+    let length = length3(axis);
+    [
+        axis[0] / length * s,
+        axis[1] / length * s,
+        axis[2] / length * s,
+        c,
+    ]
+}
+
+fn assert_matrices_close(a: [[f64; 3]; 3], b: [[f64; 3]; 3], what: &str) {
+    for r in 0..3 {
+        for c in 0..3 {
+            assert!((a[r][c] - b[r][c]).abs() < 1e-9, "{what}: {a:?} {b:?}");
+        }
+    }
+}
+
+/// The game's blender sums the first two rows of the layers' matrices (`BlendedRotation`).
+#[cfg_attr(test, test)]
+fn a_blend_of_one_layer_is_its_own_rotation_and_a_blend_of_several_sums_rows() {
+    let q = quaternion_about([1., 2., -0.5], 2.1);
+    let mut single = BlendedRotation::default();
+    single.add(0, 0.37, q);
+    assert_matrices_close(single.matrix(), rotation_matrix(q), "one layer");
+    // Two layers in a group: the blended second row points along the weighted sum of theirs,
+    // and the matrix stays a rotation.
+    let (a, b) = (
+        quaternion_about([0., 0., 1.], 0.2),
+        quaternion_about([1., 0., 0.], 2.4),
+    );
+    let mut group = BlendedRotation::default();
+    group.add(0, 0.25, a);
+    group.add(0, 0.75, b);
+    let m = group.matrix();
+    let (ma, mb) = (rotation_matrix(a), rotation_matrix(b));
+    let sum: [f64; 3] = std::array::from_fn(|k| 0.25 * ma[1][k] + 0.75 * mb[1][k]);
+    let length = length3(sum);
+    for k in 0..3 {
+        assert!((m[1][k] - sum[k] / length).abs() < 1e-12);
+    }
+    let rows = |i: usize| [m[i][0], m[i][1], m[i][2]];
+    assert!((length3(rows(0)) - 1.).abs() < 1e-12 && length3(rows(2)).abs() > 0.);
+    assert!(
+        (cross(rows(0), rows(1))[0] - m[2][0]).abs() < 1e-12,
+        "a proper rotation"
+    );
+    // Groups are poses fading into each other: spherical interpolation, oldest first, by weight.
+    let mut fade = BlendedRotation::default();
+    fade.add(1, 0.3, b);
+    fade.add(0, 0.7, a);
+    let expected = rotation_matrix(slerp(a, b, 0.3));
+    assert_matrices_close(fade.matrix(), expected, "two groups");
 }

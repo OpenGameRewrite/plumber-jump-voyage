@@ -106,6 +106,9 @@ struct Layer {
     weight: f32,
     /// A partial animation replaces this clip on the upper body (`Pose::partial`).
     covered: bool,
+    /// Layers of one stage play together; a pose that fades into another is a stage of its own
+    /// (a frozen pose made of several fades keeps one stage for each).
+    stage: usize,
 }
 /// Frames the main clip blends in over when a sub animation ends and restarts it.
 const RESTART_BLEND_FRAMES: u32 = 5;
@@ -119,6 +122,17 @@ struct Pose {
     /// The slot the clips belong to: the clip itself, or Move for the cycle.
     slot: &'static str,
 }
+impl Pose {
+    /// How many stages the pose's layers are spread over.
+    fn stages(&self) -> usize {
+        self.layers
+            .iter()
+            .chain(&self.partial)
+            .map(|l| l.stage + 1)
+            .max()
+            .unwrap_or(0)
+    }
+}
 impl Posed for Pose {
     fn is_empty(&self) -> bool {
         self.layers.is_empty()
@@ -129,8 +143,14 @@ impl Posed for Pose {
         }
     }
     fn merge(&mut self, other: Self) {
-        self.layers.extend(other.layers);
-        self.partial.extend(other.partial);
+        // The merged pose was a fade of its own: its stages stay apart from ours.
+        let shift = self.stages();
+        let shifted = |l: Layer| Layer {
+            stage: l.stage + shift,
+            ..l
+        };
+        self.layers.extend(other.layers.into_iter().map(shifted));
+        self.partial.extend(other.partial.into_iter().map(shifted));
     }
 }
 /// The clip frame a trace row shows is the frame the pose displays in the
@@ -164,6 +184,7 @@ impl Pose {
             rate: 1.,
             weight,
             covered: false,
+            stage: 0,
         });
     }
     /// The clips of the main slot.
@@ -194,6 +215,7 @@ impl Pose {
                     rate: a.rate,
                     weight: 1.,
                     covered: false,
+                    stage: 0,
                 }],
             };
         }
@@ -207,6 +229,7 @@ impl Pose {
                 rate: l.rate,
                 weight: l.weight,
                 covered: false,
+                stage: 0,
             })
             .collect();
         Self {
@@ -400,6 +423,7 @@ impl Recorder {
                 frame: sub.frame,
                 weight: 1.,
                 region: Region::Whole,
+                group: 0,
             });
         } else if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != p.anim.name) {
             playing.push(PoseLayer {
@@ -407,19 +431,39 @@ impl Recorder {
                 frame,
                 weight: 1.,
                 region: Region::Whole,
+                group: 0,
             });
         } else {
+            // Each stage of each pose is a group: the fade interpolates between them, oldest
+            // first. A frozen pose lists its stages newest first (what was playing when it was
+            // frozen, then the fades it had absorbed).
+            let mut groups = 0;
             for (old, share, _) in &self.blend.old {
-                Self::push_pose(&mut playing, old, *share);
+                Self::push_pose(&mut playing, old, *share, groups, true);
+                groups += old.stages();
             }
-            Self::push_pose(&mut playing, &self.blend.current, 1. - kept);
+            Self::push_pose(&mut playing, &self.blend.current, 1. - kept, groups, false);
         }
         playing
     }
 
     /// Add a pose's clips at `share` of the blend: the clips under a partial animation speak
     /// for the lower body only, the partial for the upper body.
-    fn push_pose(playing: &mut Vec<PoseLayer<'static>>, pose: &Pose, share: f32) {
+    fn push_pose(
+        playing: &mut Vec<PoseLayer<'static>>,
+        pose: &Pose,
+        share: f32,
+        first_group: usize,
+        newest_stage_first: bool,
+    ) {
+        let group = |l: &Layer| {
+            first_group
+                + if newest_stage_first {
+                    pose.stages() - 1 - l.stage
+                } else {
+                    l.stage
+                }
+        };
         for l in &pose.layers {
             playing.push(PoseLayer {
                 clip: l.name,
@@ -430,6 +474,7 @@ impl Recorder {
                 } else {
                     Region::Whole
                 },
+                group: group(l),
             });
         }
         for l in &pose.partial {
@@ -438,6 +483,7 @@ impl Recorder {
                 frame: l.frame,
                 weight: l.weight * share,
                 region: Region::Upper,
+                group: group(l),
             });
         }
     }
@@ -659,6 +705,7 @@ impl Recorder {
                         rate,
                         weight: 1.,
                         covered: false,
+                        stage: 0,
                     },
                     covers,
                 )

@@ -390,12 +390,19 @@ const COMPOSITION_TOLERANCE: f32 = 1e-5;
 /// `Lower` layers, the partial a `Upper` one, and a joint is the weighted blend of the layers
 /// that cover it. Layers faded out together (a frozen pose) keep their regions: each joint
 /// normalises over the weights of the layers that cover it.
+///
+/// A rotation blends in two steps, as the game does: the layers of a group are summed by the
+/// blender (the weighted rows of their matrices), and the groups, each with the weight of its
+/// layers, are interpolated spherically.
 #[derive(Clone, Copy, Debug)]
 pub struct PoseLayer<'a> {
     pub clip: &'a str,
     pub frame: f32,
     pub weight: f32,
     pub region: Region,
+    /// Layers of one group are playing together (the game's blender sums them); the groups
+    /// are poses that fade into each other (`ModelAnimInterp` interpolates between them).
+    pub group: usize,
 }
 
 #[derive(Deserialize)]
@@ -807,7 +814,7 @@ impl SkeletonPose {
         let mut out = [IDENTITY; JOINT_COUNT];
         for (slot, bind) in self.bind.iter().enumerate() {
             let mut translation = [0.; 3];
-            let mut blended = [0.; 4];
+            let mut blended = BlendedRotation::default();
             for (i, share) in &shares[slot] {
                 let (clip, layer) = &playing[*i];
                 let time = layer.frame / KEYS_PER_SECOND;
@@ -834,15 +841,11 @@ impl SkeletonPose {
                             slerp(a.map(f64::from), b.map(f64::from), f64::from(k))
                         }),
                 };
-                // Rotations are summed on one hemisphere.
-                let reference = if blended == [0.; 4] { q } else { blended };
-                let sign = if dot4(q, reference) < 0. { -1. } else { 1. };
-                for k in 0..4 {
-                    blended[k] += share * sign * q[k];
-                }
+                blended.add(playing[*i].1.group, *share, q);
             }
             if shares[slot].is_empty() {
-                blended = bind.rotation;
+                blended = BlendedRotation::default();
+                blended.add(0, 1., bind.rotation);
                 translation = bind.translation;
             }
             // Back to the file's convention: the blended scale over the blended parent's.
@@ -854,7 +857,7 @@ impl SkeletonPose {
                     blended_scales[slot][i] / above[i]
                 }
             });
-            let rotation = rotation_matrix(blended);
+            let rotation = blended.matrix();
             for r in 0..3 {
                 for c in 0..3 {
                     out[slot][r][c] = (rotation[r][c] * scale[c]) as f32;
@@ -863,6 +866,83 @@ impl SkeletonPose {
             }
         }
         Some(out)
+    }
+}
+
+/// The rotations of a joint's layers, blended the way the game does it.
+///
+/// The layers playing together (one group) go through `nn::g3d::SkeletalAnimBlender`, which for
+/// Euler animations sums the weighted first two rows of each layer's rotation matrix and rebuilds
+/// the matrix from the sums: the second row keeps its direction, the third is the normalised
+/// cross product of the two sums and the first completes them. A single layer gives its own
+/// rotation back; several give a different path between them than the normalised sum of the
+/// quaternions would. Poses that fade into each other (`ModelAnimInterp`) are then interpolated
+/// spherically, each with the weight of its layers.
+#[derive(Default)]
+struct BlendedRotation {
+    /// Per group: its weight and the sums of its layers' first and second rows.
+    groups: Vec<(usize, f64, [f64; 3], [f64; 3])>,
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn length3(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+impl BlendedRotation {
+    fn add(&mut self, group: usize, weight: f64, rotation: [f64; 4]) {
+        let index = match self.groups.iter().position(|g| g.0 == group) {
+            Some(index) => index,
+            None => {
+                self.groups.push((group, 0., [0.; 3], [0.; 3]));
+                self.groups.len() - 1
+            }
+        };
+        let m = rotation_matrix(rotation);
+        let entry = &mut self.groups[index];
+        entry.1 += weight;
+        for k in 0..3 {
+            entry.2[k] += weight * m[0][k];
+            entry.3[k] += weight * m[1][k];
+        }
+    }
+
+    /// The blended rotation matrix; the identity where the rows are degenerate (the game leaves
+    /// such a joint as it was).
+    fn matrix(&self) -> [[f64; 3]; 3] {
+        // (Oldest group first: the order of the interpolations.)
+        let mut groups: Vec<_> = self.groups.iter().collect();
+        groups.sort_by_key(|group| group.0);
+        let mut mixed: Option<([f64; 4], f64)> = None;
+        for (_, weight, first, second) in groups {
+            let third = cross(*first, *second);
+            let (second_length, third_length) = (length3(*second), length3(third));
+            if second_length == 0. || third_length == 0. {
+                continue;
+            }
+            let second = second.map(|c| c / second_length);
+            let third = third.map(|c| c / third_length);
+            let rows = [cross(second, third), second, third];
+            // (`matrix_quaternion` takes the matrix's columns.)
+            let q = matrix_quaternion(std::array::from_fn(|c| std::array::from_fn(|r| rows[r][c])));
+            mixed = Some(match mixed {
+                None => (q, *weight),
+                Some((before, total)) => {
+                    let total = total + weight;
+                    (slerp(before, q, weight / total), total)
+                }
+            });
+        }
+        mixed.map_or([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]], |(q, _)| {
+            rotation_matrix(q)
+        })
     }
 }
 

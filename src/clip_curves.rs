@@ -19,6 +19,9 @@ const FILE: &str = "local/Mario.curves.bin";
 const MAGIC: &[u8; 8] = b"PJVCURV1";
 /// Scale xyz, rotation xyzw, translation xyz.
 const CHANNELS: usize = 10;
+/// A clip frame lasts 1/60 s: the converter's time base.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub const FRAMES_PER_SECOND: f32 = 60.;
 
 /// One key: the frame it starts at and the coefficients of the cubic from there to the next key.
 #[derive(Clone, Copy)]
@@ -65,6 +68,7 @@ struct Record {
 
 /// A joint as the converter wrote it: its parent and the scale it has without a clip.
 struct JointInfo {
+    name: String,
     parent: Option<usize>,
     /// Segment scale compensation: the file stores the joint's scale over its parent's.
     compensated: bool,
@@ -151,8 +155,9 @@ impl Curves {
             for value in &mut bind {
                 *value = file.f32()?;
             }
-            by_name.entry(name).or_insert(index);
+            by_name.entry(name.clone()).or_insert(index);
             joints.push(JointInfo {
+                name,
                 parent,
                 compensated,
                 bind_scale: [bind[7], bind[8], bind[9]],
@@ -208,6 +213,16 @@ impl Curves {
         self.by_name.get(name).copied()
     }
 
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn joint_count(&self) -> usize {
+        self.joints.len()
+    }
+
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn joint_name(&self, joint: usize) -> Option<&str> {
+        self.joints.get(joint).map(|j| j.name.as_str())
+    }
+
     pub fn clip(&self, name: &str) -> Option<&Clip> {
         self.clips.get(name)
     }
@@ -242,6 +257,7 @@ impl Curves {
     /// The pose as `Mario.glb` stores it: the same translation and rotation, and for a joint with
     /// segment scale compensation the scale over its parent's (a stretched arm must not inflate
     /// its hand, but glTF always inherits).
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
     pub fn sample_for_file(&self, clip: &Clip, joint: usize, frame: f32) -> Option<Sample> {
         let mut sample = self.sample(clip, joint, frame)?;
         let info = &self.joints[joint];
