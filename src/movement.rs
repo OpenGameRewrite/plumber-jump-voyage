@@ -4483,6 +4483,13 @@ impl Player {
     pub fn upper_catch(&self) -> Option<&'static str> {
         self.upper_catch.map(|_| self.catch_clip)
     }
+    /// The partial animation (`partial0`) on screen: the catch's upper-body clip and the frame
+    /// it shows, from the row that starts it (frame 0) to its last frame.
+    pub fn partial_anim(&self) -> Option<(&'static str, f32)> {
+        self.upper_catch
+            .filter(|frame| *frame >= 0)
+            .map(|frame| (self.catch_clip, frame as f32))
+    }
     /// `PlayerJudgeCapCatchPop::judge`, asked by `tryChangeNerveFromAir`: in the
     /// catch window (`PlayerCounterAfterCapCatch::isCapCatch`), with the cap
     /// back on the head and no ground under the feet, a jump press pops the

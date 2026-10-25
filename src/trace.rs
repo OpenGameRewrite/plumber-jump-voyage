@@ -18,7 +18,7 @@ use crate::{
         look_at::{LookHint, LookSensor},
         look_joint, plane,
     },
-    skeleton_pose::{Joint, Matrices, PoseLayer, SkeletonPose},
+    skeleton_pose::{Joint, Matrices, PoseLayer, Region, SkeletonPose},
     sound_table::{AnimCursor, Cue, FxContext, Table, cap_action_name, fx_cues, is_voice},
 };
 use bevy::prelude::*;
@@ -104,6 +104,8 @@ struct Layer {
     frame: f32,
     rate: f32,
     weight: f32,
+    /// A partial animation replaces this clip on the upper body (`Pose::partial`).
+    covered: bool,
 }
 /// Frames the main clip blends in over when a sub animation ends and restarts it.
 const RESTART_BLEND_FRAMES: u32 = 5;
@@ -111,6 +113,9 @@ const RESTART_BLEND_FRAMES: u32 = 5;
 #[derive(Clone, Default)]
 struct Pose {
     layers: Vec<Layer>,
+    /// The partial animation (`partial0`) playing over the clips, with the share of the pose it
+    /// speaks for: it replaces the clips on the upper body instead of joining their blend.
+    partial: Vec<Layer>,
     /// The slot the clips belong to: the clip itself, or Move for the cycle.
     slot: &'static str,
 }
@@ -119,12 +124,13 @@ impl Posed for Pose {
         self.layers.is_empty()
     }
     fn scale(&mut self, share: f32) {
-        for layer in &mut self.layers {
+        for layer in self.layers.iter_mut().chain(&mut self.partial) {
             layer.weight *= share;
         }
     }
     fn merge(&mut self, other: Self) {
         self.layers.extend(other.layers);
+        self.partial.extend(other.partial);
     }
 }
 /// The clip frame a trace row shows is the frame the pose displays in the
@@ -140,10 +146,33 @@ impl Pose {
     /// The pose the controller asks for. The "Move" cycle blends Walk, Run,
     /// Dash and DashFast by speed, with the weights the renderer uses.
     fn of(p: &Player) -> Self {
+        let mut pose = Self::main_clips(p);
+        if let Some((name, frame)) = p.partial_anim() {
+            pose.play_partial(name, frame);
+        }
+        pose
+    }
+    /// The partial animation takes over the upper body of the clips playing now.
+    fn play_partial(&mut self, name: &'static str, frame: f32) {
+        let weight = self.layers.iter().map(|l| l.weight).sum();
+        for layer in &mut self.layers {
+            layer.covered = true;
+        }
+        self.partial.push(Layer {
+            name,
+            frame,
+            rate: 1.,
+            weight,
+            covered: false,
+        });
+    }
+    /// The clips of the main slot.
+    fn main_clips(p: &Player) -> Self {
         let a = p.anim;
         if a.name != "Move" {
             return Self {
                 slot: a.name,
+                partial: Vec::new(),
                 layers: vec![Layer {
                     name: crate::local_assets::skeleton_clip(a.name),
                     // The braking, turning and held clips keep their last frame
@@ -164,6 +193,7 @@ impl Pose {
                     },
                     rate: a.rate,
                     weight: 1.,
+                    covered: false,
                 }],
             };
         }
@@ -176,10 +206,12 @@ impl Pose {
                 frame: l.frame,
                 rate: l.rate,
                 weight: l.weight,
+                covered: false,
             })
             .collect();
         Self {
             layers,
+            partial: Vec::new(),
             slot: "Move",
         }
     }
@@ -230,6 +262,10 @@ pub struct Recorder {
     /// The sub animation on screen at the previous row (the clip, its shown frame, and whether
     /// it covered the whole body): when it ends, the main clip fades in from that pose.
     shown_sub: Option<(Layer, bool)>,
+    /// The blend of clips on screen at the previous row (outgoing poses at their shares
+    /// included), when no sub animation covered it: when a partial animation ends, the main
+    /// clip fades in from that pose (`clearUpperBodyAnim` interpolates from the shown pose).
+    shown_blend: Option<Pose>,
     /// Burst effects still alive, with frames left.
     bursts: Vec<(&'static str, u32)>,
     /// The original's effects, when their library is installed; the
@@ -261,6 +297,7 @@ impl Recorder {
             sub_clip: None,
             restart: None,
             shown_sub: None,
+            shown_blend: None,
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -362,32 +399,47 @@ impl Recorder {
                 clip: sub.name,
                 frame: sub.frame,
                 weight: 1.,
+                region: Region::Whole,
             });
         } else if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != p.anim.name) {
             playing.push(PoseLayer {
                 clip: name,
                 frame,
                 weight: 1.,
+                region: Region::Whole,
             });
         } else {
             for (old, share, _) in &self.blend.old {
-                for l in &old.layers {
-                    playing.push(PoseLayer {
-                        clip: l.name,
-                        frame: l.frame,
-                        weight: l.weight * share,
-                    });
-                }
+                Self::push_pose(&mut playing, old, *share);
             }
-            for l in &self.blend.current.layers {
-                playing.push(PoseLayer {
-                    clip: l.name,
-                    frame: l.frame,
-                    weight: l.weight * (1. - kept),
-                });
-            }
+            Self::push_pose(&mut playing, &self.blend.current, 1. - kept);
         }
         playing
+    }
+
+    /// Add a pose's clips at `share` of the blend: the clips under a partial animation speak
+    /// for the lower body only, the partial for the upper body.
+    fn push_pose(playing: &mut Vec<PoseLayer<'static>>, pose: &Pose, share: f32) {
+        for l in &pose.layers {
+            playing.push(PoseLayer {
+                clip: l.name,
+                frame: l.frame,
+                weight: l.weight * share,
+                region: if l.covered {
+                    Region::Lower
+                } else {
+                    Region::Whole
+                },
+            });
+        }
+        for l in &pose.partial {
+            playing.push(PoseLayer {
+                clip: l.name,
+                frame: l.frame,
+                weight: l.weight * share,
+                region: Region::Upper,
+            });
+        }
     }
 
     /// The skeleton as the model's calculation leaves it this row, controllers included; `None`
@@ -606,10 +658,12 @@ impl Recorder {
                         frame,
                         rate,
                         weight: 1.,
+                        covered: false,
                     },
                     covers,
                 )
             });
+        let blend_shows = shown_now.is_none();
         let shown_before = std::mem::replace(&mut self.shown_sub, shown_now);
         if covering.is_none() {
             self.blend
@@ -714,21 +768,38 @@ impl Recorder {
             // animation left on screen (named, as the game records it, after the clip
             // before it).
             interp.clear();
-            self.blend.old = shown_before
-                .map(|(shown, _)| {
-                    let share = 1. - 1. / RESTART_BLEND_FRAMES as f32;
-                    let fade = FPS / RESTART_BLEND_FRAMES as f32;
-                    let pose = Pose {
-                        slot: self.stale_clip,
-                        layers: vec![shown],
-                    };
-                    vec![(pose, share, fade)]
+            // (A partial animation's end left no sub animation on screen: the pose it fades
+            // from is the blend of the row before, partial included.)
+            let slot = self.stale_clip;
+            let frozen = shown_before
+                .map(|(shown, _)| Pose {
+                    slot,
+                    layers: vec![shown],
+                    partial: Vec::new(),
                 })
+                .or_else(|| self.shown_blend.clone().map(|flat| Pose { slot, ..flat }));
+            let share = 1. - 1. / RESTART_BLEND_FRAMES as f32;
+            let fade = FPS / RESTART_BLEND_FRAMES as f32;
+            self.blend.old = frozen
+                .map(|pose| vec![(pose, share, fade)])
                 .unwrap_or_default();
             kept = self.blend.kept();
             self.restart = Some((self.stale_clip, 0));
         }
         self.sub_clip = sub_now;
+        // What the blend shows in this row, for the fade that follows a partial animation.
+        self.shown_blend = blend_shows.then(|| {
+            let mut flat = Pose::default();
+            for (old, share, _) in &self.blend.old {
+                let mut held = old.clone();
+                held.scale(*share);
+                flat.merge(held);
+            }
+            let mut current = self.blend.current.clone();
+            current.scale(1. - kept);
+            flat.merge(current);
+            flat
+        });
         if let Some((from, done)) = self.restart {
             let done = done + 1;
             self.restart = (done < RESTART_BLEND_FRAMES).then_some((from, done));

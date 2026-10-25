@@ -165,6 +165,48 @@ impl Joint {
     }
 }
 
+/// The joint the model's partial animation group hangs from: Mario's model adds `Spine1` and
+/// everything below it to partial group 0 (`al::addPartialSklAnimPartsListRecursive`, in the
+/// model's construction), so `startUpperBodyAnim` plays on those joints only.
+const PARTIAL_GROUP_ROOT: Joint = Joint::Spine1;
+
+impl Joint {
+    /// Whether the partial animation's group (`PARTIAL_GROUP_ROOT` and its descendants) holds
+    /// the joint.
+    pub fn in_partial_group(self) -> bool {
+        let mut joint = Some(self);
+        while let Some(current) = joint {
+            if current == PARTIAL_GROUP_ROOT {
+                return true;
+            }
+            joint = current.parent();
+        }
+        false
+    }
+}
+
+/// Which joints a layer of the pose speaks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Region {
+    /// Every joint: a clip of the main blend nobody overlays.
+    Whole,
+    /// The joints outside the partial group: a main clip whose upper body a partial animation
+    /// replaces.
+    Lower,
+    /// The partial group's joints: the partial animation itself.
+    Upper,
+}
+
+impl Region {
+    fn covers(self, joint: Joint) -> bool {
+        match self {
+            Region::Whole => true,
+            Region::Lower => !joint.in_partial_group(),
+            Region::Upper => joint.in_partial_group(),
+        }
+    }
+}
+
 /// Every joint's matrix: local ones from the clips, world ones from `world_pose`.
 pub type Matrices = [Mat34; JOINT_COUNT];
 
@@ -333,11 +375,19 @@ pub fn bent_locals(actor: &Mat34, locals: &Matrices, bent: &Matrices) -> Vec<(Jo
 const COMPOSITION_TOLERANCE: f32 = 1e-5;
 
 /// One clip playing: its name, the frame it shows and its share of the blend.
+///
+/// A partial animation (`partial0`) does not join the blend of the joints it covers, it
+/// replaces it (`AnimPlayerSkl::calcSklAnim` clears the blender's result for the group's
+/// joints before blending the partial in with weight 1). So the main clips under one are
+/// `Lower` layers, the partial a `Upper` one, and a joint is the weighted blend of the layers
+/// that cover it. Layers faded out together (a frozen pose) keep their regions: each joint
+/// normalises over the weights of the layers that cover it.
 #[derive(Clone, Copy, Debug)]
 pub struct PoseLayer<'a> {
     pub clip: &'a str,
     pub frame: f32,
     pub weight: f32,
+    pub region: Region,
 }
 
 #[derive(Deserialize)]
@@ -647,15 +697,15 @@ impl SkeletonPose {
     }
 
     /// Every joint's matrix relative to its parent (cm), for the blend of `layers`; `None` when
-    /// no layer's clip is in the model.
+    /// no layer's clip is in the model. Each joint blends the layers whose region covers it,
+    /// by their weights.
     pub fn locals(&self, layers: &[PoseLayer]) -> Option<Matrices> {
-        let playing: Vec<(std::sync::Arc<ClipTracks>, f32, f32)> = layers
+        let playing: Vec<(std::sync::Arc<ClipTracks>, &PoseLayer)> = layers
             .iter()
             .filter(|l| l.weight > 0.)
-            .filter_map(|l| Some((self.clip(l.clip)?, l.frame, l.weight)))
+            .filter_map(|l| Some((self.clip(l.clip)?, l)))
             .collect();
-        let total: f64 = playing.iter().map(|(_, _, w)| f64::from(*w)).sum();
-        if playing.is_empty() || total <= 0. {
+        if playing.is_empty() {
             return None;
         }
         // The scale each joint truly has in each clip: the file stores a joint's scale divided
@@ -670,8 +720,8 @@ impl SkeletonPose {
         };
         let true_scales: Vec<[[f64; 3]; JOINT_COUNT]> = playing
             .iter()
-            .map(|(clip, frame, _)| {
-                let time = frame / KEYS_PER_SECOND;
+            .map(|(clip, layer)| {
+                let time = layer.frame / KEYS_PER_SECOND;
                 let mut scales = [[1.; 3]; JOINT_COUNT];
                 for (slot, joint) in Joint::ALL.iter().enumerate() {
                     scales[slot] = match clip.scale[slot].as_ref().and_then(|t| t.around(time)) {
@@ -689,24 +739,42 @@ impl SkeletonPose {
                 scales
             })
             .collect();
+        // The layers each joint blends, with their shares of its total weight.
+        let shares: Vec<Vec<(usize, f64)>> = Joint::ALL
+            .iter()
+            .map(|joint| {
+                let covering: Vec<(usize, f64)> = playing
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, layer))| layer.region.covers(*joint))
+                    .map(|(i, (_, layer))| (i, f64::from(layer.weight)))
+                    .collect();
+                let total: f64 = covering.iter().map(|(_, w)| w).sum();
+                covering.into_iter().map(|(i, w)| (i, w / total)).collect()
+            })
+            .collect();
         let blended_scales: Vec<[f64; 3]> = (0..JOINT_COUNT)
             .map(|slot| {
                 let mut blend = [0.; 3];
-                for ((_, _, weight), scales) in playing.iter().zip(&true_scales) {
-                    for i in 0..3 {
-                        blend[i] += f64::from(*weight) / total * scales[slot][i];
+                for (i, share) in &shares[slot] {
+                    for k in 0..3 {
+                        blend[k] += share * true_scales[*i][slot][k];
                     }
                 }
-                blend
+                if shares[slot].is_empty() {
+                    self.bind[slot].scale
+                } else {
+                    blend
+                }
             })
             .collect();
         let mut out = [IDENTITY; JOINT_COUNT];
         for (slot, bind) in self.bind.iter().enumerate() {
             let mut translation = [0.; 3];
             let mut blended = [0.; 4];
-            for (clip, frame, weight) in &playing {
-                let share = f64::from(*weight) / total;
-                let time = frame / KEYS_PER_SECOND;
+            for (i, share) in &shares[slot] {
+                let (clip, layer) = &playing[*i];
+                let time = layer.frame / KEYS_PER_SECOND;
                 let t = clip.translation[slot]
                     .as_ref()
                     .and_then(|track| track.around(time))
@@ -715,8 +783,8 @@ impl SkeletonPose {
                             f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k)
                         })
                     });
-                for i in 0..3 {
-                    translation[i] += share * t[i];
+                for k in 0..3 {
+                    translation[k] += share * t[k];
                 }
                 let q = clip.rotation[slot]
                     .as_ref()
@@ -727,9 +795,13 @@ impl SkeletonPose {
                 // Rotations are summed on one hemisphere.
                 let reference = if blended == [0.; 4] { q } else { blended };
                 let sign = if dot4(q, reference) < 0. { -1. } else { 1. };
-                for i in 0..4 {
-                    blended[i] += share * sign * q[i];
+                for k in 0..4 {
+                    blended[k] += share * sign * q[k];
                 }
+            }
+            if shares[slot].is_empty() {
+                blended = bind.rotation;
+                translation = bind.translation;
             }
             // Back to the file's convention: the blended scale over the blended parent's.
             let above = compensated(Joint::ALL[slot], &blended_scales);

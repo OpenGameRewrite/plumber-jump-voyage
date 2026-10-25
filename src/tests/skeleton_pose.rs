@@ -18,6 +18,7 @@ fn layer(clip: &str, frame: f32, weight: f32) -> PoseLayer<'_> {
         clip,
         frame,
         weight,
+        region: Region::Whole,
     }
 }
 
