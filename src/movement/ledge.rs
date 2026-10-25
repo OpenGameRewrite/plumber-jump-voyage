@@ -935,6 +935,9 @@ impl Player {
     }
 
     fn exe_climb_fast(&mut self, mesh: Option<&TriangleMesh>) {
+        // Like `exeClimb`, the fast climb starts every step by easing the hip spring's target
+        // down to a fifth (`converge(target, 0.2, 0.2)`).
+        self.joints.grab.ease_down();
         if !self.climb_holds() {
             self.end_fall_from_wall(mesh);
             return;
