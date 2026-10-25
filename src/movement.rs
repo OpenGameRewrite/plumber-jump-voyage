@@ -250,6 +250,8 @@ pub type ControllerState = (
     look_at::LookAt,
     hip_spring::HipSpring,
 );
+#[path = "movement/console_libm.rs"]
+pub(crate) mod console_libm;
 #[path = "movement/ground.rs"]
 mod ground;
 #[path = "movement/ground_pose.rs"]
@@ -4941,6 +4943,7 @@ pub fn self_check() {
     spin_checks::run();
     wall_air_checks::run();
     ledge_checks::run();
+    console_libm::self_check();
     pose_math::self_check();
     look_joint::self_check();
     ground_pose::self_check();

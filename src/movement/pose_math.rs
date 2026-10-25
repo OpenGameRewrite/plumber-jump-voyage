@@ -7,8 +7,7 @@
 //!
 //! The results of a pose function are used to the last bit: a quarter turn is a tie of
 //! `toQuat`'s four branches, and which of them the game takes depends on the rounding noise of
-//! these routines. `sinf`, `cosf`, `acosf` and `atan2f` are the platform's; they are assumed to
-//! agree with the console's library (they are correctly rounded for the values seen).
+//! these routines. `sinf`, `cosf`, `acosf` and `atan2f` are the console's library (`console_libm.rs`).
 //!
 //! Checked bit for bit against the executable's functions run in a local interpreter
 //! (`PJV_POSE_CASES`, see `tests/pose_math.rs`).
@@ -29,24 +28,7 @@ const SLERP_LINEAR_SINE: f32 = 1.192_092_9e-7;
 /// The negated gravity (`-al::getGravity`, gravity being (0, -1, 0)), signed zeros included.
 pub(super) const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
 
-/// The single-precision library functions, correctly rounded (computed in double precision and
-/// rounded once), which is what the console's `sinf`, `cosf`, `acosf` and `atan2f` return for
-/// the arguments seen.
-pub(super) fn sinf(x: f32) -> f32 {
-    f64::from(x).sin() as f32
-}
-pub(super) fn cosf(x: f32) -> f32 {
-    f64::from(x).cos() as f32
-}
-pub(super) fn acosf(x: f32) -> f32 {
-    f64::from(x).acos() as f32
-}
-pub(super) fn asinf(x: f32) -> f32 {
-    f64::from(x).asin() as f32
-}
-pub(super) fn atan2f(y: f32, x: f32) -> f32 {
-    f64::from(y).atan2(f64::from(x)) as f32
-}
+pub(super) use super::console_libm::{acosf, asinf, atan2f, cosf, sinf};
 
 pub(super) fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
