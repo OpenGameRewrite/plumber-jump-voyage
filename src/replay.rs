@@ -502,6 +502,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         info.game_frame = i as i64;
         recorder.record(&info, &mut player);
     }
+    recorder.start_rows();
     let mut rows = Vec::with_capacity(script.frame_count());
     let mut previous: Vec<&str> = Vec::new();
     let spans: Vec<&Span> = script.frames().collect();

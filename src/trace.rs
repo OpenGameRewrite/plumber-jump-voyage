@@ -299,6 +299,10 @@ pub struct Recorder {
     /// The stage the replay runs in: its sensors and its frame (the probe logs stage
     /// coordinates).
     stage: Option<std::sync::Arc<crate::geometry::TriangleMesh>>,
+    /// The next row is the first one the trace writes. The game's trace derives its `interp`
+    /// column from the clip of the row before, so the first row has none, whatever blend the
+    /// animator is in (the raw log shows the settle frames' blend running into it).
+    first_row: bool,
 }
 impl Recorder {
     /// `floor` is the material of the floor the run stands on (the recorded
@@ -321,9 +325,16 @@ impl Recorder {
             restart: None,
             shown_sub: None,
             shown_blend: None,
+            first_row: false,
             overlay: 0.,
             bursts: Vec::new(),
         }
+    }
+
+    /// The frames recorded so far only warmed the animation state up: the next row is the first
+    /// one written.
+    pub fn start_rows(&mut self) {
+        self.first_row = true;
     }
 
     /// The stage the replay runs in, for the head look-at's sensors and coordinates.
@@ -892,6 +903,9 @@ impl Recorder {
         cells.num(if p.counter_restarted { 0. } else { shown });
         cells.num(p.anim.rate);
         cells.text(&blend);
+        if std::mem::take(&mut self.first_row) {
+            interp.clear();
+        }
         cells.text(&interp);
         // The probe reads the animator's sub slot, which keeps the name of the
         // last sub clip after it ends and then shows the main clip's frame.

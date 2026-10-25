@@ -25,9 +25,6 @@ const FINDER_DISTANCE: f32 = 200.;
 /// `PlayerStateSwim::appear` sets the pre-input counter of the paddle to this (a count that is
 /// never reached: nothing has been paddled).
 const NEVER_PADDLED: i32 = 9999;
-/// Steps after the player is placed during which a clip starts without a blend (a guess, see
-/// `swim_anim`).
-const PLACED_STEPS: u32 = 10;
 
 /// The inner nerves of `PlayerStateSwim`, by the names the probe logs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -573,12 +570,6 @@ impl Player {
     pub(super) fn swim_anim(&mut self, name: &'static str) {
         if self.anim.name != name {
             self.start_clip(name);
-            // GUESS: the probe's teleport clears the animator's blend, and a swimmer placed in
-            // the water starts its first clips within the steps right after (the recordings'
-            // first rows show no blend).
-            if self.age <= PLACED_STEPS {
-                self.interpolation_cleared = true;
-            }
         }
     }
     pub(super) fn is_swim_anim(&self, name: &str) -> bool {
