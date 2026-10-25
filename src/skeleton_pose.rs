@@ -171,6 +171,11 @@ impl Joint {
 const PARTIAL_GROUP_ROOT: Joint = Joint::Spine1;
 
 impl Joint {
+    /// Whether this is the joint the partial animation's group hangs from.
+    #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+    pub fn is_partial_group_root(self) -> bool {
+        self == PARTIAL_GROUP_ROOT
+    }
     /// Whether the partial animation's group (`PARTIAL_GROUP_ROOT` and its descendants) holds
     /// the joint.
     pub fn in_partial_group(self) -> bool {

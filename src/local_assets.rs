@@ -291,23 +291,7 @@ impl<P: Default + Posed> Blend<P> {
     /// and fades it over the clip's blend frames; then age the fades by `dt`.
     pub fn update(&mut self, name: &'static str, serial: u32, next: P, dt: f32) {
         if self.name != name || self.serial != serial {
-            let frames = interp_frames(name, self.name);
-            let mut old = std::mem::take(&mut self.current);
-            if frames > 0. && !old.is_empty() {
-                // The pose being left is what the blend shows now: the clip
-                // and the fading rest of the clips before it. The animator
-                // freezes all of it as one pose that fades over the new
-                // clip's frames (the trace's `interp` shows that one fade).
-                let total: f32 = 1. - self.old.iter().map(|o| o.1).sum::<f32>();
-                old.scale(total.max(0.));
-                for (mut earlier, weight, _) in self.old.drain(..) {
-                    earlier.scale(weight);
-                    old.merge(earlier);
-                }
-                self.old.push((old, 1., 60. / frames));
-            } else {
-                self.old.clear();
-            }
+            self.freeze(interp_frames(name, self.name));
             self.name = name;
             self.serial = serial;
         }
@@ -321,6 +305,24 @@ impl<P: Default + Posed> Blend<P> {
             }
         }
         self.old.retain(|o| o.1 > 0.);
+    }
+    /// Freeze the pose shown now and fade the next one in from it over `frames` (none: the
+    /// next pose shows at once). The pose being left is what the blend shows now: the clip
+    /// and the fading rest of the clips before it. The animator freezes all of it as one pose
+    /// that fades over the new clip's frames (the trace's `interp` shows that one fade).
+    pub fn freeze(&mut self, frames: f32) {
+        let mut old = std::mem::take(&mut self.current);
+        if frames > 0. && !old.is_empty() {
+            let total: f32 = 1. - self.old.iter().map(|o| o.1).sum::<f32>();
+            old.scale(total.max(0.));
+            for (mut earlier, weight, _) in self.old.drain(..) {
+                earlier.scale(weight);
+                old.merge(earlier);
+            }
+            self.old.push((old, 1., 60. / frames));
+        } else {
+            self.old.clear();
+        }
     }
     /// Share of the final pose still held by outgoing poses.
     pub fn kept(&self) -> f32 {
@@ -412,6 +414,13 @@ mod imported {
         graph: Handle<AnimationGraph>,
         /// Clip name to graph node and length in seconds.
         nodes: std::collections::BTreeMap<String, (AnimationNodeIndex, f32)>,
+        /// The same clips split along the partial animation's group (`skeleton_pose::Region`):
+        /// `lower` leaves the group's joints alone (a main clip under a partial animation),
+        /// `upper` leaves every other joint alone (the partial animation itself).
+        lower_nodes: std::collections::BTreeMap<String, (AnimationNodeIndex, f32)>,
+        upper_nodes: std::collections::BTreeMap<String, (AnimationNodeIndex, f32)>,
+        /// A partial animation was playing in the last frame drawn.
+        partial_was: bool,
         ready: bool,
         model_visible: bool,
         cap_loaded: bool,
@@ -449,6 +458,11 @@ mod imported {
     type Blend = super::Blend<Pose>;
     /// Mask group for hips and legs; the throw overlay leaves them alone.
     const LEGS: u32 = 0;
+    /// Mask groups for the partial animation's joints (`Spine1` and below) and the rest.
+    const PARTIAL_GROUP: u32 = 1;
+    const OUTSIDE_PARTIAL_GROUP: u32 = 2;
+    /// Frames the pose with the partial animation fades over once it is cleared.
+    const PARTIAL_CLEAR_FRAMES: f32 = 5.;
     #[path = "../../tests/imported_assets.rs"]
     mod checks;
     pub fn self_check() {
@@ -672,6 +686,18 @@ mod imported {
                 let node = graph.add_clip(clip.clone(), 1., graph.root);
                 let length = clips.get(clip).map_or(1., |c| c.duration());
                 loaded.nodes.insert(name.to_string(), (node, length));
+                let mut split = |mask_group: u32| {
+                    (
+                        graph.add_clip_with_mask(clip.clone(), 1 << mask_group, 1., graph.root),
+                        length,
+                    )
+                };
+                loaded
+                    .lower_nodes
+                    .insert(name.to_string(), split(PARTIAL_GROUP));
+                loaded
+                    .upper_nodes
+                    .insert(name.to_string(), split(OUTSIDE_PARTIAL_GROUP));
             }
             // Blending is a normalized weighted average, so a heavy overlay
             // node dominates the arms and torso while its mask keeps the
@@ -863,11 +889,31 @@ mod imported {
         mut graphs: ResMut<Assets<AnimationGraph>>,
         targets: Query<(&bevy::animation::AnimationTargetId, &Bone)>,
     ) {
-        if !loaded.ready || !loaded.retargeted || loaded.masked || loaded.overlay.is_none() {
+        if !loaded.ready || !loaded.retargeted || loaded.masked {
             return;
         }
         let Some(mut graph) = graphs.get_mut(&loaded.graph) else {
             return;
+        };
+        // Each joint's parent, to tell the joints of the partial animation's group (below
+        // `Spine1`) from the rest.
+        let parents: std::collections::HashMap<&str, &str> = targets
+            .iter()
+            .map(|(_, bone)| (bone.key[0].as_str(), bone.key[1].as_str()))
+            .collect();
+        let in_partial_group = |bone: &Bone| {
+            let mut name = bone.key[0].as_str();
+            // (The walk is bounded by the number of joints: a cycle never loops forever.)
+            for _ in 0..=parents.len() {
+                if Joint::from_node_name(name).is_some_and(Joint::is_partial_group_root) {
+                    return true;
+                }
+                match parents.get(name) {
+                    Some(parent) => name = parent,
+                    None => return false,
+                }
+            }
+            false
         };
         let mut found = false;
         for (id, bone) in &targets {
@@ -875,49 +921,85 @@ mod imported {
                 graph.add_target_to_mask_group(*id, LEGS);
                 found |= bone.hip;
             }
+            graph.add_target_to_mask_group(
+                *id,
+                if in_partial_group(bone) {
+                    PARTIAL_GROUP
+                } else {
+                    OUTSIDE_PARTIAL_GROUP
+                },
+            );
         }
         loaded.masked = found;
     }
-    /// Look up a clip, following the fallback chain for missing ones.
-    fn clip(loaded: &Loaded, name: &str) -> Option<(AnimationNodeIndex, f32)> {
+    /// Look up a clip among `nodes`, following the fallback chain for missing ones.
+    fn clip_in(
+        nodes: &std::collections::BTreeMap<String, (AnimationNodeIndex, f32)>,
+        name: &str,
+    ) -> Option<(AnimationNodeIndex, f32)> {
         let mut name = skeleton_clip(name);
         for _ in 0..4 {
-            if let Some(found) = loaded.nodes.get(name) {
+            if let Some(found) = nodes.get(name) {
                 return Some(*found);
             }
             name = fallback(name);
         }
-        loaded.nodes.get("Wait").copied()
+        nodes.get("Wait").copied()
+    }
+    /// The name of the clip a graph node plays, whichever way the node is masked.
+    fn clip_name(loaded: &Loaded, node: AnimationNodeIndex) -> Option<&str> {
+        [&loaded.nodes, &loaded.lower_nodes, &loaded.upper_nodes]
+            .into_iter()
+            .flatten()
+            .find(|(_, value)| value.0 == node)
+            .map(|(name, _)| name.as_str())
     }
     /// The pose the controller asks for, with clip times in seconds. The run
-    /// cycle blends Walk, Run, Dash and DashFast on one shared phase.
+    /// cycle blends Walk, Run, Dash and DashFast on one shared phase. While a
+    /// partial animation plays, the main clips leave the joints it covers to it
+    /// (`AnimPlayerSkl::calcSklAnim`) and the partial takes them with the
+    /// weight of the whole blend.
     fn target(loaded: &Loaded, p: &crate::movement::Player, ahead: f32) -> Pose {
+        let partial = p.partial_anim();
+        let main = if partial.is_some() {
+            &loaded.lower_nodes
+        } else {
+            &loaded.nodes
+        };
         let anim = p.anim;
-        if anim.name == "Move" {
+        let mut pose = if anim.name == "Move" {
             let cycle = p.run_cycle();
             let phase = ((cycle.phase + cycle.rate * ahead) / 60.).rem_euclid(1.);
             let clips = cycle
                 .layers()
                 .filter_map(|l| {
-                    clip(loaded, l.name).map(|(node, len)| (node, l.weight, phase * len))
+                    clip_in(main, l.name).map(|(node, len)| (node, l.weight, phase * len))
                 })
                 .collect();
-            return Pose { clips };
-        }
-        let Some((node, len)) = clip(loaded, anim.name) else {
+            Pose { clips }
+        } else if let Some((node, len)) = clip_in(main, anim.name) {
+            let seconds = (anim.held() + anim.rate * ahead).max(0.) / 60.;
+            let time = if looping(anim.name) {
+                seconds.rem_euclid(len.max(1e-3))
+            } else {
+                // Hold just before the end: the player wraps a time equal to the
+                // clip's length back to its first frame.
+                seconds.min((len - 1e-4).max(0.))
+            };
+            Pose {
+                clips: vec![(node, 1., time)],
+            }
+        } else {
             return Pose::default();
         };
-        let seconds = (anim.held() + anim.rate * ahead).max(0.) / 60.;
-        let time = if looping(anim.name) {
-            seconds.rem_euclid(len.max(1e-3))
-        } else {
-            // Hold just before the end: the player wraps a time equal to the
-            // clip's length back to its first frame.
-            seconds.min((len - 1e-4).max(0.))
-        };
-        Pose {
-            clips: vec![(node, 1., time)],
+        if let Some((name, frame)) = partial
+            && let Some((node, len)) = loaded.upper_nodes.get(name)
+        {
+            let weight = pose.clips.iter().map(|clip| clip.1).sum();
+            let seconds = ((frame + ahead) / 60.).min((len - 1e-4).max(0.));
+            pose.clips.push((*node, weight, seconds));
         }
+        pose
     }
     fn animation(
         mut commands: Commands,
@@ -934,7 +1016,14 @@ mod imported {
         let ahead = fixed.overstep_fraction();
         let next = target(&loaded, &p, ahead);
         let dt = time.delta_secs();
+        // The partial animation's end clears it with a five step interpolation
+        // (`PlayerAnimator::clearUpperBodyAnim`): the pose shown fades into the clip alone.
+        let partial_now = p.partial_anim().is_some();
+        let cleared = std::mem::replace(&mut loaded.partial_was, partial_now) && !partial_now;
         let blend = &mut loaded.blend;
+        if cleared && blend.name == p.anim.name && blend.serial == p.anim.serial {
+            blend.freeze(PARTIAL_CLEAR_FRAMES);
+        }
         blend.update(p.anim.name, p.anim.serial, next, dt);
         // Final weights: outgoing poses keep their share, the rest is current.
         let kept = blend.kept();
@@ -1074,11 +1163,7 @@ mod imported {
                 .iter()
                 .max_by(|a, b| a.1.total_cmp(&b.1))
                 .and_then(|(node, _, seconds)| {
-                    loaded
-                        .nodes
-                        .iter()
-                        .find(|(_, value)| value.0 == *node)
-                        .map(|(name, _)| (name.as_str(), *seconds))
+                    clip_name(&loaded, *node).map(|name| (name, *seconds))
                 })
         };
         let part_show = |part: &str| {
