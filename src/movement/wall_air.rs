@@ -24,6 +24,7 @@
 //! * A jump press (`PlayerJudgePreInputJump`) starts the wall jump: 8.6 away
 //!   from the wall and 23 up through the shared air control, whose stick is
 //!   locked for 25 steps.
+use super::wall_slide::{FOLLOW_ANGLE_H, FOLLOW_ANGLE_V, WallSlide};
 use super::*;
 use crate::collider::{arrow_strikes, border_behind};
 use crate::geometry::CollisionCodes;
@@ -36,25 +37,11 @@ const WALL_HEIGHT_LOW_LIMIT: f32 = 120.;
 /// `Tall`: how far below the place he left a wall the player has to be before
 /// the history lets him hold a wall again.
 const TALL: f32 = 160.;
-/// `WallFollowAngleH` and `WallFollowAngleV`: how far (degrees) the wall's
-/// normal may turn from one step to the next around the vertical and across.
-const WALL_FOLLOW_ANGLE_H: f32 = 20.;
-const WALL_FOLLOW_ANGLE_V: f32 = 30.;
-/// The slide's pull into the wall and its speed limit (the literals of
-/// `PlayerStateNormalWallSlide`; the same limit holds gravity along the wall).
-const WALL_PRESS: f32 = 15.;
-const SLIDE_SPEED_MAX: f32 = 15.;
-/// The sideways speed aims at this much of the stick along the wall, and
-/// moves toward it by 0.1 a step.
-const SIDE_SPEED_PER_STICK: f32 = 3.;
-const SIDE_SPEED_STEP: f32 = 0.1;
 /// The body pulled to the wall stops this far from it (`CollisionRadius`).
 const COLLISION_RADIUS: f32 = 55.;
 /// The judge's probe from the head (120 above the feet) toward the wall.
 const PROBE_HEIGHT: f32 = 120.;
 const PROBE_LENGTH: f32 = 77.;
-/// The slide turns to face the wall by this share of the way each step.
-const FACE_WALL_RATE: f32 = 0.25;
 /// Length of the `WallKeep` clips in steps (13 frames at 30 per second).
 const WALL_KEEP_CLIP: u32 = 26;
 /// Length of the `WallJump` clip in steps (18.5 frames at 30 per second).
@@ -77,13 +64,12 @@ pub(super) struct WallAirControl {
     nerve: SlideNerve,
     /// Steps the nerve has run.
     steps: u32,
-    /// The wall's normal as the last step saw it (`mNormalStart`), and the
-    /// one the slide moves by, which follows the way the player faces
-    /// (`mNormalEnd`).
-    normal_start: Vec3,
-    normal_end: Vec3,
-    /// The speed along the wall the stick asks for (`_58`).
-    side_speed: f32,
+    /// The wall as the last step saw it (`mNormalStart`), the direction the slide moves by, which
+    /// follows the pose's front (`mNormalEnd`), and the speed along the wall the stick asks for.
+    slide: WallSlide,
+    /// The speed into the wall has come off already (`followNormal` did it as it lost the wall
+    /// or met the ground).
+    left: bool,
     /// The player's side was toward the camera when the slide began: the clips
     /// are `WallKeep` and `WallSlideR` then, else the mirrored ones.
     side_to_camera: bool,
@@ -122,9 +108,7 @@ pub(super) fn converge(value: f32, target: f32, step: f32) -> f32 {
 /// The angle (degrees) between two vectors seen along `axis`
 /// (`al::calcAngleOnPlaneDegree`, which is signed; only its size is used).
 pub(super) fn angle_on_plane(a: Vec3, b: Vec3, axis: Vec3) -> f32 {
-    let flatten = |v: Vec3| v - axis * v.dot(axis);
-    let (a, b) = (flatten(a), flatten(b));
-    a.cross(b).dot(axis).abs().atan2(a.dot(b)).to_degrees()
+    wall_slide::angle_on_plane_degree(a, b, axis).abs()
 }
 
 /// What the wall jump asks of the air control (`PlayerActionAirMoveControl::setup`
@@ -320,8 +304,8 @@ impl Player {
             if border_behind(mesh, hit.position, hit.normal) {
                 continue;
             }
-            if angle_on_plane(hit.normal, normal, Vec3::NEG_Y) > WALL_FOLLOW_ANGLE_H
-                || angle_on_plane(hit.normal, normal, side) > WALL_FOLLOW_ANGLE_V
+            if angle_on_plane(hit.normal, normal, Vec3::NEG_Y) > FOLLOW_ANGLE_H
+                || angle_on_plane(hit.normal, normal, side) > FOLLOW_ANGLE_V
             {
                 return false;
             }
@@ -349,31 +333,29 @@ impl Player {
         let Some(contact) = self.touched.wall_contact.clone() else {
             return;
         };
-        let normal = contact.normal;
+        let stood = self.pos;
+        let trans = self.position_cm();
+        let grab = wall_slide::appear(
+            contact.normal,
+            contact.position,
+            contact.at_face,
+            trans,
+            COLLISION_RADIUS,
+        );
         self.wall_air = WallAirControl {
-            normal_start: normal,
-            normal_end: normal,
+            slide: grab.slide,
             ..WallAirControl::default()
         };
-        self.facing = (-normal).with_y(0.).normalize_or(self.facing);
-        self.v = -normal * WALL_PRESS;
+        // The pose faces the wall (`makeQuatFrontUp`), the velocity presses into it.
+        self.set_pose(grab.pose);
+        self.v = grab.velocity;
         // `rs::resetCollisionExpandCheck`: the collider takes the new pose as the one it stood
         // in and the shapes grow back to full size in the next `collide`, whose own move then
         // starts at its second pose.
         self.collider
             .reset_expand_check(self.facing.x.atan2(self.facing.z));
-        let stood = self.pos;
-        let mut trans = self.pos / UNIT;
-        if !contact.at_face {
-            // A corner or an edge: slide along the wall until the contact is
-            // straight ahead.
-            let side = normal.cross(Vec3::NEG_Y).normalize_or_zero();
-            trans -= side * (trans - contact.position).dot(side);
-        }
-        let distance = (trans - contact.position).dot(normal);
-        trans -= normal * (distance - COLLISION_RADIUS).max(0.);
-        self.pos = trans * UNIT;
-        if self.pos != stood {
+        if grab.trans != trans {
+            self.pos = grab.trans * UNIT;
             // The move up to the wall is a carry from where the collider stood.
             self.collider.carry_from(stood / UNIT);
         }
@@ -432,29 +414,31 @@ impl Player {
     /// to hold on, or has turned too far since the last step, or the player is
     /// on the ground.
     fn follow_wall_normal(&mut self) -> bool {
-        let Some(contact) = self.touched.wall_contact.clone() else {
-            return false;
-        };
-        if self.no_wall_keep_wall() {
-            return false;
+        let wall = self
+            .touched
+            .wall_contact
+            .as_ref()
+            .filter(|_| !self.no_wall_keep_wall())
+            .map(|contact| contact.normal);
+        let stored = self
+            .pose_quat()
+            .unwrap_or_else(|| plane::quat_up_front(Vec3::Y, self.facing));
+        let follow = self.wall_air.slide.follow_normal(
+            wall,
+            stored,
+            self.v,
+            self.grounded,
+            (FOLLOW_ANGLE_H, FOLLOW_ANGLE_V),
+        );
+        self.wall_air.slide = follow.slide;
+        self.v = follow.velocity;
+        if wall.is_some() && follow.pose != stored {
+            self.set_pose(follow.pose);
         }
-        let normal = contact.normal;
-        let from = self.wall_air.normal_start;
-        let tangent = normal.cross(Vec3::NEG_Y).normalize_or_zero();
-        if angle_on_plane(from, normal, Vec3::NEG_Y) > WALL_FOLLOW_ANGLE_H
-            || angle_on_plane(from, normal, tangent) > WALL_FOLLOW_ANGLE_V
-        {
-            return false;
+        if !follow.holds {
+            self.wall_air.left = true;
         }
-        self.wall_air.normal_start = normal;
-        // The body swings a quarter of the way to face the wall; the normal
-        // the slide moves by is the way he faces, turned round. (The velocity
-        // is turned with it in the original; for a wall that does not turn,
-        // as the recordings' do not, that changes nothing and is not ported.)
-        let toward = (-normal).with_y(0.).normalize_or(self.facing);
-        self.facing = air_move::turn_toward(self.facing, toward, FACE_WALL_RATE);
-        self.wall_air.normal_end = -self.facing;
-        !self.grounded
+        follow.holds
     }
 
     /// The state is over (the wall was left): take the speed into the wall
@@ -479,6 +463,7 @@ impl Player {
         let steps = s.sub_steps.unwrap_or(0);
         let down = Vec3::NEG_Y;
         let tangent = normal.cross(down).normalize_or_zero();
+        let side_speed = self.v.dot(tangent);
         self.wall_air = WallAirControl {
             nerve: if keeping {
                 SlideNerve::Keep
@@ -490,10 +475,13 @@ impl Player {
             } else {
                 steps.saturating_sub(WALL_KEEP_CLIP + 1)
             },
-            normal_start: normal,
-            normal_end: normal,
-            side_speed: self.v.dot(tangent),
+            slide: WallSlide {
+                normal_start: normal,
+                normal_end: normal,
+                side_speed,
+            },
             side_to_camera: matches!(clip, "WallKeep" | "WallSlideR"),
+            left: false,
         };
     }
 
@@ -501,34 +489,28 @@ impl Player {
     /// reached by the slide): the speed into the wall comes off the velocity
     /// and the history records where the wall was left.
     pub(super) fn leave_wall_slide(&mut self) {
-        let normal = self.wall_air.normal_end;
-        self.v -= normal * self.v.dot(normal);
-        self.wall_history.leave = Some((self.pos / UNIT, self.wall_air.normal_start));
+        if !self.wall_air.left {
+            self.v = wall_slide::take_off_wall_speed(self.wall_air.slide.normal_end, self.v);
+            self.wall_air.left = true;
+        }
+        self.wall_history.leave = Some((self.pos / UNIT, self.wall_air.slide.normal_start));
     }
 
     /// `Keep`'s first steps: only the press into the wall.
     fn press_into_wall(&mut self) {
-        let press = -self.wall_air.normal_end * WALL_PRESS;
-        air_move::add_vector_limit(&mut self.v, press, SLIDE_SPEED_MAX);
+        self.v = self.wall_air.slide.press(self.v);
     }
 
-    /// The slide's movement: the press into the wall, gravity along it and
-    /// the speed along the wall the stick asks for. What the velocity had
-    /// across the wall's face (neither into it nor down it) is replaced by that.
+    /// The slide's movement: the press into the wall, gravity along it and the speed along the
+    /// wall the stick asks for.
     fn slide_along_wall(&mut self) {
-        let normal = self.wall_air.normal_end;
-        let down = (Vec3::NEG_Y - normal * Vec3::NEG_Y.dot(normal))
-            .try_normalize()
-            .unwrap_or(Vec3::NEG_Y);
-        let tangent = normal.cross(down).normalize_or_zero();
-        let target = SIDE_SPEED_PER_STICK * self.push().dot(tangent);
-        self.wall_air.side_speed = converge(self.wall_air.side_speed, target, SIDE_SPEED_STEP);
-        let mut into = normal * self.v.dot(normal);
-        let in_plane = self.v - into;
-        let mut along = down * in_plane.dot(down);
-        air_move::add_vector_limit(&mut into, -normal * WALL_PRESS, SLIDE_SPEED_MAX);
-        air_move::add_vector_limit(&mut along, down * t::WALL_SLIDE_GRAVITY, SLIDE_SPEED_MAX);
-        self.v = into + along + tangent * self.wall_air.side_speed;
+        // (The game's record has the stick unbent here: the wall-along weight is not at work in
+        // the slide.)
+        let stick = self.push();
+        self.v = self
+            .wall_air
+            .slide
+            .slide(self.v, stick, t::WALL_SLIDE_GRAVITY);
     }
 
     /// `PlayerStateWallAir::exeSlide`'s pre-input jump: the wall jump is the
@@ -538,7 +520,7 @@ impl Player {
             return;
         }
         self.pre_jump = 0;
-        self.wall_history.jump = Some((self.pos / UNIT, self.wall_air.normal_start));
+        self.wall_history.jump = Some((self.pos / UNIT, self.wall_air.slide.normal_start));
         // The wall jump is a sub-state of the actor's `WallAir` nerve, which goes
         // on counting its steps.
         self.defer(Move::WallJump, "WallJump", |p| {

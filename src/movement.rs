@@ -320,6 +320,8 @@ mod wait;
 mod wall_air;
 #[path = "movement/wall_along.rs"]
 mod wall_along;
+#[path = "movement/wall_slide.rs"]
+pub(crate) mod wall_slide;
 #[path = "movement/wet.rs"]
 mod wet;
 pub use ground::turn_power;
@@ -4966,6 +4968,7 @@ pub fn self_check() {
     turn_control::self_check();
     ground_move::self_check();
     wall_along::self_check();
+    wall_slide::self_check();
     pose_math::self_check();
     look_joint::self_check();
     ground_pose::self_check();
