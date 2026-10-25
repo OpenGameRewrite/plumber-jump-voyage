@@ -132,6 +132,20 @@ identity in the last bits, and that is what holds the settled pose of a placed p
 pattern the probe records (the first step after the teleport has found no ground and does not follow;
 every later one does, and the pose stays where it is).
 
+Three more rules the full-precision recordings of the pond runs pinned down. The swim state's
+in-water judge (`PlayerJudgeInWater::judge`) measures the root against the collided ground
+position on a tilted floor in the stage's own coordinates, and `PlayerActorHakoniwa::movement` asks
+the material code (the water prefix of the effect variants) after the step's collision, so its
+puddle test reads the height check of the position the step ended on. A standard jump takes off with
+the velocity of the plane under the body now (`PlayerActionAirMoveControl::setup`: the velocity
+without its part along the collided ground's normal, then without the part along gravity), not
+with the horizontal part the run kept for the plane it last steered on. The hip drop's landing keeps
+the pull along the floor's normal. Known gaps of the swim-hipdrop-in run (it is the one scenario that
+still fails): the pose of a jump that starts tilted on a slope relaxes in the first step by a share
+that `slerpUpFront` with rate 0.15 does not reproduce (the game's first jump row keeps 0.39 of the
+tilt, every later one 0.85), and the pound's landing on a steep floor sinks the body along the
+floor's normal by an offset the rewrite does not model.
+
 The console's single precision library is not correctly rounded: the image links a musl
 derivative (`sinf` and `cosf` through double precision kernels, `acosf`, `asinf`, `atanf` and
 `atan2f` as single precision polynomials), and about one `acosf` in ten and one `atan2f` in
