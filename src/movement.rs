@@ -2610,9 +2610,7 @@ impl Player {
     }
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
-        self.ground_height = scene
-            .ground(self.pos)
-            .map_or(f32::MAX, |floor| (self.pos.y - floor) / UNIT);
+        self.update_ground_height(scene);
         match self.mode {
             Move::Idle | Move::Walk | Move::Run => self.run(o),
             Move::Skid | Move::Turn => self.brake(o),

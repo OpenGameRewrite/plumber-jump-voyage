@@ -207,10 +207,23 @@ impl Player {
         finder.distance + ground < height
     }
 
+    /// The distance down to the floor from the root's present position (the height check
+    /// `PlayerColliderHakoniwa::updateHeightCheck` keeps; the controller's states read it at the
+    /// start of a step, which is the value the previous step's collision left).
+    pub(super) fn update_ground_height(&mut self, scene: &Course) {
+        self.ground_height = scene
+            .ground(self.pos)
+            .map_or(f32::MAX, |floor| (self.pos.y - floor) / UNIT);
+    }
+
     /// The material code the actor ends its movement with: the water prefix
     /// (`PlayerAreaChecker::isInWater` at the root while the water is deeper than the swim's
-    /// center offset).
+    /// center offset). `PlayerActorHakoniwa::movement` asks after the step's collision, so the
+    /// height check is the one of the position the step ended on (swim-dive rows 144-145: the
+    /// jump out of the pond bottom is 42 and 5 below the surface, which only the floor's 38 and
+    /// 75 further down make deeper than the offset).
     pub(super) fn update_material_code(&mut self, scene: &Course) {
+        self.update_ground_height(scene);
         let in_area = scene
             .water_areas()
             .is_water(scene.in_water_frame(self.position_cm()));
@@ -240,9 +253,10 @@ impl Player {
             if !pose_math::is_parallel_direction(UP, normal, 0.01)
                 && pose_math::dot(UP, normal) > 0.
             {
-                // The ground is tilted: measure the depth along the slope's own up axis.
-                let rise = Quat::from_rotation_arc(UP, normal)
-                    * (self.position_cm() - self.collider.ground_position());
+                // The ground is tilted: measure the depth along the slope's own up axis. The
+                // root and the ground position are both the stage's own (absolute) coordinates.
+                let rise =
+                    Quat::from_rotation_arc(UP, normal) * (at - self.collider.ground_position());
                 depth -= pose_math::dot(GRAVITY, rise).max(0.) + 5.;
             } else {
                 depth -= 5.;
@@ -458,7 +472,11 @@ impl Player {
             return;
         }
         if let Some(SwimEnd::JumpHipDrop) = ended {
+            // (As for the jump above: the press stays counted until the jump's first step;
+            // swim-dive row 143 records the counter at 5 in the jump's first row.)
+            let buffered = self.pre_jump;
             self.start_pound_jump();
+            self.pre_jump = buffered;
             return;
         }
         // Still swimming: the wetness is recorded, and the actor asks whether the water is still
