@@ -113,6 +113,10 @@ pub struct JointState {
     /// found the ground (`rs::isJustLand`, which the states read while they decide).
     was_running: bool,
     just_landed: bool,
+    /// The velocity the actor has when a landing chooses the run state (see
+    /// [`Player::velocity_when_landing_state_is_chosen`]); the state's `appear` reads it for its
+    /// impulse, ahead of `PlayerActionGroundMoveControl::appear` laying it into the floor's plane.
+    run_arrival_velocity: Option<Vec3>,
 }
 
 /// The run's impulse is this share of the velocity (`appear` and `control` pass `0.3`).
@@ -190,6 +194,7 @@ impl Player {
     pub(super) fn note_frame_start_for_joints(&mut self) {
         self.joints.was_running = self.actor_name() == "Run";
         self.joints.just_landed = self.is_just_land();
+        self.joints.run_arrival_velocity = None;
         // The run state's `control` comes with the frame, before the actor's nerve runs: the
         // frame that begins the state (`appear`) does not call it. (Recordings of a landing
         // into a run agree: the impulse of `appear` reaches the sway as an impulse and the
@@ -207,13 +212,40 @@ impl Player {
         }
     }
 
-    /// `PlayerStateRunHakoniwa::appear`: landing into a run gives the body its sway.
+    /// The velocity the actor has when the state a landing chooses starts (`getVelocity` in the
+    /// states' `appear`). The collider does not clip the actor's velocity (the trace keeps
+    /// reporting the fall speed of the touchdown), and the jump state's last step, which `land`
+    /// replays for the air control, still applies its gravity before the landing state is
+    /// chosen.
+    pub(super) fn velocity_when_landing_state_is_chosen(
+        &self,
+        flown: Vec3,
+        air_step_ran: bool,
+    ) -> Vec3 {
+        if self.touchdown_speed >= 0. {
+            return flown;
+        }
+        let mut fall = self.touchdown_speed;
+        if air_step_ran {
+            fall = (fall - self.gravity).max(-t::FALL_MAX);
+        }
+        flown.with_y(fall)
+    }
+
+    /// The run state is chosen by a landing with this velocity.
+    pub(super) fn note_velocity_at_run_choice(&mut self, velocity: Vec3) {
+        self.joints.run_arrival_velocity = Some(velocity);
+    }
+
+    /// `PlayerStateRunHakoniwa::appear`: landing into a run gives the body its sway; its impulse
+    /// reads the velocity before the ground move control's own `appear` lays it into the plane.
     fn run_state_appear(&mut self) {
         self.joints.run.appear();
         self.joints.run_landing = 0;
+        let arrival = self.joints.run_arrival_velocity.take().unwrap_or(self.v);
         if self.joints.just_landed {
             self.joints.run_landing = RUN_LANDING_FRAMES;
-            let vector = self.v * RUN_IMPULSE_SHARE;
+            let vector = arrival * RUN_IMPULSE_SHARE;
             self.start_center_joint_control(vector, false);
         }
     }

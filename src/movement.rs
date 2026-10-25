@@ -4605,7 +4605,8 @@ impl Player {
         }
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
-        if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
+        let air_step_ran = self.mode.uses_air_control() && self.air_for == Some(self.mode);
+        if air_step_ran {
             let mut v = self.v;
             let steer = air_move::Steering {
                 front: t::JUMP_ACCEL_FRONT,
@@ -4626,6 +4627,8 @@ impl Player {
         // jump's own landing) judges and keeps the velocity that step left,
         // gravity included; the states that follow otherwise set their own.
         let flown = (self.v, self.facing);
+        let arrival = self.velocity_when_landing_state_is_chosen(flown.0, air_step_ran);
+        self.note_velocity_at_run_choice(arrival);
         if o.crouch {
             self.v.y = self.touchdown_speed;
             match self.mode {
@@ -4763,7 +4766,7 @@ impl Player {
                     };
                     // (The triple jump's landing gives the body no sway.)
                     if anim != "LandJump3" {
-                        self.wait_state_appears_after_landing(flown.0);
+                        self.wait_state_appears_after_landing(arrival);
                     }
                     self.change(Move::Idle, anim, |p| p.set_h(Vec3::ZERO));
                 }
