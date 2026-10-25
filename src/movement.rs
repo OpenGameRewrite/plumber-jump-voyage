@@ -254,6 +254,8 @@ pub type ControllerState = (
 pub(crate) mod console_libm;
 #[path = "movement/ground.rs"]
 mod ground;
+#[path = "movement/ground_move.rs"]
+pub(crate) mod ground_move;
 #[path = "movement/ground_pose.rs"]
 pub(crate) mod ground_pose;
 #[path = "movement/hip_spring.rs"]
@@ -1147,9 +1149,10 @@ pub struct Player {
     /// for that frame only.
     run_start_effect: Option<&'static str>,
     /// The floor normal the run was last steered on, with the horizontal
-    /// velocity it left (`mGroundNormal`): the velocity belongs to that plane
-    /// while it is unchanged.
-    run_up: Option<(Vec2, Vec3)>,
+    /// velocity it left (`mGroundNormal`) and the whole velocity the control set on the actor
+    /// (`al::setVelocity`, the pull along the normal included): the velocity belongs to that
+    /// plane while it is unchanged.
+    run_up: Option<(Vec2, Vec3, Vec3)>,
     /// The pose when it is tilted off the vertical (a run up a slope); it
     /// belongs to the facing it was made for.
     pose_tilt: Option<PoseTilt>,
@@ -1773,7 +1776,12 @@ impl Player {
         // A run keeps its velocity in the plane it was steered on (the floor
         // the collider has found since is for the next step).
         let normal = match self.run_up {
-            Some((h, up)) if h == Vec2::new(self.v.x, self.v.z) => up,
+            Some((h, _, velocity))
+                if h == Vec2::new(self.v.x, self.v.z) && self.pull == GRAVITY_MOVE =>
+            {
+                // The velocity the control set, as it set it.
+                return velocity;
+            }
             _ => self.mesh_ground.unwrap_or(Vec3::Y),
         };
         let mut along = self.v.with_y(0.);
@@ -2824,15 +2832,21 @@ impl Player {
     /// (`updateNormalAndSnap`): the velocity the last step left in the plane of
     /// the floor it steered on, turned onto this one.
     fn velocity_in_plane(&self, up: Vec3) -> Vec3 {
-        let from = match self.run_up {
-            Some((h, from)) if h == Vec2::new(self.v.x, self.v.z) => from,
-            _ => up,
-        };
-        along_vector_normal_h(plane::lift(self.v, from), from, up)
+        match self.run_up {
+            Some((h, from, velocity))
+                if h == Vec2::new(self.v.x, self.v.z) && self.pull == GRAVITY_MOVE =>
+            {
+                along_vector_normal_h(velocity, from, up)
+            }
+            Some((h, from, _)) if h == Vec2::new(self.v.x, self.v.z) => {
+                along_vector_normal_h(plane::lift(self.v, from), from, up)
+            }
+            _ => along_vector_normal_h(plane::lift(self.v, up), up, up),
+        }
     }
     /// The run's velocity is laid in the plane of the floor it was steered on.
     fn run_follows_floor(&self) -> bool {
-        matches!(self.run_up, Some((h, _)) if h == Vec2::new(self.v.x, self.v.z))
+        matches!(self.run_up, Some((h, _, _)) if h == Vec2::new(self.v.x, self.v.z))
     }
     /// The stick in the plane of the floor with the normal `up`
     /// (`PlayerInput::calcMoveInput`): the camera's forward axis is tipped
@@ -2865,7 +2879,8 @@ impl Player {
         let from = if landing { Vec3::Y } else { up };
         let velocity = along_vector_normal_h(self.v, from, up);
         self.set_h(velocity);
-        self.run_up = Some((Vec2::new(self.v.x, self.v.z), up));
+        let set = velocity - up * GRAVITY_MOVE;
+        self.run_up = Some((Vec2::new(self.v.x, self.v.z), up, set));
     }
     /// The pose's up and front: tilted while a run on a slope has it so.
     pub fn pose_axes(&self) -> (Vec3, Vec3) {
@@ -3016,9 +3031,8 @@ impl Player {
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
         let in_plane = self.velocity_in_plane(up);
         let (pose_up, pose_front) = self.pose_axes();
-        let front = along_vector_normal_h(pose_front, pose_up, up);
         if step == 0 {
-            self.ground.reset(in_plane, front);
+            self.ground.reset(in_plane, pose_front, up);
         }
         let after_turn = self.run_nerve == RunNerve::RunAfterTurn;
         // Top speed and ramp length of this step: the stretch after a turn
@@ -3055,7 +3069,7 @@ impl Player {
         self.set_h(steer.velocity);
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
-        self.run_up = Some((Vec2::new(self.v.x, self.v.z), up));
+        self.run_up = Some((Vec2::new(self.v.x, self.v.z), up, steer.set_velocity));
         self.mode = if steer.speed < 8. {
             Move::Walk
         } else {
@@ -4267,7 +4281,7 @@ impl Player {
             self.set_h(h);
         } else {
             if step == t::SPIN_BRAKE_FRAMES {
-                self.spin_ground_move.reset(self.v, self.facing);
+                self.spin_ground_move.reset(self.v, self.facing, Vec3::Y);
             }
             let (actor_up, actor_front) = self.pose_axes();
             let steer = self.spin_ground_move.update(&SteerInput {
@@ -4950,6 +4964,8 @@ pub fn self_check() {
     ledge_checks::run();
     console_libm::self_check();
     turn_control::self_check();
+    ground_move::self_check();
+    wall_along::self_check();
     pose_math::self_check();
     look_joint::self_check();
     ground_pose::self_check();

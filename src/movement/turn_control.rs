@@ -73,7 +73,7 @@ fn accel(value: f32, target: f32, step: f32) -> f32 {
 }
 
 /// `PlayerActionFunction::brake`: lose `base / frames` of the magnitude.
-pub(super) fn brake(value: f32, frames: i32, base: f32) -> f32 {
+pub fn brake(value: f32, frames: i32, base: f32) -> f32 {
     if value == 0. {
         return 0.;
     }
@@ -88,7 +88,7 @@ pub(super) fn brake(value: f32, frames: i32, base: f32) -> f32 {
 }
 
 /// `PlayerActionFunction::isOppositeDir`.
-pub(super) fn is_opposite_dir(a: Vec3, b: Vec3) -> bool {
+pub fn is_opposite_dir(a: Vec3, b: Vec3) -> bool {
     dot(a, b) <= OPPOSITE_COS
 }
 

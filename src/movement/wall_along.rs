@@ -7,6 +7,9 @@
 //! player who pushes diagonally into a wall run along it, so it only moves the
 //! stick when the stick is within about eighty degrees of the wall's direction.
 
+use super::console_libm::{acosf, cosf, sinf};
+use super::pose_math::{cross, dot, normalize, squared_length, try_normalize_or_zero};
+use super::vector_lib::{is_near_zero, verticalize_vec};
 use bevy::math::{Vec2, Vec3};
 
 /// The frames the wall stays remembered after the last contact.
@@ -22,7 +25,7 @@ const STICK_DEADZONE: f32 = 0.1;
 /// of it (cos 85), or when the stick has turned by ten degrees (cos 10).
 const SAME_WALL_COS: f32 = 0.087_155_74;
 const SAME_STICK_COS: f32 = 0.984_807_7;
-/// `al::isNearZero` of the move input.
+/// `al::isNearZero(input, 0.001)` of the move input.
 const NEAR_ZERO: f32 = 0.001;
 /// Angles of the bend, in radians: inputs within the first one of the wall's
 /// direction run along it (25 degrees away from the wall, 50 into it), the
@@ -30,9 +33,9 @@ const NEAR_ZERO: f32 = 0.001;
 /// stays across it.
 const ALONG_AWAY_DEGREES: f32 = 25.;
 const ALONG_INTO_DEGREES: f32 = 50.;
-const FADE_OUT_END: f32 = 1.396_263_4;
-const ACROSS_END: f32 = 1.745_329_3;
-const HALF_PI: f32 = 1.570_796_4;
+const FADE_OUT_END: f32 = 1.396_263_480_186_462_4;
+const ACROSS_END: f32 = 1.745_329_260_826_110_8;
+const HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
 const PI: f32 = std::f32::consts::PI;
 
 /// What the input remembers of the last wall.
@@ -85,52 +88,67 @@ impl WallAlong {
     }
 
     /// `snapWallAlongInput`: the move input `input` on the floor with the
-    /// normal `up`, bent along the remembered wall.
+    /// normal `up`, bent along the remembered wall. Single precision in the executable's
+    /// order, with its `acosf`, `sinf` and `cosf`.
     pub fn snap(&self, input: Vec3, up: Vec3) -> Vec3 {
-        if self.weight <= 0. || input.length_squared() < NEAR_ZERO * NEAR_ZERO {
+        if self.weight <= 0. || is_near_zero(input, NEAR_ZERO) {
             return input;
         }
         // The wall's direction on the floor, and across it.
-        let across = (self.wall - up * self.wall.dot(up)).normalize_or_zero();
-        if across == Vec3::ZERO {
-            return input;
-        }
-        let along = across.cross(up).normalize();
-        let length = input.length();
-        let angle = input.dot(along).clamp(-1., 1.).acos();
-        let toward_wall = input.dot(across);
-        let limit = if toward_wall > 0. {
-            ALONG_AWAY_DEGREES
-        } else {
-            ALONG_INTO_DEGREES
-        };
-        let limit_rad = limit * PI / 180.;
-        // The angle the input is bent to, measured from the wall's direction.
-        let bent = if angle <= limit_rad {
-            0.
-        } else if angle < FADE_OUT_END {
-            let share = (angle - limit_rad) * PI * 0.5 / (FADE_OUT_END - limit_rad);
-            share.clamp(0., HALF_PI)
-        } else if angle <= ACROSS_END {
-            HALF_PI
-        } else {
-            let far_end = (180. - limit) * PI / 180.;
-            if angle >= far_end {
-                PI
+        let (across, has_across) = try_normalize_or_zero(verticalize_vec(up, self.wall));
+        let mut snapped = input;
+        if has_across {
+            let along = normalize(cross(across, up));
+            let length = squared_length(input).sqrt();
+            let angle = acosf(dot(input, along).clamp(-1., 1.));
+            let toward_wall = dot(input, across);
+            let limit = if toward_wall > 0. {
+                ALONG_AWAY_DEGREES
             } else {
-                let share = (angle - ACROSS_END) * PI * 0.5 / (far_end - ACROSS_END);
-                share.clamp(0., HALF_PI) + HALF_PI
-            }
-        };
-        let (sin, cos) = bent.sin_cos();
-        let kept = along * (cos * length);
-        let turned = across * (sin * length);
-        let snapped = if toward_wall < 0. {
-            kept - turned
-        } else {
-            kept + turned
-        };
-        input * (1. - self.weight) + snapped * self.weight
+                ALONG_INTO_DEGREES
+            };
+            let limit_rad = limit * PI / 180.;
+            // The angle the input is bent to, measured from the wall's direction.
+            let bent = if angle <= limit_rad {
+                0.
+            } else if angle < FADE_OUT_END {
+                let share = (angle - limit_rad) * PI * 0.5 / (FADE_OUT_END - limit_rad);
+                if share < 0. { 0. } else { share.min(HALF_PI) }
+            } else if angle <= ACROSS_END {
+                HALF_PI
+            } else {
+                let far_end = (180. - limit) * PI / 180.;
+                if angle >= far_end {
+                    PI
+                } else {
+                    let share = (angle + -ACROSS_END) * PI * 0.5 / (far_end + -ACROSS_END);
+                    let share = if share < 0. { 0. } else { share.min(HALF_PI) };
+                    share + HALF_PI
+                }
+            };
+            let (sin, cos) = (sinf(bent), cosf(bent));
+            let kept = Vec3::new(
+                length * (cos * along.x),
+                length * (cos * along.y),
+                length * (cos * along.z),
+            );
+            let turned = Vec3::new(
+                length * (sin * across.x),
+                length * (sin * across.y),
+                length * (sin * across.z),
+            );
+            snapped = if toward_wall < 0. {
+                kept - turned
+            } else {
+                kept + turned
+            };
+        }
+        let rest = 1. - self.weight;
+        Vec3::new(
+            snapped.x * self.weight + input.x * rest,
+            snapped.y * self.weight + input.y * rest,
+            snapped.z * self.weight + input.z * rest,
+        )
     }
 }
 
@@ -187,4 +205,11 @@ mod tests {
         let input = Vec3::new(0.3, 0., 0.9);
         assert_eq!(along.snap(input, Vec3::Y), input);
     }
+}
+
+#[path = "../tests/wall_along.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }
