@@ -476,8 +476,15 @@ between whole frames, which leaves toe and hand differences of 1 to 4 cm at frac
 Rotations blend the way the game's blender does: the weighted first two rows of each layer's
 rotation matrix are summed per joint and the matrix is rebuilt from the sums, and the poses of
 a fade (`interp`) are then interpolated spherically, a frozen pose made of earlier fades
-nesting them (`Layer::stage`, `PoseLayer::group`). The renderer plays the same curves but
-keeps Bevy's own weighted blend of the clips.
+nesting them (`Layer::stage`, `PoseLayer::group`). The windowed game poses the same 27 joints
+with that very chain: `trace::SkeletonFeed` steps the trace's animation state (crossfades, sub and
+partial animations) once per simulation step, `Player::pose_skeleton` bends the result, and
+`pose_joints` writes every one of those joints to the model before the transforms are propagated,
+drawing between steps by advancing each layer's frame by its rate times the share of a step that has
+passed. Bevy's weighted blend of the clips still poses the joints the trace does not follow (fingers
+and face), and the whole body without the installed curves. `PJV_POSE_CHECK=1` makes the windowed game
+log how far the drawn joints are from the traced ones, measured in the frame of `AllRoot` (about
+0.0001 cm: the f32 rounding of the transform tree).
 
 ## Rendered captures
 

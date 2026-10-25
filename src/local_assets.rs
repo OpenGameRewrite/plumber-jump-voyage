@@ -400,7 +400,8 @@ mod imported {
     use crate::asset_contract::{self, Bone, Part as AssetPart, Stain, Surface, VisibilityRole};
     use crate::movement::ControllerState;
     use crate::movement::look_joint::Mat34;
-    use crate::skeleton_pose::{JOINT_COUNT, Joint};
+    use crate::skeleton_pose::{JOINT_COUNT, Joint, Matrices};
+    use crate::trace::SkeletonFeed;
     #[derive(Component)]
     struct Imported;
     #[derive(Component)]
@@ -477,6 +478,13 @@ mod imported {
                 .after(bevy::app::AnimationSystems)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
+        // `PJV_POSE_CHECK=1`: report how far the drawn skeleton is from the traced one.
+        if std::env::var_os("PJV_POSE_CHECK").is_some() {
+            app.init_resource::<PoseCheck>().add_systems(
+                PostUpdate,
+                compare_pose.after(bevy::transform::TransformSystems::Propagate),
+            );
+        }
         app.init_resource::<Loaded>().add_systems(
             Update,
             (
@@ -496,11 +504,60 @@ mod imported {
     /// What the joint controllers' pose system remembers between frames.
     #[derive(Default)]
     struct JointMemory {
-        /// The joints bent last frame: the transform the animation gave and the one written.
+        /// The joints written last frame: the transform the animation gave and the one written.
         written: Vec<(Entity, Transform, Transform)>,
         /// The step the controllers last advanced for, and their state from before it.
         step: Option<u32>,
         before: Option<ControllerState>,
+        /// The traced skeleton's animation state, and the step it was last advanced for.
+        feed: SkeletonFeed,
+        fed: Option<u32>,
+    }
+    /// The most steps one drawn frame advances the skeleton's animation state by.
+    const MAX_FED_STEPS: u32 = 4;
+    /// The traced skeleton of the frame being drawn and the nodes that show it
+    /// (`PJV_POSE_CHECK`).
+    #[derive(Resource, Default)]
+    struct PoseCheck {
+        shown: Option<(Matrices, [Option<Entity>; JOINT_COUNT])>,
+        frames: u32,
+    }
+    /// The drawn joints against the traced skeleton, each joint's place measured in the frame of
+    /// `AllRoot` (so that the model's scale, yaw and the actor's place drop out). Prints the
+    /// largest difference, in centimetres, every 30 frames.
+    fn compare_pose(mut check: ResMut<PoseCheck>, globals: Query<&GlobalTransform>) {
+        let Some((traced, nodes)) = check.shown else {
+            return;
+        };
+        let root = Joint::AllRoot as usize;
+        let Some(drawn_root) = nodes[root].and_then(|e| globals.get(e).ok()) else {
+            return;
+        };
+        let drawn_inverse = drawn_root.affine().inverse();
+        let traced_inverse = mat4(&traced[root]).inverse();
+        let mut worst = (0f32, Joint::AllRoot);
+        for joint in Joint::ALL {
+            let Some(drawn) = nodes[joint as usize].and_then(|e| globals.get(e).ok()) else {
+                continue;
+            };
+            let at = drawn_inverse.transform_point3a(drawn.translation().into());
+            let row = &traced[joint as usize];
+            let expected =
+                traced_inverse.transform_point3(Vec3::new(row[0][3], row[1][3], row[2][3]));
+            let gap = (Vec3::from(at) - expected).length();
+            if gap > worst.0 {
+                worst = (gap, joint);
+            }
+        }
+        check.frames += 1;
+        if check.frames % 30 == 1 {
+            info!(
+                "POSECHECK frame {}: drawn skeleton is {:.5} cm from the traced one at most ({})",
+                check.frames,
+                worst.0,
+                worst.1.name()
+            );
+        }
     }
     /// A joint of the model as the animation leaves it: the node's entity, and the matrix of
     /// the nodes between it and its parent joint (the identity where it is the child itself).
@@ -527,18 +584,26 @@ mod imported {
             [rows[0][3], rows[1][3], rows[2][3], 1.],
         ])
     }
-    /// The player's joint controllers, shown: the ground pose (the body's lean, the sway of
-    /// a landing, the legs planted) and the head's look-at. The animation has just posed the
-    /// joints; this hands their local matrices, in the model's frame, to the controllers
-    /// (`Player::pose_skeleton`, the calculation the trace does without a renderer) and
-    /// writes the joints they bent back, before the transforms are propagated. The
-    /// controllers' state moves once a simulation step, however often the frame is drawn.
+    /// The body's skeleton, posed as the trace poses it. The 27 joints the trace records get
+    /// their local matrices from the traced chain itself (`SkeletonFeed`: the original curves,
+    /// the game's matrix-row blend and `ModelAnimInterp` fades, the sub and partial animations),
+    /// go through the joint controllers (`Player::pose_skeleton`, the calculation the trace does
+    /// without a renderer: the ground pose's lean, the sway of a landing, the legs planted, the
+    /// head's look-at, the hip spring, the poles) and are written to the model's nodes before the
+    /// transforms are propagated, so the body on screen is the `bones` column. The animation
+    /// player's own blend still poses the joints the trace does not follow (fingers and face);
+    /// without the installed curves it poses the body too, and only the joints the controllers
+    /// moved are written. The controllers' state moves once a simulation step, however often
+    /// the frame is drawn.
     fn pose_joints(
+        fixed: Res<Time<Fixed>>,
         mut player: Single<&mut crate::movement::Player>,
         bones: Query<(Entity, &Bone)>,
         parents: Query<&ChildOf>,
         imported: Query<(), With<Imported>>,
+        caps: Query<(), With<ImportedCap>>,
         mut transforms: Query<&mut Transform>,
+        check: Option<ResMut<PoseCheck>>,
         mut memory: Local<JointMemory>,
     ) {
         // A clip with no channel for a joint leaves what was written last frame there.
@@ -549,9 +614,21 @@ mod imported {
                 *transform = animated;
             }
         }
+        // The body's joints: the cap model carries joints of its own under the same names.
+        let on_cap = |mut node: Entity| {
+            while !imported.contains(node) {
+                match parents.get(node) {
+                    Ok(parent) => node = parent.parent(),
+                    Err(_) => return false,
+                }
+            }
+            caps.contains(node)
+        };
         let mut nodes = [None; JOINT_COUNT];
         for (entity, bone) in &bones {
-            if let Some(joint) = Joint::from_node_name(&bone.key[0]) {
+            if let Some(joint) = Joint::from_node_name(&bone.key[0])
+                && !on_cap(entity)
+            {
                 nodes[joint as usize] = Some(entity);
             }
         }
@@ -588,6 +665,20 @@ mod imported {
             joints.push(AnimatedJoint { entity, lead });
         }
         let step = player.step_count();
+        // The traced animation state moves once per simulation step.
+        match memory.fed {
+            None => memory.feed.advance(&player),
+            Some(fed) => {
+                for _ in 0..step.saturating_sub(fed).min(MAX_FED_STEPS) {
+                    memory.feed.advance(&player);
+                }
+            }
+        }
+        memory.fed = Some(step);
+        let traced = memory.feed.locals(&player, fixed.overstep_fraction());
+        if let Some(traced) = &traced {
+            locals = *traced;
+        }
         let bent = match (memory.step == Some(step), memory.before.clone()) {
             (true, Some(mut before)) => player.pose_skeleton_from(&mut before, &locals),
             _ => {
@@ -597,7 +688,20 @@ mod imported {
             }
         };
         let actor = player.pose_matrix();
-        for (joint, local) in crate::skeleton_pose::bent_locals(&actor, &locals, &bent) {
+        let mut shown = crate::skeleton_pose::bent_locals(&actor, &locals, &bent);
+        if traced.is_some() {
+            // Every traced joint is written: those the controllers did not move keep the
+            // traced local matrix.
+            let moved = std::mem::take(&mut shown);
+            shown = Joint::ALL
+                .iter()
+                .map(|&joint| {
+                    let own = moved.iter().find(|(m, _)| *m == joint).map(|(_, l)| *l);
+                    (joint, own.unwrap_or(locals[joint as usize]))
+                })
+                .collect();
+        }
+        for (joint, local) in shown {
             let AnimatedJoint { entity, lead } = &joints[joint as usize];
             let Ok(mut transform) = transforms.get_mut(*entity) else {
                 continue;
@@ -605,6 +709,11 @@ mod imported {
             let animated = *transform;
             *transform = Transform::from_matrix(lead.inverse() * mat4(&local));
             memory.written.push((*entity, animated, *transform));
+        }
+        if let Some(mut check) = check
+            && traced.is_some()
+        {
+            check.shown = Some((bent, nodes));
         }
     }
     fn select(

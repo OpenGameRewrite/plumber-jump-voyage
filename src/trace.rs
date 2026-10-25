@@ -421,17 +421,21 @@ impl Recorder {
 
     /// The clips and shares the skeleton's pose is made of (the renderer's weights: outgoing
     /// poses keep their share, the current one the rest).
+    ///
+    /// `ahead` is the share of a step the frame being drawn is past the last step (the windowed
+    /// game draws between steps); the traced rows are at 0.
     fn pose_layers(
         &self,
         p: &Player,
         covering: Option<Anim>,
         kept: f32,
+        ahead: f32,
     ) -> Vec<PoseLayer<'static>> {
         let mut playing: Vec<PoseLayer> = Vec::new();
         if let Some(sub) = covering {
             playing.push(PoseLayer {
                 clip: sub.name,
-                frame: sub.frame,
+                frame: sub.frame + sub.rate * ahead,
                 weight: 1.,
                 region: Region::Whole,
                 group: 0,
@@ -439,7 +443,7 @@ impl Recorder {
         } else if let Some((name, frame)) = p.model_sub().filter(|(name, _)| *name != p.anim.name) {
             playing.push(PoseLayer {
                 clip: name,
-                frame,
+                frame: frame + ahead,
                 weight: 1.,
                 region: Region::Whole,
                 group: 0,
@@ -450,10 +454,16 @@ impl Recorder {
             // frozen, then the fades it had absorbed).
             let mut groups = 0;
             for (old, share, _) in &self.blend.old {
-                Self::push_pose(&mut playing, old, *share, groups, true);
+                Self::push_pose(&mut playing, old, (*share, ahead), groups, true);
                 groups += old.stages();
             }
-            Self::push_pose(&mut playing, &self.blend.current, 1. - kept, groups, false);
+            Self::push_pose(
+                &mut playing,
+                &self.blend.current,
+                (1. - kept, ahead),
+                groups,
+                false,
+            );
         }
         playing
     }
@@ -463,7 +473,7 @@ impl Recorder {
     fn push_pose(
         playing: &mut Vec<PoseLayer<'static>>,
         pose: &Pose,
-        share: f32,
+        (share, ahead): (f32, f32),
         first_group: usize,
         newest_stage_first: bool,
     ) {
@@ -478,7 +488,7 @@ impl Recorder {
         for l in &pose.layers {
             playing.push(PoseLayer {
                 clip: l.name,
-                frame: l.frame,
+                frame: l.frame + l.rate * ahead,
                 weight: l.weight * share,
                 region: if l.covered {
                     Region::Lower
@@ -491,7 +501,7 @@ impl Recorder {
         for l in &pose.partial {
             playing.push(PoseLayer {
                 clip: l.name,
-                frame: l.frame,
+                frame: l.frame + l.rate * ahead,
                 weight: l.weight * share,
                 region: Region::Upper,
                 group: group(l),
@@ -507,7 +517,7 @@ impl Recorder {
         covering: Option<Anim>,
         kept: f32,
     ) -> Option<Matrices> {
-        let playing = self.pose_layers(p, covering, kept);
+        let playing = self.pose_layers(p, covering, kept, 0.);
         let locals = SkeletonPose::installed()?.locals(&playing)?;
         Some(p.pose_skeleton(&locals))
     }
@@ -695,66 +705,12 @@ impl Recorder {
         };
 
         // Animation blend and crossfade, advanced by one frame.
-        let dt = 1. / FPS;
-        // The dive's landing clip covers the whole body while it plays: the
-        // pose under it neither blends nor shows, and no upper overlay is meant.
-        let covering = p.sub_anim.filter(|s| s.name == "RollingStandUp");
-        // The sub animation on screen in this row (a model sub animation of another clip, or
-        // the cover), for the fade that follows its end.
-        let shown_now = covering
-            .map(|s| (s.name, s.frame, s.rate, true))
-            .or_else(|| {
-                p.model_sub()
-                    .filter(|(name, _)| *name != p.anim.name)
-                    .map(|(name, frame)| (name, frame, 1., false))
-            })
-            .map(|(name, frame, rate, covers)| {
-                (
-                    Layer {
-                        name,
-                        frame,
-                        rate,
-                        weight: 1.,
-                        covered: false,
-                        stage: 0,
-                    },
-                    covers,
-                )
-            });
-        let blend_shows = shown_now.is_none();
-        let shown_before = std::mem::replace(&mut self.shown_sub, shown_now);
-        if covering.is_none() {
-            self.blend
-                .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
-            if p.interpolation_cleared() {
-                self.blend.old.clear();
-            }
-            // The cover just ended: the main clip fades in over the pose the cover left on
-            // screen, not over the pose held under it (`PlayerAnimator` restarts the main
-            // slot at `endSubAnim`; the recorded `interp` still names the main clip's
-            // predecessor). The fade keeps its label (`slot`) and share.
-            if let Some((shown, true)) = shown_before.clone() {
-                for (old, _, _) in &mut self.blend.old {
-                    let held: f32 = old.layers.iter().map(|l| l.weight).sum();
-                    old.layers = vec![Layer {
-                        weight: held,
-                        ..shown.clone()
-                    }];
-                }
-            }
-        }
+        let PoseStep {
+            covering,
+            kept,
+            mut interp,
+        } = self.advance_pose(p);
         let pose = &self.blend.current;
-        let mut kept = self.blend.kept();
-        if let Some(sub) = p.sub_anim {
-            self.last_sub = sub.name;
-        } else if let Some((name, _)) = p.model_sub() {
-            self.last_sub = name;
-        }
-        self.overlay = if p.sub_anim.is_some() && covering.is_none() {
-            (self.overlay + dt / 0.05).min(1.)
-        } else {
-            (self.overlay - dt / 0.05).max(0.)
-        };
         let upper = if p.grounded {
             "ThrowCapParts"
         } else {
@@ -786,85 +742,6 @@ impl Recorder {
         } else {
             String::new()
         };
-        let mut interp = self
-            .blend
-            .old
-            .last()
-            .filter(|_| covering.is_none())
-            .map(|(old, _, _)| {
-                // A clip restarted over itself fades from the clip it first
-                // followed: the interpolation source keeps its name.
-                let from = match old.dominant() {
-                    name if name == p.anim.name && !self.stale_clip.is_empty() => self.stale_clip,
-                    name => name,
-                };
-                format!("{from}:{}", num(1. - kept))
-            })
-            .unwrap_or_default();
-        // A sub animation of another clip just ended: the main clip restarts
-        // blending in over `RESTART_BLEND_FRAMES` from the clip it followed.
-        if self.main_clip != p.anim.name {
-            self.stale_clip = self.main_clip;
-            self.main_clip = p.anim.name;
-        }
-        // The animation that played over the main clip: the model's sub
-        // animation, or the upper-body one of a catch on the move.
-        let sub_now = p.model_sub().map(|(name, _)| name).or(p.upper_catch());
-        // The main slot's own blend is not reported while a sub animation of
-        // another clip plays over it.
-        if sub_now.is_some_and(|name| name != p.anim.name) {
-            interp.clear();
-        }
-        if let Some(ended) = self.sub_clip
-            && sub_now.is_none()
-            && !p.upper_cleared()
-            && ended != p.anim.name
-            && !self.stale_clip.is_empty()
-        {
-            // The animator restarts the main clip (`endSubAnim`): the fade the
-            // clip had begun is replaced by the restart's own, from the pose the sub
-            // animation left on screen (named, as the game records it, after the clip
-            // before it).
-            interp.clear();
-            // (A partial animation's end left no sub animation on screen: the pose it fades
-            // from is the blend of the row before, partial included.)
-            let slot = self.stale_clip;
-            let frozen = shown_before
-                .map(|(shown, _)| Pose {
-                    slot,
-                    layers: vec![shown],
-                    partial: Vec::new(),
-                })
-                .or_else(|| self.shown_blend.clone().map(|flat| Pose { slot, ..flat }));
-            let share = 1. - 1. / RESTART_BLEND_FRAMES as f32;
-            let fade = FPS / RESTART_BLEND_FRAMES as f32;
-            self.blend.old = frozen
-                .map(|pose| vec![(pose, share, fade)])
-                .unwrap_or_default();
-            kept = self.blend.kept();
-            self.restart = Some((self.stale_clip, 0));
-        }
-        self.sub_clip = sub_now;
-        // What the blend shows in this row, for the fade that follows a partial animation.
-        self.shown_blend = blend_shows.then(|| {
-            let mut flat = Pose::default();
-            for (old, share, _) in &self.blend.old {
-                let mut held = old.clone();
-                held.scale(*share);
-                flat.merge(held);
-            }
-            let mut current = self.blend.current.clone();
-            current.scale(1. - kept);
-            flat.merge(current);
-            flat
-        });
-        if let Some((from, done)) = self.restart {
-            let done = done + 1;
-            self.restart = (done < RESTART_BLEND_FRAMES).then_some((from, done));
-            if interp.is_empty() && done < RESTART_BLEND_FRAMES {
-                interp = format!("{from}:{}", num(done as f32 / RESTART_BLEND_FRAMES as f32));
-            }
-        }
         // Clips that need the model's data (eye and hand parts) are not known here.
         let parts = p
             .sub_anim
@@ -997,6 +874,205 @@ impl Recorder {
         }
         self.head_cells(p, &mut cells, skeleton.as_ref());
         cells.finish()
+    }
+}
+
+/// The animation state behind the skeleton the windowed game draws: the same crossfade, sub
+/// animations and partial animation the trace records, stepped once per simulation step, so
+/// that the pose on screen is the pose of the traced `bones` column.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub struct SkeletonFeed {
+    recorder: Recorder,
+    step: Option<(Option<Anim>, f32)>,
+}
+impl Default for SkeletonFeed {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+impl SkeletonFeed {
+    pub fn new() -> Self {
+        Self {
+            recorder: Recorder::new(None, None, None),
+            step: None,
+        }
+    }
+
+    /// The player took a simulation step.
+    pub fn advance(&mut self, p: &Player) {
+        let PoseStep { covering, kept, .. } = self.recorder.advance_pose(p);
+        self.step = Some((covering, kept));
+    }
+
+    /// Every joint's matrix relative to its parent, as the animation leaves it `ahead` of the
+    /// last step (a share of a step); `None` before the first step or without the installed
+    /// model and its curves.
+    pub fn locals(&self, p: &Player, ahead: f32) -> Option<Matrices> {
+        let (covering, kept) = self.step?;
+        let playing = self.recorder.pose_layers(p, covering, kept, ahead);
+        SkeletonPose::installed()?.locals(&playing)
+    }
+}
+
+/// What one step of the animation state hands the rest of the row.
+struct PoseStep {
+    /// The dive's landing clip, when it covers the whole body.
+    covering: Option<Anim>,
+    /// Share of the pose still held by outgoing poses.
+    kept: f32,
+    /// The `interp` column: the fade from the clip before.
+    interp: String,
+}
+
+impl Recorder {
+    /// The animation blend and crossfade, advanced by one frame: the state behind the pose the
+    /// row shows. The windowed game steps its own recorder through this too, so that the
+    /// skeleton it poses is the traced one.
+    fn advance_pose(&mut self, p: &Player) -> PoseStep {
+        let dt = 1. / FPS;
+        // The dive's landing clip covers the whole body while it plays: the
+        // pose under it neither blends nor shows, and no upper overlay is meant.
+        let covering = p.sub_anim.filter(|s| s.name == "RollingStandUp");
+        // The sub animation on screen in this row (a model sub animation of another clip, or
+        // the cover), for the fade that follows its end.
+        let shown_now = covering
+            .map(|s| (s.name, s.frame, s.rate, true))
+            .or_else(|| {
+                p.model_sub()
+                    .filter(|(name, _)| *name != p.anim.name)
+                    .map(|(name, frame)| (name, frame, 1., false))
+            })
+            .map(|(name, frame, rate, covers)| {
+                (
+                    Layer {
+                        name,
+                        frame,
+                        rate,
+                        weight: 1.,
+                        covered: false,
+                        stage: 0,
+                    },
+                    covers,
+                )
+            });
+        let blend_shows = shown_now.is_none();
+        let shown_before = std::mem::replace(&mut self.shown_sub, shown_now);
+        if covering.is_none() {
+            self.blend
+                .update(p.anim.name, p.anim.serial, Pose::of(p), dt);
+            if p.interpolation_cleared() {
+                self.blend.old.clear();
+            }
+            // The cover just ended: the main clip fades in over the pose the cover left on
+            // screen, not over the pose held under it (`PlayerAnimator` restarts the main
+            // slot at `endSubAnim`; the recorded `interp` still names the main clip's
+            // predecessor). The fade keeps its label (`slot`) and share.
+            if let Some((shown, true)) = shown_before.clone() {
+                for (old, _, _) in &mut self.blend.old {
+                    let held: f32 = old.layers.iter().map(|l| l.weight).sum();
+                    old.layers = vec![Layer {
+                        weight: held,
+                        ..shown.clone()
+                    }];
+                }
+            }
+        }
+        let mut kept = self.blend.kept();
+        if let Some(sub) = p.sub_anim {
+            self.last_sub = sub.name;
+        } else if let Some((name, _)) = p.model_sub() {
+            self.last_sub = name;
+        }
+        self.overlay = if p.sub_anim.is_some() && covering.is_none() {
+            (self.overlay + dt / 0.05).min(1.)
+        } else {
+            (self.overlay - dt / 0.05).max(0.)
+        };
+        let mut interp = self
+            .blend
+            .old
+            .last()
+            .filter(|_| covering.is_none())
+            .map(|(old, _, _)| {
+                // A clip restarted over itself fades from the clip it first
+                // followed: the interpolation source keeps its name.
+                let from = match old.dominant() {
+                    name if name == p.anim.name && !self.stale_clip.is_empty() => self.stale_clip,
+                    name => name,
+                };
+                format!("{from}:{}", num(1. - kept))
+            })
+            .unwrap_or_default();
+        // A sub animation of another clip just ended: the main clip restarts
+        // blending in over `RESTART_BLEND_FRAMES` from the clip it followed.
+        if self.main_clip != p.anim.name {
+            self.stale_clip = self.main_clip;
+            self.main_clip = p.anim.name;
+        }
+        // The animation that played over the main clip: the model's sub
+        // animation, or the upper-body one of a catch on the move.
+        let sub_now = p.model_sub().map(|(name, _)| name).or(p.upper_catch());
+        // The main slot's own blend is not reported while a sub animation of
+        // another clip plays over it.
+        if sub_now.is_some_and(|name| name != p.anim.name) {
+            interp.clear();
+        }
+        if let Some(ended) = self.sub_clip
+            && sub_now.is_none()
+            && !p.upper_cleared()
+            && ended != p.anim.name
+            && !self.stale_clip.is_empty()
+        {
+            // The animator restarts the main clip (`endSubAnim`): the fade the
+            // clip had begun is replaced by the restart's own, from the pose the sub
+            // animation left on screen (named, as the game records it, after the clip
+            // before it).
+            interp.clear();
+            // (A partial animation's end left no sub animation on screen: the pose it fades
+            // from is the blend of the row before, partial included.)
+            let slot = self.stale_clip;
+            let frozen = shown_before
+                .map(|(shown, _)| Pose {
+                    slot,
+                    layers: vec![shown],
+                    partial: Vec::new(),
+                })
+                .or_else(|| self.shown_blend.clone().map(|flat| Pose { slot, ..flat }));
+            let share = 1. - 1. / RESTART_BLEND_FRAMES as f32;
+            let fade = FPS / RESTART_BLEND_FRAMES as f32;
+            self.blend.old = frozen
+                .map(|pose| vec![(pose, share, fade)])
+                .unwrap_or_default();
+            kept = self.blend.kept();
+            self.restart = Some((self.stale_clip, 0));
+        }
+        self.sub_clip = sub_now;
+        // What the blend shows in this row, for the fade that follows a partial animation.
+        self.shown_blend = blend_shows.then(|| {
+            let mut flat = Pose::default();
+            for (old, share, _) in &self.blend.old {
+                let mut held = old.clone();
+                held.scale(*share);
+                flat.merge(held);
+            }
+            let mut current = self.blend.current.clone();
+            current.scale(1. - kept);
+            flat.merge(current);
+            flat
+        });
+        if let Some((from, done)) = self.restart {
+            let done = done + 1;
+            self.restart = (done < RESTART_BLEND_FRAMES).then_some((from, done));
+            if interp.is_empty() && done < RESTART_BLEND_FRAMES {
+                interp = format!("{from}:{}", num(done as f32 / RESTART_BLEND_FRAMES as f32));
+            }
+        }
+        PoseStep {
+            covering,
+            kept,
+            interp,
+        }
     }
 }
 
