@@ -225,6 +225,10 @@ pub struct Orders {
     /// camera yaw: climbing uses screen directions rather than world ones.
     pub stick: Vec2,
     pub camera_yaw: f32,
+    /// The camera's view matrix rows (side, up, back) when the source knows them exactly: a
+    /// replay of a recorded run with a locked camera. The stick is then laid on the world by
+    /// `calcMoveInput`'s own arithmetic.
+    pub view: Option<crate::movement::move_input::ViewRows>,
     pub look: Vec2,
     pub jump: bool,
     pub jump_held: bool,

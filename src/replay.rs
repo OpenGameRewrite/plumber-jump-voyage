@@ -17,7 +17,10 @@ use crate::{
     effect_data::Library,
     geometry::TriangleMesh,
     input::{ACTIONS, Orders, Settings, bound, rotate},
-    movement::{Course, Player, Solid},
+    movement::{
+        Course, Player, Solid,
+        move_input::{ViewRows, locked_view},
+    },
     sound_table::Table,
     trace::{COLUMNS, FrameInfo, Recorder, TraceFile},
 };
@@ -191,6 +194,11 @@ pub struct CameraTrack {
     /// up or down shortens it), per frame.
     gain: Vec<f32>,
     views: Vec<View>,
+    /// The exact view matrix the stick is laid on the world with, per frame: the recorded
+    /// `bits_cam_view` where the trace has it, else the locked camera's matrix (the probe pins
+    /// the view to the script's `camera` yaw, `move_input::locked_view`).
+    view_rows: Vec<Option<ViewRows>>,
+    locked_rows: Option<ViewRows>,
 }
 /// The real game's camera for one frame, in the rewrite's world (metres,
 /// start at the origin; the game's axes and Bevy's are both right-handed
@@ -272,9 +280,26 @@ fn aim_correction(game: &TraceFile, row: usize, yaw_deg: f32) -> (f32, f32) {
         - 180.;
     (degrees, gain)
 }
+/// The 3x4 view matrix the probe logged in bit patterns (`bits_cam_view`), as its three rows.
+fn view_rows_of(game: &TraceFile, row: usize) -> Option<ViewRows> {
+    let words: Vec<f32> = game
+        .cell(row, "bits_cam_view")?
+        .split('/')
+        .map(|w| {
+            u32::from_str_radix(w.trim_start_matches("0x"), 16)
+                .ok()
+                .map(f32::from_bits)
+        })
+        .collect::<Option<_>>()?;
+    let [a, b, c, _, d, e, f, _, g, h, i, _] = words[..] else {
+        return None;
+    };
+    Some([Vec3::new(a, b, c), Vec3::new(d, e, f), Vec3::new(g, h, i)])
+}
 impl CameraTrack {
     pub fn new(script: &Script, game: Option<&TraceFile>) -> Result<Self, String> {
         let fixed = script.camera_yaw_deg.unwrap_or(script.start_yaw_deg);
+        let locked_rows = script.camera_yaw_deg.map(locked_view);
         let Some(game) = game else {
             return Ok(Self {
                 fixed,
@@ -282,8 +307,13 @@ impl CameraTrack {
                 aim: Vec::new(),
                 gain: Vec::new(),
                 views: Vec::new(),
+                view_rows: Vec::new(),
+                locked_rows,
             });
         };
+        let view_rows = (0..game.rows.len())
+            .map(|row| view_rows_of(game, row))
+            .collect();
         // Like the yaw: rows without a camera keep the last one, earlier rows
         // take the first. A trace without camera columns gives no views.
         let recorded: Vec<Option<View>> = (0..game.rows.len())
@@ -331,7 +361,19 @@ impl CameraTrack {
             aim,
             gain,
             views,
+            view_rows,
+            locked_rows,
         })
+    }
+    /// The view matrix of `frame` for the stick (the last recorded one past the end of the
+    /// trace), when the run records it or its camera is locked.
+    pub fn view_rows(&self, frame: usize) -> Option<ViewRows> {
+        self.view_rows
+            .get(frame)
+            .or(self.view_rows.last())
+            .copied()
+            .flatten()
+            .or(self.locked_rows)
     }
     /// The game's camera at `frame` (the last one past the end of the trace),
     /// when `--camera` supplied a trace that records it.
@@ -444,6 +486,8 @@ pub struct Options<'a> {
 /// Result of a replay: the CSV text and the sound table's presence.
 pub struct Trace {
     pub rows: Vec<Vec<String>>,
+    /// `Recorder::bits` of the whole run, settle frames first (numbered -10..-1).
+    pub bits: Vec<String>,
 }
 impl Trace {
     pub fn to_csv(&self) -> String {
@@ -490,7 +534,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     // Teleported and idle; the recorder watches so its animation state is
     // warm when frame 0 starts, but nothing is written.
     for i in 0..SETTLE_FRAMES {
-        let (orders, mut info) = orders_for(
+        let (mut orders, mut info) = orders_for(
             &settle,
             &[],
             camera.yaw_deg(0),
@@ -498,8 +542,10 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             camera.aim_gain(0),
             &bindings,
         );
+        orders.view = camera.view_rows(0);
         player.step(&orders, &course);
         info.game_frame = i as i64;
+        info.frame = i as i64 - SETTLE_FRAMES as i64;
         recorder.record(&info, &mut player);
     }
     recorder.start_rows();
@@ -535,7 +581,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 } else {
                     &[]
                 };
-                let (orders, _) = orders_for(
+                let (mut orders, _) = orders_for(
                     spans[last],
                     before,
                     camera.yaw_deg(last),
@@ -543,13 +589,14 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     camera.aim_gain(last),
                     &bindings,
                 );
+                orders.view = camera.view_rows(last);
                 let spin = player.spin_input();
                 player.step(&orders, &course);
                 player.set_spin_input(spin);
                 player.events.clear();
             }
         }
-        let (orders, mut info) = orders_for(
+        let (mut orders, mut info) = orders_for(
             span,
             &previous,
             camera.yaw_deg(frame),
@@ -557,6 +604,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             camera.aim_gain(frame),
             &bindings,
         );
+        orders.view = camera.view_rows(frame);
         // The game's camera (when the trace records it) is what its sound control hears.
         player.set_camera_position(camera.view(frame).map(|view| view.position * 100.));
         player.step(&orders, &course);
@@ -565,7 +613,10 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         rows.push(recorder.record(&info, &mut player));
         previous = span.buttons.clone();
     }
-    Ok(Trace { rows })
+    Ok(Trace {
+        rows,
+        bits: std::mem::take(&mut recorder.bits),
+    })
 }
 
 const USAGE: &str = "usage: plumber-jump-voyage --replay <file.input> --trace <out.csv> \
@@ -734,6 +785,18 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         std::fs::write(trace_path, trace.to_csv()).map_err(|e| format!("{trace_path}: {e}"))?;
+        if args.iter().any(|a| a == "--bits") {
+            let name = format!("{trace_path}.bits");
+            std::fs::write(
+                &name,
+                trace.bits.join(
+                    "
+",
+                ) + "
+",
+            )
+            .map_err(|e| format!("{name}: {e}"))?;
+        }
         println!(
             "{} frames (start height {:.1} cm) -> {trace_path}",
             trace.rows.len(),

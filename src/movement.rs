@@ -270,6 +270,8 @@ mod ledge;
 pub(crate) mod look_at;
 #[path = "movement/look_joint.rs"]
 pub(crate) mod look_joint;
+#[path = "movement/move_input.rs"]
+pub(crate) mod move_input;
 #[path = "movement/plane.rs"]
 pub mod plane;
 #[path = "movement/pole.rs"]
@@ -1163,6 +1165,9 @@ pub struct Player {
     forward: Vec3,
     /// The wall the stick is bent along after a contact.
     wall_along: wall_along::WallAlong,
+    /// The camera's view rows when the orders carry them: the stick is then laid on the world as
+    /// `PlayerInput::calcMoveInput` does (`move_input.rs`).
+    view: Option<move_input::ViewRows>,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1322,6 +1327,7 @@ impl Default for Player {
             pose_tilt: None,
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
+            view: None,
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -2638,6 +2644,7 @@ impl Player {
         self.tilt = stick.length();
         self.stick = stick.normalize_or_zero();
         self.raw_stick = Vec2::new(o.stick.x, -o.stick.y);
+        self.view = o.view;
         self.wall_along.update(
             self.touched
                 .wall_contact
@@ -2854,6 +2861,11 @@ impl Player {
     /// (`PlayerInput::calcMoveInput`): the camera's forward axis is tipped
     /// along the slope as the camera sees it, the side axis is across that.
     fn plane_stick(&self, up: Vec3) -> Vec3 {
+        if let Some(view) = &self.view {
+            return self
+                .wall_along
+                .snap(move_input::move_input(self.raw_stick, view, up), up);
+        }
         let stick = self.ground_stick();
         let input = if up == Vec3::Y {
             stick
@@ -4967,6 +4979,7 @@ pub fn self_check() {
     console_libm::self_check();
     turn_control::self_check();
     ground_move::self_check();
+    move_input::self_check();
     wall_along::self_check();
     wall_slide::self_check();
     pose_math::self_check();

@@ -303,6 +303,10 @@ pub struct Recorder {
     /// column from the clip of the row before, so the first row has none, whatever blend the
     /// animator is in (the raw log shows the settle frames' blend running into it).
     first_row: bool,
+    /// The velocity, front, up and quaternion of every recorded frame as f32 bit patterns
+    /// (the format of the probe's `bits_*` columns), settle frames included: one line per
+    /// frame, `frame,vel,front,up,quat`. A debugging aid (`--bits`), not a compared column.
+    pub bits: Vec<String>,
 }
 impl Recorder {
     /// `floor` is the material of the floor the run stands on (the recorded
@@ -326,6 +330,7 @@ impl Recorder {
             shown_sub: None,
             shown_blend: None,
             first_row: false,
+            bits: Vec::new(),
             overlay: 0.,
             bursts: Vec::new(),
         }
@@ -763,6 +768,21 @@ impl Recorder {
             }
             None => (Vec3::Y, p.facing),
         };
+        let words = |values: &[f32]| {
+            values
+                .iter()
+                .map(|v| format!("0x{:08x}", v.to_bits()))
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        self.bits.push(format!(
+            "{},{},{},{},{}",
+            info.frame,
+            words(&[v.x, v.y, v.z]),
+            words(&[pose_front.x, pose_front.y, pose_front.z]),
+            words(&[pose_up.x, pose_up.y, pose_up.z]),
+            words(&[q.x, q.y, q.z, q.w])
+        ));
         let mut cells = Cells::default();
         cells.int(info.frame);
         for axis in [p.pos.x, p.pos.y, p.pos.z] {

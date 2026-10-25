@@ -136,6 +136,9 @@ PROBE_ONLY = [
     "game_frame", "tick", "cam_real_yaw", "cam_real_pitch", "late_sample", "other_events",
     "anim_slots", "floor_y", "cap_step", "cap_hidden", "contacts", "hit_hosts",
     "fx_sets", "fx_kills",
+    # Bit-exact copies of the state and of every calcMoveInput call (the rewrite writes no equivalents;
+    # the replay reads bits_cam_view, the oracle tests read the rest).
+    "bits_stick", "bits_move", "bits_cam_view", "bits_pos", "bits_vel", "bits_front", "bits_up", "bits_quat",
 ]
 # Position columns: a contact changes them for good, so they are left out after it.
 DRIFT = {"px", "py", "pz", "cap_px", "cap_py", "cap_pz"}

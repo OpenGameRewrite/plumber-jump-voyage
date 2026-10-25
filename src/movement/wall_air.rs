@@ -504,9 +504,14 @@ impl Player {
     /// The slide's movement: the press into the wall, gravity along it and the speed along the
     /// wall the stick asks for.
     fn slide_along_wall(&mut self) {
-        // (The game's record has the stick unbent here: the wall-along weight is not at work in
-        // the slide.)
-        let stick = self.push();
+        // The slide asks `calcMoveInput` for the stick on the level (caller 0x4766b4, up = the
+        // negated gravity); with the camera's view known that is the game's own arithmetic,
+        // the wall-along bend included (a weight of 1e-4 at the start of the slide).
+        let stick = if self.view.is_some() {
+            self.plane_stick(super::pose_math::NEGATED_GRAVITY)
+        } else {
+            self.push()
+        };
         self.v = self
             .wall_air
             .slide

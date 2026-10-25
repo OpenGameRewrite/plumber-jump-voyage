@@ -11,6 +11,7 @@ plumber-jump-voyage --replay run.input --trace rewrite.csv --geometry-dir <expor
 plumber-jump-voyage --replay run.input --shots runs/name   # rendered captures
 plumber-jump-voyage --replay --states        # the original state names used
 py tools/compare-traces.py game.csv rewrite.csv --out diff.md [--lockstep]
+plumber-jump-voyage --replay run.input --trace rewrite.csv --bits   # also rewrite.csv.bits
 ```
 
 ## Input script
@@ -43,7 +44,17 @@ follows that trace's `cam_yaw` column, and the stick's world direction is turned
 on top of it to the one the trace logged (`move_input`: the game turns the stick
 by the line from its camera to the player, which swings while the player moves
 although the locked yaw does not), so the world-space input matches the real
-run. The camera's position (`cam_px/py/pz`) goes to the player too: its sound
+run. Where the run
+has a view matrix the stick is laid on the world as the executable does
+(`PlayerInput::calcMoveInput`, `src/movement/move_input.rs`, checked bit for bit with
+`PJV_MOVE_INPUT_CASES=<local cases file> cargo test move_input`): the probe's `bits_cam_view` column
+when the trace has it, else the matrix the probe pins a locked camera to (the script's `camera` line). The
+wall slide, the run and the swim read that value (with the wall bend of `wall_along.rs`); the other states
+still take the world direction above. `--bits` also writes `<trace>.bits`, one line per frame
+(the ten idle frames as -10..-1, then the rows): `frame,vel,front,up,quat` as the f32 bit patterns of the
+probe's `bits_vel`, `bits_front`, `bits_up`, `bits_quat`, for an exact comparison with a full-precision
+recording (the `bits_*` columns of `game.csv` and the idle frames of `game.preroll.csv`; `compare-traces.py`
+leaves those columns out). The camera's position (`cam_px/py/pz`) goes to the player too: its sound
 control hears the camera dip into the water (`CamWaterIn`, `CamWaterAmb`,
 `CamWaterOut`). No window, clock or random source is involved, so a run is
 byte-for-byte repeatable.
