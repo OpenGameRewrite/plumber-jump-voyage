@@ -125,8 +125,12 @@ pub fn collision_cell(p: &Player) -> String {
         items.push(format!("gn={}", vector(n)));
         if let Some(codes) = &p.touched.floor {
             items.push(format!("gmat={}", codes.material));
-            items.push(format!("gcode={}", floor_code_label(&codes.floor)));
-            items.push(format!("gcodeidx={}", codes.floor_index));
+            let label = floor_code_label(&codes.floor);
+            items.push(format!("gcode={label}"));
+            items.push(format!(
+                "gcodeidx={}",
+                floor_label_index(label, &codes.floor, codes.floor_index)
+            ));
         }
     }
     if p.wall != bevy::prelude::Vec3::ZERO {
@@ -140,8 +144,9 @@ pub fn collision_cell(p: &Player) -> String {
     }
     items.join(";")
 }
-/// The floor codes the game's probe tests for by name; every other floor code
-/// shows as `Ground` there.
+/// The floor codes the game's probe tests for by name (`Pole` stands for the whole pole family,
+/// `rs::isCollisionCodePoleClimbGround`: `Pole`, `Pole10`, `Pole20`, `Pole30Plus`); every other
+/// floor code shows as `Ground` there.
 const NAMED_FLOOR_CODES: [&str; 11] = [
     "Poison",
     "Needle",
@@ -156,10 +161,26 @@ const NAMED_FLOOR_CODES: [&str; 11] = [
     "Pole",
 ];
 fn floor_code_label(code: &str) -> &str {
-    if NAMED_FLOOR_CODES.contains(&code) {
+    if matches!(code, "Pole10" | "Pole20" | "Pole30Plus") {
+        "Pole"
+    } else if NAMED_FLOOR_CODES.contains(&code) {
         code
     } else {
         "Ground"
+    }
+}
+/// The number the trace tools give a probe label (`gcodeidx` is the index of the printed name in
+/// the game's code list, not of the code the triangle really has): `code_index` is the real code's.
+fn floor_label_index(label: &str, code: &str, code_index: u16) -> u16 {
+    // `Pole` and `Ground` in `SystemData/CollisionAttributeList.byml`'s `FloorCode`.
+    const POLE_INDEX: u16 = 15;
+    const GROUND_INDEX: u16 = 8;
+    if label == code {
+        code_index
+    } else if label == "Pole" {
+        POLE_INDEX
+    } else {
+        GROUND_INDEX
     }
 }
 /// The rewrite's own movement events, in the `triggers` format.

@@ -5,6 +5,7 @@ pub(super) fn run() {
     jump_combo_counters();
     reading_back();
     contact_and_triggers();
+    the_probe_names_the_pole_family_and_numbers_its_label();
 }
 
 fn player() -> Player {
@@ -80,5 +81,27 @@ fn contact_and_triggers() {
     assert_eq!(
         triggers_cell(&["Jump".to_string(), "Land".to_string()]),
         "fx=Jump+Land"
+    );
+}
+
+/// The probe prints `Pole` for every pole code (`isCollisionCodePoleClimbGround`) and the trace
+/// tools number the printed name: the top cap of a stage's pole is `Pole10`, index 16, and shows
+/// as `Pole`, 15 (pole-top, row 219); a code without a test shows as `Ground`, 8.
+#[cfg_attr(test, test)]
+fn the_probe_names_the_pole_family_and_numbers_its_label() {
+    for code in ["Pole", "Pole10", "Pole20", "Pole30Plus"] {
+        let label = floor_code_label(code);
+        assert_eq!(label, "Pole");
+        assert_eq!(
+            floor_label_index(label, code, 16),
+            if code == "Pole" { 16 } else { 15 }
+        );
+    }
+    let label = floor_code_label("Slip");
+    assert_eq!((label, floor_label_index(label, "Slip", 40)), ("Ground", 8));
+    let label = floor_code_label("Slide");
+    assert_eq!(
+        (label, floor_label_index(label, "Slide", 28)),
+        ("Slide", 28)
     );
 }

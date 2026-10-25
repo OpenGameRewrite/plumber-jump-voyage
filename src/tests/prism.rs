@@ -7,6 +7,7 @@ pub(super) fn run() {
     an_arrow_crosses_the_prism_inside_its_edges_only();
     the_corners_of_a_prism_are_where_the_edges_meet();
     the_exes_prism_tests_agree_bit_for_bit();
+    the_exes_face_data_agrees_bit_for_bit();
 }
 
 /// A floor triangle in the plane y = 0 with corners (0,0,0), (100,0,0) and (0,0,-100), face up.
@@ -153,4 +154,46 @@ fn the_exes_prism_tests_agree_bit_for_bit() {
         checked += 1;
     }
     eprintln!("prism cases checked against the executable: {checked}");
+}
+
+/// The world normals of a prism under its part's matrix (`Triangle::fillData`) from the
+/// executable's own function in a local interpreter (the fidelity folder's `fill_oracle.py`, fed
+/// with the prisms and part matrices of a stage export): `PJV_FILL_CASES` names the file.
+#[cfg_attr(test, test)]
+fn the_exes_face_data_agrees_bit_for_bit() {
+    let Some(path) = std::env::var_os("PJV_FILL_CASES") else {
+        return;
+    };
+    let text = std::fs::read_to_string(path).expect("the cases file");
+    let cases: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let f3 = |v: &serde_json::Value| -> [f32; 3] {
+        let a = v.as_array().expect("array");
+        [0, 1, 2].map(|i| a[i].as_f64().expect("number") as f32)
+    };
+    let mut checked = 0;
+    for case in cases.as_array().expect("cases") {
+        let row = case["prism"].as_array().expect("prism");
+        let n = |i: usize| row[i].as_f64().expect("number") as f32;
+        let prism = Prism {
+            length: n(0),
+            origin: [n(1), n(2), n(3)],
+            face: [n(4), n(5), n(6)],
+            edges: [
+                [n(7), n(8), n(9)],
+                [n(10), n(11), n(12)],
+                [n(13), n(14), n(15)],
+            ],
+            thickness: case["thickness"].as_f64().unwrap() as f32,
+        };
+        let m = case["matrix"].as_array().expect("matrix");
+        let base: Matrix34 = std::array::from_fn(|i| m[i].as_f64().expect("number") as f32);
+        let frame = PartFrame::new(base).expect("a rotation has an inverse");
+        let ours = prism.world_triangle(&frame);
+        assert_eq!(ours.normal, f3(&case["face"]), "face normal of {case}");
+        for (k, expected) in case["edges"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(ours.edges[k], f3(expected), "edge normal {k} of {case}");
+        }
+        checked += 1;
+    }
+    eprintln!("face data cases checked against the executable: {checked}");
 }
