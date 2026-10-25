@@ -4,6 +4,7 @@ pub(super) fn run() {
     the_standing_head_is_over_the_shoulders_in_the_installed_model();
     the_blend_ignores_idle_layers_and_the_scale_of_the_weights();
     the_joint_order_puts_every_parent_first();
+    a_partial_animation_replaces_the_upper_body_and_leaves_the_rest();
     a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm();
     a_parents_scale_moves_the_offset_but_not_the_frame_and_roots_inherit();
 }
@@ -62,6 +63,73 @@ fn the_blend_ignores_idle_layers_and_the_scale_of_the_weights() {
     let halves = head_of(model, &[layer("Wait", 10., 0.25), layer("Dash", 3., 0.25)]).unwrap();
     let whole = head_of(model, &[layer("Wait", 10., 1.), layer("Dash", 3., 1.)]).unwrap();
     for (a, b) in halves.iter().flatten().zip(whole.iter().flatten()) {
+        assert!((a - b).abs() < 1e-4);
+    }
+}
+
+/// `partial0` covers `Spine1` and everything below it: there the partial clip stands alone
+/// whatever the main clips weigh, and the joints outside keep the main blend.
+#[cfg_attr(test, test)]
+fn a_partial_animation_replaces_the_upper_body_and_leaves_the_rest() {
+    let Some(model) = model() else {
+        return;
+    };
+    let region = |clip, frame, weight, region| PoseLayer {
+        region,
+        ..layer(clip, frame, weight)
+    };
+    let main = [("Wait", 10.), ("Dash", 3.)];
+    let main_alone = model
+        .locals(&[layer("Wait", 10., 0.6), layer("Dash", 3., 0.4)])
+        .expect("the clips are in the model");
+    let partial_alone = model
+        .locals(&[layer("CatchCapParts", 5., 1.)])
+        .expect("the partial clip is in the model");
+    // The partial speaks for the whole blend, weighed as the main clips together.
+    let mut layers: Vec<PoseLayer> = main
+        .iter()
+        .zip([0.6, 0.4])
+        .map(|((clip, frame), weight)| region(clip, *frame, weight, Region::Lower))
+        .collect();
+    layers.push(region("CatchCapParts", 5., 1., Region::Upper));
+    let covered = model.locals(&layers).unwrap();
+    let mut spine_below = 0;
+    for joint in Joint::ALL {
+        let (expected, from) = if joint.in_partial_group() {
+            spine_below += 1;
+            (&partial_alone, "partial")
+        } else {
+            (&main_alone, "main")
+        };
+        for (a, b) in covered[joint as usize]
+            .iter()
+            .flatten()
+            .zip(expected[joint as usize].iter().flatten())
+        {
+            assert!(
+                (a - b).abs() < 1e-4,
+                "{joint:?} should follow the {from} clip"
+            );
+        }
+    }
+    // Spine1, Spine2, the head, both shoulders and both arms down to the hands.
+    assert_eq!(spine_below, 15);
+    assert!(!Joint::Hip.in_partial_group() && !Joint::LegL1.in_partial_group());
+    // A pose faded out as a whole keeps its split: the partial's share is the pose's.
+    let faded: Vec<PoseLayer> = layers
+        .iter()
+        .map(|l| PoseLayer {
+            weight: l.weight * 0.25,
+            ..*l
+        })
+        .collect();
+    let after_fade = model.locals(&faded).unwrap();
+    for (a, b) in after_fade
+        .iter()
+        .flatten()
+        .flatten()
+        .zip(covered.iter().flatten().flatten())
+    {
         assert!((a - b).abs() < 1e-4);
     }
 }
