@@ -113,6 +113,25 @@ vertical-axis branches, so the sign of `qy`/`qw` follows the rounding noise of t
 (the floor normals carry the game's own noise, and `slerpTo` does not renormalise). The
 standing and running states therefore update the pose every step, also on a level floor.
 
+The console's single precision library is not correctly rounded: the image links a musl
+derivative (`sinf` and `cosf` through double precision kernels, `acosf`, `asinf`, `atanf` and
+`atan2f` as single precision polynomials), and about one `acosf` in ten and one `atan2f` in
+four differ from the correctly rounded value in the last bit. `src/movement/console_libm.rs`
+ports those six functions and every routine that mirrors the game's own calls uses them
+(`PJV_LIBM_CASES=<local cases file> cargo test console_libm`). On top of them three controls
+are ported operation for operation and checked against the executable's own routines over
+random sequences of frames, every field they write compared after every frame: the turn
+controller (`PlayerActionTurnControl::update`, `turn_control.rs`, `PJV_TURN_CASES`), the
+ground move control (`PlayerActionGroundMoveControl::updateNormalMove` with its helpers,
+`ground_move.rs`, `PJV_MOVE_CASES`) and the stick's bend along a wall (`PlayerInput::
+updateWallAlong`, `snapWallAlongInput`, `wall_along.rs`, `PJV_WALLALONG_CASES`). The velocity
+the ground control sets is kept whole, the pull along the normal included: the next step
+rotates that vector onto the new floor (`alongVectorNormalH`, which strips the part along the
+old normal), and that rounding is the noise of the game's speed (14.000001, 13.999999) which
+decides, among others, the run's turn rate (`run-turn-right`). What stays out of reach is the
+stick itself: the probe logs the world direction it got at six decimals and the camera's matrix
+not at all, so a run that depends on the last bit of the stick drifts by a few 1e-6 a frame.
+
 Ported on this collision: falling off a ledge (`PlayerJudgeSpeedCheckFall`), the
 long-fall landing (`PlayerJudgeLongFall`, `Wait/LandStiffen`), the wall slide
 and the wall jump (`PlayerJudgeWallKeep`, `PlayerStateNormalWallSlide`,
