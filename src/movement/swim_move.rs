@@ -265,45 +265,24 @@ impl Player {
         self.set_pose(pose);
     }
 
-    /// `rs::scaleVelocityInertiaWallHit`: swimming against a wall squarely (more than 120
-    /// degrees from the wall's normal) shortens the horizontal speed to `ratio` of itself, but
-    /// not under `min_speed` (or the speed itself, when that is lower) and not over `max_speed`.
-    /// (Walls that move, `rs::calcMovePowerWall`, are not ported.)
+    /// `rs::scaleVelocityInertiaWallHit` against the wall the collider touched. (A wall whose
+    /// floor code is `GrabCeil` is skipped, `rs::isCollidedNoScaleVelocityWall`; walls that
+    /// move, `rs::calcMovePowerWall`, are not ported.)
     fn scale_velocity_inertia_wall_hit(&mut self, ratio: f32, min_speed: f32, max_speed: f32) {
         let Some(wall) = self.collider.wall.as_ref() else {
             return;
         };
-        let wall_normal = lib::verticalize_vec(Vec3::NEG_Y, wall.normal);
-        let (wall_normal, has_normal) = pose_math::try_normalize_or_zero(wall_normal);
-        if !has_normal {
+        if self
+            .touched
+            .wall
+            .as_ref()
+            .is_some_and(|codes| codes.floor == "GrabCeil")
+        {
             return;
         }
-        let (vertical, mut horizontal) = lib::separate_parallel_vertical(Vec3::NEG_Y, self.v);
-        let (heading, _) = pose_math::try_normalize_or_zero(horizontal);
-        if pose_math::dot(heading, wall_normal) < -0.5 {
-            let length = lib::length(horizontal);
-            let mut speed = if length < min_speed {
-                length
-            } else {
-                min_speed
-            };
-            let scaled_length = length * ratio;
-            if scaled_length >= speed {
-                speed = scaled_length;
-                if scaled_length > max_speed {
-                    speed = max_speed;
-                }
-            }
-            let length = lib::length(horizontal);
-            if length > 0. {
-                horizontal = scaled(horizontal, speed / length);
-            }
+        if let Some(velocity) = velocity_at_wall(self.v, wall.normal, ratio, min_speed, max_speed) {
+            self.v = velocity;
         }
-        self.v = Vec3::new(
-            horizontal.x + vertical.x,
-            horizontal.y + vertical.y,
-            horizontal.z + vertical.z,
-        );
     }
 
     /// The vertical speed under the surface (the helper at 0x48b154): the speed along
@@ -377,4 +356,56 @@ impl Player {
             horizontal.z + vertical.z,
         );
     }
+}
+
+/// What `rs::scaleVelocityInertiaWallHit` sets the velocity to for a static wall with the given
+/// normal: swimming against the wall squarely (more than 120 degrees from its normal) shortens
+/// the horizontal speed to `ratio` of itself, but not under `min_speed` (or the speed itself,
+/// when that is lower) and not over `max_speed`. `None` when the wall has no horizontal
+/// normal (the executable then leaves the velocity alone).
+pub(super) fn velocity_at_wall(
+    velocity: Vec3,
+    wall_normal: Vec3,
+    ratio: f32,
+    min_speed: f32,
+    max_speed: f32,
+) -> Option<Vec3> {
+    let wall_normal = lib::verticalize_vec(Vec3::NEG_Y, wall_normal);
+    let (wall_normal, has_normal) = pose_math::try_normalize_or_zero(wall_normal);
+    if !has_normal {
+        return None;
+    }
+    let (vertical, mut horizontal) = lib::separate_parallel_vertical(Vec3::NEG_Y, velocity);
+    let (heading, _) = pose_math::try_normalize_or_zero(horizontal);
+    if pose_math::dot(heading, wall_normal) < -0.5 {
+        let length = lib::length(horizontal);
+        let mut speed = if length < min_speed {
+            length
+        } else {
+            min_speed
+        };
+        let scaled_length = length * ratio;
+        if scaled_length >= speed {
+            speed = scaled_length;
+            if scaled_length > max_speed {
+                speed = max_speed;
+            }
+        }
+        let length = lib::length(horizontal);
+        if length > 0. {
+            horizontal = scaled(horizontal, speed / length);
+        }
+    }
+    Some(Vec3::new(
+        horizontal.x + vertical.x,
+        horizontal.y + vertical.y,
+        horizontal.z + vertical.z,
+    ))
+}
+
+#[path = "../tests/swim_wall.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

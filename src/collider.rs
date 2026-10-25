@@ -44,6 +44,7 @@ use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
 use crate::movement::plane::{normalize, try_normalize_or_zero};
 use crate::prism::{PartFrame, Point, rotate_vector, transform_point};
 use bevy::prelude::{Quat, Vec3};
+use result::{dot, near_zero, near_zero_vec, squared_length};
 
 /// `PlayerCollider::_1b0`, the slope limit in degrees: a face whose normal is
 /// within 70 degrees of straight up is floor, within 70 of straight down is
@@ -72,6 +73,8 @@ const LONGEST_STEP: f32 = 35.;
 const CARRY_STEP_SCALE: f32 = 0.99;
 /// `al::isNearZero(vec, 0.001)`: a vector shorter than this is no direction.
 const NEAR_ZERO: f32 = 0.001;
+/// A push shorter than this has no direction (`moveCollide`'s `isNearZero(fix, 1e-7)`).
+const MIN_PUSH: f32 = 1e-7;
 /// `rs::resetCollisionExpandCheck`: the bounding radius the shapes start growing from after a
 /// reset (the literal 20 in the function).
 const EXPAND_START_RADIUS: f32 = 20.;
@@ -385,6 +388,16 @@ impl Pose {
             (local.x * m[3] + local.y * m[4]) + local.z * m[5],
             (local.x * m[6] + local.y * m[7]) + local.z * m[8],
         )
+    }
+    /// A sphere in the stage's coordinates (`CollisionShapeInfoSphere::calcWorldShapeInfo`):
+    /// the scale shrinks the offset from the feet and the radius alike.
+    fn world_sphere(&self, center: Vec3, radius: f32, scale: f32) -> (Vec3, f32) {
+        (self.world_point(center * scale), radius * scale)
+    }
+    /// An arrow's start and vector in the stage's coordinates
+    /// (`CollisionShapeInfoArrow::calcWorldShapeInfo`).
+    fn world_arrow(&self, start: Vec3, vector: Vec3, scale: f32) -> (Vec3, Vec3) {
+        (self.world_point(start * scale), self.rotate(vector * scale))
     }
     /// A point of the body in the stage's coordinates: the rotated offset added to the
     /// position, the last step of `calcWorldShapeInfo`.
@@ -895,12 +908,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
     for (index, shape) in keeper.shapes.iter().enumerate() {
         match shape {
             Shape::Sphere { center, radius, .. } => {
-                // The scale shrinks the offset from the feet and the radius alike
-                // (`calcWorldShapeInfo`).
-                let center = *center * scale;
-                let radius = *radius * scale;
-                // The centre as the game sums it: the position plus the rotated offset.
-                let world = pose.world_point(center);
+                let (world, radius) = pose.world_sphere(*center, *radius, scale);
                 let world_rel = mesh.relative_vec(world);
                 for i in mesh.candidates(Aabb::around(world_rel, radius)) {
                     let t = &mesh.triangles[i as usize];
@@ -927,8 +935,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
                 // flush on the floor keeps the exact height 40 above it; the
                 // depth then falls a hair under the margin and the arrow only
                 // supports.
-                let from = pose.world_point(*start * scale);
-                let vec = pose.rotate(*vector * scale);
+                let (from, vec) = pose.world_arrow(*start, *vector, scale);
                 let tip = from + vec;
                 let area = Aabb {
                     min: mesh.relative_vec(from.min(tip)),
@@ -1314,15 +1321,26 @@ impl PlayerCollider {
             carried,
         );
         self.last_radius = radius_now;
-        // `onCutCollideAffectDir`: along the cut direction the move keeps what
-        // it asked for, whatever the contacts pushed.
-        if self.cut_direction != Vec3::ZERO {
-            let moved = at - pose.pos;
+        // Where the sweeps left the body, as the offset from the actor's position (the machine
+        // code keeps `actor + (last - actor)`). `onCutCollideAffectDir`: along the cut
+        // direction the move keeps what it asked for, whatever the contacts pushed.
+        let last = at;
+        let mut moved = last - pose.pos;
+        if !near_zero_vec(self.cut_direction, NEAR_ZERO) {
             let cut = self.cut_direction;
-            at = pose.pos + across(moved, cut) + cut * velocity.dot(cut);
+            moved = across(moved, cut);
+            let kept = dot(cut, velocity);
+            moved = Vec3::new(
+                moved.x + cut.x * kept,
+                moved.y + cut.y * kept,
+                moved.z + cut.z * kept,
+            );
         }
-        let fix = at - (pose.pos + velocity);
-        self.fix_reaction = fix;
+        at = pose.pos + moved;
+        // `getCollidedFixReaction`: how far the sweeps moved the body from where the actor's
+        // position and the move would have put it, measured from where the collider stood
+        // (the offsets are small, so no rounding at the stage's magnitude enters).
+        self.fix_reaction = (last - begin) - ((pose.pos - begin) + velocity);
         // The contacts' points go back to the replay's frame for the caller.
         for contact in [&mut self.floor, &mut self.wall, &mut self.ceiling]
             .into_iter()
@@ -1375,24 +1393,35 @@ impl PlayerCollider {
             if sweep.current >= 1. {
                 return true;
             }
-            let length = fix.length();
+            // The push's direction (the reciprocal of its length multiplied in), if it has one.
             let mut direction = Vec3::ZERO;
-            if length > 1e-7 {
-                direction = fix / length;
-                let along = direction.dot(remain);
+            let length = squared_length(fix).sqrt();
+            if !near_zero_vec(fix, MIN_PUSH) && length > 0. {
+                let inverse = 1. / length;
+                direction = Vec3::new(inverse * fix.x, inverse * fix.y, inverse * fix.z);
+                let along = dot(direction, remain);
                 // Whatever of the move goes into the surface is dropped, and a
                 // move that already leaves it is cut by the push itself.
-                let removed = if along < 0. { along } else { along.min(length) };
-                remain -= direction * removed;
+                let removed = if along < 0. || along < length {
+                    along
+                } else {
+                    length
+                };
+                remain = Vec3::new(
+                    remain.x - direction.x * removed,
+                    remain.y - direction.y * removed,
+                    remain.z - direction.z * removed,
+                );
             }
             // A remaining move against the intended one ends the sweep.
-            let against = remain.dot(intended);
-            if against < 0. && against.abs() >= NEAR_ZERO {
+            let against = dot(intended, remain);
+            if against < 0. && !near_zero(against, NEAR_ZERO) {
                 return true;
             }
-            if remain.length_squared() < NEAR_ZERO * NEAR_ZERO
-                && previous_direction.dot(direction) < 0.
-            {
+            // (`(pz*dz) + ((py*dy) + (px*dx))`: the sum in the machine code's order.)
+            let turned_back = previous_direction.z * direction.z
+                + (previous_direction.y * direction.y + previous_direction.x * direction.x);
+            if near_zero_vec(remain, NEAR_ZERO) && turned_back < 0. {
                 return true;
             }
             previous_direction = direction;
@@ -1403,7 +1432,9 @@ impl PlayerCollider {
             sweep.advance();
             // What the next round is told of this one: how far the pose it
             // starts from lies back from the one that was in collision, plus
-            // the push this round asked for before averaging.
+            // the push this round asked for before averaging. (The machine code can drop
+            // the parts of it that point the way this round pushed, when `+0x10c` is set; the
+            // byte is never set in the player's collider.)
             previous = collided_at - sweep.pos() + unaveraged;
             results = Results::default();
             if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
@@ -1411,10 +1442,11 @@ impl PlayerCollider {
                 *radius = sweep.radius();
                 return true;
             }
-            rounds += 1;
+            // The 101st round is the last (the count is tested before it is raised).
             if rounds > MAX_ROUNDS - 1 {
                 return true;
             }
+            rounds += 1;
         }
     }
 

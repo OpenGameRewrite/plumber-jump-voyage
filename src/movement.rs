@@ -4973,6 +4973,7 @@ pub fn self_check() {
     look_joint::self_check();
     ground_pose::self_check();
     swim_pose::self_check();
+    swim_move::self_check();
     pole_pose::self_check();
     cap_throw::self_check();
     hip_spring::self_check();

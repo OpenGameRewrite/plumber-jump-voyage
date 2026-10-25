@@ -11,6 +11,7 @@ pub(super) fn run() {
     exact_arrival_depth_is_just_under_the_margin();
     a_reset_body_skips_the_hair_touch_at_the_start_of_its_move();
     the_bounding_radius_and_the_growth_of_a_reset_collider();
+    the_exes_sweep_poses_agree_bit_for_bit();
 }
 
 fn square(y: f32, half: f32) -> [[Vec3; 3]; 2] {
@@ -270,4 +271,100 @@ fn the_bounding_radius_and_the_growth_of_a_reset_collider() {
         sweep.advance();
     }
     assert_eq!(sweep.shape_scale(1.), 1.);
+}
+
+/// The poses a sweep checks and the world shapes at them, from the executable's own
+/// `SpherePoseInterpolator`, `findCollidePos` and `calcWorldShapeInfo` run in a local interpreter
+/// (the fidelity folder's `collider_pose_oracle.py`): `PJV_POSE_SWEEP_CASES` names the file.
+#[cfg_attr(test, test)]
+fn the_exes_sweep_poses_agree_bit_for_bit() {
+    use serde_json::Value;
+    let Some(path) = std::env::var_os("PJV_POSE_SWEEP_CASES") else {
+        return;
+    };
+    let text = std::fs::read_to_string(path).expect("the cases file");
+    let cases: Value = serde_json::from_str(&text).expect("json");
+    let v3 = |v: &Value| -> Vec3 {
+        let a = v.as_array().expect("a vector");
+        Vec3::new(
+            a[0].as_f64().unwrap() as f32,
+            a[1].as_f64().unwrap() as f32,
+            a[2].as_f64().unwrap() as f32,
+        )
+    };
+    let num = |v: &Value| v.as_f64().expect("a number") as f32;
+    let quat = |v: &Value| {
+        let a = v.as_array().expect("a quaternion");
+        Quat::from_xyzw(num(&a[0]), num(&a[1]), num(&a[2]), num(&a[3]))
+    };
+    let mut poses = 0;
+    for case in cases.as_array().expect("cases") {
+        let start = v3(&case["start"]);
+        let tilt = Tilt {
+            from: quat(&case["from"]),
+            to: quat(&case["to"]),
+        };
+        let base = Pose::new(start, 0., 0., Some(tilt));
+        let mut sweep = Sweep::new(
+            start,
+            v3(&case["end"]),
+            num(&case["step"]),
+            num(&case["r0"]),
+            num(&case["r1"]),
+        );
+        if case["skip"].as_bool().unwrap() {
+            sweep.advance();
+        }
+        let expect = &case["expect"];
+        let mut index = 0;
+        while !sweep.finished() && index < 40 {
+            let want = &expect["poses"][index];
+            let pose = base.along(&sweep);
+            let m: Vec<f32> = want["m"].as_array().unwrap().iter().map(&num).collect();
+            let what = format!("pose {index} of {case}");
+            let rows = [0, 1, 2, 4, 5, 6, 8, 9, 10];
+            for (k, row) in rows.into_iter().enumerate() {
+                assert_eq!(pose.rotation[k], m[row], "matrix {k} of {what}");
+            }
+            assert_eq!(pose.pos, Vec3::new(m[3], m[7], m[11]), "position of {what}");
+            let scale = sweep.shape_scale(num(&case["own"]));
+            assert_eq!(scale, num(&want["scale"]), "scale of {what}");
+            for (shape, expected) in case["spheres"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(want["spheres"].as_array().unwrap())
+            {
+                let (center, radius) =
+                    pose.world_sphere(v3(&shape["center"]), num(&shape["radius"]), scale);
+                assert_eq!(center, v3(&expected["center"]), "sphere centre of {what}");
+                assert_eq!(radius, num(&expected["radius"]), "sphere radius of {what}");
+                assert_eq!(
+                    pose.rotate(Vec3::Y),
+                    v3(&expected["axis"]),
+                    "sphere axis of {what}"
+                );
+            }
+            for (shape, expected) in case["arrows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(want["arrows"].as_array().unwrap())
+            {
+                let (from, vector) =
+                    pose.world_arrow(v3(&shape["start"]), v3(&shape["vector"]), scale);
+                assert_eq!(from, v3(&expected["start"]), "arrow start of {what}");
+                assert_eq!(vector, v3(&expected["vec"]), "arrow vector of {what}");
+            }
+            sweep.advance();
+            index += 1;
+            poses += 1;
+        }
+        assert_eq!(
+            index,
+            (expect["count"].as_u64().unwrap() as usize).min(40),
+            "pose count of {case}"
+        );
+    }
+    eprintln!("sweep poses checked against the executable: {poses}");
 }

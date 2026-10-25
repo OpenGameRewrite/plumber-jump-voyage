@@ -70,22 +70,23 @@ pub(super) struct Solved {
     pub flags: u32,
 }
 
-/// `PlayerCollider::+0x10d`: the byte that lets floor faces push the spheres (always set).
-/// `PlayerCollider::+0x1b0` is the slope limit in degrees (`SLOPE_LIMIT_DEGREES`).
-/// `CollisionShapeKeeper::+0x58`, the height of a step a body sphere's flank may stand on.
+// Fixed in the player's collider: `+0x10d`, the byte that lets floor faces push the spheres, is
+// always set; `+0x1b0` is the slope limit in degrees (`SLOPE_LIMIT_DEGREES`); the keeper's
+// `+0x58` is the height of a step a body sphere's flank may stand on (`SMALL_STEP`).
 
-fn dot(a: Vec3, b: Vec3) -> f32 {
+/// The dot product in the machine code's order.
+pub(super) fn dot(a: Vec3, b: Vec3) -> f32 {
     (a.x * b.x + a.y * b.y) + a.z * b.z
 }
-fn squared_length(v: Vec3) -> f32 {
+pub(super) fn squared_length(v: Vec3) -> f32 {
     (v.x * v.x + v.y * v.y) + v.z * v.z
 }
 /// `al::isNearZero(vec, limit)`.
-fn near_zero_vec(v: Vec3, limit: f32) -> bool {
+pub(super) fn near_zero_vec(v: Vec3, limit: f32) -> bool {
     squared_length(v) < limit * limit
 }
 /// `al::isNearZero(value, limit)`.
-fn near_zero(value: f32, limit: f32) -> bool {
+pub(super) fn near_zero(value: f32, limit: f32) -> bool {
     value.abs() < limit
 }
 /// `al::verticalizeVec(out, vertical, vec)`.

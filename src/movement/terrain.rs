@@ -257,6 +257,13 @@ impl Player {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;
+                if self.mode == Move::Swim && !self.is_on_ground_by(self.v) {
+                    // Touching the floor while moving away from it (a stroke off the bottom):
+                    // the collider reports the floor, the actor is not on the ground
+                    // (`rs::isOnGround` looks at the velocity).
+                    self.grounded = false;
+                    self.hop_contact = true;
+                }
             } else if self.v.y <= 0. {
                 // A contact reached from the air is a landing, and a ground
                 // state that keeps a downward speed of its own (the pound's
@@ -305,8 +312,10 @@ impl Player {
     }
 
     /// The states whose velocity a wall contact leaves alone: the jump family,
-    /// the fall and the wall states.
+    /// the fall, the wall states and the swim (which scales its speed against the wall itself,
+    /// `rs::scaleVelocityInertiaWallHit`).
     fn keeps_velocity_at_walls(&self) -> bool {
-        matches!(self.mode, Move::WallSlide | Move::SlopeSlide) || self.wall_keep_applies()
+        matches!(self.mode, Move::WallSlide | Move::SlopeSlide | Move::Swim)
+            || self.wall_keep_applies()
     }
 }
