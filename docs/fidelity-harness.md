@@ -467,9 +467,17 @@ rendered model. A catch on the move (`CatchCapParts` on the ground, `CatchCapJum
 air) plays as the game's `partial0` animation: it replaces the main blend on `Spine1` and every
 joint below it (the model's partial group) and leaves the hips and legs alone, and when it ends
 the main clip fades back in over five steps from the pose shown the row before. The standing
-catch (`CatchCap`) is a whole-body sub animation instead. Between baked frames a clip is
-interpolated linearly, which is the fidelity limit behind the few-centimetre toe differences at
-fractional frames.
+catch (`CatchCap`) is a whole-body sub animation instead.
+
+The game samples a clip at the fractional frame of its animation and keeps the archive's
+cubic curves, so the skeleton evaluates those too (`src/clip_curves.rs`, from
+`assets/local/Mario.curves.bin`; without that file it falls back to the baked tracks, linear
+between whole frames, which leaves toe and hand differences of 1 to 4 cm at fractional frames).
+Rotations blend the way the game's blender does: the weighted first two rows of each layer's
+rotation matrix are summed per joint and the matrix is rebuilt from the sums, and the poses of
+a fade (`interp`) are then interpolated spherically, a frozen pose made of earlier fades
+nesting them (`Layer::stage`, `PoseLayer::group`). The renderer plays the same curves but
+keeps Bevy's own weighted blend of the clips.
 
 ## Rendered captures
 

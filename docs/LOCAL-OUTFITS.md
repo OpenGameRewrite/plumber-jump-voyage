@@ -78,6 +78,16 @@ python tools/convert-outfits.py --add-clip WaitRelax --add-clip Sleep
 This bakes only those clips and appends them to the installed `Mario.glb`;
 the clips already in the file, and the outfits that share them, stay as they are.
 
+The game also reads the original animation curves, which it samples between frames
+(see `docs/asset-format.md`). Write them for the clips the installed `Mario.glb` holds:
+
+```sh
+python tools/convert-outfits.py --curves
+```
+
+This creates `assets/local/Mario.curves.bin` and changes nothing else. Run it again after
+adding clips.
+
 ## Add movement sounds
 
 ```sh

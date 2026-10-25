@@ -908,9 +908,10 @@ impl BlendedRotation {
         let m = rotation_matrix(rotation);
         let entry = &mut self.groups[index];
         entry.1 += weight;
-        for k in 0..3 {
-            entry.2[k] += weight * m[0][k];
-            entry.3[k] += weight * m[1][k];
+        for (sum, row) in [(&mut entry.2, m[0]), (&mut entry.3, m[1])] {
+            for (total, value) in sum.iter_mut().zip(row) {
+                *total += weight * value;
+            }
         }
     }
 

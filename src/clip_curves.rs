@@ -263,9 +263,9 @@ impl Curves {
         let info = &self.joints[joint];
         if let Some(parent) = info.parent.filter(|_| info.compensated) {
             let above = self.scale(clip, parent, frame);
-            for i in 0..3 {
-                if above[i] != 0. {
-                    sample.scale[i] /= above[i];
+            for (scale, above) in sample.scale.iter_mut().zip(above) {
+                if above != 0. {
+                    *scale /= above;
                 }
             }
         }

@@ -39,3 +39,25 @@ python tools/annotate-assets.py assets/local
 This changes only JSON metadata. Binary chunks containing geometry, textures
 and animation samples are preserved. All generated game data stays local and
 ignored by Git.
+
+## Animation curves
+
+`Mario.glb` holds every clip baked at whole frames, but the game evaluates the archive's
+curves at the fractional frame of the animation. `assets/local/Mario.curves.bin` keeps those
+curves for the clips `Mario.glb` holds; the game uses it when present (older builds ignore it)
+and falls back to the baked tracks otherwise. Write it with `python tools/convert-outfits.py
+--curves` (the converter's `--curves-only` mode); it changes nothing else. Little endian:
+
+| Part | Content |
+| --- | --- |
+| Header | `PJVCURV1` |
+| Joints | `u32` count; each: name (`u16` length, UTF-8), `i32` parent (or -1), `u8` segment scale compensation, bind pose `f32` translation[3], rotation[4] (x y z w), scale[3] |
+| Clips | `u32` count; each: name, `f32` frames, `u32` records |
+| Record | `u32` joint, `u8` rotation kind (0 Euler XYZ in radians, 1 quaternion), then 10 channels in the order scale xyz, rotation xyzw, translation xyz |
+| Channel | `u32` keys; 0 is a constant (`f32` value), otherwise per key `f32` frame and `f32` c0, c1, c2, c3 |
+
+Between a key and the next, `t` runs from 0 to 1 and the value is `((c3 t + c2) t + c1) t + c0`;
+before the first key and after the last it is that key's value. Joints and clips the file does
+not mention (the finger and face joints, which the converter poses from other archives) keep
+their baked tracks.
+
