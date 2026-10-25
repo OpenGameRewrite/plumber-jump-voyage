@@ -1074,6 +1074,8 @@ pub struct Player {
     combo_kept: bool,
     /// Velocity when the jump's first step began, before its own impulse.
     prior_v: Vec3,
+    /// The horizontal velocity a standard jump takes off with, read when its first step starts.
+    takeoff_h: Option<Vec3>,
     /// Distance to the floor below, for the ground pound's height rule.
     ground_height: f32,
     /// The camera's orbit yaw this frame (the first jump's clip mirrors by it).
@@ -1288,6 +1290,7 @@ impl Default for Player {
             jump_power: 0.,
             combo_kept: false,
             prior_v: Vec3::ZERO,
+            takeoff_h: None,
             ground_height: f32::MAX,
             camera_yaw: 0.,
             jump_held_frames: 0,
@@ -3561,6 +3564,14 @@ impl Player {
         self.pre_jump = 0;
         self.change(mode, anim, move |p| {
             p.prior_v = p.v;
+            // (Read before the take-off sets the vertical speed: the ground-following velocity
+            // is told by it.)
+            // (A jump out of the water has its own rule for the floor's plane, `leave_ground`.)
+            p.takeoff_h = p
+                .swim
+                .jump_from_floor
+                .is_none()
+                .then(|| p.takeoff_horizontal_velocity());
             p.leave_ground(mode, power, gravity);
             then(p);
             p.arm_air_control(mode, power, gravity);
@@ -3742,7 +3753,26 @@ impl Player {
         let forward = self.v.dot(self.facing).abs();
         let power =
             air_move::jump_power(forward, t::NORMAL_MIN, t::NORMAL_MAX, power_min, power_max);
-        self.jump_with(mode, clip, power, gravity, |_| {});
+        self.jump_with(mode, clip, power, gravity, |p| {
+            if let Some(horizontal) = p.takeoff_h {
+                p.set_h(horizontal);
+            }
+        });
+    }
+    /// The horizontal velocity a jump takes off with (`PlayerActionAirMoveControl::setup`): the
+    /// velocity the actor holds, with the part along the normal of the ground it stands on taken
+    /// off (the collider's present normal, up where there is none), then the part along gravity.
+    /// A run on a slope holds the velocity of the plane it was steered on in its own horizontal
+    /// part; the jump takes the one of the plane under it now (swim-hipdrop-in row 85: 17.6814 for
+    /// the new floor against 17.6919 for the one the last step ran on).
+    fn takeoff_horizontal_velocity(&self) -> Vec3 {
+        let normal = if self.is_collided_ground() {
+            self.collided_ground_normal()
+        } else {
+            Vec3::Y
+        };
+        let on_plane = vector_lib::verticalize_vec(normal, self.units_per_frame());
+        vector_lib::verticalize_vec(Vec3::NEG_Y, on_plane).with_y(0.)
     }
     fn ground_jump(&mut self, _o: &Orders) {
         // The actor's jump judge during the ground spin fills the request of
