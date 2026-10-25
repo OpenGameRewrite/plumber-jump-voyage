@@ -9,7 +9,7 @@
 //! The nerve is `Brake` (slide on the momentum), `Wait` (crouch in place),
 //! `Walk` (crawl) and `StandUp`. A sub-state is chosen in one step and runs its
 //! first step in the next, like every nerve (`src/nerve.rs`).
-use super::ground::TurnControl;
+use super::ground::{TurnControl, TurnFrame};
 use super::*;
 
 /// `SquatBrakeSideAccel`, `SquatBrakeSideRate` and `SquatBrakeSideMaxSpeedRate`:
@@ -204,7 +204,13 @@ impl Player {
             return;
         }
         let stick = self.ground_stick();
-        self.squat.turn.update(self.facing, stick, Vec3::Y);
+        let (actor_up, actor_front) = self.pose_axes();
+        self.squat.turn.update(TurnFrame {
+            actor_front,
+            actor_up,
+            stick,
+            up: Vec3::Y,
+        });
         let turned = self.squat.turn.direction;
         // Against the facing the crawl goes the stick's way at once while the
         // body turns round.

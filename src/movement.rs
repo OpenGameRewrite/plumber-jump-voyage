@@ -308,6 +308,8 @@ mod swim_move;
 pub(crate) mod swim_pose;
 #[path = "movement/terrain.rs"]
 mod terrain;
+#[path = "movement/turn_control.rs"]
+pub(crate) mod turn_control;
 #[path = "movement/vector_lib.rs"]
 mod vector_lib;
 #[path = "movement/wait.rs"]
@@ -3034,7 +3036,8 @@ impl Player {
         let steer = self.ground.update(&SteerInput {
             velocity: in_plane,
             up,
-            front,
+            actor_front: pose_front,
+            actor_up: pose_up,
             stick: self.plane_stick(up),
             wall: self
                 .touched
@@ -4266,11 +4269,13 @@ impl Player {
             if step == t::SPIN_BRAKE_FRAMES {
                 self.spin_ground_move.reset(self.v, self.facing);
             }
+            let (actor_up, actor_front) = self.pose_axes();
             let steer = self.spin_ground_move.update(&SteerInput {
                 up: Vec3::Y,
                 wall: None,
                 velocity: self.v,
-                front: self.facing,
+                actor_front,
+                actor_up,
                 stick: self.ground_stick(),
                 max_speed: t::NORMAL_MAX,
                 accel_frames: t::ACCEL_FRAMES as i32,
@@ -4944,6 +4949,7 @@ pub fn self_check() {
     wall_air_checks::run();
     ledge_checks::run();
     console_libm::self_check();
+    turn_control::self_check();
     pose_math::self_check();
     look_joint::self_check();
     ground_pose::self_check();

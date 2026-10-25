@@ -6,7 +6,7 @@
 //! written from the machine code; the library calls (`al::separateVelocityDirHV`,
 //! `al::alongVectorNormalH`, `al::scaleVectorExceptDirection`, ...) are the ones of
 //! `vector_lib.rs` and `pose_math.rs`.
-use super::ground::{TurnSetup, ease_in, rate01};
+use super::ground::{TurnFrame, TurnSetup, ease_in, rate01};
 use super::swim_const as k;
 use super::vector_lib as lib;
 use super::*;
@@ -254,8 +254,13 @@ impl Player {
             fast_limit: speed,
         });
         let stick = self.swim_stick();
-        let (_, front) = self.pose_axes();
-        self.swim.turn.update(front, stick, UP);
+        let (actor_up, actor_front) = self.pose_axes();
+        self.swim.turn.update(TurnFrame {
+            actor_front,
+            actor_up,
+            stick,
+            up: UP,
+        });
         let pose = pose_math::quat_front_up(self.swim.turn.direction, UP);
         self.set_pose(pose);
     }

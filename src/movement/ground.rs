@@ -9,8 +9,9 @@
 //! floor under the player (`mGroundNormal`, which is straight up on level
 //! ground): velocities, the facing and the stick are vectors of that plane.
 //! The original's forced-run input has no counterpart yet and is left out.
-use super::plane::{along_vector_normal_h, verticalize};
+use super::plane::verticalize;
 use super::t;
+pub use super::turn_control::{ROUND_MIN_DEGREES, TurnControl, TurnFrame, TurnSetup};
 use bevy::prelude::*;
 
 /// Radians to degrees and back, with the original's constants.
@@ -46,29 +47,8 @@ pub const RUN_AFTER_TURN_SCALE: f32 = 0.5;
 /// narrows around them.
 const DASH_BORDER: f32 = 15.;
 const DASH_RANGE: f32 = 1.;
-/// Turn tuning of the original's run: the smallest angle that turns at all,
-/// the angle above which the turn is quick, and the frames of its ramps.
-const ROUND_MIN_DEGREES: f32 = 0.5;
-const ROUND_FAST_DEGREES: f32 = 45.;
-const ROUND_ACCEL_FRAMES: i32 = 20;
-const ROUND_ACCEL_FRAMES_FAST: i32 = 5;
-const ROUND_BRAKE_FRAMES: i32 = 20;
-/// The crawl of the squat state sets the same controller up differently
-/// (`PlayerStateSquat`'s constructor): quick turns only past 180 degrees, so
-/// never, at `SquatWalkTurnSpeed` degrees a frame over `SquatWalkTurnFrame`.
-const CRAWL_TURN_DEGREES: f32 = 30.;
-const CRAWL_FAST_DEGREES: f32 = 180.;
-const CRAWL_ACCEL_FRAMES: i32 = 10;
-const CRAWL_ACCEL_FRAMES_FAST: i32 = 1;
-const CRAWL_BRAKE_FRAMES: i32 = 10;
-/// A reversing stick is only a reversal when it did not sweep round smoothly:
-/// the average turn of the stick over five frames, in degrees per frame.
-const REVERSE_SMOOTH_RATE: f32 = 1.;
-/// A stick direction that jumps more than this much between frames restarts
-/// the stick's turn average (cosine of 70 degrees).
-const STICK_JUMP_COS: f32 = 0.3420201;
 /// Opposite directions: the cosine of 95 degrees.
-const OPPOSITE_COS: f32 = -0.08715574;
+const OPPOSITE_COS: f32 = -0.087_155_74;
 /// `al::isNearZero(x, 0.001)` on a speed.
 const NEAR_ZERO_SPEED: f32 = 0.001;
 /// Horizontal velocity below which the player counts as standing still.
@@ -141,15 +121,6 @@ fn is_zero(v: Vec3) -> bool {
 fn is_opposite(a: Vec3, b: Vec3) -> bool {
     a.dot(b) <= OPPOSITE_COS
 }
-/// `al::isReverseDirection`: opposed to within `tolerance` on every axis of
-/// their cross product.
-fn is_reverse(a: Vec3, b: Vec3, tolerance: f32) -> bool {
-    let cross = a.cross(b);
-    a.dot(b) < 0. && cross.abs().max_element() <= tolerance
-}
-fn angle_degrees(a: Vec3, b: Vec3) -> f32 {
-    a.cross(b).length().atan2(a.dot(b)) * DEGREES
-}
 /// Turn `v` about the vertical by `degrees` (positive turns +z toward +x).
 fn rotate(v: Vec3, axis: Vec3, degrees: f32) -> Vec3 {
     Quat::from_axis_angle(axis, degrees * RADIANS) * v
@@ -159,265 +130,6 @@ fn rotate(v: Vec3, axis: Vec3, degrees: f32) -> Vec3 {
 /// standard limit.
 pub fn turn_power(rate: f32) -> f32 {
     ease_in(rate01(rate, ROUND_MIN_DEGREES, t::ROUND_LIMIT_DEG))
-}
-
-/// What a turn controller is set up with (`PlayerActionTurnControl::setup`):
-/// the ramps of the turn rate and whether a stick pushed the opposite way
-/// brakes (the run) or is simply turned towards (the crawl, `_88`).
-#[derive(Clone, Copy, Debug)]
-struct TurnTuning {
-    min_degrees: f32,
-    fast_degrees: f32,
-    accel_frames: i32,
-    accel_frames_fast: i32,
-    brake_frames: i32,
-    forced: bool,
-}
-impl Default for TurnTuning {
-    fn default() -> Self {
-        Self {
-            min_degrees: ROUND_MIN_DEGREES,
-            fast_degrees: ROUND_FAST_DEGREES,
-            accel_frames: ROUND_ACCEL_FRAMES,
-            accel_frames_fast: ROUND_ACCEL_FRAMES_FAST,
-            brake_frames: ROUND_BRAKE_FRAMES,
-            forced: false,
-        }
-    }
-}
-
-/// The arguments of `PlayerActionTurnControl::setup`.
-#[derive(Clone, Copy, Debug)]
-pub struct TurnSetup {
-    pub min_degrees: f32,
-    pub fast_degrees: f32,
-    pub accel_frames: i32,
-    pub accel_frames_fast: i32,
-    pub brake_frames: i32,
-    pub limit: f32,
-    pub fast_limit: f32,
-}
-
-/// The turn controller: how fast the facing swings toward the stick.
-#[derive(Clone, Debug, Default)]
-pub struct TurnControl {
-    tuning: TurnTuning,
-    limit: f32,
-    fast_limit: f32,
-    /// Degrees the facing turns by each frame, ramped up and down.
-    rate: f32,
-    last_direction: Vec3,
-    last_axis: Vec3,
-    /// The ground normal of the last update (`_24`): the plane `last_direction`
-    /// lies in.
-    last_up: Vec3,
-    /// The stick's recent turns, newest last (a ring of five).
-    recent: Vec<f32>,
-    /// The facing after the latest update.
-    pub direction: Vec3,
-    /// The stick asked for the opposite way while this controller was not
-    /// forced: the run brakes instead of turning.
-    pub reverse: bool,
-    /// The same while it was forced (`_69`): the facing keeps turning, and
-    /// whoever moves goes the stick's way at once.
-    pub reverse_forced: bool,
-}
-impl TurnControl {
-    /// The controller the squat state keeps for crawling.
-    pub fn crawl() -> Self {
-        Self {
-            tuning: TurnTuning {
-                min_degrees: ROUND_MIN_DEGREES,
-                fast_degrees: CRAWL_FAST_DEGREES,
-                accel_frames: CRAWL_ACCEL_FRAMES,
-                accel_frames_fast: CRAWL_ACCEL_FRAMES_FAST,
-                brake_frames: CRAWL_BRAKE_FRAMES,
-                forced: true,
-            },
-            limit: CRAWL_TURN_DEGREES,
-            fast_limit: CRAWL_TURN_DEGREES,
-            ..Self::default()
-        }
-    }
-    /// The controller the swim state keeps (`PlayerStateSwim`'s constructor): forced like the
-    /// crawl's (it keeps turning when the stick pulls the opposite way). Every step sets it up
-    /// anew with [`Self::setup`].
-    pub fn swim() -> Self {
-        Self {
-            tuning: TurnTuning {
-                forced: true,
-                ..TurnTuning::default()
-            },
-            ..Self::default()
-        }
-    }
-    /// `PlayerActionTurnControl::setup`: the angles and ramps of the turn, the turn rate it may
-    /// reach and the one it may reach for a quick turn.
-    pub fn setup(&mut self, setup: TurnSetup) {
-        self.tuning = TurnTuning {
-            min_degrees: setup.min_degrees,
-            fast_degrees: setup.fast_degrees,
-            accel_frames: setup.accel_frames,
-            accel_frames_fast: setup.accel_frames_fast,
-            brake_frames: setup.brake_frames,
-            forced: self.tuning.forced,
-        };
-        self.limit = setup.limit;
-        self.fast_limit = setup.fast_limit;
-    }
-    pub fn reset(&mut self) {
-        self.rate = 0.;
-        self.last_direction = Vec3::ZERO;
-        self.last_axis = Vec3::ZERO;
-        self.last_up = Vec3::ZERO;
-        self.recent.clear();
-    }
-    /// The average of the stick's last five turns, in degrees per frame.
-    fn stick_turn(&self) -> f32 {
-        self.recent.iter().sum::<f32>() / 5.
-    }
-    /// How far into a turn the controller is, 0 to 1 (`calcTurnPowerRate`).
-    fn power(&self) -> f32 {
-        ease_in(rate01(self.rate, self.tuning.min_degrees, self.limit))
-    }
-    /// `PlayerActionTurnControl::calcTurnPowerRate(up)`: the turn power, negative when the turn's
-    /// axis points up the same way as `up`.
-    pub fn power_signed(&self, up: Vec3) -> f32 {
-        let power = self.power();
-        if up.dot(self.last_axis) > 0. {
-            -power
-        } else {
-            power
-        }
-    }
-    /// One frame of `PlayerActionTurnControl::update` on the floor with the
-    /// normal `up`: the facing is taken into that plane and so is the stick's
-    /// last direction, which was stored in the plane of the frame before.
-    pub fn update(&mut self, facing: Vec3, stick: Vec3, up: Vec3) {
-        let front = unit_or_zero(verticalize(up, facing));
-        let new = unit_or_zero(stick);
-        let has_input = !is_zero(new);
-        let last = if is_zero(self.last_direction) {
-            Vec3::ZERO
-        } else {
-            unit_or_zero(along_vector_normal_h(self.last_direction, self.last_up, up))
-        };
-        let have_both = has_input && !is_zero(last);
-        let skip_tracking = is_zero(last) || !has_input;
-        let front_invalid = is_zero(front);
-        // The stick's own turning, averaged over five frames; a jump of more
-        // than 70 degrees restarts it.
-        if skip_tracking || new.dot(last) < STICK_JUMP_COS {
-            self.recent.clear();
-        } else {
-            if self.recent.len() >= 5 {
-                self.recent.remove(0);
-            }
-            self.recent.push(angle_degrees(last, new).abs());
-        }
-        let stick_turn = self.stick_turn();
-        // A stick pushed the opposite way: the run brakes rather than turns;
-        // a forced controller keeps turning and only flags it.
-        let opposed = has_input
-            && !front_invalid
-            && is_opposite(new, front)
-            && (skip_tracking || (have_both && stick_turn <= REVERSE_SMOOTH_RATE));
-        let reverse = opposed && !self.tuning.forced;
-        self.reverse_forced = opposed && self.tuning.forced;
-        self.reverse = reverse;
-        let turning = has_input && !front_invalid && !reverse;
-        let out;
-        if turning {
-            let angle_to_stick = if have_both {
-                last.dot(new)
-            } else {
-                front.dot(new)
-            }
-            .clamp(-1., 1.)
-            .acos();
-            let remaining = front.dot(new).clamp(-1., 1.).acos() * DEGREES;
-            let stick_axis = unit_or_zero(last.cross(new));
-            let mut extra_turn = false;
-            let mut follow_axis = false;
-            if have_both && !is_zero(self.last_axis) {
-                let stick_degrees = angle_to_stick * DEGREES;
-                if stick_axis.dot(self.last_axis) > 0. {
-                    // The stick keeps swinging the same way.
-                    let face_axis = unit_or_zero(front.cross(new));
-                    if !is_zero(face_axis) && face_axis.dot(stick_axis) < 0. {
-                        extra_turn = stick_turn > 10. || stick_degrees > 3.;
-                        follow_axis = stick_turn <= 10. && stick_degrees <= 3.;
-                    }
-                } else if stick_degrees >= self.tuning.min_degrees.max(self.rate) {
-                    // The stick doubled back by a large step: the turn restarts.
-                    self.rate = 0.;
-                } else {
-                    // A small step the other way eats into the turn.
-                    self.rate = converge(self.rate, 0., stick_degrees);
-                    follow_axis = stick_degrees < self.tuning.min_degrees;
-                }
-            }
-            // The turn rate ramps up toward what the stick's tilt and the
-            // angle left allow, and down when that is reached.
-            let tilt = rate01(stick.length(), 0., 0.8).clamp(0.25, 1.);
-            if remaining < self.tuning.min_degrees {
-                self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
-            } else if remaining < self.tuning.fast_degrees {
-                let target = tilt * self.limit;
-                self.rate = if self.rate >= target {
-                    brake(self.rate, self.tuning.brake_frames, self.fast_limit)
-                } else {
-                    accel(self.rate, target, target / self.tuning.accel_frames as f32)
-                };
-            } else {
-                self.rate = accel(
-                    self.rate,
-                    self.fast_limit,
-                    self.fast_limit / self.tuning.accel_frames_fast as f32,
-                );
-            }
-            if extra_turn || is_reverse(front, new, 0.01) {
-                // Swing about the vertical the way the stick is swinging.
-                let axis = if stick_axis.dot(up) > 0. { up } else { -up };
-                out = unit_or_zero(rotate(front, axis, self.rate));
-                self.last_axis = axis;
-            } else {
-                let angle = front.angle_between(new) * DEGREES;
-                let swing = self.rate.min(angle);
-                let axis = unit_or_zero(front.cross(new));
-                let turned = if is_zero(axis) {
-                    front
-                } else {
-                    rotate(front, axis, swing)
-                };
-                out = unit_or_zero(turned);
-                let mut axis = axis;
-                if follow_axis && axis.dot(self.last_axis) < 0. {
-                    axis = -axis;
-                }
-                self.last_axis = axis;
-            }
-            self.last_direction = new;
-            self.last_up = up;
-        } else if has_input {
-            // Stick against the facing: keep the facing, stop turning. (With
-            // an unusable facing the stick's own direction is taken.)
-            out = if reverse { front } else { new };
-            if reverse {
-                self.rate = 0.;
-            }
-        } else {
-            out = if front_invalid {
-                verticalize(up, facing)
-            } else {
-                front
-            };
-            self.last_direction = Vec3::ZERO;
-            self.last_axis = Vec3::ZERO;
-            self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
-        }
-        self.direction = out;
-    }
 }
 
 /// Speed left after a frame of braking on the way the brake began
@@ -433,8 +145,10 @@ pub struct SteerInput {
     pub velocity: Vec3,
     /// The normal of that floor (`mGroundNormal`).
     pub up: Vec3,
-    /// The facing the player has now.
-    pub front: Vec3,
+    /// The actor's front and up axes (`al::calcFrontDir`, `al::calcUpDir`): the facing the
+    /// player has now, in the pose it was last given.
+    pub actor_front: Vec3,
+    pub actor_up: Vec3,
     /// The stick in the plane of the floor, its length the tilt (zero in the
     /// deadzone).
     pub stick: Vec3,
@@ -540,10 +254,7 @@ impl GroundMove {
         } else {
             0
         };
-        self.turn.rate = turn_rate;
-        self.turn.last_direction = unit_or_zero(last_input);
-        self.turn.last_axis = Vec3::ZERO;
-        self.turn.recent.clear();
+        self.turn.resume(turn_rate, unit_or_zero(last_input));
         self.turn_power = turn_power;
     }
     /// `calcAccelRate`: the speed gained this frame. The ramp is a straight
@@ -639,9 +350,13 @@ impl GroundMove {
         // The turn limit narrows toward the dash speed.
         let dash = 1. - rate01(measured, DASH_BORDER - DASH_RANGE, DASH_BORDER + DASH_RANGE);
         let limit = lerp(t::ROUND_LIMIT_DEG_MIN, t::ROUND_LIMIT_DEG, dash);
-        self.turn.limit = limit;
-        self.turn.fast_limit = limit;
-        self.turn.update(input.front, input.stick, up);
+        self.turn.set_limit(limit);
+        self.turn.update(TurnFrame {
+            actor_front: input.actor_front,
+            actor_up: input.actor_up,
+            stick: input.stick,
+            up,
+        });
         let wanted = self.turn.direction;
         let stick_dir = unit_or_zero(input.stick);
         let has_input = !is_zero(stick_dir);
@@ -858,7 +573,8 @@ mod tests {
                 velocity,
                 up: Vec3::Y,
                 wall: None,
-                front: Vec3::Z,
+                actor_front: Vec3::Z,
+                actor_up: Vec3::Y,
                 stick: Vec3::Z,
                 max_speed: 14.,
                 accel_frames: 40,
@@ -873,13 +589,16 @@ mod tests {
 
     #[test]
     fn a_stick_reversal_brakes_instead_of_turning() {
-        let mut turn = TurnControl {
-            limit: 8.5,
-            fast_limit: 8.5,
-            ..default()
+        let mut turn = TurnControl::default();
+        turn.set_limit(8.5);
+        let frame = |stick| TurnFrame {
+            actor_front: Vec3::Z,
+            actor_up: Vec3::Y,
+            stick,
+            up: Vec3::Y,
         };
-        turn.update(Vec3::Z, Vec3::Z, Vec3::Y);
-        turn.update(Vec3::Z, Vec3::NEG_Z, Vec3::Y);
+        turn.update(frame(Vec3::Z));
+        turn.update(frame(Vec3::NEG_Z));
         assert!(turn.reverse);
         assert_eq!(turn.direction, Vec3::Z);
     }
