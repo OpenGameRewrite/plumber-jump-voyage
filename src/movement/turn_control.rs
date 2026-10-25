@@ -274,7 +274,7 @@ impl TurnControl {
             .push(if degrees > 0. { degrees } else { -degrees });
         let mut sum = 0.;
         for turn in self.recent.iter().rev().take(STICK_TURN_FRAMES) {
-            sum = turn + sum;
+            sum += turn;
         }
         self.stick_turn = sum / STICK_TURN_FRAMES as f32;
     }
@@ -364,13 +364,7 @@ impl TurnControl {
             // The turn rate ramps up toward what the stick's tilt and the
             // angle left allow, and down when that is reached.
             let tilt = calc_rate01(squared_length(stick).sqrt(), 0., TILT_FULL_LENGTH);
-            let tilt = if tilt < TILT_LEAST {
-                TILT_LEAST
-            } else if tilt > 1. {
-                1.
-            } else {
-                tilt
-            };
+            let tilt = tilt.clamp(TILT_LEAST, 1.);
             let remaining = remaining_radians * DEGREES;
             if remaining < self.tuning.min_degrees {
                 self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);

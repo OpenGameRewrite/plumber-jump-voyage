@@ -33,8 +33,8 @@ const NEAR_ZERO: f32 = 0.001;
 /// stays across it.
 const ALONG_AWAY_DEGREES: f32 = 25.;
 const ALONG_INTO_DEGREES: f32 = 50.;
-const FADE_OUT_END: f32 = 1.396_263_480_186_462_4;
-const ACROSS_END: f32 = 1.745_329_260_826_110_8;
+const FADE_OUT_END: f32 = 1.3962635;
+const ACROSS_END: f32 = 1.7453293;
 const HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
 const PI: f32 = std::f32::consts::PI;
 

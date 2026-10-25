@@ -14,12 +14,13 @@
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 use std::f64::consts::FRAC_PI_2 as FRAC_PI_2_F64;
 
-const PIO2_HI: f32 = 1.570_796_251_3;
-const PIO2_LO: f32 = 7.549_789_415_9e-8;
-const P_S0: f32 = 1.666_658_669_7e-1;
-const P_S1: f32 = -4.274_342_209_1e-2;
-const P_S2: f32 = -8.656_363_003_0e-3;
-const Q_S1: f32 = -7.066_296_339_0e-1;
+/// `pi / 2` with its low bits cleared (0x3fc90fda), not the nearest single (0x3fc90fdb).
+const PIO2_HI: f32 = f32::from_bits(0x3fc9_0fda);
+const PIO2_LO: f32 = 7.5497894e-08;
+const P_S0: f32 = 0.16666587;
+const P_S1: f32 = -0.042743422;
+const P_S2: f32 = -0.008656363;
+const Q_S1: f32 = -0.70662963;
 
 /// `R(z)`, the rational approximation of the arcsine's remainder.
 fn arcsine_remainder(z: f32) -> f32 {
@@ -69,7 +70,7 @@ pub fn asinf(x: f32) -> f32 {
         return f32::NAN;
     }
     if magnitude < 0x3f00_0000 {
-        if magnitude < 0x3980_0000 && magnitude >= 0x0080_0000 {
+        if (0x0080_0000..0x3980_0000).contains(&magnitude) {
             return x;
         }
         return x + x * arcsine_remainder(x * x);
@@ -80,24 +81,21 @@ pub fn asinf(x: f32) -> f32 {
     if bits >> 31 != 0 { -value } else { value }
 }
 
+// The anchors of the argument reduction: atan(0.5), atan(1), atan(1.5) and atan(inf) as single
+// precision highs (the last two are pi/4 and pi/2 with their low bits cleared).
 const ATAN_HI: [f32; 4] = [
-    4.636_476_039_9e-1,
-    7.853_981_256_5e-1,
-    9.827_936_887_7e-1,
-    1.570_796_251_3,
+    0.4636476,
+    f32::from_bits(0x3f49_0fda),
+    0.9827937,
+    f32::from_bits(0x3fc9_0fda),
 ];
-const ATAN_LO: [f32; 4] = [
-    5.012_158_244_0e-9,
-    3.774_894_707_9e-8,
-    3.447_321_717_0e-8,
-    7.549_789_415_9e-8,
-];
+const ATAN_LO: [f32; 4] = [5.0121582e-09, 3.7748947e-08, 3.4473217e-08, 7.5497894e-08];
 const ATAN_POLY: [f32; 5] = [
-    3.333_332_836_6e-1,
-    -1.999_915_838_2e-1,
-    1.425_363_570_5e-1,
-    -1.064_801_737_7e-1,
-    6.168_760_731_8e-2,
+    0.33333328,
+    -0.19999158,
+    0.14253636,
+    -0.106480174,
+    0.061687607,
 ];
 
 pub fn atanf(x: f32) -> f32 {
@@ -150,7 +148,7 @@ pub fn atanf(x: f32) -> f32 {
     if negative { -z } else { z }
 }
 
-const PI_LO: f32 = -8.742_277_657_3e-8;
+const PI_LO: f32 = -8.742278e-08;
 
 pub fn atan2f(y: f32, x: f32) -> f32 {
     if x.is_nan() || y.is_nan() {
@@ -242,7 +240,7 @@ fn cosine_kernel(x: f64) -> f32 {
 
 const PIO2_1: f64 = 1.570_796_310_901_641_8;
 const PIO2_1T: f64 = 1.589_325_477_352_819_6e-8;
-const INV_PIO2: f64 = 0.636_619_772_367_581_4;
+const INV_PIO2: f64 = std::f64::consts::FRAC_2_PI;
 const TO_INT: f64 = 6_755_399_441_055_744.0;
 
 /// `__rem_pio2f` for the medium sizes: the quadrant and the remainder of `x` by `pi / 2`.

@@ -205,7 +205,7 @@ impl GroundMove {
     /// value slowly when it has to fall and quickly when it has to rise.
     fn update_hill(&mut self, up: Vec3, wanted: Vec3, has_input: bool) {
         // The gravity is straight down: the slope is the angle between the normal and up.
-        let cosine = (-(-1.0 * up.y) - 0.0 * up.x) - 0.0 * up.z;
+        let cosine = (up.y - 0.0 * up.x) - 0.0 * up.z;
         let slope = acosf(cosine.clamp(-1., 1.));
         // The way down in the floor's plane: gravity with its part along the normal taken off
         // (`al::verticalizeVec(out, normal, gravity)`).
