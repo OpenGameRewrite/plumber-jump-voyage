@@ -38,6 +38,8 @@
 //! which a shape is in collision, pushes the body out by the combined fix
 //! vector (`calcResultVec`), removes the part of the remaining move that goes
 //! into the surface and goes on, up to 100 rounds.
+#[path = "collider_result.rs"]
+mod result;
 use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
 use crate::movement::plane::{normalize, try_normalize_or_zero};
 use crate::prism::{PartFrame, Point, rotate_vector, transform_point};
@@ -88,7 +90,7 @@ const SMALL_STEP: f32 = 25.;
 const SAME_PLANE: f32 = 2.5;
 
 fn slope_limit() -> f32 {
-    (SLOPE_LIMIT_DEGREES * DEGREES_TO_RADIANS).cos()
+    result::slope_cos()
 }
 
 /// The smallest `y` of a face normal that is still floor.
@@ -195,9 +197,8 @@ impl Keeper {
         // Three arrows (the helper called right after each keeper is made):
         // ring point at 120 degrees apart, 30 out, 40 up, pointing 60 down.
         for index in 0..3 {
-            let angle = (index as f32 * 120.).to_radians();
             shapes.push(Shape::Arrow {
-                start: Vec3::new(30. * angle.sin(), 40., 30. * angle.cos()) + arrows_at,
+                start: ring_arrow_start(index, arrows_at),
                 vector: Vec3::new(0., -60., 0.),
                 margin: 20.,
                 index,
@@ -233,6 +234,37 @@ impl Keeper {
             has_arrow: false,
         }
     }
+}
+
+/// Where arrow `index` of the ring starts (`0x43657c`, the helper `PlayerColliderHakoniwa::init`
+/// calls for every keeper): the point 30 from the axis towards +z, turned about the up axis by
+/// 120 degrees times the index with a quaternion product (the console's `sinf` and `cosf` of the
+/// half angle, the machine code's operation order), plus the keeper's offset and 40 up. The
+/// values differ from the exact ring by a few millionths of a centimetre, enough to decide
+/// whether a depth lands on one side of a margin.
+fn ring_arrow_start(index: usize, offset: Vec3) -> Vec3 {
+    use crate::movement::console_libm::{cosf, sinf};
+    let axis = Vec3::Y;
+    let reference = Vec3::Z;
+    let (vx, vy, vz) = (reference.x * 30., reference.y * 30., reference.z * 30.);
+    let half = (((index as f32) * 120.) * DEGREES_TO_RADIANS) * 0.5;
+    let (c, s) = (cosf(half), sinf(half));
+    let (qy, qx, qz) = (s * axis.y, s * axis.x, s * axis.z);
+    // q * (v, 0)
+    let tx = vx * c + (vz * qy - vy * qz);
+    let ty = vy * c + (vx * qz - vz * qx);
+    let tz = vz * c + (vy * qx - vx * qy);
+    let tw = (-(vx * qx) - vy * qy) - vz * qz;
+    // ... times the conjugate of q
+    let x = (qy * tz + (c * tx - qz * ty)) - qx * tw;
+    let z = (c * tz + (qx * ty - qy * tx)) - qz * tw;
+    let y = ((qz * tx + c * ty) - qx * tz) - qy * tw;
+    let up = Vec3::new(axis.x * -40., axis.y * -40., axis.z * -40.);
+    Vec3::new(
+        (x + offset.x) - up.x,
+        (y + offset.y) - up.y,
+        (z + offset.z) - up.z,
+    )
 }
 
 /// `CollisionShapeKeeper::updateShape`: the radius of the sphere that grows around the shapes
@@ -291,6 +323,18 @@ struct Tilt {
     from: Quat,
     to: Quat,
 }
+/// `SpherePoseInterpolator::calcInterp`'s normalisation of the blended quaternion: the squared
+/// length summed w, x, y, z, the inverse of its root multiplied in.
+fn normalize_quat(q: Quat) -> Quat {
+    let squared = ((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z;
+    let length = squared.sqrt();
+    if length > 0. {
+        let inverse = 1. / length;
+        Quat::from_xyzw(inverse * q.x, inverse * q.y, inverse * q.z, inverse * q.w)
+    } else {
+        q
+    }
+}
 /// The rotation matrix `findCollidePos` makes from a quaternion (the products `2*q*q` first, then
 /// sums and differences, as `ActorPoseKeeperTQGMSV::updatePoseQuat` does; for a turn about the
 /// vertical alone the up column is exactly (0, 1, 0)), row-major.
@@ -314,7 +358,11 @@ impl Pose {
         if let Some(tilt) = self.tilt {
             // `SpherePoseInterpolator::calcInterp`: the quaternions' spherical
             // blend, normalised.
-            let now = crate::movement::plane::slerp(tilt.from, tilt.to, sweep.current).normalize();
+            let now = normalize_quat(crate::movement::plane::slerp(
+                tilt.from,
+                tilt.to,
+                sweep.current,
+            ));
             return Self {
                 pos: sweep.pos(),
                 rotation: rotation_of(now),
@@ -1046,128 +1094,12 @@ enum Class {
     Ceiling,
 }
 fn classify(normal: Vec3) -> Class {
-    // n . gravity with gravity pointing down is -n.y.
-    let d = -normal.y;
-    if d < 0. && d.abs() >= slope_limit() {
-        Class::Floor
-    } else if d.abs() < slope_limit() {
-        Class::Wall
-    } else {
-        Class::Ceiling
-    }
-}
-
-/// The first pass of `calcResultVec`: what kinds of faces are among the
-/// results (a sphere counts only on a face, not on an edge or corner).
-#[derive(Default)]
-struct Flags {
-    floor: bool,
-    wall: bool,
-    ceiling: bool,
-    /// An arrow found floor.
-    arrow_floor: bool,
-}
-
-/// Per axis, the most negative and most positive fix any contact asked for
-/// (starting at zero); the body moves by their sum.
-#[derive(Default)]
-struct Fixes {
-    low: Vec3,
-    high: Vec3,
-    /// Which ways the contributions pushed, as the `PUSH_*` bits.
-    directions: u32,
-}
-impl Fixes {
-    /// A contribution `fix`; `normal` stands in for its direction when it is
-    /// too short to have one (`0x4338f0`).
-    fn add(&mut self, fix: Vec3, normal: Vec3) {
-        self.low = self.low.min(fix);
-        self.high = self.high.max(fix);
-        self.directions |= push_directions(fix, normal);
-    }
-    fn total(&self) -> Vec3 {
-        self.low + self.high
-    }
-}
-
-/// `0x4338f0`: the push direction bits of a fix. The direction is the fix
-/// normalised (the normal when the fix is shorter than 0.001), with its
-/// components under 0.05 dropped; each remaining component sets the bit of
-/// its sign.
-fn push_directions(fix: Vec3, normal: Vec3) -> u32 {
-    let near_zero = |v: f32, limit: f32| v.abs() < limit;
-    let direction = if fix.length_squared() < NEAR_ZERO * NEAR_ZERO {
-        let cleaned = normal
-            .to_array()
-            .map(|c| if near_zero(c, 0.05) { 0. } else { c });
-        Vec3::from_array(cleaned).normalize_or_zero()
-    } else {
-        let unit = fix / fix.length();
-        Vec3::from_array(
-            unit.to_array()
-                .map(|c| if near_zero(c, 0.05) { 0. } else { c }),
-        )
-    };
-    let mut bits = 0;
-    for (component, (positive, negative)) in direction.to_array().into_iter().zip([
-        (PUSH_POS_X, PUSH_NEG_X),
-        (PUSH_POS_Y, PUSH_NEG_Y),
-        (PUSH_POS_Z, PUSH_NEG_Z),
-    ]) {
-        if near_zero(component, NEAR_ZERO) {
-            continue;
-        }
-        bits |= if component > 0. { positive } else { negative };
-    }
-    bits
-}
-
-/// The last step of `calcResultVec`: a push along an axis that goes the way
-/// the round before pushed back against the move (`previous` is the earlier
-/// round's push less the move left, see `move_collide`) is averaged with it,
-/// or replaced by it when this round has nothing pushing the other way.
-fn average_with_previous(fix: Vec3, now: u32, previous: Vec3, before: u32) -> Vec3 {
-    let mut result = fix.to_array();
-    let before_axes = [
-        (PUSH_POS_X, PUSH_NEG_X),
-        (PUSH_POS_Y, PUSH_NEG_Y),
-        (PUSH_POS_Z, PUSH_NEG_Z),
-    ];
-    for (axis, (positive, negative)) in before_axes.into_iter().enumerate() {
-        let current = result[axis];
-        let earlier = previous[axis];
-        let faint = earlier.abs() < NEAR_ZERO;
-        let both_ways = |other: u32| {
-            if now & other != 0 {
-                (current + earlier) * 0.5
-            } else {
-                earlier
-            }
-        };
-        if before & negative != 0 {
-            if current > 0. && current > earlier && (earlier >= 0. || faint) {
-                result[axis] = both_ways(positive);
-            }
-        } else if before & positive != 0
-            && current < 0.
-            && current < earlier
-            && (earlier <= 0. || faint)
-        {
-            result[axis] = both_ways(negative);
-        }
-    }
-    Vec3::from_array(result)
+    result::classify_face(normal)
 }
 
 /// The part of `v` across `axis` (`al::verticalizeVec`).
 fn across(v: Vec3, axis: Vec3) -> Vec3 {
     v - axis * v.dot(axis)
-}
-
-/// `al::isNearDirection`: the vectors do not point apart and every component of
-/// their cross product is within `limit`.
-fn is_near_direction(a: Vec3, b: Vec3, limit: f32) -> bool {
-    a.dot(b) >= 0. && a.cross(b).abs().max_element() <= limit
 }
 
 /// What a collide call found.
@@ -1512,14 +1444,7 @@ impl PlayerCollider {
         }
     }
 
-    /// `PlayerCollider::calcResultVec`, for static geometry: the single fix
-    /// vector that resolves the results of one pose, and the bookkeeping of
-    /// the deepest contacts. `previous` is what the round before told this
-    /// one (see `move_collide`); the second result is the fix before it was
-    /// averaged with that.
-    ///
-    /// Left out: the squeeze test of the `Press` collision code and the
-    /// moving parts' separate accumulators.
+    /// `PlayerCollider::calcResultVec` for the results of one pose (see `result.rs`).
     fn calc_result_vec(
         &mut self,
         mesh: &TriangleMesh,
@@ -1527,338 +1452,79 @@ impl PlayerCollider {
         results: &Results,
         previous: Vec3,
     ) -> (Vec3, Vec3) {
-        let flags = self.flags(mesh, results);
-        self.average_ground(mesh, results);
-        // The deepest floor of the earlier rounds provides the ground
-        // reference the arrows did not.
-        if let Some(floor) = &self.floor {
-            if !self.has_ground_position {
-                self.ground_position = floor.position;
-                self.has_ground_position = true;
-            }
-            if !self.has_ground_normal {
-                self.ground_normal = floor.normal;
-                self.has_ground_normal = true;
-            }
-        }
-        let mut fixes = Fixes::default();
-        for result in &results.collide {
-            let triangle = &mesh.triangles[result.triangle as usize];
-            match result.hit {
-                Hit::Arrow(hit) => {
-                    if flags.arrow_floor {
-                        self.arrow_fix(mesh, pose, result, &hit, &mut fixes);
-                    }
-                }
-                Hit::Sphere(hit) => {
-                    self.sphere_fix(mesh, triangle, result, &hit, &flags, &mut fixes);
-                }
-            }
-        }
-        let total = fixes.total();
-        let fix = average_with_previous(total, fixes.directions, previous, self.push_directions);
-        self.push_directions = fixes.directions;
-        (fix, total)
+        let collide = self.contact_facts(mesh, pose, &results.collide);
+        let support = self.contact_facts(mesh, pose, &results.support);
+        let border = self.border_check();
+        let solved = self.solve_results(&collide, &support, previous, border, &mut |at, normal| {
+            border_behind_game(mesh, at, normal)
+        });
+        (solved.fix, solved.total)
     }
 
-    fn flags(&self, mesh: &TriangleMesh, results: &Results) -> Flags {
-        let mut flags = Flags::default();
-        for result in &results.collide {
-            let normal = mesh.triangles[result.triangle as usize].normal;
-            match result.hit {
-                Hit::Arrow(_) => {
-                    if classify(normal) == Class::Floor {
-                        flags.arrow_floor = true;
-                    }
-                }
-                Hit::Sphere(hit) if hit.location == Location::Face => match classify(normal) {
-                    Class::Floor => flags.floor = true,
-                    Class::Wall => flags.wall = true,
-                    Class::Ceiling => flags.ceiling = true,
-                },
-                Hit::Sphere(_) => {}
-            }
-        }
-        flags
-    }
-
-    /// `calcGroundArrowAverage`: the floor normal is the average of the
-    /// distinct normals under the arrows (collisions and supports alike), the
-    /// ground position the average of the contact points of the arrows that
-    /// collided. Each arrow remembers its deepest floor hit over every round
-    /// of the `collide` (the slots are cleared only when it starts).
-    fn average_ground(&mut self, mesh: &TriangleMesh, results: &Results) {
-        self.ground_normal = Vec3::ZERO;
-        self.ground_position = Vec3::ZERO;
-        self.has_ground_normal = false;
-        self.has_ground_position = false;
-        let both = results.collide.iter().chain(&results.support);
-        for result in both {
-            let Hit::Arrow(hit) = result.hit else {
-                continue;
-            };
-            let Shape::Arrow { index, margin, .. } = self.keeper.shapes[result.shape] else {
-                continue;
-            };
-            let normal = mesh.triangles[result.triangle as usize].normal;
-            if classify(normal) != Class::Floor {
-                continue;
-            }
-            let slot = &mut self.arrow_slots[index];
-            if slot.is_none_or(|held| held.0 < hit.depth) {
-                *slot = Some((hit.depth, margin, hit.position, normal));
-            }
-        }
-        let mut position = Vec3::ZERO;
-        let mut positions = 0;
-        let mut normal = Vec3::ZERO;
-        let mut normals = 0;
-        let mut seen: Vec<Vec3> = Vec::new();
-        for slot in self.arrow_slots.iter().flatten() {
-            let (depth, margin, at, n) = *slot;
-            if depth >= margin {
-                position += at;
-                positions += 1;
-            }
-            // Arrows on the same plane count once.
-            if !seen.iter().any(|s| is_near_direction(*s, n, 0.01)) {
-                normal += n;
-                normals += 1;
-            }
-            seen.push(n);
-        }
-        // (The averages multiply by the reciprocal of the count, and the normal is made a unit
-        // vector with `al::normalize`.)
-        if positions > 0 {
-            let reciprocal = 1. / positions as f32;
-            self.ground_position = Vec3::new(
-                position.x * reciprocal,
-                position.y * reciprocal,
-                position.z * reciprocal,
-            );
-            self.has_ground_position = true;
-        }
-        if normals > 0 {
-            let reciprocal = 1. / normals as f32;
-            self.ground_normal = normalize(Vec3::new(
-                normal.x * reciprocal,
-                normal.y * reciprocal,
-                normal.z * reciprocal,
-            ));
-            self.has_ground_normal = true;
-        }
-    }
-
-    /// `calcResultVecArrow`: an arrow that went in past its margin pushes the
-    /// body up along the average floor normal by the part it went in.
-    fn arrow_fix(
-        &mut self,
+    /// The keeper's list of collided shapes as `calcResultVec` reads it.
+    fn contact_facts(
+        &self,
         mesh: &TriangleMesh,
         pose: &Pose,
-        result: &ShapeResult,
-        hit: &ArrowHit,
-        fixes: &mut Fixes,
-    ) {
-        let Shape::Arrow { margin, vector, .. } = self.keeper.shapes[result.shape] else {
-            return;
-        };
-        let normal = mesh.triangles[result.triangle as usize].normal;
-        if classify(normal) != Class::Floor {
-            return;
-        }
-        let direction = pose.rotate(vector).normalize_or_zero();
-        let depth = (hit.depth - margin).max(0.);
-        let push = -depth * direction.dot(self.ground_normal);
-        fixes.add(self.ground_normal * push, self.ground_normal);
-        self.record(
-            mesh,
-            Class::Floor,
-            hit.depth,
-            result,
-            hit.position,
-            Location::Face,
-        );
+        list: &[ShapeResult],
+    ) -> Vec<result::ContactFacts> {
+        list.iter()
+            .map(|r| result::ContactFacts {
+                shape: match self.keeper.shapes[r.shape] {
+                    Shape::Sphere {
+                        support,
+                        ignore_ground,
+                        ..
+                    } => result::ShapeFacts::Sphere {
+                        support,
+                        support_axis: pose.rotate(Vec3::Y),
+                        ignore_ground,
+                        ignore_ceiling: false,
+                    },
+                    Shape::Arrow {
+                        index,
+                        margin,
+                        vector,
+                        ..
+                    } => result::ShapeFacts::Arrow {
+                        index,
+                        margin,
+                        direction: pose.rotate(vector),
+                    },
+                },
+                hit: r.hit,
+                normal: mesh.triangles[r.triangle as usize].normal,
+                triangle: r.triangle,
+            })
+            .collect()
     }
 
-    /// `calcResultVecSphere`.
-    fn sphere_fix(
-        &mut self,
-        mesh: &TriangleMesh,
-        triangle: &MeshTriangle,
-        result: &ShapeResult,
-        hit: &SphereHit,
-        flags: &Flags,
-        fixes: &mut Fixes,
-    ) {
-        let Shape::Sphere {
-            support,
-            ignore_ground,
-            ..
-        } = self.keeper.shapes[result.shape]
-        else {
-            return;
-        };
-        let normal = triangle.normal;
-        let at_face = hit.location == Location::Face;
-        if ignore_ground && classify(normal) == Class::Floor {
-            return;
+    /// `PlayerCollider::+0x11c`: the hanging forms check the faces' hits too
+    /// (`setWallBorderCheckTypeAll`), the others only edges and corners; Cappy's collider
+    /// checks nothing.
+    fn border_check(&self) -> result::BorderCheck {
+        if !self.keeper.has_arrow {
+            result::BorderCheck::Off
+        } else if self.form_checks_faces() {
+            result::BorderCheck::All
+        } else {
+            result::BorderCheck::NoFace
         }
-        // The push along the face normal, and the radial one for an edge.
-        let by_normal = normal * hit.depth;
-        let radial = || edge_fix(normal, hit.depth, hit.center - hit.position);
-        let class = classify(normal);
-        // A wall hit with a face right behind it (the back of a thin wall) is
-        // dropped: by every wall hit in the hanging forms, by those on an edge
-        // or corner in the others (`setWallBorderCheckTypeAll` / `NoFace`).
-        if class == Class::Wall
-            && self.keeper.has_arrow
-            && (!at_face || self.form_checks_faces())
-            && border_behind_game(mesh, hit.position, normal)
-        {
-            return;
-        }
-        let fix = match class {
-            Class::Floor if !self.keeper.has_arrow => {
-                // No arrows: the sphere itself is the floor contact.
-                if flags.floor {
-                    by_normal
-                } else {
-                    radial_or_normal(at_face, by_normal, radial())
-                }
-            }
-            Class::Floor => {
-                // A floor-like face under a sphere that supports the body is
-                // ground when the contact is directly underneath it, or on
-                // its flank no higher than a small step above the ground
-                // plane the arrows found. Any other floor-like contact (the
-                // head's, or a step) can only push the body sideways.
-                let underneath =
-                    |range: f32| across(hit.position - hit.center, Vec3::Y).length() < range;
-                let ground_like = support.is_some_and(|range| {
-                    underneath(range)
-                        || flags.arrow_floor
-                            && SMALL_STEP - (hit.position - self.ground_position).y >= -1e-3
-                });
-                if ground_like {
-                    by_normal
-                } else {
-                    if flags.arrow_floor
-                        && (hit.position - self.ground_position).dot(self.ground_normal)
-                            < SAME_PLANE
-                    {
-                        return;
-                    }
-                    // The push is the normal one's part along the line from the touched
-                    // point to the sphere's centre, taken across the up axis. A direction
-                    // too short to normalise (`al::tryNormalizeOrZero`'s own limit, a
-                    // length of 0.001) is no contact at all: a body resting on a flank
-                    // only touches the slope, it is not pushed along it.
-                    let (to_centre, usable) = try_normalize_or_zero(hit.center - hit.position);
-                    if !usable {
-                        return;
-                    }
-                    let along = (by_normal.x * to_centre.x + by_normal.y * to_centre.y)
-                        + by_normal.z * to_centre.z;
-                    let side = verticalize_vec(
-                        GRAVITY,
-                        Vec3::new(
-                            to_centre.x * along,
-                            to_centre.y * along,
-                            to_centre.z * along,
-                        ),
-                    );
-                    let (direction, usable) = try_normalize_or_zero(side);
-                    if !usable {
-                        return;
-                    }
-                    fixes.add(side, direction);
-                    return;
-                }
-            }
-            Class::Wall => {
-                if flags.wall {
-                    by_normal
-                } else {
-                    let fix = radial_or_normal(at_face, by_normal, radial());
-                    if at_face { fix } else { across(fix, Vec3::Y) }
-                }
-            }
-            Class::Ceiling => {
-                if flags.ceiling {
-                    by_normal
-                } else {
-                    radial_or_normal(at_face, by_normal, radial())
-                }
-            }
-        };
-        fixes.add(fix, normal);
-        self.record(mesh, class, hit.depth, result, hit.position, hit.location);
     }
 
     /// `setWallBorderCheckTypeAll`: the hanging forms check the faces' hits too.
     fn form_checks_faces(&self) -> bool {
         matches!(self.form, Form::WallGrab | Form::Pole)
     }
-
-    /// Keeps the deepest contact of each class.
-    fn record(
-        &mut self,
-        mesh: &TriangleMesh,
-        class: Class,
-        depth: f32,
-        result: &ShapeResult,
-        position: Vec3,
-        location: Location,
-    ) {
-        let (slot, contact) = match class {
-            Class::Floor => (0, &mut self.floor),
-            Class::Wall => (1, &mut self.wall),
-            Class::Ceiling => (2, &mut self.ceiling),
-        };
-        if self.best[slot] < depth {
-            self.best[slot] = depth;
-            *contact = Some(Contact {
-                normal: mesh.triangles[result.triangle as usize].normal,
-                position,
-                triangle: result.triangle,
-                location,
-            });
-        }
-    }
 }
 
 /// The direction of gravity the collider classifies faces and takes the up axis from.
 const GRAVITY: Vec3 = Vec3::NEG_Y;
-
-/// `al::verticalizeVec(out, vertical, vec)`: `vec` without its part along `vertical`.
-fn verticalize_vec(vertical: Vec3, vec: Vec3) -> Vec3 {
-    let along = (vertical.x * vec.x + vertical.y * vec.y) + vertical.z * vec.z;
-    Vec3::new(
-        vec.x - vertical.x * along,
-        vec.y - vertical.y * along,
-        vec.z - vertical.z * along,
-    )
-}
-
-/// `SphereHitInfo::calcFixVector` away from a face: the push along the line from the touched
-/// point to the centre (`to_centre`, which `al::tryNormalizeOrZero` makes a unit vector or
-/// zero), as long as the normal pushed by `depth` reaches along it.
-fn edge_fix(normal: Vec3, depth: f32, to_centre: Vec3) -> Vec3 {
-    let (v, _) = try_normalize_or_zero(to_centre);
-    let pushed = Vec3::new(depth * normal.x, depth * normal.y, depth * normal.z);
-    let along = (pushed.x * v.x + pushed.y * v.y) + pushed.z * v.z;
-    Vec3::new(v.x * along, v.y * along, v.z * along)
-}
-
-/// `calcFixVector`: the push along the face normal on a face, the radial one
-/// on an edge or corner.
-fn radial_or_normal(at_face: bool, by_normal: Vec3, radial: Vec3) -> Vec3 {
-    if at_face { by_normal } else { radial }
-}
 
 #[path = "tests/collider.rs"]
 mod checks;
 
 pub fn self_check() {
     checks::run();
+    result::self_check();
 }
