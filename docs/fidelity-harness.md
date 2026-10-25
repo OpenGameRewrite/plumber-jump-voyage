@@ -459,6 +459,18 @@ snapshot cannot hold the first step it has pending, so the replay injects the
 row before it and chooses the state again with that frame's input. Compare with `--lockstep` to count the
 frames that disagree rather than look for drift.
 
+## Skeleton and the partial animation
+
+The `bones` column is the rewrite's own skeleton (`src/skeleton_pose.rs`): the clips of the
+installed model blended by their weights, the joint controllers, and the same pose drives the
+rendered model. A catch on the move (`CatchCapParts` on the ground, `CatchCapJumpParts` in the
+air) plays as the game's `partial0` animation: it replaces the main blend on `Spine1` and every
+joint below it (the model's partial group) and leaves the hips and legs alone, and when it ends
+the main clip fades back in over five steps from the pose shown the row before. The standing
+catch (`CatchCap`) is a whole-body sub animation instead. Between baked frames a clip is
+interpolated linearly, which is the fidelity limit behind the few-centimetre toe differences at
+fractional frames.
+
 ## Rendered captures
 
 ```sh
