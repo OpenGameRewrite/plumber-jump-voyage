@@ -124,7 +124,10 @@ random sequences of frames, every field they write compared after every frame: t
 controller (`PlayerActionTurnControl::update`, `turn_control.rs`, `PJV_TURN_CASES`), the
 ground move control (`PlayerActionGroundMoveControl::updateNormalMove` with its helpers,
 `ground_move.rs`, `PJV_MOVE_CASES`) and the stick's bend along a wall (`PlayerInput::
-updateWallAlong`, `snapWallAlongInput`, `wall_along.rs`, `PJV_WALLALONG_CASES`). The velocity
+updateWallAlong`, `snapWallAlongInput`, `wall_along.rs`, `PJV_WALLALONG_CASES`); the wall
+slide's numbers follow them (`PlayerStateNormalWallSlide::appear`, `followNormal` and the slide
+step, `wall_slide.rs`, `PJV_WSLIDE_CASES`: the grab's velocity is a normalized direction times the
+amount, and the direction the slide pushes by is the pose's front, turned round). The velocity
 the ground control sets is kept whole, the pull along the normal included: the next step
 rotates that vector onto the new floor (`alongVectorNormalH`, which strips the part along the
 old normal), and that rounding is the noise of the game's speed (14.000001, 13.999999) which
