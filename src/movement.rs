@@ -4105,6 +4105,9 @@ impl Player {
         // (`rs::waitGround` with `GravityMove`).
         self.set_h(Vec3::ZERO);
         self.v.y = -air_move::tune::GRAVITY_MOVE;
+        // The pull runs along the floor's normal, as the standing state's does (the pound
+        // landing on the pond's slope, swim-hipdrop-in row 137: -7 times the normal).
+        self.pull = GRAVITY_MOVE;
         if self.pre_jump > 0 && self.pound_jump_permitted() {
             self.ground_jump(o);
             return;
