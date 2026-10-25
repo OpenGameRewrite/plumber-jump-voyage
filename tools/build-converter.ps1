@@ -4,7 +4,7 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskToolbox = (Resolve-Path -LiteralPath $Toolbox).Path
 $taskOutput = Join-Path $taskRoot 'local\converter'
 New-Item -ItemType Directory -Path $taskOutput -Force | Out-Null
-$taskNames = @('Toolbox.Library.dll','FirstPlugin.Plg.dll','AssimpNet.dll','OpenTK.dll','Gl_EditorFramework.dll','Syroot.NintenTools.NSW.Bfres.dll')
+$taskNames = @('Toolbox.Library.dll','FirstPlugin.Plg.dll','AssimpNet.dll','OpenTK.dll','Gl_EditorFramework.dll','Syroot.NintenTools.NSW.Bfres.dll','Syroot.Maths.dll')
 $taskRefs = @('/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Core.dll','/r:System.Web.Extensions.dll')
 foreach ($taskName in $taskNames) {
     $taskDll = Get-ChildItem -LiteralPath $taskToolbox -Filter $taskName -Recurse | Select-Object -First 1
@@ -12,7 +12,7 @@ foreach ($taskName in $taskNames) {
     $taskRefs += '/r:' + $taskDll.FullName
 }
 $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $taskCompiler /nologo /platform:x64 ('/out:' + (Join-Path $taskOutput 'convert.exe')) @taskRefs (Join-Path $PSScriptRoot 'convert.cs') (Join-Path $PSScriptRoot 'convert_checks.cs')
+& $taskCompiler /nologo /platform:x64 ('/out:' + (Join-Path $taskOutput 'convert.exe')) @taskRefs (Join-Path $PSScriptRoot 'convert.cs') (Join-Path $PSScriptRoot 'convert_checks.cs') (Join-Path $PSScriptRoot 'convert_curves.cs')
 if ($LASTEXITCODE) { throw 'Converter compilation failed' }
 # Assemblies resolve beside the adapter; files remain ignored and local.
 Get-ChildItem -LiteralPath $taskToolbox -File -Filter '*.dll' | Copy-Item -Destination $taskOutput -Force

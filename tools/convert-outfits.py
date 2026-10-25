@@ -81,6 +81,7 @@ def main():
     p.add_argument('--force',action='store_true',help='Regenerate existing local GLBs')
     p.add_argument('--repack',action='store_true',help='Repack existing conversions (needs --keep-intermediates on the earlier run)')
     p.add_argument('--add-clip',action='append',help='Convert this Mario clip (repeatable) and append it to the installed Mario file; nothing else changes')
+    p.add_argument('--curves',action='store_true',help='Write assets/local/Mario.curves.bin: the original curves of every clip the installed Mario.glb holds (nothing else changes)')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the converter working files (DAE, glTF, PNG)')
     p.add_argument('--self-check',action='store_true')
     a=p.parse_args()
@@ -131,6 +132,23 @@ def main():
         """The converter arguments that bring in Mario's body, finger and facial clips."""
         return [str(model('PlayerAnimation')),'--hand-l='+str(model('PlayerAnimationHandL')),'--hand-r='+str(model('PlayerAnimationHandR'))]+[
             '--'+part.lower()+'='+str(model('PlayerAnimation'+part)) for part in ('Eye','Face','Head')]
+    if a.curves:
+        # The game evaluates the clips' curves between frames; the converter writes them
+        # exactly as stored, for the clips the installed Mario.glb already has.
+        installed=extract.ROOT/'assets/local/Mario.glb'
+        if not installed.is_file():raise ValueError('Install Mario.glb first (run this script without --curves)')
+        clips=[clip['name'] for clip in extract.glb_json(installed).get('animations',[])]
+        scratch=exports/'_curves';scratch.mkdir(exist_ok=True)
+        output=scratch/'Mario.curves.bin'
+        command=[str(a.adapter.resolve()),str(model('Mario')),str(output)]+mario_animation()+['--curves-only']
+        command+=['--clip='+clip for clip in clips]
+        command+=['--part='+str(model(part))+fix for part,fix in body_parts('Mario',candidates['Mario']).items()]
+        with output.with_suffix('.log').open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
+        if result.returncode or not output.is_file():raise ValueError(f'Curve export failed; details in {output.with_suffix(".log")}')
+        shutil.copyfile(output,extract.ROOT/'assets/local/Mario.curves.bin')
+        print(f'Wrote assets/local/Mario.curves.bin for {len(clips)} clips')
+        if not a.keep_intermediates:shutil.rmtree(scratch,ignore_errors=True)
+        return
     if a.add_clip:
         # Bake only the named clips and append them to the installed Mario file,
         # leaving everything it holds as it is (older builds read the same file).

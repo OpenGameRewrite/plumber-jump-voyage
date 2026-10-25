@@ -10,12 +10,15 @@
 //! The joints are the ones the probe logs in `bones` (`nw4f_root` down to `HandR`): each takes
 //! its translation and rotation from the clips (the bind pose where a clip has no key for it),
 //! blended by the clips' weights (translations linearly, rotations as a normalised weighted
-//! sum), and the clips are sampled at 60 keys a second, linear between keys.
+//! sum). A clip is sampled from its original curves when the installation has them
+//! (`clip_curves`: the game evaluates them at the fractional frame of the animation); otherwise
+//! from the baked tracks, at 60 keys a second and linear between keys.
 //!
 //! `world_pose` then walks the joints parents first, as the model's world calculation does: a
 //! joint's world matrix is its parent's times its own, and the player's joint controllers
 //! (`PlayerJointControlKeeper`) are given the matrix to bend before its children use it, in
 //! the same order (`al::JointControllerKeeper::Exec`).
+use crate::clip_curves::{Curves, Sample};
 use crate::movement::look_joint::Mat34;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -502,11 +505,13 @@ pub struct SkeletonPose {
     /// The glTF node of each joint (in `Joint` order) and each joint's bind pose.
     nodes: Vec<usize>,
     bind: Vec<Local>,
+    /// Each joint's index in the curve file (`None` without the file or the joint in it).
+    curve_joints: Vec<Option<usize>>,
     clips: Mutex<HashMap<String, Option<std::sync::Arc<ClipTracks>>>>,
 }
 
 /// A quaternion's rotation matrix, row-major, in double precision.
-fn rotation_matrix(q: [f64; 4]) -> [[f64; 3]; 3] {
+pub(crate) fn rotation_matrix(q: [f64; 4]) -> [[f64; 3]; 3] {
     let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
     let [x, y, z, w] = q.map(|c| c / norm);
     [
@@ -615,12 +620,17 @@ impl SkeletonPose {
                 }
             })
             .collect();
+        let curve_joints = Joint::ALL
+            .iter()
+            .map(|joint| Curves::installed()?.joint(joint.name()))
+            .collect();
         Some(Self {
             document,
             bytes,
             bin_start,
             nodes,
             bind,
+            curve_joints,
             clips: Mutex::new(HashMap::new()),
         })
     }
@@ -713,6 +723,22 @@ impl SkeletonPose {
         if playing.is_empty() {
             return None;
         }
+        // The clips' original curves at each layer's frame, where the installation has them: the
+        // game evaluates those between frames, the baked tracks below are linear between whole ones.
+        let exact: Vec<Vec<Option<Sample>>> = playing
+            .iter()
+            .map(|(_, layer)| {
+                let clip =
+                    Curves::installed().and_then(|curves| Some((curves, curves.clip(layer.clip)?)));
+                self.curve_joints
+                    .iter()
+                    .map(|joint| {
+                        let (curves, clip) = clip?;
+                        curves.sample(clip, (*joint)?, layer.frame)
+                    })
+                    .collect()
+            })
+            .collect();
         // The scale each joint truly has in each clip: the file stores a joint's scale divided
         // by its parent's (see `place`), so it is multiplied back down the chain. The game
         // blends the true scales, so the blend is made of those and converted afterwards.
@@ -725,10 +751,15 @@ impl SkeletonPose {
         };
         let true_scales: Vec<[[f64; 3]; JOINT_COUNT]> = playing
             .iter()
-            .map(|(clip, layer)| {
+            .enumerate()
+            .map(|(i, (clip, layer))| {
                 let time = layer.frame / KEYS_PER_SECOND;
                 let mut scales = [[1.; 3]; JOINT_COUNT];
                 for (slot, joint) in Joint::ALL.iter().enumerate() {
+                    if let Some(sample) = &exact[i][slot] {
+                        scales[slot] = sample.scale;
+                        continue;
+                    }
                     scales[slot] = match clip.scale[slot].as_ref().and_then(|t| t.around(time)) {
                         Some((a, b, k)) => {
                             let above = compensated(*joint, &scales);
@@ -780,23 +811,29 @@ impl SkeletonPose {
             for (i, share) in &shares[slot] {
                 let (clip, layer) = &playing[*i];
                 let time = layer.frame / KEYS_PER_SECOND;
-                let t = clip.translation[slot]
-                    .as_ref()
-                    .and_then(|track| track.around(time))
-                    .map_or(bind.translation, |(a, b, k)| {
-                        std::array::from_fn(|i| {
-                            f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k)
-                        })
-                    });
+                let t = match &exact[*i][slot] {
+                    Some(sample) => sample.translation,
+                    None => clip.translation[slot]
+                        .as_ref()
+                        .and_then(|track| track.around(time))
+                        .map_or(bind.translation, |(a, b, k)| {
+                            std::array::from_fn(|i| {
+                                f64::from(a[i]) + (f64::from(b[i]) - f64::from(a[i])) * f64::from(k)
+                            })
+                        }),
+                };
                 for k in 0..3 {
                     translation[k] += share * t[k];
                 }
-                let q = clip.rotation[slot]
-                    .as_ref()
-                    .and_then(|track| track.around(time))
-                    .map_or(bind.rotation, |(a, b, k)| {
-                        slerp(a.map(f64::from), b.map(f64::from), f64::from(k))
-                    });
+                let q = match &exact[*i][slot] {
+                    Some(sample) => sample.rotation,
+                    None => clip.rotation[slot]
+                        .as_ref()
+                        .and_then(|track| track.around(time))
+                        .map_or(bind.rotation, |(a, b, k)| {
+                            slerp(a.map(f64::from), b.map(f64::from), f64::from(k))
+                        }),
+                };
                 // Rotations are summed on one hemisphere.
                 let reference = if blended == [0.; 4] { q } else { blended };
                 let sign = if dot4(q, reference) < 0. { -1. } else { 1. };

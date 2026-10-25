@@ -70,7 +70,7 @@ partial class ConvertOutfit {
             return 0;
         } catch(Exception e) { Console.Error.WriteLine(e.ToString());return 1; }
     }
-    sealed class Export {
+    sealed partial class Export {
         readonly string[] args;
         readonly string dst;
         readonly BFRES resource;
@@ -97,6 +97,7 @@ partial class ConvertOutfit {
             meshList=model.Objects.ToList();materials=model.Materials.ToList();textures=resource.GetTextures();
         }
         public void Run() {
+            if(args.Contains("--curves-only")) {AssembleParts();WriteCurves();return;}
             ReadExpressions();
             if(args.Contains("--expressions-only"))return;
             AssembleParts();
@@ -297,17 +298,26 @@ partial class ConvertOutfit {
                 }
             }
         }
-        void BakeAnimations(Scene scene) {
+        // Every skeletal clip of the model's archive and of the extra animation archives.
+        List<FSKA> SkeletalClips() {
             var all=new List<FSKA>();all.AddRange(Animations<FSKA>(resource));
             foreach(var path in args.Skip(2).Where(a=>!a.StartsWith("--"))) {var r=new BFRES {FileName=Path.GetFileName(path),FilePath=Path.GetFullPath(path)};using(var f=File.OpenRead(path))r.Load(f);all.AddRange(Animations<FSKA>(r));}
             if(args.Contains("--geometry-only"))all.Clear();
-            Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
-            File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
+            return all;
+        }
+        // The clips the conversion keeps (one per name); the baked and the curve files use the same selection.
+        IEnumerable<FSKA> ChosenClips(List<FSKA> all) {
             var prefixes=new[]{"Wait","Run","Dash","Fire","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
-            // --clip=NAME (repeatable) bakes exactly those clips, whatever their
+            // --clip=NAME (repeatable) selects exactly those clips, whatever their
             // length or name, to add them to an existing conversion.
             var chosen=new HashSet<string>(args.Where(a=>a.StartsWith("--clip=")).Select(a=>a.Substring(7)));
-            foreach(var clip in all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>chosen.Count>0?chosen.Contains(a.Text):args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)))) {
+            return all.GroupBy(a=>a.Text).Select(g=>g.First()).Where(a=>chosen.Count>0?chosen.Contains(a.Text):args.Contains("--all-animations")||a.FrameCount<=600&&prefixes.Any(p=>a.Text.StartsWith(p,StringComparison.OrdinalIgnoreCase)));
+        }
+        void BakeAnimations(Scene scene) {
+            var all=SkeletalClips();
+            Console.WriteLine("Segment scale compensated bones: "+model.Skeleton.bones.Count(b=>b.UseSegmentScaleCompensate));
+            File.WriteAllLines(Path.ChangeExtension(dst,"animations.txt"),all.Select(a=>a.Text+" "+a.FrameCount));
+            foreach(var clip in ChosenClips(all)) {
                 var anim=new Assimp.Animation {Name=clip.Text,DurationInTicks=clip.FrameCount,TicksPerSecond=60.0};
                 var channels=new Dictionary<string,NodeAnimationChannel>();
                 foreach(var bone in model.Skeleton.bones) {var node=scene.RootNode.FindNode(bone.Text)??scene.RootNode.FindNode("Armature_"+bone.Text);if(node==null)continue;var ch=new NodeAnimationChannel {NodeName=node.Name};channels[bone.Text]=ch;anim.NodeAnimationChannels.Add(ch);}

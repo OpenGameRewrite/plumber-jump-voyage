@@ -7,6 +7,7 @@ pub(super) fn run() {
     a_partial_animation_replaces_the_upper_body_and_leaves_the_rest();
     a_stretched_upper_arm_moves_the_elbow_but_does_not_shear_the_forearm();
     a_parents_scale_moves_the_offset_but_not_the_frame_and_roots_inherit();
+    the_original_curves_agree_with_the_baked_tracks_on_whole_frames();
 }
 
 /// The model is the player's own installation; without it there is nothing to check.
@@ -181,4 +182,71 @@ fn a_parents_scale_moves_the_offset_but_not_the_frame_and_roots_inherit() {
     assert!((worlds[Joint::JointRoot as usize][1][3] - 15.).abs() < 1e-4);
     assert!((worlds[Joint::Hip as usize][0][0] - 3.).abs() < 1e-4);
     assert!((worlds[Joint::Head as usize][0][0] - 3.).abs() < 1e-4);
+}
+
+/// The curve file is the same animation as the baked tracks, only exact between frames: on whole
+/// frames the two agree to the baker's own error (its evaluation was off by up to 0.03 cm, 0.006
+/// rad and 0.004 in scale, and the packer drops keys within 0.001).
+#[cfg_attr(test, test)]
+fn the_original_curves_agree_with_the_baked_tracks_on_whole_frames() {
+    let (Some(model), Some(curves)) = (model(), Curves::installed()) else {
+        return;
+    };
+    let mut compared = 0;
+    for name in [
+        "Walk",
+        "Run",
+        "RollingStart",
+        "Jump",
+        "WallCatch",
+        "Wait",
+        "SpinCapStart",
+    ] {
+        let (Some(baked), Some(clip)) = (model.clip(name), curves.clip(name)) else {
+            continue;
+        };
+        for (slot, joint) in Joint::ALL.iter().enumerate() {
+            let Some(index) = model.curve_joints[slot] else {
+                continue;
+            };
+            for frame in (0..60).step_by(3) {
+                let Some(sample) = curves.sample_for_file(clip, index, frame as f32) else {
+                    continue;
+                };
+                let time = frame as f32 / KEYS_PER_SECOND;
+                if let Some((a, b, k)) = baked.translation[slot]
+                    .as_ref()
+                    .and_then(|t| t.around(time))
+                {
+                    for i in 0..3 {
+                        let value = f64::from(a[i]) + f64::from(b[i] - a[i]) * f64::from(k);
+                        assert!(
+                            (value - sample.translation[i]).abs() < 0.06,
+                            "{name} {joint:?} {frame} t{i}"
+                        );
+                    }
+                }
+                if let Some((a, b, k)) = baked.scale[slot].as_ref().and_then(|t| t.around(time)) {
+                    for i in 0..3 {
+                        let value = f64::from(a[i]) + f64::from(b[i] - a[i]) * f64::from(k);
+                        assert!(
+                            (value - sample.scale[i]).abs() < 0.01,
+                            "{name} {joint:?} {frame} s{i}"
+                        );
+                    }
+                }
+                if let Some((a, b, k)) = baked.rotation[slot].as_ref().and_then(|t| t.around(time))
+                {
+                    let q = slerp(a.map(f64::from), b.map(f64::from), f64::from(k));
+                    assert!(
+                        dot4(q, sample.rotation).abs() > 1. - 1e-4,
+                        "{name} {joint:?} {frame} rotation"
+                    );
+                }
+                compared += 1;
+            }
+        }
+    }
+    // (Nothing is compared when the installation predates the curve file or the clips.)
+    assert!(compared == 0 || compared > 100, "{compared}");
 }
