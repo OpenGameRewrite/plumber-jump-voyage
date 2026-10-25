@@ -111,6 +111,9 @@ pub enum Form {
     WallGrab,
     /// `changeCollisionPoleClimb`: the body clinging to a pole.
     Pole,
+    /// `changeCollisionSwim`: the swimmer, whose body sphere ignores floors (only the three
+    /// arrows stand it on the bottom).
+    Swim,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +187,12 @@ impl Keeper {
                 shapes.push(sphere(Vec3::new(0., 105., 0.), None, false));
             }
             Form::Mini => shapes.push(sphere(Vec3::new(0., 55., 0.), support, false)),
+            Form::Swim => {
+                // `PlayerColliderHakoniwa::init`'s third keeper: "Body" (IgnoreGround, 55 above the
+                // feet) and "Head" (105 above).
+                shapes.push(sphere(Vec3::new(0., 55., 0.), None, true));
+                shapes.push(sphere(Vec3::new(0., 105., 0.), None, false));
+            }
             Form::WallGrab => {
                 // Body and head hang below and out from the wall, and ignore floors.
                 shapes.push(sphere(Vec3::new(0., -75., -50.), None, true));

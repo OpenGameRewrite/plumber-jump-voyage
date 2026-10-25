@@ -122,7 +122,15 @@ order, checked bit for bit against the executable (`PJV_POSE_CASES=<local cases 
 test pose_math`). A quarter turn about the vertical axis is a tie of `toQuat`'s scalar and
 vertical-axis branches, so the sign of `qy`/`qw` follows the rounding noise of the pose
 (the floor normals carry the game's own noise, and `slerpTo` does not renormalise). The
-standing and running states therefore update the pose every step, also on a level floor.
+standing and running states therefore update the pose every step, also on a level floor. `rs::waitGround` starts with
+`al::followRotateFrontAxisUp` whenever the collider found ground: the pose's front is carried
+through the previous inverse and the current base matrix of the collision part under the feet and the
+pose is rebuilt from the up and that front (`ActorPose::follow_part`, checked bit for bit with
+`PJV_FOLLOW_CASES=<local cases file> cargo test pose_math`). The stage's parts are static, but a plaza
+rotated by 45 degrees (`CapWorldHomeGround000`) makes the product of the two matrices differ from the
+identity in the last bits, and that is what holds the settled pose of a placed player at the exact bit
+pattern the probe records (the first step after the teleport has found no ground and does not follow;
+every later one does, and the pose stays where it is).
 
 The console's single precision library is not correctly rounded: the image links a musl
 derivative (`sinf` and `cosf` through double precision kernels, `acosf`, `asinf`, `atanf` and

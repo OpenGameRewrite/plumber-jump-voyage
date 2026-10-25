@@ -143,6 +143,7 @@ impl Player {
     /// contacts is cancelled, the pull `gravity` along the normal is added up to `limit`, and
     /// the pose turns toward the ground (by `rate` of the way, at most `degrees` from upright).
     pub(super) fn swim_wait_ground(&mut self, gravity: f32, limit: f32, rate: f32, degrees: f32) {
+        self.follow_ground_part();
         let normal = self.ground_normal_or_up();
         self.rebound_velocity_from_collision(0., 0., 0.);
         if self.collider.floor.is_some()

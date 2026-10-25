@@ -314,6 +314,12 @@ pub fn slerp(from: Quat, to: Quat, t: f32) -> Quat {
     )
 }
 
+/// A direction carried by the three rows of a 3x4 matrix (`row . v`, summed x, y, z).
+fn rotate_by_rows(m: &[f32; 12], v: Vec3) -> Vec3 {
+    let row = |i: usize| (v.x * m[i] + v.y * m[i + 1]) + v.z * m[i + 2];
+    Vec3::new(row(0), row(4), row(8))
+}
+
 /// An actor's stored pose (`ActorPoseKeeperTQGMSV`): the quaternion it was last given and the
 /// rotation matrix made from it. The game reads the pose back through the matrix: the front and
 /// up directions are its columns and `al::calcQuat` runs `toQuat` over it, so a quaternion read
@@ -349,6 +355,20 @@ impl ActorPose {
     /// `al::calcSideDir(actor)`.
     pub fn side(&self) -> Vec3 {
         self.axes[0]
+    }
+
+    /// `al::followRotateFrontAxisUp(actor, parts)`: the front is carried into the collision part's
+    /// previous frame (`previous_inverse`, a 3x4 matrix by rows) and out again with its current
+    /// one (`base`), flattened into the plane of the pose's up, and the pose is rebuilt from the
+    /// up and that front (`makeQuatUpFront`; zero when the front has no direction left). A part
+    /// that stood still returns the front up to the rounding of the two matrices, which is
+    /// what the pose of a player on a rotated static part is made of. Returns the quaternion to store.
+    pub fn follow_part(&self, previous_inverse: &[f32; 12], base: &[f32; 12]) -> Quat {
+        let moved = rotate_by_rows(base, rotate_by_rows(previous_inverse, self.front()));
+        let up = self.up();
+        // `turnVecToVecCosOnPlane` with cosine -1: the target's part across the up, unit length.
+        let (flat, _) = try_normalize_or_zero(super::vector_lib::verticalize_vec(up, moved));
+        quat_up_front(up, flat)
     }
 
     /// `rs::slerpUpFront(actor, up, front, rate, max_degrees)`: the pose turned toward `up` (at

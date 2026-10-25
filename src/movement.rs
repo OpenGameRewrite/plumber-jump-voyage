@@ -1168,6 +1168,9 @@ pub struct Player {
     /// The camera's view rows when the orders carry them: the stick is then laid on the world as
     /// `PlayerInput::calcMoveInput` does (`move_input.rs`).
     view: Option<move_input::ViewRows>,
+    /// The frame (base matrix, inverse) of the collision part the last collision found ground on,
+    /// when the stage's export has it: `rs::waitGround` carries the pose along it.
+    ground_frame: Option<([f32; 12], [f32; 12])>,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1328,6 +1331,7 @@ impl Default for Player {
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
             view: None,
+            ground_frame: None,
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -2999,11 +3003,21 @@ impl Player {
     /// up follows the floor's normal (at most 45 degrees from vertical) by the
     /// slerp rate; its front is the one it has.
     fn wait_pose(&mut self) {
+        self.follow_ground_part();
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
         let stored =
             self.actor_pose()
                 .wait_ground(up, t::SLERP_QUAT_RATE_WAIT, t::WAIT_POSE_DEGREE_MAX);
         self.set_pose(stored);
+    }
+    /// The start of `rs::waitGround`: with ground under the feet (`rs::isCollidedGround`) the
+    /// pose is carried along the collision part (`al::followRotateFrontAxisUp`, which stores the
+    /// pose it makes). The first step after a teleport has found no ground yet.
+    pub(super) fn follow_ground_part(&mut self) {
+        if let Some((base, inverse)) = self.ground_frame {
+            let pose = self.actor_pose().follow_part(&inverse, &base);
+            self.set_pose(pose);
+        }
     }
     /// The actor takes the orientation `pose` (`al::updatePoseQuat`); its facing is the
     /// front's horizontal direction.

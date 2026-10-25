@@ -55,14 +55,17 @@ impl Player {
 
     /// The collision form `PlayerFormSensorCollisionArranger::syncForm` picks
     /// for the actor's nerve: the mini one for the squat, the slope slide and
-    /// the roll, the hanging one while a ledge is held, the normal one
-    /// otherwise (a dive included).
+    /// the roll, the hanging one while a ledge is held, the swimming one in the
+    /// water, the normal one otherwise (a dive included).
     fn collision_form(&self) -> Form {
         if self.mode == Move::Ledge && self.catch.is_hanging() {
             return Form::WallGrab;
         }
         if self.mode == Move::Pole && self.pole.is_form() {
             return Form::Pole;
+        }
+        if self.mode == Move::Swim {
+            return Form::Swim;
         }
         // The whole squat state keeps the mini form (the actor's nerve is
         // `Squat` through its stand-up, whose clip is `SquatEnd`).
@@ -239,6 +242,15 @@ impl Player {
                 at_face: c.location == crate::collider::Location::Face,
             }),
         };
+        // The collision part under the feet: `rs::waitGround` follows its frame.
+        self.ground_frame = collider
+            .floor
+            .as_ref()
+            .and_then(|c| mesh.triangles.get(c.triangle as usize)?.local)
+            .map(|local| {
+                let part = &mesh.parts[local.part as usize];
+                (part.base, part.inverse)
+            });
         self.mesh_ground = None;
         if let Some(floor) = &collider.floor {
             let normal = if collider.ground_normal == Vec3::ZERO {

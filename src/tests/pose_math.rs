@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn run() {
     an_untouched_vector_has_no_axis_angle();
     the_exes_pose_routines_agree_bit_for_bit();
+    the_exes_follow_of_a_collision_part_agrees_bit_for_bit();
 }
 
 #[cfg_attr(test, test)]
@@ -169,4 +170,30 @@ fn the_exes_pose_routines_agree_bit_for_bit() {
         checked += 1;
     }
     eprintln!("pose cases checked against the executable: {checked}");
+}
+
+/// `al::followRotateFrontAxisUp` from the executable (the fidelity folder's `follow_oracle.py`):
+/// `PJV_FOLLOW_CASES` names the file; without it nothing runs. Each case is a stored pose, the
+/// part's base matrix and previous inverse, and the quaternion the executable stores.
+#[cfg_attr(test, test)]
+fn the_exes_follow_of_a_collision_part_agrees_bit_for_bit() {
+    let Some(path) = std::env::var_os("PJV_FOLLOW_CASES") else {
+        return;
+    };
+    let text = std::fs::read_to_string(path).expect("the cases file");
+    let cases: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let matrix = |v: &serde_json::Value| -> [f32; 12] {
+        let list: Vec<f32> = v.as_array().unwrap().iter().map(number).collect();
+        list.try_into().unwrap()
+    };
+    let cases = cases.as_array().expect("cases");
+    for (index, case) in cases.iter().enumerate() {
+        let pose = ActorPose::new(quat(&case["stored"]));
+        let got = pose.follow_part(&matrix(&case["inverse"]), &matrix(&case["base"]));
+        assert!(
+            same_quat_bits(got, quat(&case["out"])),
+            "case {index}: {case} got {got:?}"
+        );
+    }
+    assert!(!cases.is_empty(), "no cases");
 }
