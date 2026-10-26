@@ -1162,6 +1162,10 @@ pub struct Player {
     /// (`al::setVelocity`, the pull along the normal included): the velocity belongs to that
     /// plane while it is unchanged.
     run_up: Option<(Vec2, Vec3, Vec3)>,
+    /// The velocity the last collision moved a ground state with (its horizontal speed and pull
+    /// it was made from, then the velocity): the game's `getVelocity` after the step, laid on
+    /// the normal the nerve saw, not the one the collision found since.
+    ground_move: Option<(Vec2, f32, Vec3)>,
     /// The pose when it is tilted off the vertical (a run up a slope); it
     /// belongs to the facing it was made for.
     pose_tilt: Option<PoseTilt>,
@@ -1334,6 +1338,7 @@ impl Default for Player {
             cycle: RunCycle::default(),
             run_start_effect: None,
             run_up: None,
+            ground_move: None,
             pose_tilt: None,
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
@@ -1779,6 +1784,11 @@ impl Player {
         {
             if self.landing_speed < 0. {
                 self.v.with_y(self.landing_speed)
+            } else if let Some((h, pull, velocity)) = self.ground_move
+                && h == Vec2::new(self.v.x, self.v.z)
+                && pull == self.pull
+            {
+                velocity
             } else {
                 self.ground_following()
             }

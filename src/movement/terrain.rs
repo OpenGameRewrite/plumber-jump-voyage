@@ -167,12 +167,14 @@ impl Player {
         // snap sets the pose, even when a contact with the pole's cap marked
         // the body as grounded (`units_per_frame` agrees).
         let mut velocity = self.v;
+        self.ground_move = None;
         // (The slope slide's velocity is the game's own, the pull included, whatever its y.)
         if was_grounded
             && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim)
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
             velocity = self.ground_following();
+            self.ground_move = Some((Vec2::new(self.v.x, self.v.z), self.pull, velocity));
         }
         let yaw = self.facing.x.atan2(self.facing.z);
         // The ledge and pole holds put the actor on their pose before the
