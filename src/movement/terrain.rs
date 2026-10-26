@@ -46,7 +46,7 @@ pub(super) fn to_cm_exact(metres: Vec3) -> Vec3 {
 impl Player {
     /// The body's position in centimetres relative to the replay's start, as the collider holds
     /// it (the metres of `pos` cannot keep every digit of a stage-sized position).
-    pub(super) fn position_cm(&self) -> Vec3 {
+    pub fn position_cm(&self) -> Vec3 {
         match self.collider_end {
             Some((metres, centimetres)) if metres == self.pos => centimetres,
             _ => to_cm_exact(self.pos),

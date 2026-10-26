@@ -51,7 +51,7 @@ has a view matrix the stick is laid on the world as the executable does
 when the trace has it, else the matrix the probe pins a locked camera to (the script's `camera` line). The
 wall slide, the run and the swim read that value (with the wall bend of `wall_along.rs`); the other states
 still take the world direction above. `--bits` also writes `<trace>.bits`, one line per frame
-(the ten idle frames as -10..-1, then the rows): `frame,vel,front,up,quat` as the f32 bit patterns of the
+(the ten idle frames as -10..-1, then the rows): `frame,vel,front,up,quat,position` (the position as start-relative centimetres) as the f32 bit patterns of the
 probe's `bits_vel`, `bits_front`, `bits_up`, `bits_quat`, for an exact comparison with a full-precision
 recording (the `bits_*` columns of `game.csv` and the idle frames of `game.preroll.csv`; `compare-traces.py`
 leaves those columns out). The camera's position (`cam_px/py/pz`) goes to the player too: its sound

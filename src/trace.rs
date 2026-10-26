@@ -305,7 +305,7 @@ pub struct Recorder {
     first_row: bool,
     /// The velocity, front, up and quaternion of every recorded frame as f32 bit patterns
     /// (the format of the probe's `bits_*` columns), settle frames included: one line per
-    /// frame, `frame,vel,front,up,quat`. A debugging aid (`--bits`), not a compared column.
+    /// frame, `frame,vel,front,up,quat,position` (the position as start-relative centimetres). A debugging aid (`--bits`), not a compared column.
     pub bits: Vec<String>,
 }
 impl Recorder {
@@ -775,13 +775,15 @@ impl Recorder {
                 .collect::<Vec<_>>()
                 .join("/")
         };
+        let cm = p.position_cm();
         self.bits.push(format!(
-            "{},{},{},{},{}",
+            "{},{},{},{},{},{}",
             info.frame,
             words(&[v.x, v.y, v.z]),
             words(&[pose_front.x, pose_front.y, pose_front.z]),
             words(&[pose_up.x, pose_up.y, pose_up.z]),
-            words(&[q.x, q.y, q.z, q.w])
+            words(&[q.x, q.y, q.z, q.w]),
+            words(&[cm.x, cm.y, cm.z])
         ));
         let mut cells = Cells::default();
         cells.int(info.frame);
