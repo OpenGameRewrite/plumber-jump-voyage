@@ -832,10 +832,12 @@ fn roll_jump_is_a_nerve_of_the_roll() {
 /// stays and the direction swings.
 #[cfg_attr(test, test)]
 fn the_spin_throw_brakes_only_along_its_front() {
-    let mut p = Player::default();
-    p.facing = Vec3::new(-0.587_803, 0., -0.809_004);
-    p.grounded = true;
-    p.v = Vec3::new(-0.302_507, -7., 1.937_606);
+    let mut p = Player {
+        facing: Vec3::new(-0.587_803, 0., -0.809_004),
+        grounded: true,
+        v: Vec3::new(-0.302_507, -7., 1.937_606),
+        ..Player::default()
+    };
     p.spin_cap_inertia();
     assert!(
         (p.v.x + 0.343_351).abs() < 2e-6 && (p.v.z - 1.881_392).abs() < 2e-6,
@@ -1622,7 +1624,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x6f95c8a6a6a2c9d7,
+        hash, 0x2dd0aa5a8e34464f,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

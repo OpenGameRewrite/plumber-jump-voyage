@@ -173,6 +173,14 @@ fn the_exes_pose_routines_agree_bit_for_bit() {
                 );
                 assert!(same_quat_bits(got, quat(&case["out"])), "{case} -> {got:?}");
             }
+            "rotation_limit" => {
+                let got = make_quat_rotation_limit(
+                    vec3(&case["a"]),
+                    vec3(&case["b"]),
+                    number(&case["limit"]),
+                );
+                assert!(same_quat_bits(got, quat(&case["out"])), "{case} -> {got:?}");
+            }
             "turn_quat" => {
                 let got = turn_quat(
                     quat(&case["q"]),

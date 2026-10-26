@@ -27,6 +27,8 @@ struct Tracker {
     cursor: AnimCursor,
     /// Where the cap's clip stands, and whether the cap was out last frame.
     cap_cursor: AnimCursor,
+    /// Where the cap's spin attack clip stands while the cap is not out (the player's shown frame).
+    attack_cursor: AnimCursor,
     had_cap: bool,
     rng: u32,
     pending: Vec<(f32, String, bool, f32)>,
@@ -239,7 +241,12 @@ fn play(
             &mut t,
         );
         if with_cap {
-            ctx.action(true, p.anim.name, from, to, "anim", false, &[], &mut t);
+            let attack = t
+                .attack_cursor
+                .advance(p.anim.name, p.anim.serial, p.anim.frame, false);
+            if let Some((from, to, _)) = attack.scan {
+                ctx.action(true, p.anim.name, from, to, "anim", false, &[], &mut t);
+            }
         }
     }
     if advance.loop_start {

@@ -289,6 +289,8 @@ pub struct Cap {
     curve_front: Vec3,
     /// The rolling throw's state (`_26c != 0`), when the cap is thrown down.
     rolling: Option<Rolling>,
+    /// The continuous throw flies on the `FlyingWaitCapCatch` clip (`startThrow`'s first flag).
+    capcatch: bool,
     /// Where the floor is when the replay has no stage collision (the player's feet at the
     /// throw), and whether the cap rests on it (the rolling nerves read that contact).
     floor_y: f32,
@@ -352,7 +354,10 @@ impl Cap {
             },
             step: 0,
             frames: 0,
-            action: thrown(launch.kind, launch.air, launch.left),
+            action: capcatch(
+                thrown(launch.kind, launch.air, launch.left),
+                launch.continuous,
+            ),
             action_frame: 0,
             action_serial: serial,
             left: launch.left,
@@ -368,6 +373,7 @@ impl Cap {
             spiral_side: launch.spiral_side,
             curve_front: front,
             rolling: None,
+            capcatch: launch.continuous,
             floor_y: player.y / UNIT,
             floor_contact: false,
             trampled: false,
@@ -441,6 +447,10 @@ impl Cap {
         self.trampled = true;
         true
     }
+    /// The clip the throw's flight plays.
+    fn flight_clip(&self) -> &'static str {
+        capcatch(flying(self.kind, self.air, self.left), self.capcatch)
+    }
     /// Start a clip over.
     fn play(&mut self, action: &'static str) {
         self.action = action;
@@ -502,11 +512,8 @@ impl Cap {
         // The stay and the return start their clips on their first step, so
         // their first row still shows the clip before.
         let (action, frame) = match (moment.nerve, moment.step) {
-            (CapNerve::Throw, step) => (flying(self.kind, self.air, self.left), step),
-            (CapNerve::ThrowBrake, step) => (
-                flying(self.kind, self.air, self.left),
-                self.cruise_frames + 1 + step,
-            ),
+            (CapNerve::Throw, step) => (self.flight_clip(), step),
+            (CapNerve::ThrowBrake, step) => (self.flight_clip(), self.cruise_frames + 1 + step),
             (CapNerve::ThrowRolling, 0) => (thrown(self.kind, self.air, self.left), 0),
             (CapNerve::ThrowRolling, step) => ("FlyingWaitRolling", step - 1),
             (CapNerve::ThrowRollingBrake, step) => (
@@ -515,7 +522,7 @@ impl Cap {
             ),
             (CapNerve::ThrowSpiral, 0) => (thrown(self.kind, self.air, self.left), 0),
             (CapNerve::ThrowSpiral, step) => ("FlyingWaitSpiral", step - 1),
-            (CapNerve::ThrowStay, 0) => (flying(self.kind, self.air, self.left), 0),
+            (CapNerve::ThrowStay, 0) => (self.flight_clip(), 0),
             (CapNerve::ThrowStay, step) => (stay(self.left), step - 1),
             (CapNerve::Trample, 0) => (stay(self.left), 0),
             (CapNerve::Trample, step) => ("Trample", step - 1),
@@ -940,14 +947,27 @@ fn thrown(kind: Throw, air: bool, left: bool) -> &'static str {
         _ => flying(kind, air, left),
     }
 }
+/// `FlyingWaitR`/`L` of the continuous throw are the `FlyingWaitCapCatch` clips (recorded: the
+/// third throw in a row).
+fn capcatch(clip: &'static str, continuous: bool) -> &'static str {
+    match (continuous, clip) {
+        (true, "FlyingWaitR") => "FlyingWaitCapCatchR",
+        (true, "FlyingWaitL") => "FlyingWaitCapCatchL",
+        _ => clip,
+    }
+}
 fn stay(left: bool) -> &'static str {
     if left { "StayL" } else { "StayR" }
 }
 /// Frames of a clip of the cap's animation archive and whether it loops
-/// (`MarioCapAnimation`: the flying clips run 11 frames, the stay's loop 9).
+/// (`MarioCapAnimation`: the flying clips run 11 frames, the stay's loop 9, the continuous throw's
+/// flying loop 12).
 fn clip_shape(name: &str) -> (u32, bool) {
     if name.starts_with("Stay") {
         (9, true)
+    } else if name.starts_with("FlyingWaitCapCatch") {
+        // The continuous throw's flying clip loops (12 frames, recorded: cap-throw-triple).
+        (12, true)
     } else if name == "Trample" {
         (TRAMPLE_FRAMES, false)
     } else {

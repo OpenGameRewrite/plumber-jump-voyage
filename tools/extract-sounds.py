@@ -219,7 +219,7 @@ WallCatchEnd WallCatchEndJump PoleCatch PoleClimb PoleFall PoleWait SwimFallIn S
 # Event tables keyed by the original's reaction names (shared with the effect tool).
 import reaction_names
 from reaction_names import MARIO_REACTIONS,CAP_REACTIONS
-CAP_ACTIONS=['FlyingWait','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
+CAP_ACTIONS=['FlyingWait','FlyingWaitCapCatch','FlyingWaitSpiral','FlyingWaitRolling','Trample','SpinCapStart3Left','SpinCapStart3Right']
 # Sounds the player's own code starts (its per-frame sound control, not a clip's
 # frame list): footfalls with their foot lift, material variant and clothes
 # rustle, the roll's spin and the wind of a fast fall.
@@ -342,7 +342,8 @@ def install_resources(names,a,game,output,temp):
 def add_clips(a):
     """Add sounds to the installed table without touching what is installed.
 
-    `--add-clip` appends the sound triggers of named Mario clips, `--add-reaction` the plays of
+    `--add-clip` appends the sound triggers of named Mario clips, `--add-cap-action` those of named
+    actions of the cap (its own table, `PossessCap.byml`), `--add-reaction` the plays of
     named hit reactions (by the original's name) and `--add-play` plays the player's code starts
     by name; only new entries are appended. The sounds they play are installed too when
     `--vgmstream` is given and they are missing (their files are added next to the installed
@@ -364,6 +365,15 @@ def add_clips(a):
         added.append(name)
     for name in wanted_clips:
         if name not in added and name not in known:print(f'{name}: the game has no sound triggers for this clip')
+    cap_known=table['cap']['actions']
+    cap_table=outfits.byml(db['PossessCap.byml']) if a.add_cap_action else {}
+    for item in cap_table.get('ActionInfoList',[]):
+        name=item['Name']
+        if name not in a.add_cap_action or name in cap_known:continue
+        cap_known[name]=[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
+            for x in item.get('PlayInfoInActionList',[])]
+        missing|={x['play'] for x in cap_known[name] if x['play'] not in table['cap']['plays']}
+        added.append(f'cap {name}')
     reactions=table['mario']['reactions']
     for item in mario.get('HitReactionInfoList',[]):
         name=item['Name']
@@ -406,12 +416,13 @@ def main():
     p.add_argument('--self-check',action='store_true')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
     p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
+    p.add_argument('--add-cap-action',action='append',help='Add the sound triggers of this action of the cap (repeatable) to the installed table; nothing else changes')
     p.add_argument('--add-clip',action='append',help='Add the sound triggers of this Mario clip (repeatable) to the installed table, and with --vgmstream the sounds it plays that are missing; nothing else changes')
     p.add_argument('--add-reaction',action='append',help='Add the plays of this hit reaction of Mario (its original name, repeatable) the same way')
     p.add_argument('--add-play',action='append',help='Add this play the player code starts by name (repeatable) the same way')
     a=p.parse_args()
     if a.self_check:self_check();return
-    if a.add_clip or a.add_reaction or a.add_play:add_clips(a);return
+    if a.add_clip or a.add_reaction or a.add_play or a.add_cap_action:add_clips(a);return
     if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
     game=read_game(a)
     sounds,wave_files,files,db=game

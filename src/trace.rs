@@ -263,6 +263,9 @@ pub struct Recorder {
     cursor: AnimCursor,
     /// Where the cap's clip stands, for the sounds its frames start.
     cap_cursor: AnimCursor,
+    /// Where the cap's spin attack clip stands while the cap is not out: it plays the clip the
+    /// player plays, at the player's shown frame.
+    attack_cursor: AnimCursor,
     blend: Blend<Pose>,
     overlay: f32,
     /// Name of the latest sub clip (the probe keeps it after the clip ends).
@@ -319,6 +322,7 @@ impl Recorder {
             effects: library.map(|library| Tracker::new(library).on_floor(floor)),
             cursor: AnimCursor::default(),
             cap_cursor: AnimCursor::default(),
+            attack_cursor: AnimCursor::default(),
             blend: Blend::default(),
             last_sub: "",
             last_state: None,
@@ -622,13 +626,21 @@ impl Recorder {
                 &mut mix,
             );
             if with_cap {
-                self.action(
-                    (true, p.anim.name, from, to, false),
-                    "",
-                    speed,
-                    &mut events,
-                    &mut mix,
-                );
+                // The cap's spin attack plays the same clip on the cap's own model, whose frame
+                // is the one the player shows: its sounds come in the row that shows their
+                // frame, not one before (the third throw's voice at frame 1).
+                let attack = self
+                    .attack_cursor
+                    .advance(p.anim.name, p.anim.serial, shown, false);
+                if let Some((from, to, _)) = attack.scan {
+                    self.action(
+                        (true, p.anim.name, from, to, false),
+                        "",
+                        speed,
+                        &mut events,
+                        &mut mix,
+                    );
+                }
             }
         }
         if advance.loop_start {

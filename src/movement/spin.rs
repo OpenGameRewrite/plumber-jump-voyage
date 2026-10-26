@@ -184,5 +184,12 @@ impl Player {
                 p.v = Vec3::NEG_Y * t::FALL_MAX;
             });
         }
+        // The actor's cap throw judge (`tryActionCapSpinAttackImpl`) is asked in the drop too, and
+        // it is the spin throw (`isJumpSpinGround` covers the drop's nerve; recorded:
+        // cap-throw-spiral-drop).
+        if self.pre_throw > 0 && !o.crouch && self.cap.is_none() {
+            self.pre_throw = 0;
+            self.start_throw(Throw::Spin);
+        }
     }
 }

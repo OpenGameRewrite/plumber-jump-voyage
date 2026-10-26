@@ -4364,12 +4364,7 @@ impl Player {
         if self.throwing.continuous {
             self.throwing.count = 0;
         }
-        if matches!(kind, Throw::Spin | Throw::Down) {
-            // A spiral or rolling throw ends `setupAttackInfo` early: it neither continues nor
-            // starts a row of throws, so the next one begins the count again.
-            self.throwing.continuous = false;
-            self.throwing.count = 0;
-        }
+
         self.throwing.kind = Some(kind);
         self.throwing.in_air = air;
         let name = throw_clip(
