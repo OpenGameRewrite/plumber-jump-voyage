@@ -139,7 +139,7 @@ impl Player {
         self.floor_normal().unwrap_or(Vec3::Y)
     }
     /// `rs::isCollidedGroundLessAngle`: touching ground flatter than `degrees`.
-    fn ground_flatter_than(&self, degrees: f32) -> bool {
+    pub(super) fn ground_flatter_than(&self, degrees: f32) -> bool {
         self.grounded && self.floor_up().angle_between(Vec3::Y).to_degrees() <= degrees
     }
     /// Add speed along the facing, on the floor, until the velocity along it

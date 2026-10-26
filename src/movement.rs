@@ -1141,6 +1141,9 @@ pub struct Player {
     /// The player's root is in water (not a puddle): the water prefix of the material code that
     /// effects and sounds pick their variants by (`PlayerActorHakoniwa::movement`).
     material_water: bool,
+    /// `EMaterialChangeTrigger 0`, which the end of the last step's movement set: the root was in
+    /// a puddle (the water shallower than the swim's centre offset).
+    material_puddle: bool,
     step_phase: f32,
     /// Fall speed the ground stopped in the latest step (zero when it did not
     /// land), kept for the trace: the original still reports it that frame.
@@ -1323,6 +1326,7 @@ impl Default for Player {
             wet: wet::WetControl::default(),
             camera_cm: None,
             material_water: false,
+            material_puddle: false,
             water_finder: crate::water::SurfaceFinder::default(),
             step_phase: 0.,
             landing_speed: 0.,
@@ -4112,8 +4116,22 @@ impl Player {
     fn start_hip_drop(&mut self) {
         self.change(Move::GroundPound, "HipDropStart", |p| {
             p.v = Vec3::ZERO;
+            p.stand_pose_upright();
             p.events.push(Fx::PoundStart);
         });
+    }
+    /// `PlayerStateHipDrop::exeStart`'s first step turns the actor's pose to the world's up
+    /// (`al::turnQuatYDirRadian` by a half turn at most), whatever tilt a jump left.
+    fn stand_pose_upright(&mut self) {
+        let Some(stored) = self.pose_quat() else {
+            return;
+        };
+        let current = plane::ActorPose::new(stored).calc_quat();
+        self.set_pose(pose_math::turn_quat_y_dir_radian(
+            current,
+            Vec3::Y,
+            std::f32::consts::PI,
+        ));
     }
     fn hip_drop(&mut self, o: &Orders) {
         // A throw during the pound turns it into a dive.
@@ -4150,6 +4168,12 @@ impl Player {
         // The pull runs along the floor's normal, as the standing state's does (the pound
         // landing on the pond's slope, swim-hipdrop-in row 137: -7 times the normal).
         self.pull = GRAVITY_MOVE;
+        // The landing also settles the pose to the floor (`rs::waitGround`'s slerp), on any floor
+        // the standing states hold (`rs::isOnGroundRunAngle`; the slow body here is at the
+        // flat end of its angle limit).
+        if self.ground_flatter_than(t::STAND_ANGLE_MIN) {
+            self.wait_pose();
+        }
         if self.pre_jump > 0 && self.pound_jump_permitted() {
             self.ground_jump(o);
             return;
@@ -4795,6 +4819,11 @@ impl Player {
                 self.v.y = -t::HIP_DROP_SPEED;
                 self.defer(Move::PoundLand, "HipDropLand", |p| {
                     p.events.push(Fx::PoundLand);
+                    // `PlayerActorHakoniwa::exeHipDrop`, on the landing, wets the body that
+                    // came down in a puddle.
+                    if p.material_puddle {
+                        p.wet.record_heavy_land_puddle();
+                    }
                 });
                 return;
             }

@@ -57,6 +57,11 @@ impl WetControl {
         self.wetness = WET_STEPS;
     }
 
+    /// `recordHeavyLandPuddle` (the hip drop's landing in a puddle): the body is wet at once.
+    pub(super) fn record_heavy_land_puddle(&mut self) {
+        self.wetness = WET_STEPS;
+    }
+
     /// `PlayerEffect::tryDeleteWetEffect`: the drops stop emitting, their particles live on.
     fn delete_drops(&mut self) {
         if std::mem::take(&mut self.dripping) {

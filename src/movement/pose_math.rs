@@ -291,6 +291,50 @@ pub fn quat_up(q: Quat) -> Vec3 {
     )
 }
 
+/// `al::normalize` of a vector that may be too short to have a direction: zero then.
+fn unit_or_zero(v: Vec3) -> Vec3 {
+    let squared = squared_length(v);
+    if squared < NO_DIRECTION {
+        return Vec3::ZERO;
+    }
+    scaled_by_inverse_length(v, squared.sqrt())
+}
+
+/// `al::turnQuat(out, q, from, to, max_radians)`: `q` turned by the rotation that carries the
+/// direction `from` toward `to`, by at most `max_radians` (the shortest way; two opposed
+/// directions would take a random axis in the original, which is not ported), normalised.
+pub fn turn_quat(q: Quat, from: Vec3, to: Vec3, max_radians: f32) -> Quat {
+    let (from, to) = (unit_or_zero(from), unit_or_zero(to));
+    let (rx, ry, rz, rw) = match get_axis_angle_from_two_vec(from, to) {
+        Some((axis, angle)) => {
+            let share = (max_radians / angle).clamp(0., 1.);
+            let half = (angle * share) * 0.5;
+            let (cos, sin) = (cosf(half), sinf(half));
+            (sin * axis.x, sin * axis.y, sin * axis.z, cos)
+        }
+        None => (0., 0., 0., 1.),
+    };
+    // The product r * q in the order the library adds it.
+    let w = ((rw * q.w - rx * q.x) - ry * q.y) - rz * q.z;
+    let x = ((rx * q.w + rw * q.x) + ry * q.z) - rz * q.y;
+    let y = rz * q.x + (ry * q.w + (rw * q.y - rx * q.z));
+    let z = rz * q.w + (((rx * q.y + rw * q.z)) - ry * q.x);
+    let squared = z * z + (((w * w + x * x) + y * y));
+    let length = squared.sqrt();
+    if length > 0. {
+        let inverse = 1. / length;
+        Quat::from_xyzw(inverse * x, inverse * y, inverse * z, inverse * w)
+    } else {
+        Quat::from_xyzw(x, y, z, w)
+    }
+}
+
+/// `al::turnQuatYDirRadian(out, q, dir, radian)`: `q` turned so that its up (Y) axis turns toward
+/// `dir` by at most `radian`.
+pub fn turn_quat_y_dir_radian(q: Quat, dir: Vec3, radian: f32) -> Quat {
+    turn_quat(q, quat_up(q), dir, radian)
+}
+
 /// `sead::QuatCalcCommon::slerpTo` (`al::slerpQuat`): the spherical blend of two quaternions, not
 /// normalised, taking the shorter way round.
 pub fn slerp(from: Quat, to: Quat, t: f32) -> Quat {
