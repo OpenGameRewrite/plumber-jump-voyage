@@ -248,19 +248,20 @@ impl Player {
         }
         let mut depth = k::CENTER_OFFSET;
         if judge.ground_check && self.is_collided_ground() {
+            // The part of the root's rise above the ground that the ground's own up axis (the
+            // pose's up turned onto the floor's normal) measures: the root and the ground
+            // position are both the stage's own (absolute) coordinates.
             let normal = self.collided_ground_normal();
-            if !pose_math::is_parallel_direction(UP, normal, 0.01)
-                && pose_math::dot(UP, normal) > 0.
+            let (pose_up, _) = self.pose_axes();
+            let mut rise_along_gravity = 0.;
+            if !pose_math::is_parallel_direction(pose_up, normal, 0.01)
+                && pose_math::dot(pose_up, normal) > 0.
             {
-                // The ground is tilted: measure the depth along the slope's own up axis. The
-                // root and the ground position are both the stage's own (absolute) coordinates.
-                let rise =
-                    Quat::from_rotation_arc(UP, normal) * (at - self.collider.ground_position());
-                depth -= pose_math::dot(GRAVITY, rise).max(0.) + 5.;
-            } else {
-                depth -= 5.;
+                let turn = pose_math::make_quat_rotation_rate(pose_up, normal, 1.);
+                let rise = pose_math::rotate_by_quat(at - self.collider.ground_position(), turn);
+                rise_along_gravity = pose_math::dot(GRAVITY, rise).max(0.);
             }
-            depth = depth.max(0.);
+            depth = (depth - (rise_along_gravity + 5.)).max(0.);
         } else if judge.ground_check {
             depth = (depth - 5.).max(0.);
         }

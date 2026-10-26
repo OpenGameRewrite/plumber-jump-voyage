@@ -300,6 +300,17 @@ fn unit_or_zero(v: Vec3) -> Vec3 {
     scaled_by_inverse_length(v, squared.sqrt())
 }
 
+/// `al::makeQuatRotationRate(out, from, to, rate)`: the rotation that carries `from` onto `to`,
+/// by `rate` of the angle between them (the identity for two equal directions).
+pub fn make_quat_rotation_rate(from: Vec3, to: Vec3, rate: f32) -> Quat {
+    let Some((axis, angle)) = get_axis_angle_from_two_vec(from, to) else {
+        return Quat::IDENTITY;
+    };
+    let half = (angle * rate) * 0.5;
+    let (cos, sin) = (cosf(half), sinf(half));
+    Quat::from_xyzw(sin * axis.x, sin * axis.y, sin * axis.z, cos)
+}
+
 /// `al::turnQuat(out, q, from, to, max_radians)`: `q` turned by the rotation that carries the
 /// direction `from` toward `to`, by at most `max_radians` (the shortest way; two opposed
 /// directions would take a random axis in the original, which is not ported), normalised.

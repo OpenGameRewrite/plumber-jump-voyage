@@ -165,6 +165,31 @@ fn the_exes_pose_routines_agree_bit_for_bit() {
                 );
                 assert!(same_quat_bits(got, quat(&case["out"])), "{case} -> {got:?}");
             }
+            "rotation_rate" => {
+                let got = make_quat_rotation_rate(
+                    vec3(&case["a"]),
+                    vec3(&case["b"]),
+                    number(&case["rate"]),
+                );
+                assert!(same_quat_bits(got, quat(&case["out"])), "{case} -> {got:?}");
+            }
+            "turn_quat" => {
+                let got = turn_quat(
+                    quat(&case["q"]),
+                    vec3(&case["frm"]),
+                    vec3(&case["to"]),
+                    number(&case["max"]),
+                );
+                assert!(same_quat_bits(got, quat(&case["out"])), "{case} -> {got:?}");
+            }
+            "turn_quat_y" => {
+                let got = turn_quat_y_dir_radian(
+                    quat(&case["q"]),
+                    vec3(&case["dir"]),
+                    number(&case["rad"]),
+                );
+                assert!(same_quat_bits(got, quat(&case["out"])), "{case} -> {got:?}");
+            }
             other => panic!("unknown case {other}"),
         }
         checked += 1;
