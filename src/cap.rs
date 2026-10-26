@@ -19,6 +19,7 @@
 use crate::collider::{Location, PlayerCollider};
 use crate::geometry::TriangleMesh;
 use crate::movement::cap_pose::{CapPose, direction_of, horizontal_length, length};
+use crate::movement::cap_spiral;
 use crate::movement::{Throw, UNIT};
 use bevy::prelude::*;
 
@@ -123,6 +124,8 @@ pub enum CapPhase {
 pub enum CapNerve {
     Throw,
     ThrowBrake,
+    /// The spin-move throw (`exeThrowSpiral`): the cap circles the player on a widening spiral.
+    ThrowSpiral,
     ThrowStay,
     /// The player stood on the hovering cap (`HackCap::exeTrample`, which the
     /// recordings name `TrampleReturn`): it stays put for a short while, then
@@ -136,6 +139,7 @@ impl CapNerve {
         Some(match name {
             "Throw" => Self::Throw,
             "ThrowBrake" => Self::ThrowBrake,
+            "ThrowSpiral" => Self::ThrowSpiral,
             "ThrowStay" => Self::ThrowStay,
             "TrampleReturn" => Self::Trample,
             "Return" => Self::Return,
@@ -147,6 +151,7 @@ impl CapNerve {
         match self {
             Self::Throw => "Throw",
             Self::ThrowBrake => "ThrowBrake",
+            Self::ThrowSpiral => "ThrowSpiral",
             Self::ThrowStay => "ThrowStay",
             Self::Trample => "TrampleReturn",
             Self::Return => "Return",
@@ -179,6 +184,10 @@ pub struct Launch {
     pub air: bool,
     /// The third throw in a row, which flies faster.
     pub continuous: bool,
+    /// Which way the spin-move throw circles (`HackCap::_268`, set by `startThrow` from the throw
+    /// type's vector): -1 for the clockwise spin (`DoubleRight`), +1 for the counterclockwise one
+    /// (`DoubleLeft`), 0 for every other throw.
+    pub spiral_side: f32,
 }
 
 /// Moments of the flight the player and the presentation react to.
@@ -251,6 +260,10 @@ pub struct Cap {
     brake_step: f32,
     /// The speed the return has built up (`_288`).
     return_speed: f32,
+    /// Which way the spin-move throw circles (`_268.x`), and the direction its spiral turns
+    /// from (`_300`, the throw direction the nerve's first step keeps).
+    spiral_side: f32,
+    curve_front: Vec3,
     /// The player trampled the cap in this frame's sensor phase: the trample
     /// nerve is entered when the cap next updates (`al::setNerve`).
     trampled: bool,
@@ -271,7 +284,12 @@ impl Cap {
     pub fn start(launch: Launch, player: Vec3, serial: u32) -> Self {
         let front = launch.front.with_y(0.).normalize_or_zero();
         let base = player / UNIT + Vec3::Y * param::THROW_HEIGHT;
-        let spot = base + front * START_DISTANCE;
+        let spiral = launch.spiral_side != 0.;
+        let spot = if spiral {
+            cap_spiral::start_position(base, front, launch.spiral_side)
+        } else {
+            base + front * START_DISTANCE
+        };
         let speed = if launch.continuous {
             param::CONTINUOUS_SPEED
         } else {
@@ -285,21 +303,28 @@ impl Cap {
             kind: launch.kind,
             air: launch.air,
             phase: CapPhase::Out,
-            nerve: CapNerve::Throw,
+            nerve: if spiral {
+                CapNerve::ThrowSpiral
+            } else {
+                CapNerve::Throw
+            },
             step: 0,
             frames: 0,
-            action: flying(launch.kind, launch.air, launch.left),
+            action: thrown(launch.kind, launch.air, launch.left),
             action_frame: 0,
             action_serial: serial,
             left: launch.left,
             spot,
-            velocity: front * speed,
+            // (`exeThrowStart` sends the spiral off with no velocity: its nerve sets it.)
+            velocity: if spiral { Vec3::ZERO } else { front * speed },
             front,
             pose: CapPose::thrown_along(front),
             speed,
             cruise_frames: cruise_frames(speed),
             brake_step: -speed / brake_frames,
             return_speed: 0.,
+            spiral_side: launch.spiral_side,
+            curve_front: front,
             trampled: false,
             stay_reaction_done: false,
             collider: PlayerCollider::for_cap(),
@@ -386,6 +411,8 @@ impl Cap {
     /// A cap put back into place each frame (lockstep) keeps the numbering of
     /// the clip it is in the middle of.
     pub fn continue_clip(&mut self, before: &Cap) {
+        // (The spiral keeps circling from the throw direction it began with.)
+        self.curve_front = before.curve_front;
         self.action_serial = before.action_serial + u32::from(before.action != self.action);
         if before.action == self.action {
             self.action_frame = before.action_frame;
@@ -414,6 +441,8 @@ impl Cap {
                 flying(self.kind, self.air, self.left),
                 self.cruise_frames + 1 + step,
             ),
+            (CapNerve::ThrowSpiral, 0) => (thrown(self.kind, self.air, self.left), 0),
+            (CapNerve::ThrowSpiral, step) => ("FlyingWaitSpiral", step - 1),
             (CapNerve::ThrowStay, 0) => (flying(self.kind, self.air, self.left), 0),
             (CapNerve::ThrowStay, step) => (stay(self.left), step - 1),
             (CapNerve::Trample, 0) => (stay(self.left), 0),
@@ -449,6 +478,7 @@ impl Cap {
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events),
             CapNerve::ThrowBrake => self.throw_brake(&mut events),
+            CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT),
             CapNerve::ThrowStay => self.throw_stay(world.hold, &mut events),
             CapNerve::Trample => self.trample(&mut events),
             CapNerve::Return => self.go_back(head),
@@ -536,6 +566,29 @@ impl Cap {
         self.wall_reaction(events);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
     }
+    /// `HackCap::exeThrowSpiral`: the cap chases a point that circles the player (see
+    /// `cap_spiral`) and returns after 105 steps.
+    fn throw_spiral(&mut self, feet: Vec3) -> Option<CapNerve> {
+        if self.step == 0 {
+            self.curve_front = self.front;
+            self.play("FlyingWaitSpiral");
+            self.velocity = Vec3::ZERO;
+        }
+        // The point it circles follows the player (`+0x2f4`).
+        let pivot = Vec3::new(feet.x, param::THROW_HEIGHT + feet.y, feet.z);
+        let step = cap_spiral::step(
+            self.step,
+            self.spot,
+            pivot,
+            self.curve_front,
+            self.spiral_side,
+        );
+        self.velocity = step.velocity;
+        if let Some(front) = step.front {
+            self.front = front;
+        }
+        (self.step + 1 >= cap_spiral::FRAMES).then_some(CapNerve::Return)
+    }
     /// `HackCap::exeThrowBrake`: take a tenth of the speed off each frame; the
     /// cap stays where it has stopped.
     fn throw_brake(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
@@ -597,7 +650,11 @@ impl Cap {
     /// the player after a throw, the joint's front after a trample.
     fn go_back(&mut self, head: Vec3) -> Option<CapNerve> {
         if self.step == 0 {
-            self.play(flying(self.kind, self.air, self.left));
+            // `tryStartActionIfNotPlaying`: a cap coming out of the spiral keeps its clip.
+            let action = flying(self.kind, self.air, self.left);
+            if self.action != action {
+                self.play(action);
+            }
             self.return_speed = 0.;
         }
         let to_head = head - self.spot;
@@ -673,7 +730,7 @@ fn cruise_frames(speed: f32) -> u32 {
 }
 fn phase_of(nerve: CapNerve) -> CapPhase {
     match nerve {
-        CapNerve::Throw | CapNerve::ThrowBrake => CapPhase::Out,
+        CapNerve::Throw | CapNerve::ThrowBrake | CapNerve::ThrowSpiral => CapPhase::Out,
         CapNerve::ThrowStay | CapNerve::Trample => CapPhase::Stay,
         CapNerve::Return => CapPhase::Return,
     }
@@ -686,6 +743,20 @@ fn flying(kind: Throw, air: bool, left: bool) -> &'static str {
         (Throw::Down, false) => "FlyingWaitRolling",
         _ if left => "FlyingWaitL",
         _ => "FlyingWaitR",
+    }
+}
+/// The clip `exeThrowStart` starts: the hand's, whatever the throw (the spiral and rolling nerves
+/// switch to their own clip on their first step).
+fn thrown(kind: Throw, air: bool, left: bool) -> &'static str {
+    match kind {
+        Throw::Spin => {
+            if left {
+                "FlyingWaitL"
+            } else {
+                "FlyingWaitR"
+            }
+        }
+        _ => flying(kind, air, left),
     }
 }
 fn stay(left: bool) -> &'static str {

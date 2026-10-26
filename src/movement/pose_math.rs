@@ -311,6 +311,19 @@ pub fn make_quat_rotation_rate(from: Vec3, to: Vec3, rate: f32) -> Quat {
     Quat::from_xyzw(sin * axis.x, sin * axis.y, sin * axis.z, cos)
 }
 
+/// `al::makeQuatRotationLimit(out, from, to, limit)`: the rotation that carries `from` toward `to`,
+/// by the whole angle between them or by `limit` radians when that is smaller (the identity for
+/// two equal directions, where the original answers `false`).
+pub fn make_quat_rotation_limit(from: Vec3, to: Vec3, limit: f32) -> Quat {
+    let Some((axis, angle)) = get_axis_angle_from_two_vec(from, to) else {
+        return Quat::IDENTITY;
+    };
+    let share = (limit / angle).clamp(0., 1.);
+    let half = (share * angle) * 0.5;
+    let (cos, sin) = (cosf(half), sinf(half));
+    Quat::from_xyzw(sin * axis.x, sin * axis.y, sin * axis.z, cos)
+}
+
 /// `al::turnQuat(out, q, from, to, max_radians)`: `q` turned by the rotation that carries the
 /// direction `from` toward `to`, by at most `max_radians` (the shortest way; two opposed
 /// directions would take a random axis in the original, which is not ported), normalised.

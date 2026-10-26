@@ -1000,6 +1000,7 @@ fn cap_bounce() {
                 left: false,
                 air: false,
                 continuous: false,
+                spiral_side: 0.,
             },
             Vec3::ZERO,
             1,

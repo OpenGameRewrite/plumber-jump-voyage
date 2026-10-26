@@ -234,6 +234,7 @@ mod t {
     pub const SPIN_AIR_GRAVITY: f32 = 0.3;
     pub const SPIN_BRAKE_FRAMES: u32 = 15;
     pub const SPIN_BRAKE_RATE: f32 = 0.95;
+    pub const SPIN_ROUND_LIMIT_DEGREE: f32 = 5.;
 }
 
 /// The angle a thrown button gives the spine's swing (`PlayerSpinCapAttack` `+0x58`): only the
@@ -242,6 +243,8 @@ const BUTTON_THROW_SWING_ANGLE: f32 = 0.;
 
 #[path = "movement/cap_pose.rs"]
 pub(crate) mod cap_pose;
+#[path = "movement/cap_spiral.rs"]
+pub(crate) mod cap_spiral;
 #[path = "movement/cap_throw.rs"]
 pub(crate) mod cap_throw;
 /// What a pose calculation advances (the controllers that keep state between frames).
@@ -296,6 +299,8 @@ mod snap;
 mod sounds;
 #[path = "movement/spin.rs"]
 mod spin;
+#[path = "movement/spin_cap.rs"]
+mod spin_cap;
 #[path = "movement/squat.rs"]
 mod squat;
 #[path = "movement/swim.rs"]
@@ -384,6 +389,18 @@ fn throw_clip(kind: Throw, air: bool, count: u32, continuous: bool) -> &'static 
         // clip's name even in the air.
         (Throw::Forward, true, 2, false) => "SpinCapStart2Right",
         (Throw::Forward, true, _, _) => "SpinCapStart3Right",
+    }
+}
+
+/// `HackCap::_268.x` of a throw: the spin-move throw circles clockwise (`DoubleRight`, -1) or
+/// counterclockwise (`DoubleLeft`, +1) with the stick's spin (`exeRun` and `exeJump` set the
+/// trigger bit 28 for a clockwise spin and 27 for the other, which `setupAttackInfo` turns into the
+/// throw vector's sign); every other throw has none.
+fn spiral_side_of(kind: Option<Throw>, counterclockwise: bool) -> f32 {
+    match kind {
+        Some(Throw::Spin) if counterclockwise => 1.,
+        Some(Throw::Spin) => -1.,
+        _ => 0.,
     }
 }
 
@@ -2189,6 +2206,7 @@ impl Player {
             left: false,
             air: !self.grounded,
             continuous: self.throwing.continuous,
+            spiral_side: spiral_side_of(self.throwing.kind, self.throw_clip.ends_with("Left")),
         };
         if s.throw.is_some_and(|hint| hint.launch) {
             self.launch = Some(launch);
@@ -4439,8 +4457,7 @@ impl Player {
         // is held, a plain `max / frames` per frame, see `GroundMove::plain`).
         // The floor pulls with the ground control's gravity throughout.
         if step < t::SPIN_BRAKE_FRAMES {
-            let h = self.v.with_y(0.) * t::SPIN_BRAKE_RATE;
-            self.set_h(h);
+            self.spin_cap_inertia();
         } else {
             if step == t::SPIN_BRAKE_FRAMES {
                 self.spin_ground_move.reset(self.v, self.facing, Vec3::Y);
@@ -4525,6 +4542,7 @@ impl Player {
             left: false,
             air: !self.grounded,
             continuous,
+            spiral_side: spiral_side_of(Some(kind), !self.spin_clockwise),
         }
     }
     /// `HackCap::startThrow`: the cap starts flying on the next frame.

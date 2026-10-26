@@ -5,6 +5,53 @@ pub(super) fn run() {
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
     the_catch_is_the_sensor_contact();
+    the_spiral_circles_the_player();
+}
+
+/// The spin-move throw of the recorded `cap-throw-spiral` run (rows 54 to 58, the player
+/// `UNIT`-scaled to where each row's cap update saw him): the cap appears 150 away along the
+/// throw direction turned 45 degrees, with no velocity, then each step goes to the point on the
+/// widening circle round the player, and the nerve names itself.
+#[cfg_attr(test, test)]
+fn the_spiral_circles_the_player() {
+    let at = |x: f32, z: f32| Vec3::new(x, 0., z) * UNIT;
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::new(-0.587_803, 0., -0.809_004),
+            kind: Throw::Spin,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: -1.,
+        },
+        at(11.258_301, 68.216_797),
+        1,
+    );
+    let spot = |cap: &Cap| (cap.pos / UNIT, cap.state_name(), cap.clip());
+    let (start, name, clip) = spot(&cap);
+    assert!((start - Vec3::new(-136.895_5, 70., 44.753_9)).length() < 0.01);
+    assert_eq!((name, clip), ("ThrowSpiral", "FlyingWaitR"));
+    // The rows 55 to 58: where the player stood after the row before, and the cap's recorded spot.
+    let rows = [
+        ((10.680_664, 69.775_391), (-198.708, -36.908)),
+        ((10.076_172, 71.296_875), (-245.405, -76.197)),
+        ((9.45, 72.78), (-288.29, -120.56)),
+        ((8.79, 74.24), (-326.96, -169.69)),
+    ];
+    for ((px, pz), (x, z)) in rows {
+        let world = CapWorld {
+            player: at(px, pz),
+            hold: false,
+            mesh: None,
+        };
+        assert!(cap.update(&world).is_empty());
+        let (found, name, clip) = spot(&cap);
+        assert!(
+            (found - Vec3::new(x, 70., z)).length() < 0.05,
+            "{found} {x} {z}"
+        );
+        assert_eq!((name, clip), ("ThrowSpiral", "FlyingWaitSpiral"));
+    }
 }
 
 /// The catch is the contact of the cap's `Catch` sensor (100) with the player's
@@ -20,6 +67,7 @@ fn the_catch_is_the_sensor_contact() {
                 left: false,
                 air: false,
                 continuous: false,
+                spiral_side: 0.,
             },
             Vec3::ZERO,
             1,
@@ -57,6 +105,7 @@ fn straight_throw_matches_the_recording() {
             left: false,
             air: false,
             continuous: false,
+            spiral_side: 0.,
         },
         Vec3::ZERO,
         1,
@@ -127,6 +176,7 @@ fn a_wall_at_an_angle_turns_the_cap() {
             left: false,
             air: false,
             continuous: false,
+            spiral_side: 0.,
         },
         Vec3::ZERO,
         1,
@@ -167,6 +217,7 @@ fn the_return_after_a_trample_leaves_along_the_cap_pose() {
             left: false,
             air: false,
             continuous: false,
+            spiral_side: 0.,
         },
         Vec3::ZERO,
         1,

@@ -125,6 +125,9 @@ pub struct GroundMove {
     turn_power: f32,
     /// The factor the slope gives the speed (`_7c`): above zero downhill, below it uphill.
     hill: f32,
+    /// Frames of speed the brake counter needs before a release brakes over the brake frames
+    /// (`mCounterBorder`, the last argument of `setup`).
+    border: i32,
 }
 impl Default for GroundMove {
     /// The run's control.
@@ -136,15 +139,19 @@ impl Default for GroundMove {
             brake_counter: 0,
             turn_power: 0.,
             hill: 0.,
+            border: t::BRAKE_ON_COUNTER as i32,
         }
     }
 }
 impl GroundMove {
-    /// The control of the spin throw's ground state: no ramp, no drift.
+    /// The control of the spin throw's ground state: no ramp, no drift, and a counter border of 0
+    /// (`PlayerStateSpinCap` passes 0 to `setup`), so a released stick always brakes over the
+    /// brake frames, whatever speed the control has built up (the run's border is 10 frames).
     pub fn plain() -> Self {
         Self {
             ramp: false,
             drift: false,
+            border: 0,
             ..Self::default()
         }
     }
@@ -160,7 +167,7 @@ impl GroundMove {
             let (heading, moving) = try_normalize_or_zero(velocity);
             let (front, facing) = try_normalize_or_zero(verticalize_vec(up, actor_front));
             if moving && facing && !is_opposite_dir(front, heading) {
-                self.brake_counter = t::BRAKE_ON_COUNTER as i32;
+                self.brake_counter = self.border;
             }
         }
         self.turn_power = 0.;
@@ -175,7 +182,7 @@ impl GroundMove {
         last_input: Vec3,
         turn_power: f32,
     ) {
-        let border = t::BRAKE_ON_COUNTER as i32;
+        let border = self.border;
         self.brake_counter = if speed > t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE {
             (steps as i32).min(border)
         } else {
@@ -306,7 +313,7 @@ impl GroundMove {
             speed = accel(speed, target, rate);
         }
         // Frames that speed above the brake speed have lasted.
-        let border = t::BRAKE_ON_COUNTER as i32;
+        let border = self.border;
         if speed > t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE {
             self.brake_counter = (self.brake_counter + 1).min(border);
         } else if self.brake_counter < border {
