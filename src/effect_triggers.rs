@@ -462,7 +462,10 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
 /// The effects the controller emits by name in this frame: the water's splash.
 pub fn emitted_by(fx: Fx) -> Vec<&'static str> {
     match fx {
-        Fx::WaterIn { .. } | Fx::WaterOut => vec!["WaterSurfaceInOut"],
+        // `PlayerEffect::emitEffectWaterInOut`: the large splash when the entry set one of the
+        // dive triggers (9, 15, 19, 29).
+        Fx::WaterIn { strong: true } => vec!["WaterSurfaceInOutLarge"],
+        Fx::WaterIn { strong: false } | Fx::WaterOut => vec!["WaterSurfaceInOut"],
         _ => vec![],
     }
 }
