@@ -145,6 +145,15 @@ fn the_exes_ground_pose_agrees_bit_for_bit() {
                     .all(|(a, b)| a.to_bits() == b.to_bits()),
                 "sequence {n} frame {f}: state {state:?} want {want:?}"
             );
+            // `calcGroundPoseUp` stands the actor's up axis with the spine's matrix (a copy of
+            // its forward one, not the inverse).
+            let up = &frame["ground_up"];
+            let got = pose.ground_pose_up(vec3(&up["actor_up"]));
+            let want = vec3(&up["out"]);
+            assert!(
+                got.to_array().map(f32::to_bits) == want.to_array().map(f32::to_bits),
+                "sequence {n} frame {f}: ground pose up {got:?} want {want:?}"
+            );
         }
     }
     let _ = pose;
