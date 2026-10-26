@@ -113,6 +113,9 @@ pub struct JointState {
     /// found the ground (`rs::isJustLand`, which the states read while they decide).
     was_running: bool,
     just_landed: bool,
+    /// The actor pose's up axis when the frame began. A state that starts in the frame (the
+    /// jump's `appear`) reads the pose before the run's end-of-step pose update.
+    pub(super) frame_start_pose_up: Vec3,
     /// The velocity the actor has when a landing chooses the run state (see
     /// [`Player::velocity_when_landing_state_is_chosen`]); the state's `appear` reads it for its
     /// impulse, ahead of `PlayerActionGroundMoveControl::appear` laying it into the floor's plane.
@@ -193,6 +196,7 @@ impl Player {
     /// The start of a frame.
     pub(super) fn note_frame_start_for_joints(&mut self) {
         self.joints.was_running = self.actor_name() == "Run";
+        self.joints.frame_start_pose_up = self.pose_axes().0;
         self.joints.just_landed = self.is_just_land();
         self.joints.run_arrival_velocity = None;
         // The run state's `control` comes with the frame, before the actor's nerve runs: the

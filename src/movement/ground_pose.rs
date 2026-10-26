@@ -340,7 +340,12 @@ impl GroundPose {
             shift: Vec3::new(side.x * reach, side.y * reach, side.z * reach),
             root_up,
             hip: turn(hip),
-            spine: turn(spine),
+            // (The exe stores the spine's "back" matrix as a copy of its forward one, not the
+            // transposed: `calcGroundPoseUp` stands the up axis with it.)
+            spine: Turn {
+                back: rotation_rows(spine),
+                ..turn(spine)
+            },
         };
     }
 
