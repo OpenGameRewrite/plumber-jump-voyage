@@ -329,8 +329,8 @@ pub fn turn_quat(q: Quat, from: Vec3, to: Vec3, max_radians: f32) -> Quat {
     let w = ((rw * q.w - rx * q.x) - ry * q.y) - rz * q.z;
     let x = ((rx * q.w + rw * q.x) + ry * q.z) - rz * q.y;
     let y = rz * q.x + (ry * q.w + (rw * q.y - rx * q.z));
-    let z = rz * q.w + (((rx * q.y + rw * q.z)) - ry * q.x);
-    let squared = z * z + (((w * w + x * x) + y * y));
+    let z = rz * q.w + ((rx * q.y + rw * q.z) - ry * q.x);
+    let squared = z * z + ((w * w + x * x) + y * y);
     let length = squared.sqrt();
     if length > 0. {
         let inverse = 1. / length;
