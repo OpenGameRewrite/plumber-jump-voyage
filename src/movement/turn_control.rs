@@ -206,6 +206,21 @@ impl TurnControl {
             ..Self::default()
         }
     }
+    /// The controller the air control builds (`PlayerActionAirMoveControl`'s constructor): forced
+    /// like the swim's, set up with the jump's turn constants (`JumpTurn*`).
+    pub fn air() -> Self {
+        let mut turn = Self::swim();
+        turn.setup(TurnSetup {
+            min_degrees: 1.,
+            fast_degrees: 135.,
+            accel_frames: 20,
+            accel_frames_fast: 1,
+            brake_frames: 10,
+            limit: 6.,
+            fast_limit: 25.,
+        });
+        turn
+    }
     /// `PlayerActionTurnControl::setup`: the angles and ramps of the turn, the turn rate it may
     /// reach and the one it may reach for a quick turn.
     pub fn setup(&mut self, setup: TurnSetup) {

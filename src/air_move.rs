@@ -198,6 +198,10 @@ impl Default for AirMove {
     }
 }
 impl AirMove {
+    /// The stick steered the velocity in the last update (the take-off locks it for a while).
+    pub fn steered(&self) -> bool {
+        self.steered
+    }
     /// Start a jump from velocity `v`: the horizontal part keeps its direction
     /// (or follows `front` when still), the vertical part becomes the power.
     pub fn setup(&mut self, v: &mut Vec3, front: Vec3, t: &Takeoff) {

@@ -1069,6 +1069,8 @@ pub struct Player {
     /// Air control of the jump family, the state it was set up for, and the
     /// facts of the jump in progress that its landing needs.
     air: AirMove,
+    /// The turn controller the air control keeps (`PlayerActionAirMoveControl::mTurnControl`).
+    air_turn: turn_control::TurnControl,
     air_for: Option<Move>,
     jump_power: f32,
     combo_kept: bool,
@@ -1293,6 +1295,7 @@ impl Default for Player {
             combo: ContinuousJump::default(),
             long_combo: ContinuousLongJump::default(),
             air: AirMove::default(),
+            air_turn: turn_control::TurnControl::air(),
             air_for: None,
             jump_power: 0.,
             combo_kept: false,
@@ -3623,6 +3626,7 @@ impl Player {
         };
         let takeoff = takeoff_of(mode, extend, power, gravity);
         self.air.setup(&mut self.v, self.facing, &takeoff);
+        self.air_turn.reset();
         self.air_for = Some(mode);
         self.jump_power = power;
     }
@@ -3634,6 +3638,7 @@ impl Player {
             takeoff.input_lock = ledge::LET_GO_INPUT_LOCK;
         }
         self.air.setup(&mut self.v, self.facing, &takeoff);
+        self.air_turn.reset();
         self.air_for = Some(self.mode);
     }
     /// Put the air control into the middle of a recorded jump (lockstep).
@@ -3806,14 +3811,27 @@ impl Player {
     /// `rs::slerpUpFront` relaxes a tilted pose toward the world's up and that front at the
     /// state's `SlerpQuatRate`. An upright pose just faces the turned front.
     fn turn_in_air(&mut self, push: Vec3) {
-        let Some(stored) = self.pose_quat() else {
-            self.facing = self.air.turn_facing(self.facing, push);
-            return;
-        };
-        let pose = plane::ActorPose::new(stored);
-        let front = along_vector_normal_h(pose.front(), pose.up(), Vec3::Y);
-        let turned = self.air.turn_facing(front, push);
-        self.set_pose(pose.slerp_up_front(Vec3::Y, turned, t::SLERP_QUAT_RATE, 0.));
+        let (actor_up, actor_front) = self.pose_axes();
+        let stick = if self.air.steered() { push } else { Vec3::ZERO };
+        self.air_turn.update(turn_control::TurnFrame {
+            actor_front,
+            actor_up,
+            stick,
+            up: Vec3::Y,
+        });
+        let turned = self.air_turn.direction;
+        match self.pose_quat() {
+            Some(stored) => {
+                let relaxed = plane::ActorPose::new(stored).slerp_up_front(
+                    Vec3::Y,
+                    turned,
+                    t::SLERP_QUAT_RATE,
+                    0.,
+                );
+                self.set_pose(relaxed);
+            }
+            None => self.facing = turned,
+        }
     }
     /// The horizontal velocity a jump takes off with (`PlayerActionAirMoveControl::setup`): the
     /// velocity the actor holds, with the part along the normal of the ground it stands on taken
