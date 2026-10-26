@@ -3753,11 +3753,49 @@ impl Player {
         let forward = self.v.dot(self.facing).abs();
         let power =
             air_move::jump_power(forward, t::NORMAL_MIN, t::NORMAL_MAX, power_min, power_max);
-        self.jump_with(mode, clip, power, gravity, |p| {
+        let ground_up = self.ground_pose_up_for_jump();
+        self.jump_with(mode, clip, power, gravity, move |p| {
             if let Some(horizontal) = p.takeoff_h {
                 p.set_h(horizontal);
             }
+            if let Some(up) = ground_up {
+                p.slerp_pose_up(up, 1., 180.);
+            }
         });
+    }
+    /// `PlayerStateJump::appear` keeps the ground pose's up (`PlayerJointControlKeeper::
+    /// calcGroundPoseUp`) when the previous step ended the run or the standing state's body
+    /// (`EActionTrigger 0x15`, which `exeRun` and `exeWait` set), and the jump's first step turns
+    /// the actor's pose to it (`rs::slerpUp` with rate 1).
+    fn ground_pose_up_for_jump(&self) -> Option<Vec3> {
+        if !matches!(self.actor_name(), "Run" | "Wait") {
+            return None;
+        }
+        let (actor_up, _) = self.pose_axes();
+        Some(self.joints.ground.ground_pose_up(actor_up))
+    }
+    /// `rs::slerpUp`: the pose turns to `up`, keeping its front (the side crossed with the up
+    /// when that is parallel to it).
+    fn slerp_pose_up(&mut self, up: Vec3, rate: f32, max_degrees: f32) {
+        let pose = self.actor_pose();
+        let mut front = pose.front();
+        if pose_math::is_parallel_direction(up, front, 0.01) {
+            front = pose_math::normalize(pose_math::cross(pose.side(), up));
+        }
+        let stored = pose.slerp_up_front(up, front, rate, max_degrees);
+        self.set_pose(stored);
+    }
+    /// The pose of a body in the air relaxes toward the world's up
+    /// (`PlayerActionAirMoveControl::update`: `rs::slerpUpFront` at the air rate).
+    fn relax_pose_in_air(&mut self) {
+        let Some(stored) = self.pose_quat() else {
+            return;
+        };
+        if plane::ActorPose::new(stored).up() == Vec3::Y {
+            return;
+        }
+        let relaxed = plane::ActorPose::new(stored).slerp_up_front(Vec3::Y, self.facing, 0.15, 0.);
+        self.set_pose(relaxed);
     }
     /// The horizontal velocity a jump takes off with (`PlayerActionAirMoveControl::setup`): the
     /// velocity the actor holds, with the part along the normal of the ground it stands on taken
@@ -3963,6 +4001,7 @@ impl Player {
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
         self.facing = self.air.turn_facing(self.facing, push);
+        self.relax_pose_in_air();
         self.air_actions(o);
     }
     /// Free flight of the states that keep the older approximation of the
