@@ -1887,7 +1887,13 @@ impl Player {
         }
         if let Some(frames) = self.catching {
             return Some(CapRow {
-                state: if frames < 0 { "Return" } else { "Catch" },
+                state: if frames < 0 {
+                    "Return"
+                } else if self.winding && self.winding_age > 0 {
+                    "SpinAttack"
+                } else {
+                    "Catch"
+                },
                 // The cap moves before the player, so it sits where the
                 // player was when the frame began.
                 pos: self.prev,
@@ -2766,9 +2772,12 @@ impl Player {
             return true;
         }
         if self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw {
-            self.pre_throw = 0;
             let kind = self.throw_kind(o);
+            // A throw press with the cap still out is refused and stays buffered
+            // (`PlayerJudgePreInputCapThrow`: only `recordJudgeAndReset` after a throw empties it), so
+            // the throw starts on the frame the cap arrives (`HackCap::isEnableSpinAttack`).
             if self.cap.is_none() {
+                self.pre_throw = 0;
                 if matches!(self.mode, Move::Run | Move::Walk)
                     && kind == Throw::Forward
                     && speed > t::NORMAL_MIN
