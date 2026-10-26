@@ -243,6 +243,8 @@ const BUTTON_THROW_SWING_ANGLE: f32 = 0.;
 
 #[path = "movement/cap_pose.rs"]
 pub(crate) mod cap_pose;
+#[path = "movement/cap_rolling.rs"]
+pub(crate) mod cap_rolling;
 #[path = "movement/cap_spiral.rs"]
 pub(crate) mod cap_spiral;
 #[path = "movement/cap_throw.rs"]
@@ -4571,7 +4573,7 @@ impl Player {
         // sets it flying; the throw nerve itself runs from the next frame.
         if let Some(launch) = self.launch.take() {
             self.winding = false;
-            let cap = Cap::start(launch, self.pos, self.cap_serial + 1);
+            let cap = Cap::start_in(launch, self.pos, self.cap_serial + 1, scene.mesh.as_deref());
             self.cap_serial = cap.clip_serial();
             self.cap = Some(cap);
             return;

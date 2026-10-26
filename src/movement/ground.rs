@@ -175,6 +175,34 @@ mod tests {
     }
 
     #[test]
+    fn the_spin_throw_control_brakes_a_slow_release_over_the_brake_frames() {
+        // `PlayerStateSpinCap` hands `setup` a counter border of 0, so a stick let go at 1.54 a
+        // frame (the cap-throw-spiral run, step 15 of the spin) loses `NormalMaxSpeed / BrakeFrame`
+        // = 1.4 a frame: 0.14 left, then nothing. The run's control would stop it at once.
+        let step = |mut control: GroundMove, velocity: Vec3| {
+            control.reset(velocity, Vec3::new(-0.587_803, 0., -0.809_004), Vec3::Y);
+            control.update(&SteerInput {
+                velocity,
+                up: Vec3::Y,
+                wall: None,
+                actor_front: Vec3::new(-0.587_803, 0., -0.809_004),
+                actor_up: Vec3::Y,
+                stick: Vec3::ZERO,
+                max_speed: 14.,
+                accel_frames: 40,
+            })
+        };
+        let velocity = Vec3::new(-0.721_015, 0., 1.361_606);
+        let braked = step(GroundMove::plain(), velocity);
+        assert!(
+            (braked.speed - 0.140_725).abs() < 1.0e-5,
+            "{}",
+            braked.speed
+        );
+        assert_eq!(step(GroundMove::default(), velocity).speed, 0.);
+    }
+
+    #[test]
     fn a_stick_reversal_brakes_instead_of_turning() {
         let mut turn = TurnControl::default();
         turn.set_limit(8.5);

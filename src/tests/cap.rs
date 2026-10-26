@@ -6,6 +6,55 @@ pub(super) fn run() {
     the_return_after_a_trample_leaves_along_the_cap_pose();
     the_catch_is_the_sensor_contact();
     the_spiral_circles_the_player();
+    the_throw_down_rolls_along_the_floor();
+}
+
+/// The throw down of the recorded `cap-throw-rolling-down` run, on the plane the player stood on:
+/// the cap appears 150 ahead and drops onto the floor (its sphere rests 60 up), rolls at 30 for
+/// 19 steps, brakes by one a step for 30 and stays at 1155, then returns straight at the head.
+#[cfg_attr(test, test)]
+fn the_throw_down_rolls_along_the_floor() {
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::Z,
+            kind: Throw::Down,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: 0.,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: None,
+    };
+    let at = |cap: &Cap| cap.pos / UNIT;
+    // Row 74: the start, the drop onto the floor and the clip the start began.
+    assert!((at(&cap) - Vec3::new(0., 60., 150.)).length() < 1e-3);
+    assert_eq!(
+        (cap.state_name(), cap.clip()),
+        ("ThrowRolling", "FlyingWaitR")
+    );
+    let mut log = vec![];
+    for _ in 75..=145 {
+        cap.update(&world);
+        log.push((cap.state_name(), at(&cap).z, cap.clip()));
+    }
+    // Rows 75 to 93 roll 30 a step (row 93 is the last step of the rolling nerve, already
+    // named the brake), and the first of them plays the rolling clip.
+    assert_eq!(log[0], ("ThrowRolling", 180., "FlyingWaitRolling"));
+    assert!((log[18].1 - 720.).abs() < 1e-3 && log[18].0 == "ThrowRollingBrake");
+    // Rows 94 to 122 brake 29, 28 ... 1; row 123 has stopped at 1155 and names the stay.
+    assert!((log[19].1 - 749.).abs() < 1e-3);
+    assert!((log[47].1 - 1155.).abs() < 1e-3 && log[47].0 == "ThrowRollingBrake");
+    assert_eq!(log[48].0, "ThrowStay");
+    assert!((log[48].1 - 1155.).abs() < 1e-3);
+    // The stay runs 22 steps (rows 123 to 144); row 145 chooses the return.
+    assert_eq!(log[70].0, "Return");
+    assert!(!cap.grounding_effect().0, "the effect ends with the return");
 }
 
 /// The spin-move throw of the recorded `cap-throw-spiral` run (rows 54 to 58, the player
@@ -24,7 +73,7 @@ fn the_spiral_circles_the_player() {
             continuous: false,
             spiral_side: -1.,
         },
-        at(11.258_301, 68.216_797),
+        at(11.258_301, 68.216_8),
         1,
     );
     let spot = |cap: &Cap| (cap.pos / UNIT, cap.state_name(), cap.clip());
@@ -33,8 +82,8 @@ fn the_spiral_circles_the_player() {
     assert_eq!((name, clip), ("ThrowSpiral", "FlyingWaitR"));
     // The rows 55 to 58: where the player stood after the row before, and the cap's recorded spot.
     let rows = [
-        ((10.680_664, 69.775_391), (-198.708, -36.908)),
-        ((10.076_172, 71.296_875), (-245.405, -76.197)),
+        ((10.680_664, 69.775_39), (-198.708, -36.908)),
+        ((10.076_172, 71.296_88), (-245.405, -76.197)),
         ((9.45, 72.78), (-288.29, -120.56)),
         ((8.79, 74.24), (-326.96, -169.69)),
     ];

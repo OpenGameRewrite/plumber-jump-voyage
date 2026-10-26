@@ -48,6 +48,9 @@ pub enum Source {
     CapOwnReaction,
     /// Kept running by the controller's own conditions.
     Code,
+    /// Kept running by Cappy's own code through its effect keeper (the rolling throw's
+    /// grounding effect): the same, owned by the cap.
+    CapCode,
     /// Started by the controller's own call through the player's effect keeper (the splash of
     /// entering and leaving the water): logged without the model's owner mark, and it ends
     /// with its particles.
@@ -60,7 +63,7 @@ impl Source {
     /// effects have already been calculated once when they are first listed. Everything the
     /// player's update starts is first listed one calculation younger.
     fn after_sample(self) -> bool {
-        matches!(self, Source::Cap | Source::CapOwnReaction)
+        matches!(self, Source::Cap | Source::CapOwnReaction | Source::CapCode)
     }
 }
 
@@ -140,6 +143,8 @@ pub struct Triggers {
     last_cap: Option<(String, u32)>,
     /// Names of all effects in the library; controller requests for others are ignored.
     known: HashSet<String>,
+    /// The effects of Cappy's table: when the controller keeps one running, the cap owns it.
+    cap_owned: HashSet<String>,
     /// Entries that follow the actor: only these end when their clip does,
     /// the others (dust left behind) live out their own particles.
     follows: HashSet<Key>,
@@ -162,6 +167,9 @@ impl Triggers {
                 };
                 if trigger.has_flag("FollowTrans") || trigger.has_flag("FollowRotate") {
                     triggers.follows.insert(key.clone());
+                }
+                if trigger.table == "Cap" {
+                    triggers.cap_owned.insert(effect.clone());
                 }
                 // Keeping the emitter lets a one-shot emission finish after
                 // the clip ends (the brake's sparks); an emitter that never
@@ -378,10 +386,15 @@ impl Triggers {
                     changes.push(Change::Again { key });
                 }
             } else {
-                self.running.insert(key.clone(), (Source::Code, false));
+                let source = if self.cap_owned.contains(*name) {
+                    Source::CapCode
+                } else {
+                    Source::Code
+                };
+                self.running.insert(key.clone(), (source, false));
                 changes.push(Change::Start {
                     key,
-                    source: Source::Code,
+                    source,
                     once: false,
                 });
             }
@@ -390,7 +403,8 @@ impl Triggers {
             .running
             .iter()
             .filter(|(k, (s, _))| {
-                (*s == Source::Code || RUN_DUST.contains(&k.effect.as_str()))
+                (matches!(*s, Source::Code | Source::CapCode)
+                    || RUN_DUST.contains(&k.effect.as_str()))
                     && !wanted.contains(&k.effect.as_str())
             })
             .map(|(k, _)| k.clone())
@@ -426,6 +440,10 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     if p.roll_effect_on() {
         wanted.push("Rolling");
     }
+    // The rolling throw's grounding effect (the cap's own code starts it).
+    if p.cap.as_ref().is_some_and(|cap| cap.grounding_effect().0) {
+        wanted.push("FlyRollingGrounding");
+    }
     if matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun) || p.soot.smoking {
         wanted.push("StateFire");
     }
@@ -449,6 +467,9 @@ pub fn code_calls(p: &Player) -> Vec<&'static str> {
     let mut calls = vec![];
     if p.roll_effect_called() {
         calls.push("Rolling");
+    }
+    if p.cap.as_ref().is_some_and(|cap| cap.grounding_effect().1) {
+        calls.push("FlyRollingGrounding");
     }
     calls
 }
@@ -506,7 +527,7 @@ const WATER_MATERIAL: &str = "Water";
 /// model for Mario's own and the controller's, its cap for Cappy's.
 fn owner(source: Source) -> &'static str {
     match source {
-        Source::Cap | Source::CapReaction | Source::CapOwnReaction => "cap",
+        Source::Cap | Source::CapReaction | Source::CapOwnReaction | Source::CapCode => "cap",
         Source::Mario | Source::Code => "model",
         Source::Reaction | Source::Emitted => "player",
     }
@@ -652,7 +673,14 @@ impl Tracker {
                 // A stopped effect no longer emits at once; the particles it
                 // left only fade.
                 Change::Stop { key } => self.live.retain(|l| l.key != key),
-                Change::Again { key } => started.push(format!("{}@model", key.effect)),
+                Change::Again { key } => {
+                    let owner = self
+                        .live
+                        .iter()
+                        .find(|live| live.key == key)
+                        .map_or("model", |live| live.owner);
+                    started.push(format!("{}@{owner}", key.effect));
+                }
             }
         }
         // The dust a one-step run state started is stopped with the state, in

@@ -46,6 +46,26 @@ impl CapPose {
         Self::given(quat_front_up(-front, NEGATED_GRAVITY))
     }
 
+    /// The pose of the rolling throw (`makeQuatFrontUp(-direction, up)`): the cap faces back along
+    /// the way it rolls, its up axis the throw's side.
+    pub fn rolling(direction: Vec3, up: Vec3) -> Self {
+        Self::given(quat_front_up(-direction, up))
+    }
+
+    /// `rollingGround`'s pose: the cap's front is the way back along `direction`, its up `up`;
+    /// the pose goes `rate` of the way there (`al::slerpQuat` from the stored quaternion), or
+    /// takes it whole when there is no rate (the airborne branch gives the pose directly).
+    pub fn follow_rolling(&mut self, direction: Vec3, up: Vec3, rate: Option<f32>) {
+        let target = quat_front_up(-direction, up);
+        *self = Self::given(rate.map_or(target, |rate| slerp(self.stored, target, rate)));
+    }
+
+    /// The pose read back through its matrix (`al::calcQuat`): what the cap's collider turns its
+    /// shapes by.
+    pub fn read_back(&self) -> Quat {
+        self.matrix.calc_quat()
+    }
+
     /// The quaternion the pose keeper holds (`al::getQuat`).
     pub fn quat(&self) -> Quat {
         self.stored
@@ -94,6 +114,17 @@ impl CapPose {
             cos_of_degrees(limit_degrees),
         )
         .map(|(turned, _)| turned)
+    }
+
+    /// The last part of `exeReturn`'s pose work for a cap that rolled: facing `front` with the up
+    /// axis across it and the pose's own side (`front x side`; the pose's up when they are
+    /// parallel), so the model keeps rolling like a wheel on its way back.
+    pub fn stand_facing_across(&mut self, front: Vec3) {
+        let (across, found) = try_normalize_or_zero(cross(front, self.matrix.side()));
+        let up = if found { across } else { self.matrix.up() };
+        if !is_parallel_direction(front, up, PARALLEL_LIMIT) {
+            *self = Self::given(quat_front_up(front, up));
+        }
     }
 
     /// The last part of `exeReturn`'s pose work: stand upright facing `front`, unless that is

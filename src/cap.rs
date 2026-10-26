@@ -19,8 +19,8 @@
 use crate::collider::{Location, PlayerCollider};
 use crate::geometry::TriangleMesh;
 use crate::movement::cap_pose::{CapPose, direction_of, horizontal_length, length};
-use crate::movement::cap_spiral;
 use crate::movement::{Throw, UNIT};
+use crate::movement::{cap_rolling, cap_spiral};
 use bevy::prelude::*;
 
 /// `HackCapThrowParam`, as stored in `MarioCapCommonInfo/ActorParam`:
@@ -73,6 +73,8 @@ const SLIDE_LIMIT: f32 = 0.866_025_4;
 /// same wall (cosine of 5 degrees).
 const GRAZE_LIMIT: f32 = 0.087_155_74;
 const SAME_WALL: f32 = 0.996_194_7;
+/// The radius of Cappy's collision sphere (`PlayerColliderHackCap`): a cap on the floor is that high.
+const COLLIDER_RADIUS: f32 = 60.;
 /// Frames the cap stays put after it was trampled (`exeTrample` compares its
 /// step with 15).
 const TRAMPLE_FRAMES: u32 = 15;
@@ -124,6 +126,10 @@ pub enum CapPhase {
 pub enum CapNerve {
     Throw,
     ThrowBrake,
+    /// The throw down at the end of a ground pound (`exeThrowRolling`): the cap rolls away along
+    /// the floor, then brakes (`exeThrowRollingBrake`).
+    ThrowRolling,
+    ThrowRollingBrake,
     /// The spin-move throw (`exeThrowSpiral`): the cap circles the player on a widening spiral.
     ThrowSpiral,
     ThrowStay,
@@ -139,6 +145,8 @@ impl CapNerve {
         Some(match name {
             "Throw" => Self::Throw,
             "ThrowBrake" => Self::ThrowBrake,
+            "ThrowRolling" => Self::ThrowRolling,
+            "ThrowRollingBrake" => Self::ThrowRollingBrake,
             "ThrowSpiral" => Self::ThrowSpiral,
             "ThrowStay" => Self::ThrowStay,
             "TrampleReturn" => Self::Trample,
@@ -151,6 +159,8 @@ impl CapNerve {
         match self {
             Self::Throw => "Throw",
             Self::ThrowBrake => "ThrowBrake",
+            Self::ThrowRolling => "ThrowRolling",
+            Self::ThrowRollingBrake => "ThrowRollingBrake",
             Self::ThrowSpiral => "ThrowSpiral",
             Self::ThrowStay => "ThrowStay",
             Self::Trample => "TrampleReturn",
@@ -223,6 +233,16 @@ pub struct CapWorld<'a> {
     pub mesh: Option<&'a TriangleMesh>,
 }
 
+/// What the rolling throw keeps: the up axis the model rolls about (`+0x24c`), how long and how
+/// hard it flies, and the grounding effect (`+0x30c`: running, and called in this step).
+#[derive(Clone, Copy, Debug)]
+struct Rolling {
+    up: Vec3,
+    plan: cap_rolling::Plan,
+    effect: bool,
+    called: bool,
+}
+
 #[derive(Clone)]
 pub struct Cap {
     /// Metres.
@@ -264,6 +284,12 @@ pub struct Cap {
     /// from (`_300`, the throw direction the nerve's first step keeps).
     spiral_side: f32,
     curve_front: Vec3,
+    /// The rolling throw's state (`_26c != 0`), when the cap is thrown down.
+    rolling: Option<Rolling>,
+    /// Where the floor is when the replay has no stage collision (the player's feet at the
+    /// throw), and whether the cap rests on it (the rolling nerves read that contact).
+    floor_y: f32,
+    floor_contact: bool,
     /// The player trampled the cap in this frame's sensor phase: the trample
     /// nerve is entered when the cap next updates (`al::setNerve`).
     trampled: bool,
@@ -282,9 +308,20 @@ impl Cap {
     /// the same frame.
     /// `serial` numbers the cap's first clip; later clips count on from it.
     pub fn start(launch: Launch, player: Vec3, serial: u32) -> Self {
+        Self::start_in(launch, player, serial, None)
+    }
+    /// [`Self::start`] in a stage's collision: the cap's first move, in the frame it appears, is
+    /// the collider's (a cap thrown down lands on the floor in it).
+    pub fn start_in(
+        launch: Launch,
+        player: Vec3,
+        serial: u32,
+        mesh: Option<&TriangleMesh>,
+    ) -> Self {
         let front = launch.front.with_y(0.).normalize_or_zero();
         let base = player / UNIT + Vec3::Y * param::THROW_HEIGHT;
         let spiral = launch.spiral_side != 0.;
+        let rolled = launch.kind == Throw::Down;
         let spot = if spiral {
             cap_spiral::start_position(base, front, launch.spiral_side)
         } else {
@@ -305,6 +342,8 @@ impl Cap {
             phase: CapPhase::Out,
             nerve: if spiral {
                 CapNerve::ThrowSpiral
+            } else if rolled {
+                CapNerve::ThrowRolling
             } else {
                 CapNerve::Throw
             },
@@ -325,14 +364,38 @@ impl Cap {
             return_speed: 0.,
             spiral_side: launch.spiral_side,
             curve_front: front,
+            rolling: None,
+            floor_y: player.y / UNIT,
+            floor_contact: false,
             trampled: false,
             stay_reaction_done: false,
             collider: PlayerCollider::for_cap(),
             wall_memory: Vec3::ZERO,
             wall_last_frame: false,
         };
-        cap.advance(None);
+        if rolled {
+            cap.begin_rolling(front);
+        }
+        // `rs::resetCollisionExpandCheck` came with the start's `resetPosition`.
+        cap.collider.reset_expand_check(0.);
+        cap.advance(mesh);
         cap
+    }
+    /// `exeThrowStart` for a throw down: the cap sets off straight down at the rolling speed,
+    /// and its up axis is the throw's side.
+    fn begin_rolling(&mut self, front: Vec3) {
+        let (direction, up) = cap_rolling::start_axes(front);
+        let plan = cap_rolling::plan_down();
+        self.front = direction;
+        self.velocity = direction * cap_rolling::SPEED;
+        self.pose = CapPose::rolling(direction, up);
+        self.speed = cap_rolling::SPEED;
+        self.rolling = Some(Rolling {
+            up,
+            plan,
+            effect: false,
+            called: false,
+        });
     }
     /// Send the cap on another leg toward `direction` (the flick throw, which the
     /// original runs as `ThrowAppend`; here a fresh short throw).
@@ -441,6 +504,12 @@ impl Cap {
                 flying(self.kind, self.air, self.left),
                 self.cruise_frames + 1 + step,
             ),
+            (CapNerve::ThrowRolling, 0) => (thrown(self.kind, self.air, self.left), 0),
+            (CapNerve::ThrowRolling, step) => ("FlyingWaitRolling", step - 1),
+            (CapNerve::ThrowRollingBrake, step) => (
+                "FlyingWaitRolling",
+                self.rolling.map_or(0, |r| r.plan.rolling_steps) + 1 + step,
+            ),
             (CapNerve::ThrowSpiral, 0) => (thrown(self.kind, self.air, self.left), 0),
             (CapNerve::ThrowSpiral, step) => ("FlyingWaitSpiral", step - 1),
             (CapNerve::ThrowStay, 0) => (flying(self.kind, self.air, self.left), 0),
@@ -470,6 +539,10 @@ impl Cap {
         let head = world.player / UNIT + Vec3::Y * HEAD_HEIGHT;
         let body = world.player / UNIT + Vec3::Y * CATCH_CENTER_HEIGHT;
         let mut events = Vec::new();
+        // (The grounding effect's emit call is made by the steps that roll on a surface.)
+        if let Some(rolling) = self.rolling.as_mut() {
+            rolling.called = false;
+        }
         if std::mem::take(&mut self.trampled) {
             self.nerve = CapNerve::Trample;
             self.step = 0;
@@ -478,6 +551,8 @@ impl Cap {
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events),
             CapNerve::ThrowBrake => self.throw_brake(&mut events),
+            CapNerve::ThrowRolling => self.throw_rolling(),
+            CapNerve::ThrowRollingBrake => self.throw_rolling_brake(),
             CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT),
             CapNerve::ThrowStay => self.throw_stay(world.hold, &mut events),
             CapNerve::Trample => self.trample(&mut events),
@@ -504,15 +579,29 @@ impl Cap {
     fn advance(&mut self, mesh: Option<&TriangleMesh>) {
         match mesh {
             Some(mesh) => {
-                let out = self.collider.collide(mesh, self.spot, self.velocity, 0.);
+                // A cap that rolls turns its collision shape with its pose.
+                let tilt = self.rolling.map(|_| self.pose.read_back());
+                let out = self
+                    .collider
+                    .collide_tilted(mesh, self.spot, self.velocity, 0., tilt);
                 self.wall_last_frame = self.collider.wall.is_some();
+                self.floor_contact = false;
                 if out.collided {
                     self.spot = out.pos;
                 } else {
                     self.spot += self.velocity;
                 }
             }
-            None => self.spot += self.velocity,
+            None => {
+                self.spot += self.velocity;
+                // No stage: the floor is the plane the player stood on, and a rolling cap rests
+                // on it by the collider's radius.
+                if self.rolling.is_some() {
+                    let rest = self.floor_y + COLLIDER_RADIUS;
+                    self.floor_contact = self.spot.y <= rest;
+                    self.spot.y = self.spot.y.max(rest);
+                }
+            }
         }
         self.pos = self.spot * UNIT;
     }
@@ -565,6 +654,80 @@ impl Cap {
         }
         self.wall_reaction(events);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
+    }
+    /// `HackCap::exeThrowRolling`: roll along the surface at the throw's speed for the steps the
+    /// distance allows, then brake.
+    fn throw_rolling(&mut self) -> Option<CapNerve> {
+        let plan = self.rolling?.plan;
+        if self.step == 0 {
+            // `tryStartActionIfNotPlaying`.
+            self.try_play("FlyingWaitRolling");
+        }
+        self.roll_on_ground();
+        self.velocity = cap_rolling::keep_along(self.velocity, self.front);
+        (self.step >= plan.rolling_steps).then_some(CapNerve::ThrowRollingBrake)
+    }
+    /// `HackCap::exeThrowRollingBrake`: keep rolling, slowing by a fixed amount a step; the cap
+    /// stays where it stops.
+    fn throw_rolling_brake(&mut self) -> Option<CapNerve> {
+        let plan = self.rolling?.plan;
+        self.roll_on_ground();
+        let brake = self.front * plan.brake_step;
+        self.velocity = Vec3::new(
+            self.velocity.x + brake.x,
+            self.velocity.y + brake.y,
+            self.velocity.z + brake.z,
+        );
+        self.velocity = cap_rolling::keep_along(self.velocity, self.front);
+        cap_rolling::has_stopped(self.velocity, self.front).then_some(CapNerve::ThrowStay)
+    }
+    /// `HackCap::rollingGround`: turn the way the cap rolls along what it touches.
+    fn roll_on_ground(&mut self) {
+        let Some(mut rolling) = self.rolling else {
+            return;
+        };
+        let contact = self.contact_normal();
+        let rolled = cap_rolling::roll(self.front, rolling.up, self.velocity, contact);
+        rolling.called = false;
+        if let Some(rolled) = rolled {
+            self.front = rolled.direction;
+            self.velocity = rolled.velocity;
+            self.pose
+                .follow_rolling(rolled.direction, rolling.up, rolled.pose_rate);
+            // (The airborne branch stops the grounding effect.)
+            rolling.effect = rolled.grounded;
+            rolling.called = rolled.grounded;
+        }
+        self.rolling = Some(rolling);
+    }
+    /// Start a clip unless it is already playing (`al::tryStartActionIfNotPlaying`).
+    fn try_play(&mut self, action: &'static str) {
+        if self.action != action {
+            self.play(action);
+        }
+    }
+    /// The grounding effect runs while the cap rolls on a surface and until it returns
+    /// (`HackCap::control` deletes it then), and its emit call is made in the steps that touch one.
+    pub fn grounding_effect(&self) -> (bool, bool) {
+        self.rolling.map_or((false, false), |r| {
+            (r.effect && self.nerve != CapNerve::Return, r.called)
+        })
+    }
+    /// The normal of what the collider touched in its last move: the floor's, else a wall's, else
+    /// the ceiling's (`rolling_ground` reads `rs::getCollided*Normal` in that order).
+    fn contact_normal(&self) -> Option<Vec3> {
+        if self.floor_contact {
+            return Some(Vec3::Y);
+        }
+        [
+            &self.collider.floor,
+            &self.collider.wall,
+            &self.collider.ceiling,
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        .map(|contact| contact.normal)
     }
     /// `HackCap::exeThrowSpiral`: the cap chases a point that circles the player (see
     /// `cap_spiral`) and returns after 105 steps.
@@ -651,10 +814,12 @@ impl Cap {
     fn go_back(&mut self, head: Vec3) -> Option<CapNerve> {
         if self.step == 0 {
             // `tryStartActionIfNotPlaying`: a cap coming out of the spiral keeps its clip.
-            let action = flying(self.kind, self.air, self.left);
-            if self.action != action {
-                self.play(action);
-            }
+            let action = if self.spiral_side != 0. {
+                "FlyingWaitSpiral"
+            } else {
+                thrown(Throw::Forward, self.air, self.left)
+            };
+            self.try_play(action);
             self.return_speed = 0.;
         }
         let to_head = head - self.spot;
@@ -674,7 +839,12 @@ impl Cap {
             .pose
             .front_turned_toward(direction, param::TURN_LIMIT_DEGREES)
             .unwrap_or(Vec3::ZERO);
-        self.pose.stand_facing(front);
+        // (A cap that rolled keeps its up axis across the new front, like a wheel.)
+        if self.rolling.is_some() {
+            self.pose.stand_facing_across(front);
+        } else {
+            self.pose.stand_facing(front);
+        }
         self.front = front;
         self.return_speed =
             (self.return_speed + param::RETURN_STRENGTH).min(param::RETURN_SPEED_MAX);
@@ -730,7 +900,11 @@ fn cruise_frames(speed: f32) -> u32 {
 }
 fn phase_of(nerve: CapNerve) -> CapPhase {
     match nerve {
-        CapNerve::Throw | CapNerve::ThrowBrake | CapNerve::ThrowSpiral => CapPhase::Out,
+        CapNerve::Throw
+        | CapNerve::ThrowBrake
+        | CapNerve::ThrowRolling
+        | CapNerve::ThrowRollingBrake
+        | CapNerve::ThrowSpiral => CapPhase::Out,
         CapNerve::ThrowStay | CapNerve::Trample => CapPhase::Stay,
         CapNerve::Return => CapPhase::Return,
     }
@@ -749,7 +923,7 @@ fn flying(kind: Throw, air: bool, left: bool) -> &'static str {
 /// switch to their own clip on their first step).
 fn thrown(kind: Throw, air: bool, left: bool) -> &'static str {
     match kind {
-        Throw::Spin => {
+        Throw::Spin | Throw::Down => {
             if left {
                 "FlyingWaitL"
             } else {
