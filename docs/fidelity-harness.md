@@ -117,7 +117,7 @@ from it (`ActorPoseKeeperTQGMSV::updatePoseQuat`). The game reads the pose back 
 matrix (`al::calcFrontDir`, `calcUpDir`, `calcQuat` = `toQuat` of the matrix), the probe's
 `qx..qw` columns and the collider's from/to quaternions included. `src/movement/pose_math.rs`
 ports the routines behind it (`slerpUpFront`, `waitGround`'s pose, `makeQuatUpFront`,
-`alongVectorNormalH`, `turnVecToVecDegree`, `toQuat`, `slerpTo`) in their single precision
+`alongVectorNormalH`, `turnVecToVecDegree`, `toQuat`, `slerpTo`, `makeQuatRotationRate`, `turnQuat`) in their single precision
 order, checked bit for bit against the executable (`PJV_POSE_CASES=<local cases file> cargo
 test pose_math`). A quarter turn about the vertical axis is a tie of `toQuat`'s scalar and
 vertical-axis branches, so the sign of `qy`/`qw` follows the rounding noise of the pose
@@ -139,12 +139,32 @@ the material code (the water prefix of the effect variants) after the step's col
 puddle test reads the height check of the position the step ended on. A standard jump takes off with
 the velocity of the plane under the body now (`PlayerActionAirMoveControl::setup`: the velocity
 without its part along the collided ground's normal, then without the part along gravity), not
-with the horizontal part the run kept for the plane it last steered on. The hip drop's landing keeps
-the pull along the floor's normal. Known gaps of the swim-hipdrop-in run (it is the one scenario that
-still fails): the pose of a jump that starts tilted on a slope relaxes in the first step by a share
-that `slerpUpFront` with rate 0.15 does not reproduce (the game's first jump row keeps 0.39 of the
-tilt, every later one 0.85), and the pound's landing on a steep floor sinks the body along the
-floor's normal by an offset the rewrite does not model.
+with the horizontal part the run kept for the plane it last steered on. The pound and the jump out
+of a run on a slope settled the rest (`swim-hipdrop-in` passes strictly):
+
+* A jump chosen out of the run or the standing state keeps the ground pose's up
+  (`PlayerJointControlKeeper::calcGroundPoseUp`: the actor's up as the spine's stand-up matrix turns it;
+  the exe stores that matrix as a copy of the forward one, not its inverse) read with the pose the
+  run step *began* with, because the run's own pose update comes after the jump is chosen. The jump's
+  first step turns the pose to it (`rs::slerpUp`, rate 1) and the air control relaxes the pose toward
+  the world's up and the turn controller's front at `SlerpQuatRate` (`rs::slerpUpFront`, 0.15) every
+  step, so the tilt keeps 0.39 of its size on the first row and 0.85 on every later one. The air
+  control's turn controller is the faithful port (`turn_control.rs`, set up with the `JumpTurn*`
+  constants).
+* The pound's start turns the pose to the world's up at once (`al::turnQuatYDirRadian`), its landing
+  runs `rs::waitGround` (the pull along the floor's normal, `GravityMove`, and the pose following the
+  floor by `SlerpQuatRateWait`). The tilting pose tilts the collider's arrows with it, which is what
+  sinks the body along the normal (a ratio of 0.85 per row) until the in-water judge fires. The
+  landing in a puddle wets the body (`PlayerWetControl::recordHeavyLandPuddle`).
+* The in-water judge's tilted floor test turns the pose's up onto the floor's normal with
+  `al::makeQuatRotationRate` and measures the root's rise along gravity (`+ 5`), in the stage's own
+  coordinates.
+* The velocity the trace shows for a ground state is the one the step moved with: the normal the
+  nerve saw, not the one the collision found since.
+
+Still not bit exact: the first rows of a jump from a slope differ from the recording by a few ulps
+(the pose the keeper stored before the jump is not observable), and the first row of the swim after
+the run into the pond (`swim-dive`) differs by 1e-6 in the velocity.
 
 The console's single precision library is not correctly rounded: the image links a musl
 derivative (`sinf` and `cosf` through double precision kernels, `acosf`, `asinf`, `atanf` and
