@@ -40,6 +40,7 @@ EFFECT_REACTIONS = {
     'アクションジャンプ': 'ActionJump',
     '汚れ落とし(スス)': 'SootWash',
     '入水落下': 'WaterDive',
+    '飛び込み後の水面顔出し': 'WaterHeadOut',
     '帽子入水': 'CapEnterWater',
     '帽子出水': 'CapLeaveWater',
     '踏みつけヒット': 'StompHit',

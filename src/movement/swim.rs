@@ -52,6 +52,10 @@ pub(super) enum SwimNerve {
     FallIn,
     /// The dive of a hip drop that fell into the water.
     Dive,
+    /// The dive in after a head slide reached the water.
+    HeadIn,
+    /// The dive in after a high fall (the `DiveInWater` clip).
+    DiveIn,
 }
 impl SwimNerve {
     /// The name `<actor nerve>/<state nerve>` the probe logs.
@@ -68,6 +72,8 @@ impl SwimNerve {
             Self::HipDropJump => "Swim/SwimHipDropJump",
             Self::FallIn => "Swim/SwimFallIn",
             Self::Dive => "Swim/SwimDive",
+            Self::HeadIn => "Swim/SwimHeadIn",
+            Self::DiveIn => "Swim/SwimDiveIn",
         }
     }
 }
@@ -132,6 +138,15 @@ pub(super) struct Swim {
     /// The water was entered by a hip drop (`EActionTrigger 19`, set by the actor's hip drop
     /// nerve): `appear` picks the dive.
     entered_by_hip_drop: bool,
+    /// The water was entered by a head slide (trigger 15): `appear` picks the head-in dive.
+    pub(super) entered_by_head_slide: bool,
+    /// The water was entered with the `DiveInWater` clip playing (trigger 9, or the head
+    /// slide's own flag for it): `appear` picks the dive-in.
+    pub(super) entered_by_dive_in: bool,
+    /// Whether the dive-in nerves still steer with the stick (`this+0x104`) and the steps they
+    /// have risen toward keeping the stroke (`this+0x108`).
+    pub(super) dive_in_steer: bool,
+    pub(super) dive_in_keep: i32,
     /// The body's turn.
     pub turn: TurnControl,
 }
@@ -159,6 +174,10 @@ impl Default for Swim {
             out_in_inside: true,
             jump_from_floor: None,
             entered_by_hip_drop: false,
+            entered_by_head_slide: false,
+            entered_by_dive_in: false,
+            dive_in_steer: false,
+            dive_in_keep: 0,
             turn: TurnControl::swim(),
         }
     }
@@ -286,6 +305,16 @@ impl Player {
         // sets the dive trigger.
         self.swim.entered_by_hip_drop = matches!(self.mode, Move::PoundLand)
             || self.mode == Move::GroundPound && self.clip() != "HipDropStart";
+        // `PlayerActorHakoniwa::exeHeadSliding` sets trigger 9 when the slide's dive-in flag is
+        // on and 15 otherwise; the other states set 9 when the `DiveInWater` clip plays.
+        let head_slide = self.mode == Move::Dive;
+        let dive_in = if head_slide {
+            self.head_slide_dive_in
+        } else {
+            self.clip() == "DiveInWater"
+        };
+        self.swim.entered_by_dive_in = dive_in;
+        self.swim.entered_by_head_slide = head_slide && !dive_in;
         self.start_swim(scene);
     }
 
@@ -329,6 +358,8 @@ impl Player {
         self.swim.since_paddle = NEVER_PADDLED;
         self.swim.jump_invalid = 0;
         self.swim.move_timer = 0;
+        self.swim.dive_in_steer = false;
+        self.swim.dive_in_keep = 0;
         self.swim.turn.reset();
         self.swim.ground_normal = if !self.is_just_land() && self.is_collided_ground() {
             self.collided_ground_normal()
@@ -340,22 +371,32 @@ impl Player {
         // The velocity is laid on the plane of the ground normal: the stroke keeps the speed
         // the player came with (at most `SwimSurfaceSpeedMaxH` less a quarter on the ground),
         // and the vertical part is held between the fall and the rise limits.
-        if std::mem::take(&mut self.swim.entered_by_hip_drop) {
+        let hip_drop = std::mem::take(&mut self.swim.entered_by_hip_drop);
+        let head_slide = std::mem::take(&mut self.swim.entered_by_head_slide);
+        let dive_in = std::mem::take(&mut self.swim.entered_by_dive_in);
+        if hip_drop {
             self.set_swim_nerve(SwimNerve::Dive);
             return;
         }
-        // A fast fall into water near the surface (not the dive or the head slide, which
-        // are not ported) is the fall-in: only the vertical speed is kept without a stick.
+        // A fast fall into water near the surface is the dive in (the `DiveInWater` clip), the
+        // head-in (a head slide) or the fall-in; without a stick only the vertical speed is
+        // kept.
         let finder = self.water_finder;
         if !self.is_on_ground_by(self.v)
             && finder.found
             && finder.distance < k::SURFACE_START_DIST
             && pose_math::dot(self.v, GRAVITY) > k::FALL_IN_SPEED
         {
-            if !self.is_move() {
+            if !dive_in && !self.is_move() {
                 self.v = lib::parallelize_vec(GRAVITY, self.v);
             }
-            self.set_swim_nerve(SwimNerve::FallIn);
+            self.set_swim_nerve(if dive_in {
+                SwimNerve::DiveIn
+            } else if head_slide {
+                SwimNerve::HeadIn
+            } else {
+                SwimNerve::FallIn
+            });
             return;
         }
         let (vertical, mut horizontal) =
@@ -429,7 +470,10 @@ impl Player {
     /// hip drop (action triggers 9, 15, 19 and 29) enter harder.
     fn try_reaction_water_in(&mut self, scene: &Course) {
         if self.surface_to_splash(scene) {
-            let strong = self.swim.entered_by_hip_drop;
+            // (The large splash and the loud entry: one of the triggers 9, 15, 19, 29 is on.)
+            let strong = self.swim.entered_by_hip_drop
+                || self.swim.entered_by_head_slide
+                || self.swim.entered_by_dive_in;
             self.events.push(Fx::WaterIn { strong });
         }
     }
@@ -540,6 +584,8 @@ impl Player {
             SwimNerve::HipDropJump => self.exe_swim_hip_drop_jump(first, o, scene),
             SwimNerve::FallIn => self.exe_swim_fall_in(first, o, scene),
             SwimNerve::Dive => self.exe_swim_dive(first, o, scene),
+            SwimNerve::HeadIn => self.exe_swim_head_in(first, o, scene),
+            SwimNerve::DiveIn => self.exe_swim_dive_in(first, o, scene),
         };
         if end.is_some() {
             return end;

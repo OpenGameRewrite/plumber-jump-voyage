@@ -311,6 +311,8 @@ mod swim;
 mod swim_const;
 #[path = "movement/swim_dive.rs"]
 mod swim_dive;
+#[path = "movement/swim_dive_in.rs"]
+mod swim_dive_in;
 #[path = "movement/swim_ground.rs"]
 mod swim_ground;
 #[path = "movement/swim_move.rs"]
@@ -498,6 +500,7 @@ pub mod clip {
             "SwimSurfaceNormal" => Some(38.),
             "SwimStandWait" => Some(140.),
             "SwimWalk" => Some(68.),
+            "SwimHeadSlidingIn" => Some(20.),
             _ => None,
         }
     }
@@ -851,6 +854,8 @@ pub enum Fx {
     },
     /// The player left the water (`tryReactionWaterOut`): its hit reaction and the splash effect.
     WaterOut,
+    /// The head-in dive came up to the surface (the hit reaction `飛び込み後の水面顔出し`).
+    SwimHeadOut,
     /// The fall into the water that starts the swim's dive (the hit reaction `入水落下`).
     WaterDive,
     /// The water hip drop reached the bottom (`rs::startHitReactionHipDropLand`).
@@ -1162,6 +1167,12 @@ pub struct Player {
     /// The swim state (`PlayerStateSwim`) and the player's water surface finder.
     swim: swim::Swim,
     water_finder: crate::water::SurfaceFinder,
+    /// The `Spine1` joint's side axis as the model last posed it (`al::calcJointSideDir`, which
+    /// the dive into the water reads in its first step); the pose calculation keeps it.
+    spine_side: Vec3,
+    /// The head slide's flag that the `DiveInWater` judge passed during the slide
+    /// (`PlayerStateHeadSliding::isEnableDiveInWater`).
+    head_slide_dive_in: bool,
     /// The player's wetness and the drops that run off him (`PlayerWetControl`).
     wet: wet::WetControl,
     /// Where the camera is, in centimetres relative to the replay's start, when the host
@@ -1362,6 +1373,8 @@ impl Default for Player {
             material_water: false,
             material_puddle: false,
             water_finder: crate::water::SurfaceFinder::default(),
+            spine_side: Vec3::ZERO,
+            head_slide_dive_in: false,
             step_phase: 0.,
             landing_speed: 0.,
             touchdown_speed: 0.,
@@ -3012,7 +3025,12 @@ impl Player {
             spring: &mut self.joints.spring,
             actor,
         };
-        crate::skeleton_pose::world_pose(&actor, locals, &mut controls)
+        let world = crate::skeleton_pose::world_pose(&actor, locals, &mut controls);
+        // The next step's nerves read the joint axes this calculation leaves (`al::calcJointSideDir`).
+        let spine = &world[crate::skeleton_pose::Joint::Spine1 as usize];
+        let side = Vec3::new(spine[0][0], spine[1][0], spine[2][0]);
+        self.spine_side = pose_math::try_normalize_or_zero(side).0;
+        world
     }
 
     /// The controllers' state a pose calculation advances: the ground pose's, the look-at's and
@@ -4292,6 +4310,7 @@ impl Player {
             let up = p.v.y.max(0.) + t::HEAD_SLIDING_JUMP;
             p.v = h * t::HEAD_SLIDING_SPEED + Vec3::Y * up;
             p.dive_possible = false;
+            p.head_slide_dive_in = false;
             p.events.push(Fx::Dive);
         });
     }

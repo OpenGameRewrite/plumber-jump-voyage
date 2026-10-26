@@ -33,6 +33,9 @@ const BENT_SPINE_MAX: f32 = 40.;
 const BENT_SIDE_BLEND_RATE: f32 = 0.05;
 /// `SwimBentFrontBlendRate`: how fast the nerves that let the pose go ease the spine's turn back.
 const BENT_FRONT_BLEND_RATE: f32 = 0.04;
+/// How fast the dive into the water brings the pitch to the travel's angle (the literal in the
+/// executable's helper at `0x488410`).
+const DIVE_IN_PITCH_RATE: f32 = 0.2;
 /// The point the root turns about, in its own frame (`+0x30` of the controller).
 const PIVOT: Vec3 = Vec3::new(0., 80., 0.);
 /// `al::isNearZero`'s limit for the angles.
@@ -65,6 +68,21 @@ impl SwimPose {
         self.heel = lerp_value(self.heel, 0., BENT_SIDE_BLEND_RATE);
         self.roll = lerp_value(self.roll, 0., BENT_SIDE_BLEND_RATE);
         self.spine = lerp_value(self.spine, 0., BENT_FRONT_BLEND_RATE);
+    }
+
+    /// The first step of the dive into the water: the pitch takes the spine's angle and the other
+    /// three are cleared (`PlayerStateSwim::exeSwimHeadIn` / `exeSwimDiveIn`).
+    pub fn start_dive_in(&mut self, pitch: f32) {
+        *self = Self {
+            pitch,
+            ..Self::default()
+        };
+    }
+
+    /// The pitch follows the angle of the travel against the body (the helper at `0x488410`
+    /// that the two dive-in nerves end with): a fifth of the way each step.
+    pub fn follow_travel(&mut self, angle: f32) {
+        self.pitch = lerp_value(self.pitch, angle, DIVE_IN_PITCH_RATE);
     }
 
     /// The angles in the executable's order, for the tests.

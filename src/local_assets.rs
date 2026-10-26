@@ -356,6 +356,7 @@ pub fn looping(name: &str) -> bool {
             | "SwimStandMove"
             | "SwimSurfaceNormal"
             | "SwimStandWait"
+            | "SwimHeadSlidingIn"
             | "SwimWalk"
             | "SpinJumpLoop"
             | "Slide"

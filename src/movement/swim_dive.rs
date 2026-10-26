@@ -346,7 +346,7 @@ impl Player {
 }
 
 /// `al::limitVelocityDir`: the part of the velocity along `dir` is held to `limit`.
-fn limit_velocity_dir(velocity: Vec3, dir: Vec3, limit: f32) -> Vec3 {
+pub(super) fn limit_velocity_dir(velocity: Vec3, dir: Vec3, limit: f32) -> Vec3 {
     let (mut along, across) = lib::separate_parallel_vertical(dir, velocity);
     if pose_math::squared_length(along) > limit * limit {
         let length = lib::length(along);

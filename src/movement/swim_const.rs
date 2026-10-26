@@ -124,3 +124,21 @@ pub const FALL_IN_SPEED: f32 = 15.;
 pub const FALL_IN_BRAKE_H: f32 = 0.95;
 pub const FALL_IN_BRAKE_V: f32 = 0.91;
 pub const FALL_IN_FORCE_SURFACE_FRAME: i32 = 10;
+
+/// The dive into the water from above (`SwimHeadIn*`, `SwimDiveIn*`): the vertical brakes, the
+/// rise that follows a held stick, the surface height that ends it and the steps the dive-in
+/// keeps its stroke.
+pub const HEAD_IN_BRAKE_V: f32 = 0.92;
+pub const HEAD_IN_RISE_POWER: f32 = 0.6;
+pub const HEAD_IN_RISE_SPEED_MAX: f32 = 10.;
+pub const HEAD_IN_SURFACE_HEIGHT: f32 = 50.;
+pub const DIVE_IN_BRAKE_H: f32 = 0.97;
+pub const DIVE_IN_BRAKE_V: f32 = 0.987;
+pub const DIVE_IN_RISE_POWER: f32 = 0.5;
+pub const DIVE_IN_RISE_SPEED_MAX: f32 = 3.;
+pub const DIVE_IN_SURFACE_HEIGHT: f32 = 50.;
+pub const DIVE_IN_KEEP_FRAME: i32 = 10;
+/// `SwimHeadSlidingSideAccel`: the stick's push across the dive.
+pub const HEAD_SLIDING_SIDE_ACCEL: f32 = 0.125;
+/// `SlerpQuatGrav`: how fast the pose follows the direction of travel.
+pub const SLERP_QUAT_GRAV: f32 = 0.4;

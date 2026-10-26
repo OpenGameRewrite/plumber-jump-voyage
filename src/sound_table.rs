@@ -275,6 +275,7 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         Fx::WaterIn { strong: false } => vec![Cue::Play("PlWaterInMedSlow")],
         Fx::WaterOut => reaction("WaterOut"),
         Fx::WaterDive => reaction("WaterDive"),
+        Fx::SwimHeadOut => reaction("WaterHeadOut"),
         Fx::SwimHipDropLand => reaction("HipDropLand"),
         // The sound control's camera sounds: the camera dipping into the water, its ambience
         // while it and the player are under, and the swim stroke's bubbles (heard from under
