@@ -85,7 +85,12 @@ it faces back at the thrower while it flies and hovers, the cap jump turns it to
 front of its model's `AllRoot` joint (`src/cap_joint.rs` reads that joint's clips from
 the installed `assets/local/caps/MarioCap.glb`), and the return leans it toward the
 player's head and flies along its front, which turns toward the head by at most 40
-degrees a frame, so a return that begins facing away arcs. The replay's `collision` column then also carries `ceiling`, `gmat`
+degrees a frame, so a return that begins facing away arcs. Two throws fly other ways: the spin
+move's throw (a stick circle, then the throw button) circles the player on a widening spiral for 105
+steps before it returns (`src/movement/cap_spiral.rs`), and the throw at the end of a ground pound's
+landing falls to the floor and rolls along it at 30 a step, braking over 30 steps (`src/movement/cap_rolling.rs`;
+its shape turns with its pose). A throw pressed while the cap is out waits in the input buffer and
+starts on the frame the cap is caught. The replay's `collision` column then also carries `ceiling`, `gmat`
 (the floor's material), `gcode` and `gcodeidx` (its floor code), taken from the
 triangle under the feet. Replays without geometry are unchanged.
 `py tools/fidelity-report.py <runs> --geometry <exports>` replays every

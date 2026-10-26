@@ -375,12 +375,20 @@ const WALKABLE_STEP: f32 = 0.24;
 /// The clip a throw starts with (`PlayerSpinCapAttack`'s clip name builder
 /// for a throw without motion controls): the plain throw, the second and
 /// third in a row, and the spin (spiral) and up or down throws.
-fn throw_clip(kind: Throw, air: bool, count: u32, continuous: bool) -> &'static str {
+fn throw_clip(
+    kind: Throw,
+    air: bool,
+    count: u32,
+    continuous: bool,
+    counterclockwise: bool,
+) -> &'static str {
     match (kind, air, count, continuous) {
         (Throw::Up, false, _, _) => "SpinCapStartDoubleUp",
         (Throw::Up, true, _, _) => "SpinCapAirStartDoubleUp",
         (Throw::Down, false, _, _) => "SpinCapStartDoubleDown",
         (Throw::Down, true, _, _) => "SpinCapAirStartDoubleDown",
+        (Throw::Spin, false, _, _) if counterclockwise => "SpinCapStartDoubleLeft",
+        (Throw::Spin, true, _, _) if counterclockwise => "SpinCapAirStartDoubleLeft",
         (Throw::Spin, false, _, _) => "SpinCapStartDoubleRight",
         (Throw::Spin, true, _, _) => "SpinCapAirStartDoubleRight",
         (Throw::Forward, false, 1, false) => "SpinCapStart",
@@ -4235,21 +4243,33 @@ impl Player {
             self.ground_jump(o);
             return;
         }
-        if (self.pre_throw > 0 || o.throw_pressed) && self.frame <= t::HIP_DROP_JUMP_END {
-            self.pre_throw = 0;
+        // The landing cancel window (`isEnableLandCancel`): a press before it opens stays in the
+        // input buffer (`PlayerJudgePreInputCapThrow`) and acts when it does.
+        if (self.pre_throw > 0 || o.throw_pressed) && self.pound_jump_permitted() {
             if o.crouch {
                 // Roll straight out of the pound with a strong start.
+                self.pre_throw = 0;
                 self.start_roll(RollStart::Boost);
-            } else if self.cap.is_none() {
-                self.start_throw(Throw::Down);
+                return;
             }
-            return;
+            if self.cap.is_none() {
+                self.pre_throw = 0;
+                self.start_throw(Throw::Down);
+                return;
+            }
         }
         // From its 24th step (`isEnableMove`, counted like the cancel window)
         // the landing hands over to the run when the stick is pushed, and to
         // an ordinary jump when one is buffered (the pound's jump needed the
         // window above).
         let can_move = self.frame + 1 >= t::HIP_DROP_LAND_CANCEL;
+        // `isEnableMove` tries the cap throw first, with no trigger: the plain throw (recorded:
+        // cap-throw-rolling-late, a press at the 35th step of the landing).
+        if can_move && (self.pre_throw > 0 || o.throw_pressed) && !o.crouch && self.cap.is_none() {
+            self.pre_throw = 0;
+            self.start_throw(Throw::Forward);
+            return;
+        }
         if can_move && self.pre_jump > 0 && self.tilt <= 0.1 && !o.crouch {
             self.ground_jump(o);
             return;
@@ -4344,9 +4364,21 @@ impl Player {
         if self.throwing.continuous {
             self.throwing.count = 0;
         }
+        if matches!(kind, Throw::Spin | Throw::Down) {
+            // A spiral or rolling throw ends `setupAttackInfo` early: it neither continues nor
+            // starts a row of throws, so the next one begins the count again.
+            self.throwing.continuous = false;
+            self.throwing.count = 0;
+        }
         self.throwing.kind = Some(kind);
         self.throwing.in_air = air;
-        let name = throw_clip(kind, air, self.throwing.count, self.throwing.continuous);
+        let name = throw_clip(
+            kind,
+            air,
+            self.throwing.count,
+            self.throwing.continuous,
+            !self.spin_clockwise,
+        );
         // `exeSpinGround` and `exeSpinAir` ask the keeper for the spine's swing in their first step;
         // a thrown button has no swing angle.
         let swing = if air {
@@ -4520,16 +4552,19 @@ impl Player {
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
         self.facing = self.air.turn_facing(self.facing, push);
-        let release = self.throw_frame(self.throwing.kind.unwrap_or(Throw::Forward), true);
-        if step > 22 && !self.winding
-            || !self.winding && step >= release + 6 && (self.pre_jump > 0 || o.crouch_pressed)
-        {
+        // The actor's cancels (`PlayerActorHakoniwa::exeSpinCap`): while the air throw runs its
+        // first 23 steps only the pound may cancel it (`isEnableCancelHipDrop`: once the cap has
+        // left its spin attack); a jump press does nothing (recorded: cap-throw-air-jump). From
+        // the 24th step the state falls and every air judge may act (`isEnableCancelAir`).
+        let can_pound = self.ground_height >= air_move::tune::HIP_DROP_HEIGHT;
+        if !self.winding && o.crouch_pressed && can_pound {
+            self.start_hip_drop();
+            return;
+        }
+        if step > 22 && !self.winding {
             self.set(Move::Fall);
             self.spin_fall = true;
             self.gravity = t::GRAVITY_AIR;
-            if o.crouch_pressed {
-                self.start_hip_drop();
-            }
         }
     }
     fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {

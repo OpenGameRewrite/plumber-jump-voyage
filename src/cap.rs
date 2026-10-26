@@ -6,10 +6,13 @@
 //! against recorded runs (`capthrow`, `spin-throw`). The flight over open
 //! ground is reproduced, and in a stage's real collision (`geometry.rs`) the
 //! cap collides with the walls and slides along one it meets at an angle.
-//! Cappy's other wall reactions (a head-on hit that stops it, the
-//! lock-on, the attack on what it hits), its floor reactions, the stick
-//! steering of a throw in progress, the spiral and rolling throws and the
-//! re-throw have no counterpart yet.
+//! The spin-move throw (`exeThrowSpiral`, `cap_spiral.rs`) and the throw down at the end of a
+//! ground pound (`exeThrowRolling` and its brake, `cap_rolling.rs`) have their own nerves;
+//! the re-throw after a catch is the player's (`PlayerJudgePreInputCapThrow`).
+//! Cappy's other wall reactions (a head-on hit that stops it, the rebound of the spiral and the
+//! rolling throw, the lock-on, the attack on what it hits), its floor reactions, the stick
+//! steering of a throw in progress and the throws of the motion controls (`DoubleUp`,
+//! `ThrowAppend`, `Rethrow`) have no counterpart yet.
 //!
 //! The cap is a separate actor that updates before the player in the same
 //! frame. It runs its current nerve once per frame and then its collider moves
@@ -653,6 +656,7 @@ impl Cap {
             events.push(CapEvent::Thrown);
         }
         self.wall_reaction(events);
+        self.pose.face_back_along(self.front);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
     }
     /// `HackCap::exeThrowRolling`: roll along the surface at the throw's speed for the steps the
@@ -737,6 +741,8 @@ impl Cap {
             self.play("FlyingWaitSpiral");
             self.velocity = Vec3::ZERO;
         }
+        // The ground helper turns the cap to face back along the way it moved last step.
+        self.pose.face_back_along(self.front);
         // The point it circles follows the player (`+0x2f4`).
         let pivot = Vec3::new(feet.x, param::THROW_HEIGHT + feet.y, feet.z);
         let step = cap_spiral::step(
@@ -756,6 +762,7 @@ impl Cap {
     /// cap stays where it has stopped.
     fn throw_brake(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         self.wall_reaction(events);
+        self.pose.face_back_along(self.front);
         self.velocity += self.front * self.brake_step;
         let stopped = self.velocity.length() < NEAR_ZERO;
         let reversed = self.velocity.dot(self.front) < 0.;

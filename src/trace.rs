@@ -1373,7 +1373,11 @@ impl TraceFile {
         Some(ThrowHint {
             winding: age > 0 || state_runs,
             age: age as u32,
-            launch: age > 0 && self.cell(row + 1, "cap_state") == Some("Throw"),
+            launch: age > 0
+                && matches!(
+                    self.cell(row + 1, "cap_state"),
+                    Some("Throw" | "ThrowSpiral" | "ThrowRolling")
+                ),
             kind,
             count,
             continuous,

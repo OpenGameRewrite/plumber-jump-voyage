@@ -49,6 +49,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 
 pub(super) fn run() {
     original_simulation_trace();
+    the_spin_throw_brakes_only_along_its_front();
     state_changes_follow_the_nerve_machine();
     idle_sequence();
     run_speed();
@@ -822,6 +823,30 @@ fn roll_jump_is_a_nerve_of_the_roll() {
         !matches!(q.mode, Move::Roll | Move::RollJump),
         "{:?}",
         q.mode
+    );
+}
+
+/// `rs::moveInertiaTurn` in the spin-cap state (`cap-throw-spiral`, rows 46 to 48): the player
+/// ran, turned to the stick (-0.59, -0.81) and threw; the velocity (-0.30, 1.94) points away from
+/// that front, and only its part along the front loses the 0.95 each step, so the sideways part
+/// stays and the direction swings.
+#[cfg_attr(test, test)]
+fn the_spin_throw_brakes_only_along_its_front() {
+    let mut p = Player::default();
+    p.facing = Vec3::new(-0.587_803, 0., -0.809_004);
+    p.grounded = true;
+    p.v = Vec3::new(-0.302_507, -7., 1.937_606);
+    p.spin_cap_inertia();
+    assert!(
+        (p.v.x + 0.343_351).abs() < 2e-6 && (p.v.z - 1.881_392).abs() < 2e-6,
+        "{}",
+        p.v
+    );
+    p.spin_cap_inertia();
+    assert!(
+        (p.v.x + 0.382_153).abs() < 2e-6 && (p.v.z - 1.827_988).abs() < 2e-6,
+        "{}",
+        p.v
     );
 }
 

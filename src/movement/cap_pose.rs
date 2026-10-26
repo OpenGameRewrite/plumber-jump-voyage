@@ -46,6 +46,15 @@ impl CapPose {
         Self::given(quat_front_up(-front, NEGATED_GRAVITY))
     }
 
+    /// The throw nerves' ground helper (`0x401d0c`, called by `exeThrow`, `exeThrowBrake` and
+    /// `exeThrowSpiral` after their wall reaction) ends by standing the cap upright facing back
+    /// along the direction it keeps (`makeQuatFrontUp(-direction, up)`, slerped whole from its
+    /// own quaternion): a cap turned along a wall, or circling, faces back along its new way.
+    pub fn face_back_along(&mut self, direction: Vec3) {
+        let target = quat_front_up(-direction, NEGATED_GRAVITY);
+        *self = Self::given(slerp(self.stored, target, 1.));
+    }
+
     /// The pose of the rolling throw (`makeQuatFrontUp(-direction, up)`): the cap faces back along
     /// the way it rolls, its up axis the throw's side.
     pub fn rolling(direction: Vec3, up: Vec3) -> Self {

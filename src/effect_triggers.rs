@@ -180,6 +180,10 @@ impl Triggers {
                         .timing(Some(r))
                         .is_some_and(|t| t.last_alive.is_none())
                 });
+                // An effect a clip starts at one of its frames (not for as long as the clip plays) and
+                // that does not fade out when deleted lives out its particles after the clip
+                // changes (recorded: the air throw's `SpinRight` through the pound that cancels it).
+                let fades = trigger.has_flag("OneTimeFade");
                 for action in &trigger.actions {
                     let table = if trigger.table == "Cap" {
                         &mut triggers.cap
@@ -192,7 +196,8 @@ impl Triggers {
                         .push(ActionEntry {
                             key: key.clone(),
                             start: action.start,
-                            keep: action.keep && !endless,
+                            keep: action.keep && !endless
+                                || (action.start >= 0 && !fades && !endless),
                             end: action.end,
                         });
                 }
