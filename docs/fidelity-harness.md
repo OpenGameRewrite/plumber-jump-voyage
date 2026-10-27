@@ -649,6 +649,19 @@ snapshot cannot hold the first step it has pending, so the replay injects the
 row before it and chooses the state again with that frame's input. Compare with `--lockstep` to count the
 frames that disagree rather than look for drift.
 
+The trace's velocity includes the floor pull of a grounded state and, on the
+bubble's landing row, the fall speed the ground already stopped; the injection
+sets those back to zero so the next state adds its own pull. The bubble's inner
+clocks (`RecoveryStart`, `RecoveryTravel`, `RecoveryFall`) are restored from the
+rate-one `TractorBubble*` clip frame, since the exposed counter spans all three.
+
+Known lockstep residuals (free replay passes both): `abyss-recovery-bubble` shows
+only `interp` at the Land to Wait blend (the injection has no interpolation
+history for the outgoing clip). `burn-lava-twice` still differs where state the
+trace cannot show is not reconstructed: the first rows' layers and bones, the
+fire run's looping effects (FireRunHipSmoke re-emits because live effects are not
+restored from `effects_live`), and the second run's footstep and cycle phase.
+
 ## Skeleton and the partial animation
 
 The `bones` column is the rewrite's own skeleton (`src/skeleton_pose.rs`): the clips of the

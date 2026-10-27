@@ -2226,9 +2226,9 @@ impl Player {
         // the next step decides.
         self.nerve.touchdown =
             self.grounded && self.mode.in_flight() && !self.burning() && !self.is_dead();
-        if self.nerve.touchdown {
-            // The row reports the fall speed that reached the ground; the
-            // ground has already stopped it.
+        // The row reports the fall speed that reached the ground; the ground
+        // has already stopped it (the bubble's fall lands by itself).
+        if self.nerve.touchdown || self.grounded && self.mode == Move::RecoveryFall {
             self.v.y = 0.;
         }
         self.spin_fall = s.spin_fall;
@@ -2260,6 +2260,12 @@ impl Player {
         } else {
             t::GRAVITY
         };
+        // The trace's velocity includes the floor pull a grounded state applies; the
+        // body carries only what is left of it, so a state chosen next (a run
+        // pulling harder) starts from zero as it does in free replay.
+        if self.grounded && self.v.y == -self.pull && !self.mode.in_flight() {
+            self.v.y = 0.;
+        }
         if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
             self.run_nerve = match self.mode {
                 Move::Skid => RunNerve::Brake,
