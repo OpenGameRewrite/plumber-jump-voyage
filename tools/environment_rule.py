@@ -26,6 +26,7 @@ so those names are judged as if physical and the surface hosts cannot be read (n
 """
 import math
 import re
+import struct
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -55,7 +56,7 @@ HANDLED_MESSAGE = re.compile(
     r"SandGeyserRaise|LiftGeyser|HoldCancel|EnemyAttack|.*Explosion|.*CactusNeedle|AttachCactusNeedle|Push|PushToPlayer|"
     r"PushVelocity|CollisionImpulse|KnockDown|PressureDeath|ForceAbyss)")
 
-# States a scenario never scripts: contamination whatever the frame's contacts were.
+# These states need a cause; static collision/death-area causes are proved below.
 UNSCRIPTED_STATES = ("Bind", "Hack", "Damage", "Demo", "ShineGet", "Press", "SandSink", "Abyss", "Dead")
 # States in which the position follows a wall, a pole or a hang: displacement differs from velocity.
 SURFACE_STATES = ("Pole", "WallCatch", "WallAir", "WallGrab", "WallSlide", "Hang", "GrabCeil")
@@ -205,7 +206,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None):
         self.rows = game_rows
         self.listed = listed
         self.verdict = Verdict()
@@ -226,6 +227,79 @@ class Judge:
             key for key, bases in spans.items()
             if any(max(b[i] for b in bases) - min(b[i] for b in bases) > 0.01 for i in range(3))
         }
+        self._scripted = {}
+        if geometry and start is not None and v.geometry_replay:
+            self._classify_damage(geometry, start, preroll or {}, start_triangle or {})
+
+    def _classify_damage(self, geometry, start, preroll, start_triangle):
+        """Prove an episode's entry, never infer it from its scenario name or its outcome.
+
+        checkDamageFromCollision reads the previous collision before the movement step;
+        checkDeathArea reads the position. A fire episode includes its own Dead substate.
+        Actor messages/contacts are still judged independently, even in a proved episode.
+        """
+        surfaces = {}
+        initial = set()
+        vertices = start_triangle.get("vertices", [])
+        # Exported world vertices are serialized to three decimals. Equality here is
+        # equality of that serialization, not a distance tolerance or the runner's
+        # older approximate floor_triangle_match claim.
+        vertex_key = lambda vs: sorted(tuple(round(x, 3) for x in p) for p in vs)
+        for tri in geometry.get("triangles", []):
+            obj = geometry["objects"][tri[13]]
+            if obj.get("static") is not True:
+                continue
+            attr = geometry["attributes"][tri[12]]
+            code = (attr.get("FloorCode"), attr.get("MaterialCode"))
+            base = tuple(float(f"{f32(f32(x) - f32(s)):.6f}") for x, s in zip(obj["translate"], start))
+            surfaces.setdefault(base, set()).add(code)
+            if (start_triangle.get("found") and len(vertices) == 3 and len(tri) >= 16
+                    and tri[14:16] == [start_triangle.get("kcl_triangle_index"), start_triangle.get("kcl_attribute_index")]
+                    and vertex_key([tri[0:3], tri[3:6], tri[6:9]]) == vertex_key(vertices)):
+                initial.add(code)
+
+        rows = dict(preroll)
+        rows.update(self.rows)
+        previous_family, cause = "", None
+        for f, row in sorted(rows.items()):
+            family = row.get("state", "").split("/")[0]
+            if family != previous_family:
+                cause = cause if family == "Dead" and previous_family in ("Damage", "DamageFire", "Abyss") else None
+                if family in ("DamageFire", "Damage", "Dead") and cause is None:
+                    codes = {"DamageFire"} if family == "DamageFire" else {"Needle", "Poison"} if family == "Damage" else {"Poison"}
+                    for g in (f - 1, f):
+                        sample = rows.get(g, {})
+                        flags = key_values(sample.get("collision", ""))
+                        hosts = parse_hit_hosts(sample.get("hit_hosts"))
+                        # Current probe exposes the floor code only. Wall/ceiling
+                        # material names alone cannot establish their damage code.
+                        code = (flags.get("gcode"), flags.get("gmat"))
+                        host = hosts.get("ground", {})
+                        static = (host.get("moving") == "0" and host.get("parts_flag") != "0"
+                                  and ("ground", host.get("host")) not in self._moving_by_position)
+                        exported = static and code in surfaces.get(host.get("base"), set())
+                        # Preroll lacks hit_hosts. Its first sample can instead use
+                        # the probe's actual start KCL triangle, verified above.
+                        exported = exported or (g == min(rows) and g in preroll and code in initial)
+                        if flags.get("ground") == "1" and code[0] in codes and exported:
+                            cause = f"exported static {code[0]} floor ({code[1]}) at frame {g}"
+                            break
+                elif family == "Abyss":
+                    for g in (f - 1, f):
+                        sample = rows.get(g, {})
+                        p = [number(sample.get(k)) for k in ("px", "py", "pz")]
+                        if None not in p:
+                            absolute = [f32(f32(p[i]) + f32(start[i])) for i in range(3)]
+                            for area in geometry.get("areas", []):
+                                if in_death_area(area, absolute):
+                                    cause = f"exported DeathArea {area.get('id', '')} at frame {g}"
+                                    break
+            if cause:
+                self._scripted[f] = cause
+            previous_family = family
+
+    def _unscripted(self, f):
+        return self._state(f).startswith(UNSCRIPTED_STATES) and f not in self._scripted
 
     # ---- facts about a frame, from the game trace ----
 
@@ -269,7 +343,7 @@ class Judge:
             if int(trig.get(key, "0") or "0", 16) != 0:
                 found.append(f"trigger {key} set")
         state = self._state(f)
-        if state.startswith(UNSCRIPTED_STATES):
+        if self._unscripted(f):
             found.append(f"state {state}")
         prev = self._row(f - 1)
         flags = self._flags(f)
@@ -298,8 +372,11 @@ class Judge:
         if v.typed:
             for f in self.rows:
                 self._judge_typed_contacts(f)
+        for f, cause in self._scripted.items():
+            if f in self.rows:
+                v.accept(f, "scripted damage/death", cause)
         for f, reasons in self.listed.items():
-            if self._state(f).startswith(UNSCRIPTED_STATES):
+            if self._unscripted(f):
                 v.refuse(f, f"state {self._state(f)} that the scenario does not script")
             for reason in reasons:
                 self._judge_reason(f, reason)
@@ -448,15 +525,37 @@ class Judge:
         if not explained:
             v.refuse(f, f"displacement differs from velocity on flat ground with no wall, surface state or transition: {reason}")
             return
-        if state.startswith(UNSCRIPTED_STATES):
+        if self._unscripted(f):
             v.refuse(f, f"displacement in unscripted state {state}: {reason}")
             return
         self._geometry(f, reason, "displacement against the map geometry", ("ground",))
 
 
-def judge_run(game_rows, rewrite_rows, listed):
+def f32(value):
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def in_death_area(area, p):
+    """AreaShapeCube::isInVolume / calcLocalPos, with no boundary margin.
+
+    Linked/switch-controlled areas and other shapes need further evidence; fail closed.
+    """
+    spans = {"AreaCubeBase": (0, 1000), "AreaCubeTop": (-1000, 0), "AreaCubeCenter": (-500, 500)}
+    if area.get("name") != "DeathArea" or area.get("shape") not in spans or area.get("links") or area.get("args"):
+        return False
+    m, scale = area.get("matrix", []), area.get("scale", [])
+    if len(m) != 12 or len(scale) != 3 or any(abs(s) <= 0.001 for s in scale):
+        return False  # the game's isNearZero scale guard, not a fitted tolerance
+    delta = [f32(p[i] - f32(m[i * 4 + 3])) for i in range(3)]
+    local = [f32(f32(f32(f32(delta[0] * f32(m[i])) + f32(delta[1] * f32(m[i + 4])))
+                           + f32(delta[2] * f32(m[i + 8]))) / f32(scale[i])) for i in range(3)]
+    bottom, top = spans[area["shape"]]
+    return all(math.isfinite(x) for x in local) and -500 <= local[0] <= 500 and bottom <= local[1] <= top and -500 <= local[2] <= 500
+
+
+def judge_run(game_rows, rewrite_rows, listed, **evidence):
     """Judge a run. `listed` is {frame: [reason text]} from game.env.json (the player's own cap already discounted)."""
-    return Judge(game_rows, rewrite_rows, listed).judge()
+    return Judge(game_rows, rewrite_rows, listed, **evidence).judge()
 
 
 def self_check():
@@ -532,4 +631,48 @@ def self_check():
     assert verdict(old, flat, {1: ["something new"]}).refused
     # states the scenario never scripts refuse a listed frame
     assert 1 in verdict(rows(state="Damage/Wait"), flat, {1: ["hit-sensor contact 帽子花"]}).refused
+    # Static damage is scripted by its collision code and exported host, never
+    # by a scenario label, the LavaPink material alone, or the eventual death.
+    mesh = {"objects": [{"static": True, "translate": [0, 0, 0]}],
+            "attributes": [{"FloorCode": "DamageFire", "MaterialCode": "LavaPink"}],
+            "triangles": [[0] * 12 + [0, 0, 7, 4]], "areas": []}
+    evidence = dict(geometry=mesh, start=[0, 0, 0])
+    g = rows(hit_hosts=static_floor,
+             state=lambda i: "Wait/Wait" if i == 0 else "DamageFire/Dead" if i >= 4 else "DamageFire/Jump",
+             collision="ground=1;wall=0;ceiling=0;gcode=DamageFire;gmat=LavaPink")
+    listed = {i: ["floor material changed A -> LavaPink"] for i in range(1, 6)}
+    assert not judge_run(g, geometry, listed, **evidence).refused
+    assert judge_run(g, flat, listed, **evidence).refused
+    assert judge_run(g, geometry, listed).refused
+    bad = rows(hit_hosts=static_floor, state="DamageFire/Jump", collision="ground=1;gcode=Ground;gmat=LavaPink")
+    assert judge_run(bad, geometry, listed, **evidence).refused
+    mesh["objects"][0]["static"] = False
+    assert judge_run(g, geometry, listed, **evidence).refused
+    mesh["objects"][0]["static"] = True
+    moving = {f: dict(r, hit_hosts=r["hit_hosts"].replace("/15/1/0/", "/15/1/1/")) for f, r in g.items()}
+    assert judge_run(moving, geometry, listed, **evidence).refused
+    # A fire cause does not waive enemy messages, unknown coins (even after
+    # death), or the static SignBoardDanger obstacle's physical sensor.
+    for contact in (push, "k=a;w=player;s=Body:1;o=Body:12;h=Coin;c=Coin;m=;r=",
+                    "k=a;w=player;s=Body:1;o=Cap:6;h=Sign;c=SignBoardDanger;m=;r="):
+        touched = {f: dict(r, contacts=contact if f == 5 else "") for f, r in g.items()}
+        assert 5 in judge_run(touched, geometry, listed, **evidence).refused
+    # Direct-start damage may begin in preroll, whose missing hosts require
+    # exact start triangle identity plus vertices at the export's precision.
+    pre = {-2: dict(g[0], hit_hosts=""), -1: dict(g[1], hit_hosts="", collision="ground=0")}
+    direct = rows(state="DamageFire/Jump", collision="ground=0")
+    initial = dict(found=True, vertices=[[0, 0, 0]] * 3, kcl_triangle_index=7, kcl_attribute_index=4)
+    v = judge_run(direct, geometry, {1: ["hit-sensor contact 帽子花"]}, preroll=pre, start_triangle=initial, **evidence)
+    assert not v.refused and 1 in v.accepted["scripted damage/death"]["frames"]
+    initial["kcl_triangle_index"] = 8
+    assert judge_run(direct, geometry, {1: ["hit-sensor contact 帽子花"]}, preroll=pre, start_triangle=initial, **evidence).refused
+    area = dict(name="DeathArea", id="pit", shape="AreaCubeTop", scale=[1, 1, 1],
+                matrix=[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], args={}, links=[])
+    mesh["areas"] = [area]
+    abyss = rows(state="Abyss/Fall", py="-10", hit_hosts=static_floor)
+    assert not judge_run(abyss, geometry, {1: ["hit-sensor contact 帽子花"]}, **evidence).refused
+    assert not in_death_area(area, [0, 0.000001, 0])
+    assert in_death_area(area, [500, -1000, 500])
+    assert not in_death_area(dict(area, links=["SwitchAppear"]), [0, -10, 0])
+    assert not in_death_area(dict(area, shape="Unknown"), [0, -10, 0])
     assert ranges([1, 2, 3, 5, 7, 8]) == "1-3,5,7-8"

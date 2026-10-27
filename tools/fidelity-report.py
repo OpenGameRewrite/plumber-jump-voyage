@@ -89,10 +89,37 @@ def replay(exe, script, game, out, geometry=None):
     """Run the rewrite's headless replay; returns an error text or None."""
     command = [exe, "--replay", script, "--trace", out, "--camera", game]
     if geometry:
-        command += ["--geometry-dir", geometry]
+        command += ["--geometry", geometry]
     done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     if done.returncode != 0:
         return (done.stderr or done.stdout).strip()[-400:]
+    return None
+
+
+def replay_geometry(script, game, directory):
+    """Select once for both replay and judge; same precedence as replay::load_geometry."""
+    if not directory:
+        return None
+    meta_path = os.path.join(os.path.dirname(game), "game.meta.json")
+    meta = json.load(open(meta_path, encoding="utf-8")) if os.path.isfile(meta_path) else {}
+    stage, scenario = meta.get("stage"), meta.get("scenario_no")
+    for line in open(script, encoding="utf-8"):
+        words = line.split("#", 1)[0].split()
+        if words and words[0] == "stage":
+            stage = words[1] if len(words) > 1 else None
+            scenario = int(words[2]) if len(words) > 2 else scenario
+    if not stage:
+        return None
+    if scenario is not None:
+        specific = os.path.join(directory, f"{stage}.s{scenario}.json")
+        if os.path.isfile(specific):
+            return specific
+    general = os.path.join(directory, f"{stage}.json")
+    if os.path.isfile(general):
+        with open(general, encoding="utf-8") as f:
+            have = json.load(f).get("scenario")
+        if scenario is None or have is None or scenario == have:
+            return general
     return None
 
 
@@ -220,12 +247,13 @@ def main():
             skipped.append((name, "no input script (looked beside the trace and in the scenarios folder)"))
             continue
         rewrite = os.path.join(folder, "rewrite.csv")
-        error = replay(exe, script, game, rewrite, geometry)
+        geometry_path = replay_geometry(script, game, geometry)
+        error = replay(exe, script, game, rewrite, geometry_path)
         if error:
             skipped.append((name, f"the replay failed: {error}"))
             continue
         try:
-            report = compare.compare(game, rewrite, allow_contaminated=args.allow_contaminated)
+            report = compare.compare(game, rewrite, allow_contaminated=args.allow_contaminated, geometry_path=geometry_path)
         except compare.EnvironmentRefused as refused:
             skipped.append((name, f"REFUSED, the real-game run is contaminated: {refused.summary}"))
             table.append((name, refused.summary, "REFUSED", "", ""))

@@ -516,6 +516,71 @@ name (cut at 48 bytes) in `hit-sensor contact <name>` reasons. Those are judged 
 physical overlaps by name, so a run that touches an NPC or an item stays refused
 until it is recorded again with the current probe.
 
+Damage/death is a scripted consequence when its entry has a proved static cause.
+`PlayerActorHakoniwa::checkDamageFromCollision` reads collision before movement,
+then `executePreMovementNerveChange` enters the damage state: the judge checks the
+entry sample and its predecessor for `gcode=DamageFire` (fire), `Needle` (damage),
+or `Poison` (damage/death), a ground contact and a static logged host. `LavaPink`
+alone is not a fire code. The host's base position, in the trace's coordinate
+frame, must match an exported `static=true` object carrying that code/material on
+its triangles. Base positions match the probe's six-decimal f32 serialization;
+no distance margin is used. The dashboard selects the export once and gives that
+exact file to both replay and judge. Standalone comparisons supply `--geometry
+<export.json>`; an export for a different recorded stage/scenario gives no exception.
+The episode keeps that cause through its substates (including Dead); a later
+damage episode must prove its entry again. Messages, actor contacts and moving
+surfaces remain independently refused.
+
+For a capture already burning at frame zero, `game.preroll.csv` supplies the
+entry. Its first floor sample can use `floor_triangle_at_start` because preroll
+does not log surface hosts: KCL triangle and attribute indices and all vertices
+must match a static exported triangle, exactly at the export's three-decimal
+serialization. The runner's older approximate `floor_triangle_match` is not used.
+Wall/ceiling material names alone do not prove their floor code; those entries
+still need probe wall/ceiling code or hit-triangle identity before this exception
+can cover them. Fire volumes are also not covered by the floor-code exception.
+
+`checkDeathArea` enters Abyss when the player position lies inside a DeathArea.
+The judge checks the entry and previous absolute position against exported cube
+areas, using `AreaShapeCube::isInVolume` / `AreaShape::calcLocalPos` bounds and
+single precision operations, with no boundary margin. Unsupported shapes or
+linked/conditional areas are unproved and retain the old rule. The game's
+`isNearZero` scale guard is preserved. A SignBoardDanger sensor is still an actor
+contact even though the sign also has exported collision.
+
+Death-drop coins cannot yet be distinguished in recorded `contacts`: class
+`Coin` supports both placed and unplaced instances (`Coin::init`), and a late
+first contact does not prove a late spawn. `Coin::appearPlayerDead` and
+`appearPlayerDeadReplace` establish the real origin, but the probe does not log
+their actor identities. Coin contacts therefore remain refused after death.
+The minimal probe addition is a stable actor token plus an origin tag set by
+those two appearance paths, cleared on every reuse/other appearance; include it
+in each typed contact. Placement absence alone is insufficient (other spawners
+also create Coin). No existing recording is retroactively tagged by timing.
+
+### Recording repeat determinism
+
+`tools/repeat_trace.py` checks repeat CSVs with exact header, row-count and cell
+equality outside boot-relative `game_frame`/`tick` and the separately reported
+visual observations. `nn::vfx::Emitter::Initialize` has its own global RNG path
+and resource/set seed modes (`SetEmitterSetRandomSeed`); the probe resets only
+`sead::Random`. `effects_live` observes `isEffectEmitting`, so particle lifetime
+can vary despite identical movement and effect emission events. It is reported
+as **nondeterministic by design**, without a numeric tolerance.
+
+`fx_kills` includes every actor, not only Mario. Other-owner graphics updates
+also depend on boot/render scheduling: observed repeat differences include
+`stopcd` material updates, so attributing every difference to particle RNG would
+be a guess. Other-owner entries and Mario/cap natural set lifetime observations
+(`queue`, `invalid`, `fin`) are reported separately as nondeterministic by design.
+Explicit Mario/cap effect kills, unknown records, `fx_sets`, effect start/stop
+events, animation and every remaining column still match exactly. This policy
+only tests recording repeats; game-vs-rewrite effect comparisons remain strict,
+including the existing swim `effects_live` residual. The local recording runner
+imports this helper; `PJV_FIDELITY_TOOLS` can select a worktree's tools directory.
+Run `py tools/repeat_trace.py` and `py tools/compare-traces.py --self-check` to
+exercise both policies without launching the emulator.
+
 `fidelity-report.py` replays every scenario that has a `game.csv` (with
 `--camera game.csv`), writes `rewrite.csv`, `diff.md` and `diff.json` beside
 it, and writes `SUMMARY.md` in the runs folder: per scenario the environment,

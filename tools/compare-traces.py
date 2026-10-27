@@ -576,7 +576,7 @@ class Report:
 
 
 def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), lockstep=False,
-            allow_contaminated=False):
+            allow_contaminated=False, geometry_path=None):
     """Compare two trace files. Raises EnvironmentRefused for a contaminated run unless allowed."""
     report = Report()
     report.game_path, report.rewrite_path, report.lockstep = game_path, rewrite_path, lockstep
@@ -605,7 +605,20 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
     verdict = None
     flagged_without_frames = not clean and not listed
     if (not clean and listed) or any(r.get("hit_hosts") or r.get("contacts") for r in game.values()):
-        verdict = judge_run(game, rew, listed)
+        evidence = {}
+        if geometry_path:
+            with open(geometry_path, encoding="utf-8") as f:
+                geometry = json.load(f)
+            meta_path = os.path.join(os.path.dirname(game_path), "game.meta.json")
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            # A different stage/scenario cannot establish the cause of this trace.
+            if geometry.get("stage") == meta.get("stage") and geometry.get("scenario") == meta.get("scenario_no"):
+                pre = os.path.join(os.path.dirname(game_path), "game.preroll.csv")
+                evidence = dict(geometry=geometry, start=meta.get("start_abs"),
+                                preroll=read_trace(pre)[1] if os.path.isfile(pre) else {},
+                                start_triangle=meta.get("floor_triangle_at_start"))
+        verdict = judge_run(game, rew, listed, **evidence)
         for f, reasons in listed.items():
             if not reasons:
                 verdict.refuse(f, "listed by the probe without a reason")
@@ -1035,6 +1048,7 @@ def main():
     ap.add_argument("--ignore-events", default="",
                     help="comma-separated event kinds to leave out besides the probe's own, e.g. se,voice")
     ap.add_argument("--lockstep", action="store_true", help="rewrite was run in lockstep")
+    ap.add_argument("--geometry", help="the exact stage export used by the rewrite replay (damage/death cause evidence)")
     ap.add_argument("--strict", action="store_true", help="exit with status 1 if any column fails")
     ap.add_argument("--allow-contaminated", action="store_true",
                     help="compare a run whose environment was not clean (its listed frames are left out)")
@@ -1049,7 +1063,7 @@ def main():
             sys.exit(f"bad --tol {item!r}")
     ignore = [k for k in args.ignore_events.split(",") if k]
     try:
-        report = compare(args.game, args.rewrite, overrides, ignore, args.lockstep, args.allow_contaminated)
+        report = compare(args.game, args.rewrite, overrides, ignore, args.lockstep, args.allow_contaminated, args.geometry)
     except EnvironmentRefused as refused:
         print(refused.banner, file=sys.stderr)
         sys.exit(3)
