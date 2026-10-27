@@ -21,6 +21,19 @@ pub fn apply(
         let edge = phase != *smoke_phase;
         *smoke_phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
+        if script == "needle" {
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                reset: started && now < 0.04,
+                direction: if (0.1..1.0).contains(&now) {
+                    Vec2::X * 0.6
+                } else {
+                    Vec2::ZERO
+                },
+                ..default()
+            };
+            return;
+        }
         if script == "lava" {
             // From PJV_SPAWN: run +X onto the lava plate and keep going, then let go.
             let now = time.elapsed_secs() - delay;

@@ -263,12 +263,19 @@ impl WaterAreas {
                 ignore: entry["args"]["IsIgnoreArea"].as_bool().unwrap_or(false),
             });
         }
-        Self { areas, ocean_heights: Vec::new() }
+        Self {
+            areas,
+            ocean_heights: Vec::new(),
+        }
     }
     pub fn with_oceans(mut self, table: &serde_json::Value) -> Self {
-        self.ocean_heights = table.as_array().into_iter().flatten()
+        self.ocean_heights = table
+            .as_array()
+            .into_iter()
+            .flatten()
             .filter(|o| o["preset"].as_i64() != Some(5))
-            .filter_map(|o| o["height"].as_f64().map(|h| h as f32)).collect();
+            .filter_map(|o| o["height"].as_f64().map(|h| h as f32))
+            .collect();
         self
     }
 
@@ -309,7 +316,10 @@ impl WaterAreas {
 
     /// `al::isInWaterPos`.
     pub fn is_water(&self, p: Vec3) -> bool {
-        self.volume_at(p).map_or_else(|| self.ocean_heights.iter().any(|h| p.y - h <= 0.001), |area| !area.ignore)
+        self.volume_at(p).map_or_else(
+            || self.ocean_heights.iter().any(|h| p.y - h <= 0.001),
+            |area| !area.ignore,
+        )
     }
 
     /// `al::calcFindWaterSurface` for the "Water" kind: the arrow runs from `start + dir * dist`

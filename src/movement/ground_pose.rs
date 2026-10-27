@@ -187,6 +187,11 @@ pub struct GroundPose {
 }
 
 impl GroundPose {
+    /// The recorder waits in Wait for 120 frames before teleporting. Its
+    /// resetMarioDynamics resets parts, not this body's converged IK rates.
+    pub fn settled_wait() -> Self {
+        Self { ik_follow: 1., ik: 1., leg_ik: 1., ..Self::default() }
+    }
     /// The turn tilt, for the tests and the trace.
     #[allow(dead_code)]
     pub fn tilt(&self) -> f32 {

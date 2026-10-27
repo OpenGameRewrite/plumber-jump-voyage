@@ -231,6 +231,7 @@ fn colors(
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn interp_frames(name: &str, _from: &str) -> f32 {
     match name {
+        "JumpInterp" | "JumpReverseInterp" => 3.,
         "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         // PlayerAnimation/AnimInterp.byml.
@@ -1520,9 +1521,17 @@ mod imported {
                 };
                 loaded.stain_base.insert(handle.id(), base);
                 let (color, reflectance, roughness) = base;
-                let k = if soot.poison { 4. * crate::movement::joint_math::ease_out(level) } else { soot_blend(level) };
+                let k = if soot.poison {
+                    4. * crate::movement::joint_math::ease_out(level)
+                } else {
+                    soot_blend(level)
+                };
                 let c = color.to_linear();
-                let stain_color = if soot.poison { [0.4,0.05,0.8] } else { [0.01;3] };
+                let stain_color = if soot.poison {
+                    [0.4, 0.05, 0.8]
+                } else {
+                    [0.01; 3]
+                };
                 let Some(mut m) = materials.get_mut(&handle.0) else {
                     continue;
                 };

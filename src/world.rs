@@ -550,6 +550,26 @@ fn setup(
     );
     // (The pool's water in centimetres: centre, half sizes, surface height and depth.)
     course.water = crate::water::WaterAreas::demo_box(900., 2500., 600., 500., 0., 400.);
+    // Static Needle fixture: the box collider feeds the same floor code as a
+    // loaded KCL triangle. The small cones show its hazardous footprint.
+    let needle_center = Vec3::new(-4., 0., -6.);
+    course
+        .needles
+        .push((needle_center, Vec3::new(1.5, 0., 1.25)));
+    for x in -3..=3 {
+        for z in -2..=2 {
+            commands.spawn((
+                Mesh3d(meshes.add(Cone {
+                    radius: 0.14,
+                    height: 0.35,
+                })),
+                MeshMaterial3d(dark.clone()),
+                Transform::from_translation(
+                    needle_center + Vec3::new(x as f32 * 0.4, 0.175, z as f32 * 0.4),
+                ),
+            ));
+        }
+    }
     // A lava plate: touching it burns, as hot ground does in the original.
     let lava = materials.add(StandardMaterial {
         base_color: Color::srgb(0.95, 0.32, 0.05),

@@ -73,8 +73,13 @@ impl Player {
                 | Move::RecoveryStart
                 | Move::RecoveryTravel
                 | Move::RecoveryFall
-                | Move::DamageAir | Move::DamageLand | Move::DamageDead
-                | Move::DamageSwim | Move::DamageSurface | Move::DamageLandWater | Move::DamageSwimDead
+                | Move::DamageAir
+                | Move::DamageLand
+                | Move::DamageDead
+                | Move::DamageSwim
+                | Move::DamageSurface
+                | Move::DamageLandWater
+                | Move::DamageSwimDead
         )
         .then_some(self.frame)
     }

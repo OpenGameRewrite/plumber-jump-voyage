@@ -27,7 +27,9 @@ impl Soot {
         self.pending = Some((false, 0.02));
     }
     /// PlayerStainControl::recordPoison (0x465ac8): type1, increment1.
-    pub fn record_poison(&mut self) { self.pending = Some((true,1.)); }
+    pub fn record_poison(&mut self) {
+        self.pending = Some((true, 1.));
+    }
 
     fn update(&mut self, cap_on: bool, in_water: bool, wet: bool) {
         self.smoke_called = false;
@@ -45,7 +47,10 @@ impl Soot {
         }
         if let Some((poison, increment)) = self.pending.take() {
             if self.poison != poison {
-                self.body = 0.; self.cap = 0.; self.decoration = 0.; self.smoking = false;
+                self.body = 0.;
+                self.cap = 0.;
+                self.decoration = 0.;
+                self.smoking = false;
             }
             self.poison = poison;
             self.active = true;

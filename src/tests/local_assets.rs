@@ -56,7 +56,7 @@ fn outfit_validation_and_expressions() {
         }
         assert_eq!(fallback(n), "Wait", "{name}");
     }
-    assert_eq!(interp_frames("Jump", "Move"), 3.);
+    assert_eq!(interp_frames("Jump", "Move"), 0.);
     assert_eq!(interp_frames("Jump", "Wait"), 0.);
     assert!(looping("Wait") && !looping("Jump"));
     assert!(

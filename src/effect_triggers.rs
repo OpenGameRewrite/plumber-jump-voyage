@@ -477,7 +477,11 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
         wanted.push("FlyRollingGrounding");
     }
     if p.soot.smoking {
-        wanted.push(if p.soot.poison { "StatePoison" } else { "StateFire" });
+        wanted.push(if p.soot.poison {
+            "StatePoison"
+        } else {
+            "StateFire"
+        });
     }
     // The drops running off the player after he left the water.
     if p.is_dripping() {
@@ -513,7 +517,11 @@ pub fn emitted_by(fx: Fx) -> Vec<&'static str> {
 pub fn code_calls(p: &Player) -> Vec<&'static str> {
     let mut calls = vec![];
     if p.soot.smoke_called {
-        calls.push(if p.soot.poison { "StatePoison" } else { "StateFire" });
+        calls.push(if p.soot.poison {
+            "StatePoison"
+        } else {
+            "StateFire"
+        });
     }
     if p.roll_effect_called() {
         calls.push("Rolling");

@@ -316,7 +316,8 @@ impl Player {
     pub(super) fn judge_in_water(&mut self, scene: &Course) {
         if self.is_dead()
             || self.recovering()
-            || matches!(self.mode, Move::Swim | Move::Pole) || self.in_damage_state()
+            || matches!(self.mode, Move::Swim | Move::Pole)
+            || self.in_damage_state()
             || self.nerve.deferred
         {
             return;
@@ -364,6 +365,9 @@ impl Player {
     /// (`PlayerStateSwim::appear` takes the velocity the old state left and the step's collision
     /// moves the body by what it sets); the first inner nerve executes with the next update.
     pub(super) fn start_swim(&mut self, scene: &Course) {
+        self.start_swim_with_reaction(scene, true);
+    }
+    fn start_swim_with_reaction(&mut self, scene: &Course, react: bool) {
         // The state starts from the velocity the actor holds (`al::getVelocity`): a body that
         // ran into the water carries the floor-following velocity with the pull along the
         // floor's normal, which the ground states keep apart from `v`.
@@ -371,14 +375,14 @@ impl Player {
         self.mode = Move::Swim;
         self.frame = 0;
         self.nerve.choose_silently(true);
-        self.swim_appear(scene);
+        self.swim_appear(scene, react);
     }
     /// Actor action20 skips the entry reaction after DamageSwim, action26 paddles.
     pub(super) fn start_swim_after_damage(&mut self, scene: &Course, paddle: bool) {
-        let before = self.events.len();
-        self.start_swim(scene);
-        self.events.truncate(before);
-        if paddle { self.set_swim_nerve(SwimNerve::Paddle); }
+        self.start_swim_with_reaction(scene, false);
+        if paddle {
+            self.set_swim_nerve(SwimNerve::Paddle);
+        }
     }
 
     /// Set the inner nerve: it is current at once, its first step is the next update's.
@@ -389,7 +393,7 @@ impl Player {
     }
 
     /// `PlayerStateSwim::appear`.
-    fn swim_appear(&mut self, scene: &Course) {
+    fn swim_appear(&mut self, scene: &Course, react: bool) {
         self.swim.start_jump = 0;
         self.swim.since_paddle = NEVER_PADDLED;
         self.swim.jump_invalid = 0;
@@ -402,8 +406,7 @@ impl Player {
         } else {
             UP
         };
-        // (The damage swim, trigger 20, skips the reaction; it is not ported.)
-        self.try_reaction_water_in(scene);
+        if react { self.try_reaction_water_in(scene); }
         // The velocity is laid on the plane of the ground normal: the stroke keeps the speed
         // the player came with (at most `SwimSurfaceSpeedMaxH` less a quarter on the ground),
         // and the vertical part is held between the fall and the rise limits.

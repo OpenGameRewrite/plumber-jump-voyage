@@ -557,7 +557,7 @@ fn trails(
     // ROMless presentation fallback: soot wisps from the seat, thinning out
     // as the stain fades.
     let burning = matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun);
-    if p.soot.smoking && !burning {
+    if p.soot.smoking && !p.soot.poison && !burning {
         let k = ((p.soot.body - 0.25) / 0.5).clamp(0.2, 1.);
         if s.rand() < 0.25 + 0.35 * k {
             let hip = p.pos + Vec3::Y * 0.6 - p.facing * 0.2;
@@ -719,7 +719,7 @@ pub fn trail_names(p: &Player) -> Vec<&'static str> {
         _ => {}
     }
     let burning = matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun);
-    if p.soot.smoking && !burning {
+    if p.soot.smoking && !p.soot.poison && !burning {
         names.push("SootSmoke");
     }
     if p.cap.is_some() {

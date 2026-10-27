@@ -23,7 +23,7 @@ fn flat(v: Vec3) -> Vec3 {
     v.with_y(0.)
 }
 /// `al::limitVelocityDir`: the part of `v` along `dir` is kept within `limit`.
-fn limit_along(v: &mut Vec3, dir: Vec3, limit: f32) {
+pub fn limit_velocity_dir(v: &mut Vec3, dir: Vec3, limit: f32) {
     // 0x8e5568 separates and rejoins the two components even below the limit.
     // Normalizing the supplied axis or applying a delta changes the original's rounding.
     let mut parallel = dir * dot(*v, dir);
@@ -36,9 +36,6 @@ fn limit_along(v: &mut Vec3, dir: Vec3, limit: f32) {
         }
     }
     *v = parallel + perpendicular;
-}
-pub fn limit_velocity_dir(v: &mut Vec3, dir: Vec3, limit: f32) {
-    limit_along(v, dir, limit);
 }
 /// `al::addVectorLimit`: add `add` to `v` without letting the part of `v`
 /// along `add` pass `limit`. Returns whether anything was added.
@@ -303,10 +300,10 @@ impl AirMove {
             *v += self.dir * (along * accel);
             *v += (input - self.dir * along) * steer.turn;
         }
-        limit_along(v, self.dir, self.speed_cap);
-        limit_along(v, self.side, self.speed_cap);
+        limit_velocity_dir(v, self.dir, self.speed_cap);
+        limit_velocity_dir(v, self.side, self.speed_cap);
         if v.dot(DOWN) > 0. {
-            limit_along(v, DOWN, self.fall_max);
+            limit_velocity_dir(v, DOWN, self.fall_max);
         }
         self.input_lock = self.input_lock.saturating_sub(1);
     }

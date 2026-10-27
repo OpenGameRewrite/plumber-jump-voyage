@@ -278,17 +278,19 @@ impl Player {
             } else {
                 0.
             };
-            if self.in_damage_state() || matches!(
-                self.mode,
-                Move::SlopeSlide
-                    | Move::Swim
-                    | Move::BurnJump
-                    | Move::BurnBounce
-                    | Move::FireRun
-                    | Move::FireFall
-                    | Move::FireDead
-                    | Move::Dead
-            ) {
+            if self.in_damage_state()
+                || matches!(
+                    self.mode,
+                    Move::SlopeSlide
+                        | Move::Swim
+                        | Move::BurnJump
+                        | Move::BurnBounce
+                        | Move::FireRun
+                        | Move::FireFall
+                        | Move::FireDead
+                        | Move::Dead
+                )
+            {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;

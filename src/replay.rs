@@ -512,6 +512,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         None => flat_floor(),
     };
     let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
+    player.prepare_recorded_teleport();
     let recorded = options.camera.or(options.lockstep);
     if let (Some(game), Some(mesh)) = (recorded, &options.geometry) {
         let spawn = game.metadata["spawn_abs"].as_array();
@@ -580,7 +581,11 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         player.step(&orders, &course);
         info.game_frame = i as i64;
         info.frame = i as i64 - SETTLE_FRAMES as i64;
-        recorder.record(&info, &mut player);
+        let preroll = recorder.record(&info, &mut player);
+        if std::env::var_os("PJV_DEBUG_PREROLL").is_some() {
+            if i == 0 { eprintln!("{}", COLUMNS.join(",")); }
+            eprintln!("{}", preroll.join(","));
+        }
     }
     recorder.start_rows();
     let mut rows = Vec::with_capacity(script.frame_count());
@@ -672,10 +677,14 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         player.set_camera_position(camera.view(frame).map(|view| view.position * 100.));
         // Scene RNG is external to a player-only replay. Feed raw getU32 results
         // at the original getRandom(int,int) call site; the state chooses the clip.
-        player.set_damage_random(recorded.and_then(|game| game.cell(frame,"random")).into_iter()
-            .flat_map(|cell| cell.split('|'))
-            .filter_map(|item| item.strip_prefix("_ZN2al9getRandomEii+0x24="))
-            .filter_map(|hex| u32::from_str_radix(hex,16).ok()));
+        player.set_damage_random(
+            recorded
+                .and_then(|game| game.cell(frame, "random"))
+                .into_iter()
+                .flat_map(|cell| cell.split('|'))
+                .filter_map(|item| item.strip_prefix("_ZN2al9getRandomEii+0x24="))
+                .filter_map(|hex| u32::from_str_radix(hex, 16).ok()),
+        );
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (SETTLE_FRAMES + frame) as i64;

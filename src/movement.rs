@@ -460,6 +460,11 @@ pub mod clip {
     pub fn held_length(name: &str) -> Option<u32> {
         match name {
             "SquatStart" => Some(3),
+            "DamageDown" | "NoDamageDown" => Some(92),
+            "DamageLand" => Some(78),
+            "DamageDownSwim" | "NoDamageDownSwim" => Some(140),
+            "DamageDownSwimSurface" | "NoDamageDownSwimSurface" => Some(53),
+            "DamageSwimSurfaceLand" => Some(145),
             // (The fall's clip is 28 frames long and its counter stops one past that.)
             "Fall" => Some(28),
             "Jump" | "JumpReverse" => Some(84),
@@ -683,7 +688,11 @@ impl Move {
             Self::BurnBounce => "Hot! (bounce)",
             Self::FireRun => "Fire run",
             Self::FireFall => "Fire fall",
-            Self::FireDead | Self::DamageDead | Self::DamageSwimDead | Self::Dead | Self::AbyssFall => "Dead",
+            Self::FireDead
+            | Self::DamageDead
+            | Self::DamageSwimDead
+            | Self::Dead
+            | Self::AbyssFall => "Dead",
             Self::DamageAir | Self::DamageLand => "Damage",
             Self::DamageSwim | Self::DamageSurface | Self::DamageLandWater => "Water damage",
             Self::RecoveryStart | Self::RecoveryTravel | Self::RecoveryFall => "Recovery",
@@ -1546,6 +1555,8 @@ pub struct Course {
     pub water: crate::water::WaterAreas,
     /// Hot surfaces (lava): centre of the top face and half extents.
     pub hot: Vec<(Vec3, Vec3)>,
+    /// Static Needle-coded tops in the toy course, consumed through collision.
+    pub needles: Vec<(Vec3, Vec3)>,
     /// Shallow water to stand in: centre of the surface and half extents.
     pub puddles: Vec<(Vec3, Vec3)>,
     pub targets: Vec<Vec3>,
@@ -1831,6 +1842,9 @@ impl Player {
     pub fn start_in_air(&mut self) {
         self.grounded = false;
         self.ground_contact = 0;
+    }
+    pub fn prepare_recorded_teleport(&mut self) {
+        self.joints.ground = ground_pose::GroundPose::settled_wait();
     }
     /// A player standing at `pos` (metres) facing the horizontal direction `facing`.
     pub fn spawn_at(pos: Vec3, facing: Vec3) -> Self {
@@ -2124,8 +2138,16 @@ impl Player {
         // in the step that follows.)
         if self.is_dead()
             && !self.death.abyss_pending_for_trace()
-            && s.mode
-                .is_some_and(|m| !matches!(m, Move::FireDead | Move::Dead | Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead))
+            && s.mode.is_some_and(|m| {
+                !matches!(
+                    m,
+                    Move::FireDead
+                        | Move::Dead
+                        | Move::AbyssFall
+                        | Move::DamageDead
+                        | Move::DamageSwimDead
+                )
+            })
         {
             self.damage = Damage::default();
             self.soot = Soot::default();
@@ -2147,7 +2169,10 @@ impl Player {
         }
         if let Some(mode) = s.mode {
             self.mode = mode;
-            if matches!(mode, Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead) {
+            if matches!(
+                mode,
+                Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead
+            ) {
                 // The recorded state is the death-area fall: the actor is dead (health 0).
                 self.damage.hp = 0;
             }
@@ -2176,7 +2201,16 @@ impl Player {
         // read from them), not the actor nerve's.
         if matches!(
             self.mode,
-            Move::PoundLand | Move::GroundSpin | Move::SpinDrop | Move::DamageAir | Move::DamageLand | Move::DamageDead | Move::DamageSwim | Move::DamageSurface | Move::DamageLandWater | Move::DamageSwimDead
+            Move::PoundLand
+                | Move::GroundSpin
+                | Move::SpinDrop
+                | Move::DamageAir
+                | Move::DamageLand
+                | Move::DamageDead
+                | Move::DamageSwim
+                | Move::DamageSurface
+                | Move::DamageLandWater
+                | Move::DamageSwimDead
         ) && let Some(steps) = s.sub_steps
         {
             self.frame = steps;
@@ -2808,8 +2842,13 @@ impl Player {
             Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead => {
                 self.damage_fire_step(o, scene)
             }
-            Move::DamageAir | Move::DamageLand | Move::DamageDead => self.damage_life_step(o, scene),
-            Move::DamageSwim | Move::DamageSurface | Move::DamageLandWater | Move::DamageSwimDead => self.damage_swim_step(o, scene),
+            Move::DamageAir | Move::DamageLand | Move::DamageDead => {
+                self.damage_life_step(o, scene)
+            }
+            Move::DamageSwim
+            | Move::DamageSurface
+            | Move::DamageLandWater
+            | Move::DamageSwimDead => self.damage_swim_step(o, scene),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -2888,6 +2927,7 @@ impl Player {
         self.wet.update();
         self.update_soot(scene);
         let dead = self.is_dead();
+        // ModelKeeper::show resets AnimPlayerSkl interpolation after a blink.
         let was_hidden = self.damage.hidden;
         self.damage.update(dead);
         if was_hidden && !self.damage.hidden {
@@ -3746,10 +3786,12 @@ impl Player {
     fn side_faces_camera(&self) -> bool {
         // rs::isPlayerSideFaceToCameraZ (0x55dc7c): read camera axes and
         // actor matrix, project the side off camera up, normalize, strict dot<0.
-        let view = self.view.unwrap_or_else(|| move_input::locked_view(self.camera_yaw.to_degrees()));
+        let view = self
+            .view
+            .unwrap_or_else(|| move_input::locked_view(self.camera_yaw.to_degrees()));
         let side = self.actor_pose().side();
-        let side = pose_math::try_normalize_or_zero(vector_lib::verticalize_vec(view[1],side)).0;
-        pose_math::dot(side,-view[2]) < 0.
+        let side = pose_math::try_normalize_or_zero(vector_lib::verticalize_vec(view[1], side)).0;
+        pose_math::dot(side, -view[2]) < 0.
     }
     /// The first, second or third jump of the combo. Which one it is, and
     /// what that does to the combo, is decided as the jump state appears (when
@@ -5031,6 +5073,19 @@ impl Player {
         }
         if scene.mesh.is_none() {
             self.collide_toy_poles(scene);
+            if self.grounded
+                && scene.needles.iter().any(|(c, h)| {
+                    (self.pos.x - c.x).abs() < h.x
+                        && (self.pos.z - c.z).abs() < h.z
+                        && self.pos.y == c.y
+                })
+            {
+                self.touched.active = true;
+                self.touched.floor = Some(CollisionCodes {
+                    floor: "Needle".into(),
+                    ..default()
+                });
+            }
         }
         if self.mode == Move::WallSlide
             && (self.wall == Vec3::ZERO || self.grounded)
@@ -5099,7 +5154,7 @@ impl Player {
                         {
                             self.pos.y = top;
                             self.landing_speed = self.landing_speed.min(self.v.y);
-                            if self.mode != Move::SlopeSlide {
+                            if self.mode != Move::SlopeSlide && !self.in_damage_state() {
                                 // (The slope slide keeps the game's own velocity, the pull into
                                 // the floor included.)
                                 self.v.y = 0.;
@@ -5197,4 +5252,5 @@ pub fn self_check() {
     cap_throw::self_check();
     hip_spring::self_check();
     look_at::self_check();
+    damage::self_check();
 }
