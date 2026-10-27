@@ -406,7 +406,9 @@ impl Player {
         } else {
             UP
         };
-        if react { self.try_reaction_water_in(scene); }
+        if react {
+            self.try_reaction_water_in(scene);
+        }
         // The velocity is laid on the plane of the ground normal: the stroke keeps the speed
         // the player came with (at most `SwimSurfaceSpeedMaxH` less a quarter on the ground),
         // and the vertical part is held between the fall and the rise limits.

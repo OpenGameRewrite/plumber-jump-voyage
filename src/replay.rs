@@ -581,11 +581,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         player.step(&orders, &course);
         info.game_frame = i as i64;
         info.frame = i as i64 - SETTLE_FRAMES as i64;
-        let preroll = recorder.record(&info, &mut player);
-        if std::env::var_os("PJV_DEBUG_PREROLL").is_some() {
-            if i == 0 { eprintln!("{}", COLUMNS.join(",")); }
-            eprintln!("{}", preroll.join(","));
-        }
+        recorder.record(&info, &mut player);
     }
     recorder.start_rows();
     let mut rows = Vec::with_capacity(script.frame_count());
