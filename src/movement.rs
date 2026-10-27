@@ -2823,7 +2823,12 @@ impl Player {
         // The head's look-at runs after the state (`PlayerActorHakoniwa::movement`).
         // (It is off while the animator plays a sub animation: `movement` asks the
         // animator's sub-animation flag before the state's `isEnableLookAt`.)
-        let enabled = look_at::look_enabled(self.nerve_name().name)
+        // (The state's `isEnableLookAt` asks the nerve it has chosen, shown or not.)
+        let look_label = match self.mode {
+            Move::Swim => self.swim.nerve.name(),
+            _ => self.nerve_name().name,
+        };
+        let enabled = look_at::look_enabled(look_label)
             && !self.run_nerve_blocks_look()
             && !self.sub.active;
         let actor = self.pose_matrix();
