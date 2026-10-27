@@ -243,6 +243,7 @@ pub type ControllerState = (
 pub(crate) mod console_libm;
 pub mod death;
 mod abyss;
+mod entrance_camera;
 mod recovery_dead;
 mod safety;
 mod damage;
@@ -1078,6 +1079,7 @@ pub struct Player {
     pub sub_anim: Option<Anim>,
     pub soot: Soot,
     pub death: death::Death,
+    entrance_camera: entrance_camera::EntranceCamera,
     recovery: recovery_dead::Recovery,
     /// Horizontal speed in original units per frame, for animation blending.
     pub move_speed: f32,
@@ -1325,6 +1327,7 @@ impl Default for Player {
             sub_anim: None,
             soot: Soot::default(),
             death: death::Death::default(),
+            entrance_camera: entrance_camera::EntranceCamera::default(),
             recovery: recovery_dead::Recovery::default(),
             move_speed: 0.,
             shown: SPAWN,
@@ -2689,6 +2692,8 @@ impl Player {
         self.check_death_area(scene);
         self.update_recovery_point(scene);
         self.finish_frame(scene);
+        // The camera updates after the actors of the frame.
+        self.entrance_camera.update(self.position_cm(), o.recenter);
     }
     /// Changes of state the surroundings force, decided before the state runs: the ground
     /// reached last step. (Water is asked after the state's own step, see `judge_in_water`.)
@@ -2883,8 +2888,11 @@ impl Player {
             Move::Swim => self.swim.nerve.name(),
             _ => self.nerve_name().name,
         };
-        let enabled =
-            look_at::look_enabled(look_label) && !self.run_nerve_blocks_look() && !self.sub.active;
+        // (And while the scene's entrance camera plays: `entrance_camera.rs`.)
+        let enabled = look_at::look_enabled(look_label)
+            && !self.run_nerve_blocks_look()
+            && !self.sub.active
+            && !self.entrance_camera.playing();
         let actor = self.pose_matrix();
         self.look.step(&actor, enabled, scene.look_sensors());
         self.run_state_frame();

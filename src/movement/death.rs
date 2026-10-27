@@ -113,6 +113,7 @@ impl Player {
         self.death.external_reload = external;
         self.death.generation = generation;
         self.camera_cm = camera;
+        self.entrance_camera = entrance_camera::EntranceCamera::Starting;
         // The new actor is constructed at the selected placement before its first Wait.
         if let Some(mesh) = &scene.mesh {
             let cm = mesh.snap_to_game_precision(terrain::to_cm_exact(pose.0));

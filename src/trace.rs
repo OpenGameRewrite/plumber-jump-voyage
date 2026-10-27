@@ -12,7 +12,7 @@ use crate::{
     fx,
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
-    local_assets::{Blend, Posed, looping},
+    local_assets::{Blend, Posed, interp_frames, looping},
     movement::{
         Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip,
         look_at::{LookHint, LookSensor},
@@ -286,7 +286,7 @@ pub struct Recorder {
     main_clip: &'static str,
     stale_clip: &'static str,
     sub_clip: Option<&'static str>,
-    restart: Option<(&'static str, u32)>,
+    restart: Option<(&'static str, u32, u32)>,
     /// The sub animation on screen at the previous row (the clip, its shown frame, and whether
     /// it covered the whole body): when it ends, the main clip fades in from that pose.
     shown_sub: Option<(Layer, bool)>,
@@ -343,13 +343,14 @@ impl Recorder {
         }
     }
 
-    /// The new actor starts Wait twice. Its six-step interpolation is between two
-    /// identical new Wait poses; the capture converter names it after the last sampled
-    /// clip (before loading). Keep that diagnostic label without blending the dead actor.
+    /// The new actor starts Wait twice. Its interpolation is between two identical new Wait
+    /// poses, as long as the Wait entry of the interpolation table; the capture converter names
+    /// it after the last sampled clip (before loading). Keep that diagnostic label without
+    /// blending the dead actor.
     pub fn scene_started(&mut self, previous_clip: &'static str) {
         self.main_clip = "Wait";
         self.stale_clip = previous_clip;
-        self.restart = Some((previous_clip, 0));
+        self.restart = Some((previous_clip, 0, interp_frames("Wait", previous_clip) as u32));
     }
 
     /// The frames recorded so far only warmed the animation state up: the next row is the first
@@ -1106,7 +1107,7 @@ impl Recorder {
                 .map(|pose| vec![(pose, share, fade)])
                 .unwrap_or_default();
             kept = self.blend.kept();
-            self.restart = Some((self.stale_clip, 0));
+            self.restart = Some((self.stale_clip, 0, RESTART_BLEND_FRAMES));
         }
         self.sub_clip = sub_now;
         // What the blend shows in this row, for the fade that follows a partial animation.
@@ -1122,11 +1123,11 @@ impl Recorder {
             flat.merge(current);
             flat
         });
-        if let Some((from, done)) = self.restart {
+        if let Some((from, done, length)) = self.restart {
             let done = done + 1;
-            self.restart = (done < RESTART_BLEND_FRAMES).then_some((from, done));
-            if interp.is_empty() && done < RESTART_BLEND_FRAMES {
-                interp = format!("{from}:{}", num(done as f32 / RESTART_BLEND_FRAMES as f32));
+            self.restart = (done < length).then_some((from, done, length));
+            if interp.is_empty() && done < length {
+                interp = format!("{from}:{}", num(done as f32 / length as f32));
             }
         }
         PoseStep {
