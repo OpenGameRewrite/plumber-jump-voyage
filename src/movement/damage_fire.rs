@@ -64,7 +64,7 @@ impl Player {
     pub fn fire_sub_steps(&self) -> Option<u32> {
         matches!(
             self.mode,
-            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead
+            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall
         )
         .then_some(self.frame)
     }

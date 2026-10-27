@@ -195,6 +195,9 @@ fn landing_reaction(mode: Move) -> Option<&'static str> {
 pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
     let reaction = |name| vec![Cue::Reaction { cap: false, name }];
     match fx {
+        Fx::Abyss => vec![Cue::Play("FallDown"), Cue::Play("vDeadFallDown")],
+        Fx::RecoveryDamage => reaction("BubbleDamage"),
+        Fx::RecoveryBegin => reaction("BubbleStart"),
         // The footfall, its material variant and the clothes' rustle.
         Fx::Step { left } => match (context.mode, left) {
             (Move::Crawl, _) => vec![],

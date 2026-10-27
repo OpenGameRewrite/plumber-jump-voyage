@@ -231,10 +231,14 @@ pub struct WaterAreas {
 impl WaterAreas {
     /// The `WaterArea` entries of an export's `areas` table.
     pub fn from_export(table: &serde_json::Value) -> Self {
+        Self::from_export_named(table, "WaterArea")
+    }
+
+    pub fn from_export_named(table: &serde_json::Value, name: &str) -> Self {
         let float = |v: &serde_json::Value| v.as_f64().unwrap_or(0.) as f32;
         let mut areas = Vec::new();
         for entry in table.as_array().into_iter().flatten() {
-            if entry["name"].as_str() != Some("WaterArea") {
+            if entry["name"].as_str() != Some(name) {
                 continue;
             }
             let Some(shape) = entry["shape"].as_str().and_then(Shape::from_model) else {

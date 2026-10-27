@@ -1189,11 +1189,17 @@ impl Cells {
 /// A trace file read back (the real game's, for the camera and lockstep).
 pub struct TraceFile {
     pub rows: Vec<HashMap<String, String>>,
+    pub metadata: serde_json::Value,
 }
 impl TraceFile {
     pub fn read(path: &str) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        Self::parse(&text)
+        let mut trace = Self::parse(&text)?;
+        let meta = std::path::Path::new(path).with_extension("meta.json");
+        if meta.exists() {
+            trace.metadata = serde_json::from_str(&std::fs::read_to_string(&meta).map_err(|e| format!("{}: {e}", meta.display()))?).map_err(|e| format!("{}: {e}", meta.display()))?;
+        }
+        Ok(trace)
     }
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
@@ -1212,7 +1218,7 @@ impl TraceFile {
                     .collect()
             })
             .collect();
-        Ok(Self { rows })
+        Ok(Self { rows, metadata: serde_json::Value::Null })
     }
     /// A non-empty cell.
     pub fn cell(&self, row: usize, column: &str) -> Option<&str> {

@@ -51,7 +51,7 @@ impl Player {
     /// Collision causes are consumed before the nerve runs, not during collision resolution.
     /// The floor/wall/ceiling code queries are distinct from a sensor's fire request.
     pub(super) fn dispatch_fire_damage(&mut self, scene: &Course) {
-        if self.is_dead() {
+        if self.is_dead() || self.recovering() {
             return;
         }
         let fire = |codes: &Option<CollisionCodes>| {
@@ -80,6 +80,11 @@ impl Player {
         if !(message || on_floor || against_wall || against_ceiling) {
             return;
         }
+        if self.recovery.valid() && self.damage.hp > 1 {
+            self.begin_safety_recovery();
+            return;
+        }
+        self.recovery.safety = None;
         self.damage.fire();
         self.appear_damage_fire(floor, wall, ceiling);
     }

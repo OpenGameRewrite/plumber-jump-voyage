@@ -241,6 +241,9 @@ pub type ControllerState = (
 );
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
+pub mod death;
+mod abyss;
+mod recovery_dead;
 mod damage;
 mod damage_fire;
 #[path = "movement/ground.rs"]
@@ -570,6 +573,10 @@ pub enum Move {
     FireFall,
     FireDead,
     Dead,
+    AbyssFall,
+    RecoveryStart,
+    RecoveryTravel,
+    RecoveryFall,
     WallSlide,
     WallJump,
     Ledge,
@@ -581,7 +588,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 40] = [
+    pub const ALL: [Move; 44] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -614,6 +621,10 @@ impl Move {
         Self::FireFall,
         Self::FireDead,
         Self::Dead,
+        Self::AbyssFall,
+        Self::RecoveryStart,
+        Self::RecoveryTravel,
+        Self::RecoveryFall,
         Self::WallSlide,
         Self::WallJump,
         Self::Ledge,
@@ -652,7 +663,8 @@ impl Move {
             Self::BurnBounce => "Hot! (bounce)",
             Self::FireRun => "Fire run",
             Self::FireFall => "Fire fall",
-            Self::FireDead | Self::Dead => "Dead",
+            Self::FireDead | Self::Dead | Self::AbyssFall => "Dead",
+            Self::RecoveryStart | Self::RecoveryTravel | Self::RecoveryFall => "Recovery",
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
             Self::Ledge => "Ledge hang",
@@ -885,6 +897,9 @@ pub enum Fx {
     Burned(bool),
     /// Water put the burn out.
     Quenched,
+    Abyss,
+    RecoveryDamage,
+    RecoveryBegin,
 }
 /// Clip the presentation should play: an original animation name, or "Move"
 /// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
@@ -1060,6 +1075,8 @@ pub struct Player {
     /// Upper-body overlay clip while throwing on the run.
     pub sub_anim: Option<Anim>,
     pub soot: Soot,
+    pub death: death::Death,
+    recovery: recovery_dead::Recovery,
     /// Horizontal speed in original units per frame, for animation blending.
     pub move_speed: f32,
     /// Where to draw the player and cap: between the last two simulation
@@ -1305,6 +1322,8 @@ impl Default for Player {
             },
             sub_anim: None,
             soot: Soot::default(),
+            death: death::Death::default(),
+            recovery: recovery_dead::Recovery::default(),
             move_speed: 0.,
             shown: SPAWN,
             shown_cap: None,
@@ -2579,6 +2598,10 @@ impl Player {
 
     /// Advance one original frame.
     pub fn step(&mut self, o: &Orders, scene: &Course) {
+        if self.death.restart_pending {
+            self.restart_after_death(scene);
+        }
+        self.death.update_judge(self.is_dead());
         self.prev = self.pos;
         self.prev_cap = self.cap.as_ref().map(|c| c.pos);
         if self.hitstop > 0. {
@@ -2618,6 +2641,7 @@ impl Player {
         // The cap updates before the player does, within the same frame.
         self.update_cap(&o, scene);
         self.cap_sensor_phase(&o);
+        self.check_death_area(scene);
         self.dispatch_fire_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -2728,6 +2752,8 @@ impl Player {
                 self.damage_fire_step(o, scene)
             }
             Move::Dead => {}
+            Move::AbyssFall => self.abyss_fall(),
+            Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => self.recovery_step(&o, scene),
             Move::LongJump => self.long_jump_air(o),
             Move::Backflip => self.back_jump_air(o),
             Move::Sideflip => self.turn_jump_air(o),
@@ -2802,6 +2828,7 @@ impl Player {
         self.update_soot(scene);
         let dead = self.is_dead();
         self.damage.update(dead);
+        self.death.update_scene(dead);
         // A state chosen this step has run no step yet: its first one is next.
         // The nerve's own steps restart with a new actor nerve, chosen or
         // reached by a sub-state that belongs to another one.
@@ -2827,12 +2854,7 @@ impl Player {
         self.update_sounds(scene);
         self.timer = self.frame as f32 / FPS;
         self.since_land = self.land_frames as f32 / FPS;
-        // The toy course has nothing below it: falling out of it brings the
-        // player back to the checkpoint. (The game has its own abyss handling,
-        // the `Abyss` nerve and the recovery point, which is not ported; a
-        // stage's collision is left to itself.)
-        let out_of_course = scene.mesh.is_none() && self.pos.y < -18.;
-        if out_of_course || !self.pos.is_finite() || !self.v.is_finite() {
+        if !self.pos.is_finite() || !self.v.is_finite() {
             self.reset();
         }
         // The head's look-at runs after the state (`PlayerActorHakoniwa::movement`).
@@ -4912,6 +4934,10 @@ impl Player {
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
         // DeadFire disables movement collision; retain the last contact report.
+        if matches!(self.mode, Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel) {
+            self.move_without_collision(scene);
+            return;
+        }
         if self.is_dead() {
             return;
         }

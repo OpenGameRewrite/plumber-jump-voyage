@@ -391,7 +391,7 @@ struct File {
 }
 
 /// Everything loaded from `assets/local/effects`.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Library {
     pub effects: BTreeMap<String, Vec<Trigger>>,
     pub resources: BTreeMap<String, Arc<Resource>>,

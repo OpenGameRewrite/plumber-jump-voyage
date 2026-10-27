@@ -105,6 +105,9 @@ pub struct TriangleMesh {
     cells: HashMap<(i32, i32), Vec<u32>>,
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
+    pub death: crate::water::WaterAreas,
+    /// Original PlayerList / checkpoint restart placements, absolute centimetres.
+    pub restart_points: Vec<serde_json::Value>,
     /// The hit sensors of the stage's placed actors the head can look at (the export's
     /// `look_sensors`), in the replay's frame.
     pub look_sensors: Vec<crate::movement::look_at::LookSensor>,
@@ -220,6 +223,8 @@ impl TriangleMesh {
             thickness: PRISM_THICKNESS,
             origin,
             water: crate::water::WaterAreas::from_export(&root["areas"]),
+            death: crate::water::WaterAreas::from_export_named(&root["areas"], "DeathArea"),
+            restart_points: root["restart_points"].as_array().cloned().unwrap_or_default(),
             look_sensors: look_sensors_from_export(&root["look_sensors"], origin),
             ..Self::default()
         };

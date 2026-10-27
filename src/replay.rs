@@ -512,6 +512,25 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         None => flat_floor(),
     };
     let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
+    let recorded = options.camera.or(options.lockstep);
+    if let (Some(game), Some(mesh)) = (recorded, &options.geometry) {
+        let spawn = game.metadata["spawn_abs"].as_array();
+        let selected_id = game.metadata["restart_point_id"].as_str();
+        let point = mesh.restart_points.iter().find(|point| {
+            if let Some(id) = selected_id {
+                return point["id"].as_str() == Some(id);
+            }
+            let position = point["position"].as_array();
+            point["kind"].as_str() == Some("stage") && spawn.zip(position).is_some_and(|(a,b)| a[0] == b[0] && a[2] == b[2])
+        });
+        if let Some(point) = point {
+            let p = point["position"].as_array().ok_or("restart position missing")?;
+            let absolute = Vec3::new(p[0].as_f64().ok_or("restart x")? as f32, p[1].as_f64().ok_or("restart y")? as f32, p[2].as_f64().ok_or("restart z")? as f32);
+            let yaw = point["yaw"].as_f64().ok_or("restart yaw missing")? as f32;
+            player.death.restart_pose = Some((mesh.relative_vec(absolute) * 0.01, yaw));
+        }
+        player.death.external_reload = true;
+    }
     // Over no floor within reach of the collider's arrows (40 below the feet): the player is
     // in the air.
     if course
@@ -525,7 +544,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         .or(options.lockstep)
         .and_then(TraceFile::floor_material);
     let mut recorder =
-        Recorder::new(options.table, options.library, floor).with_stage(options.geometry.clone());
+        Recorder::new(options.table.clone(), options.library.clone(), floor.clone()).with_stage(options.geometry.clone());
     let settle = Span {
         frames: 0,
         stick: Vec2::ZERO,
@@ -594,6 +613,22 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 player.step(&orders, &course);
                 player.set_spin_input(spin);
                 player.events.clear();
+            }
+        }
+        // The probe stops sampling Mario across scene teardown/loading. A boot-clock gap
+        // is an external scene boundary, not extra scripted player updates or an HP sample.
+        if frame > 0 && player.is_dead() && let Some(game) = recorded {
+            let previous_frame = game.number(frame - 1, "game_frame");
+            let current_frame = game.number(frame, "game_frame");
+            if previous_frame.zip(current_frame).is_some_and(|(a,b)| b > a + 1.) {
+                if !player.death.ready() {
+                    return Err(format!("scene reload at {frame} before death-wipe judge"));
+                }
+                if player.death.restart_pose.is_none() {
+                    return Err("scene reload requires exported restart_points and recorded spawn_abs/restart_point_id".into());
+                }
+                player.restart_after_death(&course);
+                recorder = Recorder::new(options.table.clone(), options.library.clone(), floor.clone()).with_stage(options.geometry.clone());
             }
         }
         let (mut orders, mut info) = orders_for(

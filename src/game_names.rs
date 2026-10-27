@@ -77,6 +77,8 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::FireFall => known("DamageFire/Fall"),
         Move::FireDead => known("DamageFire/Dead"),
         Move::Dead => known("Dead"),
+        Move::AbyssFall => known("Abyss/Fall"),
+        Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => known("Abyss/Recovery"),
         Move::WallSlide => known("WallAir/Slide"),
         Move::WallJump => known("WallAir/Jump"),
         Move::Ledge => ledge(anim),
