@@ -304,9 +304,8 @@ pub struct Recorder {
     /// The stage the replay runs in: its sensors and its frame (the probe logs stage
     /// coordinates).
     stage: Option<std::sync::Arc<crate::geometry::TriangleMesh>>,
-    /// The next row is the first one the trace writes. The game's trace derives its `interp`
-    /// column from the clip of the row before, so the first row has none, whatever blend the
-    /// animator is in (the raw log shows the settle frames' blend running into it).
+    /// Legacy captures lack the first row's interpolation label. Explicit preroll
+    /// scripts carry the sampled animation history across the row-zero boundary.
     first_row: bool,
     /// The velocity, front, up and quaternion of every recorded frame as f32 bit patterns
     /// (the format of the probe's `bits_*` columns), settle frames included: one line per
@@ -359,8 +358,8 @@ impl Recorder {
 
     /// The frames recorded so far only warmed the animation state up: the next row is the first
     /// one written.
-    pub fn start_rows(&mut self) {
-        self.first_row = true;
+    pub fn start_rows(&mut self, carry_interpolation: bool) {
+        self.first_row = !carry_interpolation;
     }
 
     /// The stage the replay runs in, for the head look-at's sensors and coordinates.

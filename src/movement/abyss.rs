@@ -2,6 +2,20 @@
 use super::*;
 
 impl Player {
+    /// executePreMovementNerveChange: an active RecoveryArea is remembered;
+    /// leaving all recovery volumes starts the bubble from the previous pose.
+    pub(super) fn check_recovery_area_exit(&mut self, scene: &Course) {
+        if !self.is_dead()
+            && !self.recovering()
+            && self.recovery.area_active
+            && self.recovery.valid()
+            && scene.mesh.as_ref().is_some_and(|mesh| {
+                mesh.recovery.volume_at(mesh.to_game_vec(self.position_cm())).is_none()
+            })
+        {
+            self.prepare_safety_recovery();
+        }
+    }
     pub(super) fn check_death_area(&mut self, scene: &Course) {
         if self.is_dead() || self.recovering() && self.mode != Move::RecoveryFall {
             return;

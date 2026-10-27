@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn run() {
     scripts();
+    preroll();
     scenarios();
     camera_and_buttons();
     lockstep();
@@ -58,6 +59,30 @@ fn scripts() {
     );
     assert!(Script::parse("start 0 0 0\n").is_err());
     assert!(Script::parse("start 0 0 0 0\nx 0 0 -").is_err());
+}
+
+#[cfg_attr(test, test)]
+fn preroll() {
+    let legacy = Script::parse(IDLE).unwrap();
+    assert_eq!(legacy.preroll, None);
+    assert_eq!(legacy.preroll_frames(), 10);
+    let explicit = Script::parse(&format!("preroll 10\n{IDLE}")).unwrap();
+    let a = replay(&legacy, options(None)).unwrap();
+    let b = replay(&explicit, options(None)).unwrap();
+    assert_eq!(a.to_csv(), b.to_csv());
+    assert_eq!(a.bits, b.bits);
+    for count in [0, 1, 60] {
+        let script = Script::parse(&format!("preroll {count}\n{IDLE}")).unwrap();
+        let result = replay(&script, options(None)).unwrap();
+        assert_eq!(result.rows.len(), 60);
+        assert_eq!(result.bits.len(), count + 60);
+        assert!(result.bits[0].starts_with(&format!("{},", -(count as i64))));
+        assert_eq!(number(&result.rows, 0, "game_frame"), count as f32);
+        assert_eq!(number(&result.rows, 0, "anim_frame"), count as f32);
+    }
+    for invalid in ["", "-1", "1.5", "4294967296", "10 extra"] {
+        assert!(Script::parse(&format!("{IDLE}preroll {invalid}\n")).is_err());
+    }
 }
 
 #[cfg_attr(test, test)]

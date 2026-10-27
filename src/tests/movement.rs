@@ -1447,6 +1447,7 @@ fn burn_and_soot() {
     p.v.y = -5.;
     p.step(&Orders::default(), &cool);
     assert_eq!((p.mode, p.frame), (Move::FireRun, 0));
+    assert_eq!(p.v.y, -GRAVITY_MOVE, "appear applies Run's pull immediately");
     let push = Orders {
         direction: Vec2::Y,
         ..default()

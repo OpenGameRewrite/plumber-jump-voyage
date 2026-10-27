@@ -65,6 +65,10 @@ impl Player {
         self.damage.hp = self.damage.hp.saturating_sub(1);
         self.damage.invalid = 20;
         self.events.push(Fx::RecoveryDamage);
+        self.prepare_safety_recovery();
+    }
+    /// The RecoveryArea exit path requests recovery without damageForce.
+    pub(super) fn prepare_safety_recovery(&mut self) {
         self.nerve.clear();
         self.nerve.actor = "Abyss";
         self.nerve.step = 0;
@@ -149,6 +153,7 @@ impl Player {
             Move::RecoveryTravel => {
                 if self.frame == 0 {
                     self.start_clip("TractorBubbleWait");
+                    self.events.push(Fx::RecoveryWait);
                     self.recovery_travel_setup();
                 }
                 let r = &self.recovery;
@@ -192,16 +197,7 @@ impl Player {
                     self.recovery.area_active = false;
                     self.damage.invalid = self.damage.invalid.max(120);
                     self.recovery.push_invalid = 120;
-                    if self.pre_jump > 0 {
-                        self.ground_jump(o);
-                    } else if self.is_move() {
-                        self.run_appear(true);
-                        self.go(Move::Run, "Move");
-                    } else if o.crouch {
-                        self.start_squat();
-                    } else {
-                        self.go(Move::Idle, "Wait");
-                    }
+                    self.land(o);
                 }
             }
             _ => unreachable!(),

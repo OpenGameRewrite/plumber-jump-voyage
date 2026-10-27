@@ -198,6 +198,7 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         Fx::Abyss => vec![Cue::Play("FallDown"), Cue::Play("vDeadFallDown")],
         Fx::RecoveryDamage => reaction("BubbleDamage"),
         Fx::RecoveryBegin => reaction("BubbleStart"),
+        Fx::RecoveryWait => vec![Cue::Play("TractorBubbleWait")],
         // The footfall, its material variant and the clothes' rustle.
         Fx::Step { left } => match (context.mode, left) {
             (Move::Crawl, _) => vec![],

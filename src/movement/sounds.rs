@@ -16,7 +16,9 @@ impl Player {
             rate: self.anim.rate,
             phase: self.cycle.shown,
             run_start: self.cycle.weights[4],
-            speed: self.move_speed,
+            // PlayerSeCtrl::update uses calcSpeed for its persistent footstep
+            // counter, including the ground pull during a stopped pivot.
+            speed: super::vector_lib::length(self.units_per_frame()),
             vertical_speed: if self.is_dead() || self.recovery_bubble() {
                 0.
             } else {

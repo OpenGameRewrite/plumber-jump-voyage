@@ -14,7 +14,7 @@
 use crate::{
     input::{Orders, Settings},
     movement::{Course, ExactFrames, Player, UNIT, look_at::LookSensor},
-    replay::{CameraTrack, SETTLE_FRAMES, Script, Span, orders_for},
+    replay::{CameraTrack, Script, Span, orders_for},
     ui::Menu,
     world::{MainCamera, Orbit},
 };
@@ -35,6 +35,7 @@ pub struct Driver {
     shots: Vec<u32>,
     dir: PathBuf,
     start_yaw_deg: f32,
+    preroll: usize,
     bindings: Vec<[String; 2]>,
     previous: Vec<&'static str>,
     /// Simulation steps started and finished.
@@ -74,6 +75,7 @@ impl Driver {
             shots,
             dir,
             start_yaw_deg: script.start_yaw_deg,
+            preroll: script.preroll_frames(),
             bindings: Settings::default().bindings,
             previous: Vec::new(),
             started: 0,
@@ -90,7 +92,7 @@ impl Driver {
     }
     /// Frame the latest finished step belongs to.
     fn frame(&self) -> usize {
-        self.finished.saturating_sub(SETTLE_FRAMES + 1)
+        self.finished.saturating_sub(self.preroll + 1)
     }
 }
 
@@ -166,7 +168,7 @@ fn follow_game_camera(
 fn feed(mut driver: ResMut<Driver>, mut orders: ResMut<Orders>) {
     let tick = driver.started;
     driver.started += 1;
-    let Some(frame) = tick.checked_sub(SETTLE_FRAMES) else {
+    let Some(frame) = tick.checked_sub(driver.preroll) else {
         *orders = Orders::default();
         return;
     };
@@ -209,7 +211,7 @@ fn capture(
                 exit.write(AppExit::Success);
                 return;
             };
-            if driver.finished > SETTLE_FRAMES + frame as usize {
+            if driver.finished > driver.preroll + frame as usize {
                 time.pause();
                 driver.phase = Phase::Settling(0);
             }

@@ -52,7 +52,7 @@ pub struct SeFrame {
     pub phase: f32,
     /// Weight of the run-start clip in the pose.
     pub run_start: f32,
-    /// Horizontal speed in units a frame.
+    /// Full velocity length in units a frame (`al::calcSpeed`).
     pub speed: f32,
     /// Vertical speed in units a frame (negative falling).
     pub vertical_speed: f32,

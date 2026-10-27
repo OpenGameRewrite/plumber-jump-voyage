@@ -4,6 +4,34 @@ pub(super) fn run() {
     number_text();
     game_rows();
     sample_point();
+    preroll_interpolation();
+}
+
+#[cfg_attr(test, test)]
+fn preroll_interpolation() {
+    let row = |carry| {
+        let mut recorder = Recorder::new(None, None, None);
+        let mut player = Player::default();
+        let info = FrameInfo {
+            frame: 0,
+            game_frame: 0,
+            stick: bevy::math::Vec2::ZERO,
+            held: Vec::new(),
+            pressed: Vec::new(),
+            camera_yaw_deg: 0.,
+            direction: bevy::math::Vec2::ZERO,
+        };
+        recorder.record(&info, &mut player);
+        player.inject(&crate::movement::Snapshot {
+            anim: Some(("Jump", 0.)),
+            ..Default::default()
+        });
+        recorder.start_rows(carry);
+        recorder.record(&info, &mut player)
+    };
+    let column = COLUMNS.iter().position(|name| *name == "interp").unwrap();
+    assert!(row(false)[column].is_empty());
+    assert!(row(true)[column].starts_with("Wait:"));
 }
 
 #[cfg_attr(test, test)]

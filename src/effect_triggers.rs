@@ -391,7 +391,18 @@ impl Triggers {
             let key = Self::code_key(name);
             if self.running.contains_key(&key) {
                 if input.calls.contains(name) {
-                    changes.push(Change::Again { key });
+                    if matches!(*name, "StateFire" | "StatePoison") {
+                        // PlayerEffect deletes the stain effect before every emit
+                        // request. Its new set has its own particle age.
+                        changes.push(Change::Stop { key: key.clone() });
+                        changes.push(Change::Start {
+                            key,
+                            source: Source::Code,
+                            once: false,
+                        });
+                    } else {
+                        changes.push(Change::Again { key });
+                    }
                 }
             } else {
                 let source = if self.cap_owned.contains(*name) {
@@ -428,7 +439,10 @@ impl Triggers {
             .iter()
             .filter(|(k, (s, _))| {
                 (matches!(*s, Source::Code | Source::CapCode)
-                    || RUN_DUST.contains(&k.effect.as_str()))
+                    || RUN_DUST.contains(&k.effect.as_str())
+                        && !self.mario.get(input.anim).is_some_and(|entries| {
+                            entries.iter().any(|entry| entry.key == **k)
+                        }))
                     && !wanted.contains(&k.effect.as_str())
             })
             .map(|(k, _)| k.clone())
@@ -781,12 +795,20 @@ impl Tracker {
             .map(|l| format!("{}:{}", l.owner, l.key.effect))
             .collect();
         // LandLava has a finite material splash and a continuous default DummyEmitter.
-        // The default starts when no floor material matches; returning to a floor fades it.
+        // The default starts when no floor material matches; returning to a matching
+        // material fades it. Ordinary ground still selects the default slot.
         // This is Effect::tryUpdateMaterial (0xa58fb8), not the splash's particle lifetime.
         // No fixed burn/death duration belongs here: the default's own data gives its tail.
         if self.lava_started {
-            let no_floor = p.touched.active && p.touched.floor.is_none();
-            if no_floor {
+            let default_slot = p.touched.active
+                && self.library.effects.get("LandLava").is_some_and(|triggers| {
+                    triggers.iter().any(|trigger| {
+                        trigger
+                            .resource_for(p.touched.floor.as_ref().map(|c| c.material.as_str()))
+                            .is_some_and(|resource| resource.name == EMPTY_RESOURCE)
+                    })
+                });
+            if default_slot {
                 self.lava_default = true;
                 self.lava_default_tail = 0;
             } else if std::mem::take(&mut self.lava_default) {
@@ -803,7 +825,7 @@ impl Tracker {
                 alive.push("player:LandLava".into());
             }
             self.lava_default_tail = self.lava_default_tail.saturating_sub(1);
-            if !no_floor
+            if !default_slot
                 && !self.lava_default
                 && self.lava_default_tail == 0
                 && !self.live.iter().any(|l| l.key.effect == "LandLava")

@@ -70,6 +70,9 @@ pub struct Script {
     pub stage: Option<String>,
     /// Its scenario number, when the script gives one.
     pub scenario: Option<u32>,
+    /// Explicit preroll also opts into carrying interpolation across frame zero.
+    /// Absent in legacy scripts, whose ten-frame trace convention stays unchanged.
+    pub preroll: Option<u32>,
     pub spans: Vec<Span>,
     pub shots: Vec<u32>,
 }
@@ -129,6 +132,14 @@ impl Script {
                     };
                     script.camera_yaw_deg = Some(yaw);
                 }
+                "preroll" => {
+                    let [_, frames] = words[..] else {
+                        return Err(at("preroll needs one nonnegative frame count"));
+                    };
+                    script.preroll = Some(frames.parse().map_err(|_| {
+                        at("preroll needs a nonnegative 32-bit integer frame count")
+                    })?);
+                }
                 "shot" => {
                     for w in &words[1..] {
                         let frame = w.parse().map_err(|_| at(&format!("bad frame '{w}'")))?;
@@ -158,6 +169,9 @@ impl Script {
     }
     pub fn frame_count(&self) -> usize {
         self.spans.iter().map(|s| s.frames as usize).sum()
+    }
+    pub fn preroll_frames(&self) -> usize {
+        self.preroll.map_or(SETTLE_FRAMES, |frames| frames as usize)
     }
     /// The span each frame belongs to.
     pub fn frames(&self) -> impl Iterator<Item = &Span> {
@@ -568,7 +582,8 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     };
     // Teleported and idle; the recorder watches so its animation state is
     // warm when frame 0 starts, but nothing is written.
-    for i in 0..SETTLE_FRAMES {
+    let preroll = script.preroll_frames();
+    for i in 0..preroll {
         let (mut orders, mut info) = orders_for(
             &settle,
             &[],
@@ -580,10 +595,10 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         orders.view = camera.view_rows(0);
         player.step(&orders, &course);
         info.game_frame = i as i64;
-        info.frame = i as i64 - SETTLE_FRAMES as i64;
+        info.frame = i as i64 - preroll as i64;
         recorder.record(&info, &mut player);
     }
-    recorder.start_rows();
+    recorder.start_rows(script.preroll.is_some());
     let mut rows = Vec::with_capacity(script.frame_count());
     let mut previous: Vec<&str> = Vec::new();
     let spans: Vec<&Span> = script.frames().collect();
@@ -683,7 +698,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         );
         player.step(&orders, &course);
         info.frame = frame as i64;
-        info.game_frame = (SETTLE_FRAMES + frame) as i64;
+        info.game_frame = (preroll + frame) as i64;
         rows.push(recorder.record(&info, &mut player));
         previous = span.buttons.clone();
     }

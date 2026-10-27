@@ -62,6 +62,11 @@ impl Player {
     }
 
     pub fn fire_sub_steps(&self) -> Option<u32> {
+        if self.recovering() {
+            // The probe observes the RecoveryDead child of Abyss, whose nerve
+            // counter spans Start/Recovery/Fall, rather than its inner phase.
+            return Some(self.nerve.step);
+        }
         matches!(
             self.mode,
             Move::BurnJump
@@ -222,6 +227,10 @@ impl Player {
     }
     fn fire_ground_appear(&mut self) {
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
+        // GroundMove::appear sets the support-plane velocity and pull at the
+        // choice of Run, before that nerve's first execution on the next frame.
+        let from = if self.is_just_land() { Vec3::Y } else { up };
+        self.v = pose_math::along_vector_normal_h(self.v, from, up) - up * GRAVITY_MOVE;
         let front = self.pose_axes().1;
         self.fire
             .ground

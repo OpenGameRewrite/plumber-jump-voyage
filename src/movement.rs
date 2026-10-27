@@ -483,6 +483,7 @@ pub mod clip {
             "WaitRelax" => Some(1200.),
             "WaitHot" => Some(340.),
             "DamageWait" => Some(120.),
+            "FireRun" => Some(60.),
             "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
@@ -543,8 +544,6 @@ pub mod clip {
     pub const RUN_START: u32 = 30;
     pub const BRAKE: u32 = 5;
     pub const JUMP_CAP_LEAP_FROG: u32 = 36;
-    /// The fire run loop; its footsteps repeat every cycle.
-    pub const FIRE_RUN: f32 = 60.;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -931,6 +930,7 @@ pub enum Fx {
     Abyss,
     RecoveryDamage,
     RecoveryBegin,
+    RecoveryWait,
 }
 /// Clip the presentation should play: an original animation name, or "Move"
 /// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
@@ -2570,9 +2570,6 @@ impl Player {
             if let Some(length) = clip::held_length(self.anim.name) {
                 self.anim.frame = self.anim.frame.min(length as f32 + 1.);
             }
-            if self.anim.name == "FireRun" && self.anim.frame >= clip::FIRE_RUN {
-                self.anim.frame -= clip::FIRE_RUN;
-            }
             if let Some(length) = clip::loop_length(self.anim.name) {
                 let slack = clip::loop_slack(self.anim.name);
                 // (A clip whose counter shows its length for a row starts its loop for the
@@ -2713,6 +2710,7 @@ impl Player {
         self.update_cap(&o, scene);
         self.cap_sensor_phase(&o);
         self.start_pending_abyss();
+        self.check_recovery_area_exit(scene);
         self.dispatch_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -3610,10 +3608,9 @@ impl Player {
     fn end_burn(&mut self) {
         if self.ground_lost < 5 {
             self.run_frames = t::BRAKE_ON_COUNTER;
-            self.go(
-                Move::Run,
-                if self.speed_h() > 0.5 { "Move" } else { "Wait" },
-            );
+            // exeDamageFire routes a completed child into Run; its first
+            // execution starts Move even when the run immediately ends in Wait.
+            self.go(Move::Run, "Move");
         } else {
             self.go(Move::Fall, "Fall");
         }

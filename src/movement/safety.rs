@@ -58,7 +58,9 @@ impl Player {
                 let hit = hit.unwrap();
                 self.set_safety_point(hit.position, hit.normal, Vec3::NEG_Y);
             } else {
-                self.slide_safety_point(mesh, at, false);
+                // calcActorCollisionCodeNoSafetyPointPos sets skipIfValid in
+                // the air: supported ground below the dangerous point vetoes a slide.
+                self.slide_safety_point(mesh, at, !self.is_collided_ground());
             }
             if self.recovery.valid()
                 && self.recovery.safety.is_some_and(|s| {
