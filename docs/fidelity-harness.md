@@ -713,3 +713,53 @@ spawner and the audio variants use fixed-seed generators, and blinking follows
 elapsed time; none of them feeds back into the player. `--random game.csv`
 therefore only reads the game's logged choices and reports how many frames
 carry some; there is nothing in the rewrite to replace.
+
+## Death, Abyss, respawn and bubble recovery
+
+`PlayerActorHakoniwa::checkDeathArea` (after the step's collision) either starts the bubble
+recovery or sets the player dead and chooses the `Abyss` nerve; the nerve is chosen late, so
+the trace shows the old state with step -1 for one row (`src/movement/abyss.rs`). A fall that
+ends in a death area is dead for good unless a recovery is valid: a saved safety point alone
+is not enough, the player needs an active recovery area, Cappy's rescue (assist) or the
+assist option (`recovery_dead.rs`, `PJV_ASSIST_RECOVERY` in the windowed game). Safety points
+are taken from static collision only (`safety.rs`: a +10/-100 cm ray, the 60 degree gate, the
+unsafe floor and wall codes, and the 100 cm slide search); actors answer the original's
+`AskSafetyPoint` message, so an export marks the objects that do with `ask_safety_point`
+(default false, which also means a moving host never answers).
+
+The bubble (`RecoveryStart` 45 steps, `RecoveryTravel` 60 to 120 steps, `RecoveryFall`) is the
+original's own math: the travel's length, arch, eased progress, spin and root offset, whose
+routines (`al::rotateQuatRadian`, `al::rotateVectorDegree`, `al::scaleVectorDirection`,
+`al::calcAngleOnPlaneDegree`) are checked bit for bit against the executable with
+`PJV_RECOVERY_CASES=<local cases file> cargo test rotation_oracle` (the cases come from a
+local generator that runs the executable's routines; nothing of them is in the repository).
+No recorded run reaches a bubble recovery, so its sequence is decoded, not traced.
+After the landing the damage and push invalidation last 120 steps.
+
+Death is judged by `PlayerJudgeDeadWipeStart` (`death.rs`): the counter starts at -1 and
+runs only while the player is dead, and the scene's Miss sequence closes the wipe
+(22 + wait + 28 layout steps; 96 for damage, 30 for the Abyss, 90 with the cap message) before
+the stage is rebuilt. The rebuilt player is a new actor at the stage's restart placement,
+with the default health, keepers and an entrance camera. A replay learns where from the
+local export: `tools/export-restart-points.py <geometry.json> --romfs <romfs>` adds
+`restart_points` (the stage's `PlayerList` entry and the checkpoint flags' `PlayerRestartPos`
+links) to a geometry export, and the recording's `restart_point_id` metadata, else its
+`spawn_abs`, selects one. The scene loading gap is outside the player's updates: it is the jump
+of the boot clock (`game_frame`) while the player is dead, never extra scripted frames. The toy
+course has no loader, so its instant reset is gone and a dead or fallen player goes through the
+same wipe and respawn at its checkpoint.
+
+The entrance camera (`entrance_camera.rs`) keeps the head's look-at off in a new scene until
+the player has moved more than 10 cm from the first position (or reset the camera); the
+poser ends one update later and the player notices one frame after that, which the traces
+confirm. Its time limit and right-stick ends come from stage camera data and are not modelled.
+
+Limits: only 3D with world-down gravity exists (2D, arbitrary gravity and the original's
+parallel-axis spin branch are not ported; the spin branch is a marked guess), a moving safety
+point does not refresh the bubble's target, the original's `TractorBubbleWait` sound
+sequence uses a command the sound table cannot play (the bubble is silent), the bubble is a
+translucent sphere rather than the child actor's model, and the wipe is a black layer: the
+original's layout animation and the fade-in after the scene loads are not drawn. Lockstep
+replays of the target runs differ from free replay at the reload (one frame of a quarter-turn
+quaternion sign) and after the long idle in `burn-lava-twice-late` (the injected state has no
+area-animation sub-state); the free replays pass every comparable column.
