@@ -662,6 +662,16 @@ trace cannot show is not reconstructed: the first rows' layers and bones, the
 fire run's looping effects (FireRunHipSmoke re-emits because live effects are not
 restored from `effects_live`), and the second run's footstep and cycle phase.
 
+Quicksand (`sand_sink.rs`) rebuilds its hidden state in lockstep from the rows: the depth
+(`PlayerSandSinkAffect`, replayed over the sand episode from the floor the previous row
+stood on and its `floor_y`; GUESS: the surface is flat under the body), the ground
+control's turn state, the jump's air control (counted from the jump nerve's own steps) and
+the slope slide's `mSlopeForceCounter` (the rows before it on flat ground). Residuals of the
+three sand runs: the first rows' `anim_layers`/`bones` (the run start, as in the other
+lockstep runs), the hill factor of the sand run on the slope (one row), the push judge's
+counter (the wall push starts a row late), and the first row after `AreaAnimWait` is chosen
+(`sub_step`).
+
 ## Skeleton and the partial animation
 
 The `bones` column is the rewrite's own skeleton (`src/skeleton_pose.rs`): the clips of the
@@ -819,6 +829,17 @@ original's layout animation and the fade-in after the scene loads are not drawn.
 replays of the target runs differ from free replay at the reload (one frame of a quarter-turn
 quaternion sign) and after the long idle in `burn-lava-twice-late` (the injected state has no
 area-animation sub-state); the free replays pass every comparable column.
+
+### Quicksand fixture and smoke
+
+The toy course has a quicksand patch (`Course::sands`, `world.rs`: the terrace under it is the
+sand's bottom, two metres thick). Its collision answers `SandSink` like a stage triangle, the
+body sinks into the solid at 200/240 cm a step, and a body deeper than a short step is held
+inside the patch by its edge. `PJV_SCRIPT=sand` (walk on, stop, jump out while shallow) and
+`PJV_SCRIPT=sand-die` (stay until the death) run it from `PJV_SPAWN=-0.5,0,1`; start the game
+from the repository root with `PJV_PLAY=1 PJV_SAVE=<private save> PJV_SMOKE=8 PJV_SHOT=... PJV_SHOT_AT=...`.
+Fidelity limits seen in the shots: the sand dust (`SandWait`/`SandWalk`) is drawn as red
+speckle quads by the particle adapter, not the original shader, and the patch is a flat tinted box.
 
 ### Damage Life/Swim environment corrections
 
