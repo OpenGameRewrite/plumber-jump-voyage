@@ -232,7 +232,8 @@ fn colors(
 pub fn interp_frames(name: &str, _from: &str) -> f32 {
     match name {
         "JumpInterp" | "JumpReverseInterp" => 3.,
-        "SandWait" | "SandWalk" | "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
+        "SandWait" | "SandWalk" | "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push"
+        | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         // PlayerAnimation/AnimInterp.byml.
         "DeadFall" | "WaitHot" | "WaitCold" | "DamageWait" | "TractorBubbleWait" => 10.,
@@ -341,7 +342,14 @@ impl<P: Default + Posed> Blend<P> {
 pub fn looping(name: &str) -> bool {
     matches!(
         name,
-        "Push" | "WaitCold" | "WaitVeryCold" | "SandWait" | "SandWalk" | "SandWaitNormal" | "SandWaitStrong" | "Wait"
+        "Push"
+            | "WaitCold"
+            | "WaitVeryCold"
+            | "SandWait"
+            | "SandWalk"
+            | "SandWaitNormal"
+            | "SandWaitStrong"
+            | "Wait"
             | "WaitHot"
             | "TractorBubbleWait"
             | "DamageWait"
@@ -1172,9 +1180,16 @@ mod imported {
         };
         let anim = p.anim;
         let mut pose = if let Some(weight) = p.sand_blend() {
-            let phase = ((anim.frame + p.anim_rate_change() + anim.rate*ahead) / 80.).rem_euclid(1.);
-            Pose { clips: [("SandWaitNormal",1.-weight),("SandWaitStrong",weight)].into_iter()
-                .filter_map(|(name,weight)| clip_in(main,name).map(|(node,len)|(node,weight,phase*len))).collect() }
+            let phase =
+                ((anim.frame + p.anim_rate_change() + anim.rate * ahead) / 80.).rem_euclid(1.);
+            Pose {
+                clips: [("SandWaitNormal", 1. - weight), ("SandWaitStrong", weight)]
+                    .into_iter()
+                    .filter_map(|(name, weight)| {
+                        clip_in(main, name).map(|(node, len)| (node, weight, phase * len))
+                    })
+                    .collect(),
+            }
         } else if anim.name == "Move" {
             let cycle = p.run_cycle();
             let phase = ((cycle.phase + cycle.rate * ahead) / 60.).rem_euclid(1.);

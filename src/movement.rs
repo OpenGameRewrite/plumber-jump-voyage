@@ -331,9 +331,9 @@ mod vector_lib;
 mod wait;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
-mod wall_push;
 #[path = "movement/wall_along.rs"]
 mod wall_along;
+mod wall_push;
 #[path = "movement/wall_slide.rs"]
 pub(crate) mod wall_slide;
 #[path = "movement/wet.rs"]
@@ -528,7 +528,8 @@ pub mod clip {
             // 23, then 1) before they wrap.
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
-            "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" => 1.,
+            "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal"
+            | "SwimStandWait" | "SwimWalk" => 1.,
             _ => 0.,
         }
     }
@@ -703,7 +704,8 @@ impl Move {
             Self::FireRun => "Fire run",
             Self::FireFall => "Fire fall",
             Self::SandWait | Self::SandRun | Self::SandPivot | Self::SandJump => "Quicksand",
-            Self::SandDead | Self::FireDead
+            Self::SandDead
+            | Self::FireDead
             | Self::DamageDead
             | Self::DamageSwimDead
             | Self::Dead
@@ -1590,6 +1592,9 @@ pub struct Course {
     pub hot: Vec<(Vec3, Vec3)>,
     /// Static Needle-coded tops in the toy course, consumed through collision.
     pub needles: Vec<(Vec3, Vec3)>,
+    /// The toy course's quicksand: centre of the surface and half extents. The solid under it
+    /// is the sand's bottom; the body sinks into it (`sand_sink.rs`).
+    pub sands: Vec<(Vec3, Vec3)>,
     /// Shallow water to stand in: centre of the surface and half extents.
     pub puddles: Vec<(Vec3, Vec3)>,
     pub targets: Vec<Vec3>,
@@ -2179,7 +2184,8 @@ impl Player {
                         | Move::Dead
                         | Move::AbyssFall
                         | Move::DamageDead
-                        | Move::DamageSwimDead | Move::SandDead
+                        | Move::DamageSwimDead
+                        | Move::SandDead
                 )
             })
         {
@@ -2297,7 +2303,11 @@ impl Player {
         // The trace's velocity includes the floor pull a grounded state applies; the
         // body carries only what is left of it, so a state chosen next (a run
         // pulling harder) starts from zero as it does in free replay.
-        if self.grounded && self.v.y == -self.pull && !self.mode.in_flight() && !self.in_sand_state() {
+        if self.grounded
+            && self.v.y == -self.pull
+            && !self.mode.in_flight()
+            && !self.in_sand_state()
+        {
             self.v.y = 0.;
         }
         if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
@@ -2814,9 +2824,16 @@ impl Player {
             if self.judge_sand_sink() {
                 if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
                     let push = self.push();
-                    self.air.update(&mut self.v, push, o.jump_held, &air_move::Steering {
-                        front: t::JUMP_ACCEL_FRONT, back: t::JUMP_ACCEL_BACK, turn: t::JUMP_ACCEL_TURN,
-                    });
+                    self.air.update(
+                        &mut self.v,
+                        push,
+                        o.jump_held,
+                        &air_move::Steering {
+                            front: t::JUMP_ACCEL_FRONT,
+                            back: t::JUMP_ACCEL_BACK,
+                            turn: t::JUMP_ACCEL_TURN,
+                        },
+                    );
                     self.turn_in_air(push);
                 }
                 self.appear_sand_sink();
@@ -2907,7 +2924,9 @@ impl Player {
             | Move::DamageSurface
             | Move::DamageLandWater
             | Move::DamageSwimDead => self.damage_swim_step(o, scene),
-            Move::SandWait | Move::SandRun | Move::SandPivot | Move::SandJump | Move::SandDead => self.sand_step(o),
+            Move::SandWait | Move::SandRun | Move::SandPivot | Move::SandJump | Move::SandDead => {
+                self.sand_step(o)
+            }
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -3482,8 +3501,13 @@ impl Player {
                 let front = self.facing;
                 self.pivot.reset(front);
             }
-            RunNerve::WallPush => { self.joints.run.stopped(); self.cycle.effect=None; }
-            RunNerve::Run | RunNerve::RunAfterTurn => { self.wall_push_counter=0; }
+            RunNerve::WallPush => {
+                self.joints.run.stopped();
+                self.cycle.effect = None;
+            }
+            RunNerve::Run | RunNerve::RunAfterTurn => {
+                self.wall_push_counter = 0;
+            }
         }
     }
     /// `PlayerStateRunHakoniwa2D3D::isEnableLookAt` hands `Run3D` to the base run state's own
@@ -3491,7 +3515,8 @@ impl Player {
     /// turn may look; the turn and the pivot (`TurnPoint`) may not. The nerve counts from the
     /// step that chooses it (the keeper reads it in that step, a step before the clip starts).
     fn run_nerve_blocks_look(&self) -> bool {
-        self.mode == Move::Turn || matches!(self.mode, Move::Walk | Move::Run) && self.run_nerve == RunNerve::WallPush
+        self.mode == Move::Turn
+            || matches!(self.mode, Move::Walk | Move::Run) && self.run_nerve == RunNerve::WallPush
     }
     /// The run state dies and the actor chooses the standing state.
     fn end_run(&mut self) {
@@ -5147,6 +5172,7 @@ impl Player {
                     ..default()
                 });
             }
+            self.mark_toy_sand_floor(scene);
         }
         if self.mode == Move::WallSlide
             && (self.wall == Vec3::ZERO || self.grounded)
@@ -5206,10 +5232,28 @@ impl Player {
                     {
                         continue;
                     }
-                    let top = b.top(self.pos.x.clamp(lo.x, hi.x));
+                    // (A solid under the toy course's sand lets the body sink into it. Inside the
+                    // sand only the patch's edge holds a sunk body back, as the pit's walls do;
+                    // a shallow one steps out over the edge like over any short step.)
+                    let nominal = b.top(self.pos.x.clamp(lo.x, hi.x));
+                    let sand_here = Self::toy_sand_surface_at(scene, before)
+                        .is_some_and(|y| (y - nominal).abs() < 1e-3)
+                        && self.sand.depth > 0.;
+                    if axis != 1 && sand_here {
+                        let left = Self::toy_sand_surface_at(scene, self.pos).is_none();
+                        if left && self.sand.depth * UNIT > WALKABLE_STEP {
+                            self.pos[axis] = before[axis];
+                            self.v[axis] = 0.;
+                        }
+                        if !left || self.sand.depth * UNIT > WALKABLE_STEP {
+                            continue;
+                        }
+                    }
+                    let sink = self.toy_sand_sink(scene, nominal);
+                    let top = b.top(self.pos.x.clamp(lo.x, hi.x)) - sink;
                     if axis == 1 {
                         if self.v.y <= 0.
-                            && before.y >= b.top(before.x.clamp(lo.x, hi.x)) - 0.15
+                            && before.y >= b.top(before.x.clamp(lo.x, hi.x)) - sink - 0.15
                             && self.pos.y < top + contact_reach
                             && self.pos.y + height > lo.y
                         {

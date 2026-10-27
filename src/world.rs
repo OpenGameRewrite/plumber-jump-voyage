@@ -570,6 +570,21 @@ fn setup(
             ));
         }
     }
+    // Quicksand fixture: a flat patch of the terrace whose floor code is SandSink; the terrace
+    // under it is the sand's bottom (two metres thick, the depth that kills).
+    let sand_center = Vec3::new(-5., 0., 1.);
+    let sand_half = Vec3::new(2.5, 0., 2.5);
+    course.sands.push((sand_center, sand_half));
+    let sand = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.82, 0.68, 0.38),
+        perceptual_roughness: 1.,
+        ..default()
+    });
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(sand_half.x * 2., 0.01, sand_half.z * 2.))),
+        MeshMaterial3d(sand),
+        Transform::from_translation(sand_center + Vec3::Y * 0.005),
+    ));
     // A lava plate: touching it burns, as hot ground does in the original.
     let lava = materials.add(StandardMaterial {
         base_color: Color::srgb(0.95, 0.32, 0.05),

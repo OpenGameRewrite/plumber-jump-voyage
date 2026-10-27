@@ -114,6 +114,24 @@ pub fn apply(
             };
             return;
         }
+        if script == "sand" || script == "sand-die" {
+            // From PJV_SPAWN east of the sand patch: walk onto it and stop to sink. `sand` jumps
+            // out while the body is still shallow; `sand-die` stays until the sink height.
+            let now = time.elapsed_secs() - delay;
+            let jumps = script == "sand";
+            *orders = Orders {
+                reset: started && now < 0.04,
+                direction: if (0.1..0.7).contains(&now) {
+                    Vec2::NEG_X * 0.7
+                } else {
+                    Vec2::ZERO
+                },
+                jump: jumps && (1.2..1.23).contains(&now),
+                jump_held: jumps && (1.2..1.8).contains(&now),
+                ..default()
+            };
+            return;
+        }
         if script == "lava-twice"
             && let Some(player) = player
         {

@@ -56,11 +56,14 @@ impl Player {
     /// Lockstep: the counter a recorded slope slide has built up.
     pub(super) fn resume_slope_slide(&mut self, s: &Snapshot) {
         if self.mode == Move::SlopeSlide {
-            self.slide.force_counter = (s.slope_flat_steps as i32).min(t::SLOPE_FORCE_FRAMES as i32);
+            self.slide.force_counter =
+                (s.slope_flat_steps as i32).min(t::SLOPE_FORCE_FRAMES as i32);
         }
     }
     /// PlayerStateSlope::isEnableCancelSandSink (0x481328).
-    pub(super) fn sand_slope_cancel(&self) -> bool { self.slide.force_counter > 15 }
+    pub(super) fn sand_slope_cancel(&self) -> bool {
+        self.slide.force_counter > 15
+    }
     /// `PlayerJudgePreInputJump::judge`: a jump press still buffered counts, except while the
     /// forced slope slide judges (the buffer runs down all the same).
     pub(super) fn pre_input_jump_judges(&self) -> bool {

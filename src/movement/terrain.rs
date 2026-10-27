@@ -282,7 +282,7 @@ impl Player {
             };
             if self.in_sand_state()
                 || self.in_damage_state()
-            || self.in_wall_push_frame()
+                || self.in_wall_push_frame()
                 || matches!(
                     self.mode,
                     Move::SlopeSlide
@@ -298,7 +298,9 @@ impl Player {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;
-                if (self.burning() || self.in_damage_state() || self.in_sand_state()) && !self.is_on_ground_by(self.v) {
+                if (self.burning() || self.in_damage_state() || self.in_sand_state())
+                    && !self.is_on_ground_by(self.v)
+                {
                     self.grounded = false;
                     self.hop_contact = true;
                 }

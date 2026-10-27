@@ -538,7 +538,9 @@ pub fn code_calls(p: &Player) -> Vec<&'static str> {
             "StateFire"
         });
     }
-    if p.sand_effect().1 { calls.extend(p.sand_effect().0); }
+    if p.sand_effect().1 {
+        calls.extend(p.sand_effect().0);
+    }
     if p.roll_effect_called() {
         calls.push("Rolling");
     }
@@ -766,7 +768,11 @@ impl Tracker {
                         .iter()
                         .find(|live| live.key == key)
                         .map_or("model", |live| live.owner);
-                    started.push(if owner == "player" {key.effect.clone()} else {format!("{}@{owner}", key.effect)});
+                    started.push(if owner == "player" {
+                        key.effect.clone()
+                    } else {
+                        format!("{}@{owner}", key.effect)
+                    });
                 }
             }
         }

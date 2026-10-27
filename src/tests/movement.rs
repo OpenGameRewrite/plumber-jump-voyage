@@ -78,6 +78,7 @@ pub(super) fn run() {
     poles();
     slope_slide();
     burn_and_soot();
+    quicksand();
     low_ceiling();
     wall_collision_and_stress();
 }
@@ -1378,6 +1379,83 @@ fn slope_slide() {
 }
 
 #[cfg_attr(test, test)]
+/// The toy course's quicksand (`PlayerStateSandSink`, `PlayerSandSinkAffect`): the sink rate,
+/// the slowing, the cap gate, the jump out and the death at the sink height.
+fn quicksand() {
+    let mut scene = floor();
+    scene.solids[0].half = Vec3::new(100., 2., 100.);
+    scene.solids[0].center = Vec3::new(0., -2., 0.);
+    scene
+        .sands
+        .push((Vec3::new(5., 0., 0.), Vec3::new(3., 0., 3.)));
+    let walk = Orders {
+        direction: Vec2::X * 0.7,
+        ..default()
+    };
+    // Walking onto the sand chooses the sink state the step the ground is the sand.
+    let mut p = Player::spawn_at(Vec3::new(1., 0., 0.), Vec3::X);
+    for _ in 0..200 {
+        p.step(&walk, &scene);
+        if p.in_sand_state() {
+            break;
+        }
+    }
+    assert!(p.in_sand_state(), "the walk reaches the sand");
+    assert!(matches!(p.mode, Move::SandRun | Move::SandWait));
+    assert!(!p.sand_cap_enabled() || p.sand.depth < 30.);
+    // Standing still, the body sinks the sink height over the dead time, at a constant rate.
+    let stand = Orders::default();
+    frames(&mut p, stand.clone(), &scene, 4);
+    assert_eq!(p.mode, Move::SandWait);
+    let before = p.sand.depth;
+    p.step(&stand, &scene);
+    assert!((p.sand.depth - before - sand_sink::HEIGHT / sand_sink::DEAD_TIME).abs() < 1e-3);
+    assert!(
+        p.sand_blend().is_some(),
+        "the wait blends the normal and strong clips"
+    );
+    // The cap cannot be thrown once the body is 30 deep.
+    while p.sand.depth < 30. {
+        p.step(&stand, &scene);
+    }
+    assert!(!p.sand_cap_enabled());
+    // Deep sand limits the walking speed (`reduceVelocity`): a tenth of the normal speed at most.
+    frames(&mut p, walk.clone(), &scene, 30);
+    assert!(p.speed_h() <= 0.6 * t::NORMAL_MAX, "{}", p.speed_h());
+    // Sunk to the death height, the dead state starts and the health is gone.
+    for _ in 0..400 {
+        p.step(&stand, &scene);
+        if p.mode == Move::SandDead {
+            break;
+        }
+    }
+    assert_eq!(p.mode, Move::SandDead);
+    assert_eq!(p.damage.hp, 0);
+    // A jump out of shallow sand leaves it: the jump state, then the air and the floor.
+    let mut p = Player::spawn_at(Vec3::new(5., 0., 0.), Vec3::X);
+    frames(&mut p, stand.clone(), &scene, 40);
+    assert!(p.in_sand_state());
+    p.step(
+        &Orders {
+            jump: true,
+            jump_held: true,
+            ..default()
+        },
+        &scene,
+    );
+    let hold = Orders {
+        jump_held: true,
+        ..default()
+    };
+    let mut jumped = false;
+    for _ in 0..20 {
+        p.step(&hold, &scene);
+        jumped |= p.mode == Move::SandJump;
+    }
+    assert!(jumped, "the press starts the jump state");
+    // The jump leaves the sand where it was: the body is not pushed out of the sand's solid.
+    assert!((p.pos.x - 5.).abs() < 0.5 && p.pos.y > 0.);
+}
 fn burn_and_soot() {
     let cool = floor();
     let mut lava = cool.clone();

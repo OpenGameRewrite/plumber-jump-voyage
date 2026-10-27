@@ -193,12 +193,23 @@ impl Pose {
         if let Some(weight) = p.sand_blend() {
             let frame = (a.frame + p.anim_rate_change()) % 80.;
             return Self {
-                slot: a.name, partial: Vec::new(),
-                layers: [("SandWaitNormal", 80., 1. - weight), ("SandWaitStrong", 30., weight)]
-                    .into_iter().map(|(name, length, weight)| Layer {
-                        name, frame: frame * (length / 80.), rate: a.rate * (length / 80.), weight,
-                        covered: false, stage: 0,
-                    }).filter(|l| l.weight > 0.).collect(),
+                slot: a.name,
+                partial: Vec::new(),
+                layers: [
+                    ("SandWaitNormal", 80., 1. - weight),
+                    ("SandWaitStrong", 30., weight),
+                ]
+                .into_iter()
+                .map(|(name, length, weight)| Layer {
+                    name,
+                    frame: frame * (length / 80.),
+                    rate: a.rate * (length / 80.),
+                    weight,
+                    covered: false,
+                    stage: 0,
+                })
+                .filter(|l| l.weight > 0.)
+                .collect(),
             };
         }
         if a.name != "Move" {
@@ -1353,8 +1364,11 @@ impl TraceFile {
     /// starts where no earlier row is in the sand's states, the slope slide or the air.
     fn sand_depth(&self, row: usize) -> Option<f32> {
         let collision = |at: usize| {
-            self.cell(at, "collision").unwrap_or("").split(';')
-                .filter_map(|s| s.split_once('=')).collect::<BTreeMap<_, _>>()
+            self.cell(at, "collision")
+                .unwrap_or("")
+                .split(';')
+                .filter_map(|s| s.split_once('='))
+                .collect::<BTreeMap<_, _>>()
         };
         let on_sand = |at: usize| {
             self.cell(at, "ground") == Some("1") && collision(at).get("gcode") == Some(&"SandSink")
@@ -1388,7 +1402,9 @@ impl TraceFile {
                 depth = (measured + if sinking { 200. / 240. } else { -vy }).max(0.);
             } else if !safe && depth > 0. {
                 depth = match surface {
-                    Some(floor) if floor >= y && floor <= y + depth => (floor - y).max(0.).min(depth),
+                    Some(floor) if floor >= y && floor <= y + depth => {
+                        (floor - y).max(0.).min(depth)
+                    }
                     _ => {
                         safe = true;
                         0.
@@ -1413,9 +1429,14 @@ impl TraceFile {
             return 0;
         };
         loop {
-            let flat = self.cell(at, "state").is_some_and(|s| s.starts_with("Slope"))
+            let flat = self
+                .cell(at, "state")
+                .is_some_and(|s| s.starts_with("Slope"))
                 && self.cell(at, "ground") == Some("1")
-                && self.cell(at, "floor_normal").and_then(vector_cell).is_some_and(crate::movement::Player::is_slide_end_normal);
+                && self
+                    .cell(at, "floor_normal")
+                    .and_then(vector_cell)
+                    .is_some_and(crate::movement::Player::is_slide_end_normal);
             if !flat {
                 return steps;
             }
@@ -1428,8 +1449,17 @@ impl TraceFile {
     }
     fn sand_hint(&self, row: usize) -> Option<crate::movement::SandHint> {
         let depth = self.sand_depth(row)?;
-        let mut hint = crate::movement::SandHint { depth, ..Default::default() };
-        let front = |r: usize| Vec3::new(self.number(r, "fx").unwrap_or(0.), 0., self.number(r, "fz").unwrap_or(0.));
+        let mut hint = crate::movement::SandHint {
+            depth,
+            ..Default::default()
+        };
+        let front = |r: usize| {
+            Vec3::new(
+                self.number(r, "fx").unwrap_or(0.),
+                0.,
+                self.number(r, "fz").unwrap_or(0.),
+            )
+        };
         if row > 0 {
             hint.turn_rate = front(row).angle_between(front(row - 1)).to_degrees();
         }
