@@ -294,7 +294,13 @@ impl Player {
             self.set_swim_nerve(SwimNerve::Paddle);
             return None;
         }
-        // (The attack triggers of a trample are not ported.)
+        if self.swim_tramples() {
+            return None;
+        }
+        if self.swim.attack.hit {
+            self.set_swim_nerve(SwimNerve::Paddle);
+            return None;
+        }
         if self.is_collided_ground() {
             self.swim.air_steps = 0;
         } else {
@@ -345,7 +351,10 @@ impl Player {
             self.set_swim_nerve(SwimNerve::Surface);
             return None;
         }
-        if o.jump {
+        if self.swim_tramples() {
+            return None;
+        }
+        if o.jump || self.swim.attack.hit {
             self.set_swim_nerve(SwimNerve::Paddle);
             return None;
         }
@@ -369,7 +378,7 @@ impl Player {
     // ---- SwimPaddle ------------------------------------------------------------------------
 
     /// The paddle clip's rate: faster the sooner the last paddle was (`SwimPaddleAnimRateInterval*`).
-    fn paddle_rate(since_paddle: f32) -> f32 {
+    pub(super) fn paddle_rate(since_paddle: f32) -> f32 {
         let t = rate01(
             since_paddle,
             k::PADDLE_ANIM_RATE_INTERVAL_MIN,
@@ -403,7 +412,9 @@ impl Player {
             self.set_swim_nerve(SwimNerve::Surface);
             return None;
         }
-        // (The trample trigger is not ported.)
+        if self.swim_tramples() {
+            return None;
+        }
         if o.jump {
             // Another paddle: the rise starts over and the clip is asked to restart.
             let rate = Self::paddle_rate((self.swim.since_paddle + 1) as f32);

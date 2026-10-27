@@ -102,7 +102,12 @@ impl Player {
             k::DIVE_BRAKE
         };
         self.move_dive_swim(1., 1., step);
-        // (The attack triggers of a trample and the head slide are not ported.)
+        // Something hit on the way down bounces the dive (the head slide out of the dive,
+        // `isTriggerHeadSliding`, is not ported).
+        if self.swim.attack.hip_drop_hit || self.swim.attack.hit {
+            self.set_swim_nerve(SwimNerve::ReflectDownFall);
+            return;
+        }
         if self.try_change_hip_drop_land(o) {
             return;
         }

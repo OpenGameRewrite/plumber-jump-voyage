@@ -319,6 +319,8 @@ mod swim_dive_in;
 mod swim_ground;
 #[path = "movement/swim_spin_cap.rs"]
 mod swim_spin_cap;
+#[path = "movement/swim_trample.rs"]
+pub(crate) mod swim_trample;
 #[path = "movement/swim_move.rs"]
 mod swim_move;
 #[path = "movement/swim_pose.rs"]
@@ -527,6 +529,8 @@ pub mod clip {
     pub const SWIM_LAND: u32 = 45;
     pub const SWIM_HIP_DROP_START: u32 = 30;
     pub const SWIM_SPIN_CAP_START: u32 = 50;
+    /// (Not recorded: a stand-in for the converted model's length.)
+    pub const SWIM_TRAMPLE: u32 = 24;
     pub const SWIM_HIP_DROP_LAND: u32 = 74;
     pub const LAND: u32 = 26;
     /// The landing after a long fall (`PlayerStateWait`'s `LandStiffen` nerve).
@@ -2725,7 +2729,7 @@ impl Player {
             Move::Roll => self.roll(o),
             Move::RollEnd => self.roll_stand_up_step(o),
             Move::RollJump => self.roll_jump_step(o),
-            Move::Dive => self.head_sliding(o),
+            Move::Dive => self.head_sliding(o, scene),
             Move::SlopeSlide => self.slope_slide(o),
             Move::BurnJump | Move::BurnBounce => self.burn_air(o),
             Move::FireRun => self.fire_run(o),
@@ -2740,6 +2744,19 @@ impl Player {
             Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
             _ => self.air(o),
+        }
+        // The jump states ask for the `DiveInWater` clip at the end of their steps
+        // (`tryChangeDiveInWaterAnim` in `exeJump`, `exeJumpTurn`).
+        if matches!(
+            self.mode,
+            Move::Jump
+                | Move::DoubleJump
+                | Move::TripleJump
+                | Move::LongJump
+                | Move::Sideflip
+                | Move::WallJump
+        ) {
+            self.try_change_dive_in_water_anim(scene);
         }
     }
     fn read_input(&mut self, o: &Orders) {
@@ -4353,10 +4370,15 @@ impl Player {
             p.events.push(Fx::Dive);
         });
     }
-    fn head_sliding(&mut self, _o: &Orders) {
+    fn head_sliding(&mut self, _o: &Orders, scene: &Course) {
         self.head_sliding_motion();
         if self.anim.name == "HeadSlidingStart" && self.anim_done(clip::HEAD_SLIDING_START) {
             self.play("HeadSliding");
+        }
+        // `PlayerStateHeadSliding::exeDive` ends by judging the fall into water; the state keeps
+        // the answer for the water entry (`isEnableDiveInWater`).
+        if self.dive_in_water_enabled(scene) {
+            self.head_slide_dive_in = true;
         }
     }
     /// Diving flight (`rs::moveDivingJump` with the dive's values): no

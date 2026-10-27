@@ -56,6 +56,10 @@ pub(super) enum SwimNerve {
     HeadIn,
     /// The dive in after a high fall (the `DiveInWater` clip).
     DiveIn,
+    /// The hop off something trampled in the water.
+    Trample,
+    /// The dive that hit something on its way down.
+    ReflectDownFall,
     /// The cap throw at the surface.
     SpinCapSurface,
     /// The cap throw under the surface and on the bottom.
@@ -78,6 +82,8 @@ impl SwimNerve {
             Self::Dive => "Swim/SwimDive",
             Self::HeadIn => "Swim/SwimHeadIn",
             Self::DiveIn => "Swim/SwimDiveIn",
+            Self::Trample => "Swim/SwimTrample",
+            Self::ReflectDownFall => "Swim/SwimReflectDownFall",
             Self::SpinCapSurface => "Swim/SwimSpinCapSurface",
             Self::SpinCap => "Swim/SwimSpinCap",
         }
@@ -156,6 +162,8 @@ pub(super) struct Swim {
     /// The nerve the trace still names: a nerve the actor chose after the state's update (the
     /// cap throw) is applied by the next update, not shown before.
     pub(super) chosen_after_update: Option<SwimNerve>,
+    /// The attack-sensor triggers of this step (`PlayerTrigger`, cleared when the step ends).
+    pub(super) attack: super::swim_trample::SwimAttack,
     /// The body's turn.
     pub turn: TurnControl,
 }
@@ -194,6 +202,7 @@ impl Default for Swim {
             dive_in_steer: false,
             dive_in_keep: 0,
             chosen_after_update: None,
+            attack: super::swim_trample::SwimAttack::default(),
             turn: TurnControl::swim(),
         }
     }
@@ -509,8 +518,14 @@ impl Player {
             && (self.swim.nerve == SwimNerve::Surface || finder.distance <= k::SURFACE_START_DIST)
     }
 
-    /// `PlayerActorHakoniwa::exeSwim`: the state's update, then what the actor decides.
+    /// `PlayerActorHakoniwa::exeSwim`, then the step's attack triggers are gone.
     pub(super) fn swim(&mut self, o: &Orders, scene: &Course) {
+        self.swim_step(o, scene);
+        self.swim.attack = Default::default();
+    }
+
+    /// `PlayerActorHakoniwa::exeSwim`: the state's update, then what the actor decides.
+    fn swim_step(&mut self, o: &Orders, scene: &Course) {
         self.swim.chosen_after_update = None;
         let ended = self.swim_update(o, scene);
         if ended.is_some() {
@@ -606,6 +621,8 @@ impl Player {
             SwimNerve::Dive => self.exe_swim_dive(first, o, scene),
             SwimNerve::HeadIn => self.exe_swim_head_in(first, o, scene),
             SwimNerve::DiveIn => self.exe_swim_dive_in(first, o, scene),
+            SwimNerve::Trample => self.exe_swim_trample(first, o, scene),
+            SwimNerve::ReflectDownFall => self.exe_swim_reflect_down_fall(first, o, scene),
             SwimNerve::SpinCapSurface => self.exe_swim_spin_cap_surface(first, o, scene),
             SwimNerve::SpinCap => self.exe_swim_spin_cap(first, o, scene),
         };
@@ -664,7 +681,9 @@ impl Player {
             self.set_swim_nerve(SwimNerve::Surface);
             return None;
         }
-        // (The trample trigger is not ported.)
+        if self.swim_tramples() {
+            return None;
+        }
         if o.jump {
             self.set_swim_nerve(SwimNerve::Paddle);
             return None;

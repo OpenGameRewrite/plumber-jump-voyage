@@ -73,6 +73,8 @@ pub(super) fn run() {
     cap_bounce();
     wall_slide_and_ledge();
     swimming();
+    the_dive_in_judge_wants_a_long_fall_over_deep_water();
+    a_trample_in_the_water_hops_the_swimmer_up();
     poles();
     slope_slide();
     burn_and_soot();
@@ -1185,6 +1187,61 @@ fn swimming() {
         1,
     );
     assert_eq!(p.mode, Move::Jump);
+}
+
+/// `PlayerJudgeDiveInWater`: a fall that has gone on, the surface 1500 to 1660 below the root and
+/// no ground nearer than that (the swim state then dives in with `SwimDiveIn`).
+#[cfg_attr(test, test)]
+fn the_dive_in_judge_wants_a_long_fall_over_deep_water() {
+    let pool = Course {
+        water: crate::water::WaterAreas::demo_box(0., 0., 10_000., 10_000., 100., 10_000.),
+        ..default()
+    };
+    let mut p = Player::spawn_at(Vec3::new(0., 17., 0.), Vec3::Z);
+    p.fall.distance = 50.;
+    // 16 metres over the surface at 1 m: inside the window.
+    assert!(p.judge_dive_in_water(&pool));
+    // A fall that has hardly begun, a surface too near and one out of the arrow's reach are not.
+    p.fall.distance = 5.;
+    assert!(!p.judge_dive_in_water(&pool));
+    p.fall.distance = 50.;
+    p.pos.y = 15.5;
+    assert!(!p.judge_dive_in_water(&pool));
+    p.pos.y = 19.;
+    assert!(!p.judge_dive_in_water(&pool));
+    // Once the clip plays the judge is not asked again.
+    p.pos.y = 17.;
+    p.anim.name = "DiveInWater";
+    assert!(!p.dive_in_water_enabled(&pool));
+}
+
+/// The attack-sensor trigger of a trample (nothing in the rewrite raises it yet) sends the
+/// swimmer under the surface into `SwimTrample` and rises it with `DiveTramplePower`.
+#[cfg_attr(test, test)]
+fn a_trample_in_the_water_hops_the_swimmer_up() {
+    let pool = Course {
+        water: crate::water::WaterAreas::demo_box(0., 0., 10_000., 10_000., 100., 1000.),
+        ..default()
+    };
+    let mut p = Player::spawn_at(Vec3::new(0., 1.3, 0.), Vec3::Z);
+    frames(&mut p, Orders::default(), &pool, 50);
+    assert_eq!(p.mode, Move::Swim);
+    // Three metres under the surface, in the open water.
+    p.pos.y = -2.;
+    p.update_water_finder(&pool);
+    p.swim.nerve = swim::SwimNerve::Move;
+    p.swim.steps = 1;
+    p.v = Vec3::ZERO;
+    p.receive_swim_attack(swim_trample::SwimAttack {
+        trample: true,
+        ..default()
+    });
+    frames(&mut p, Orders::default(), &pool, 1);
+    assert_eq!(p.nerve_name().name, "Swim/SwimTrample");
+    assert!((p.v.y - 11.).abs() < 1e-4, "the hop rises 11: {}", p.v.y);
+    // The trigger was for that step only.
+    frames(&mut p, Orders::default(), &pool, 1);
+    assert!(p.v.y < 11.);
 }
 
 #[cfg_attr(test, test)]

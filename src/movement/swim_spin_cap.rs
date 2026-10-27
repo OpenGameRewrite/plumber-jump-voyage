@@ -205,7 +205,9 @@ impl Player {
         if self.swim_spin_attack_runs() {
             return None;
         }
-        // (The attack sensors' trample is not ported.)
+        if self.swim_tramples() {
+            return None;
+        }
         if o.jump {
             self.set_swim_nerve(SwimNerve::Paddle);
             return None;

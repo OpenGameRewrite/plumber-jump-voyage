@@ -288,13 +288,16 @@ impl Player {
     /// `normal` rises while the paddle's rise lasts and falls with `gravity` after, within
     /// the limits. Ground below stops the fall.
     pub(super) fn swim_vertical(&self, vertical: Vec3, normal: Vec3, gravity: f32) -> Vec3 {
+        // A trampled enemy (or another hit) bounces the swimmer up whatever the stroke would do.
+        if let Some(rise) = self.swim_attack_rise() {
+            return scaled(normal, rise);
+        }
         let along = pose_math::dot(vertical, normal);
         let speed = if self.is_collided_ground() && along < 0. {
             0.
         } else {
             along
         };
-        // (The trample triggers of the attack sensors, `SwimTrample`, are not ported.)
         let speed = if (k::RISE_FRAME as u32) > self.swim.since_paddle as u32 {
             let rising = speed + k::RISE_POWER;
             if rising > k::RISE_SPEED_MAX {

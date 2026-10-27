@@ -74,7 +74,63 @@ const DIVE_IN: DiveInKind = DiveInKind {
     brakes_still: false,
 };
 
+/// `PlayerJudgeDiveInWater`: the fall must have gone on for this far, the surface be this far below
+/// and nothing be nearer under it than that (centimetres).
+const DIVE_IN_FALL_DISTANCE_MIN: f32 = 10.;
+const DIVE_IN_HEIGHT: f32 = 1500.;
+/// `updateHeightCheck`'s arrow starts 30 above the root and runs 1735 down: ground further than
+/// that is not "below" the root at all (`IUsePlayerHeightCheck::isAboveGround`).
+const GROUND_PROBE_START: f32 = 30.;
+const GROUND_PROBE_LENGTH: f32 = 1735.;
+
 impl Player {
+    // ---- The fall into the water that starts the dive-in ------------------------------------
+
+    /// `PlayerJudgeDiveInWater::judge`: a fall that has gone on, with the water's surface 1500 to
+    /// 1660 below the root and no ground nearer under it than the surface plus the body's height.
+    pub(super) fn judge_dive_in_water(&self, scene: &Course) -> bool {
+        if self.fall.distance < DIVE_IN_FALL_DISTANCE_MIN {
+            return false;
+        }
+        let above_ground = self.ground_height + GROUND_PROBE_START <= GROUND_PROBE_LENGTH;
+        if above_ground && self.ground_height < DIVE_IN_HEIGHT {
+            return false;
+        }
+        let find_distance = (k::TALL + DIVE_IN_HEIGHT) * 0.5;
+        let at = scene.in_water_frame(self.position_cm());
+        let start = Vec3::new(
+            at.x + find_distance * GRAVITY.x,
+            at.y + find_distance * GRAVITY.y,
+            at.z + find_distance * GRAVITY.z,
+        );
+        let Some((surface, _)) = scene
+            .water_areas()
+            .find_surface(start, Vec3::Y, find_distance)
+        else {
+            return false;
+        };
+        let surface_distance = pose_math::dot(at - surface, Vec3::Y);
+        if surface_distance < DIVE_IN_HEIGHT {
+            return false;
+        }
+        !(above_ground && self.ground_height < surface_distance + k::TALL)
+    }
+
+    /// `PlayerActionDiveInWater::judgeEnableDiveInWater`: the judge, unless the clip is already
+    /// playing.
+    pub(super) fn dive_in_water_enabled(&self, scene: &Course) -> bool {
+        self.anim.name != "DiveInWater" && self.judge_dive_in_water(scene)
+    }
+
+    /// `PlayerActionDiveInWater::tryChangeDiveInWaterAnim`, which the jump states call every step:
+    /// the fall into deep water plays its own clip (and the water entry then raises trigger 9).
+    /// GUESS for the clip's play: no recording has the clip (the head slide's judge is recorded).
+    pub(super) fn try_change_dive_in_water_anim(&mut self, scene: &Course) {
+        if self.dive_in_water_enabled(scene) {
+            self.start_clip("DiveInWater");
+        }
+    }
+
     /// The first step of both nerves: the clip, the fall speed held to the fall-in speed and
     /// the body's pitch starting from the angle the spine has with the body's front.
     fn start_dive_in(&mut self) {

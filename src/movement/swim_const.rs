@@ -143,6 +143,12 @@ pub const HEAD_SLIDING_SIDE_ACCEL: f32 = 0.125;
 /// `SlerpQuatGrav`: how fast the pose follows the direction of travel.
 pub const SLERP_QUAT_GRAV: f32 = 0.4;
 
+/// The hops off something stomped in the water: `DiveTramplePower` (a trample), `SwimTramplePower`
+/// (another hit), and the steps the reflected dive keeps its bounce (`DiveTrampleCancelFrame`).
+pub const DIVE_TRAMPLE_POWER: f32 = 11.;
+pub const TRAMPLE_POWER: f32 = 8.;
+pub const DIVE_TRAMPLE_CANCEL_FRAME: i32 = 20;
+
 /// The cap throw (`SwimSpinCapUpPower`, `SwimSpinCapUpSpeedMax`) lifts a body in the open water
 /// by the power, up to the speed; `SpinCapThrowFrameSwim` is the step the cap leaves on.
 pub const SPIN_CAP_UP_POWER: f32 = 10.;
