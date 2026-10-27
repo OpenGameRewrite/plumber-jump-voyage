@@ -1109,8 +1109,16 @@ fn camera(
     mut shake: ResMut<Shake>,
     mut cam: Single<(&mut Transform, &mut Projection), (With<MainCamera>, Without<Player>)>,
     course: Res<Course>,
+    mut seen_restart: Local<u32>,
 ) {
     let dt = time.delta_secs().clamp(1e-4, 0.05);
+    if *seen_restart != p.death.generation {
+        // A new life starts with the camera at the player (the original restarts its camera
+        // with the scene), not easing up from where the fall ended.
+        *seen_restart = p.death.generation;
+        orbit.anchor = p.pos.y;
+        orbit.focus = p.pos + Vec3::Y * 1.25;
+    }
     let behind = (-p.facing.x).atan2(-p.facing.z);
     let speed = p.flat_speed();
     if !menu.open && !orbit.locked {

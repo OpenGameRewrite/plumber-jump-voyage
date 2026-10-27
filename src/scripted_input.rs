@@ -35,6 +35,21 @@ pub fn apply(
             };
             return;
         }
+        if script == "fall" {
+            // From PJV_SPAWN near the course's edge: run +X off it and let the death area,
+            // the wipe and the respawn play out.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                reset: started && now < 0.04,
+                direction: if (0.1..3.0).contains(&now) {
+                    Vec2::X
+                } else {
+                    Vec2::ZERO
+                },
+                ..default()
+            };
+            return;
+        }
         if script == "soot" {
             // From PJV_SPAWN: run +X across the lava plate, stand while the
             // soot smoulders, then walk on into the puddle to wash it off.
