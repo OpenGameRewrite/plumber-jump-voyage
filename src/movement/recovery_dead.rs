@@ -92,8 +92,9 @@ impl Player {
         };
         let pose = self.actor_pose();
         let rotate_end = (duration as f32 * 0.9 - 10.).max(0.).floor() as u32;
-        // U04: the 3D parallel-gravity path is decoded. Arbitrary gravity and 2D need
-        // their dimension controller; this controller currently supports world-down only.
+        // Only 3D with the actor's gravity world-down exists in this controller (2D and
+        // arbitrary gravity need their dimension controller).
+        let axis = -pose.side();
         self.recovery.start = start;
         self.recovery.up = up;
         self.recovery.horizontal = horizontal;
@@ -101,9 +102,9 @@ impl Player {
         self.recovery.linear = linear;
         self.recovery.duration = duration;
         self.recovery.rotate_end = rotate_end;
-        self.recovery.rotation = (rotate_end / 30) as f32 * 360.;
+        self.recovery.rotation = (rotate_end / 30) as f32 * 360. + spin_degrees(pose.up(), -safety.gravity, axis);
         self.recovery.pose = pose.calc_quat();
-        self.recovery.axis = -pose.side();
+        self.recovery.axis = axis;
         self.recovery.root = pose.up() * 80.;
         self.collider = PlayerCollider::default();
     }
@@ -133,16 +134,11 @@ impl Player {
                 let r = &self.recovery;
                 let progress = ease_in_out(ease_in_out(rate(self.frame, 0, r.duration)));
                 let rotation = joint_math::ease_out(rate(self.frame, 10, r.rotate_end)) * r.rotation;
-                let angle = rotation * 0.017_453_292;
-                let half = angle * 0.5;
-                let axis = r.axis * console_libm::sinf(half);
-                let spin = Quat::from_xyzw(axis.x, axis.y, axis.z, console_libm::cosf(half));
-                let pose = rotate_pose(r.pose, r.axis, angle);
-                let offset = pose_math::rotate_by_quat(-r.root, spin) + r.root;
+                let pose = rotate_pose(r.pose, r.axis, rotation * DEGREES_TO_RADIANS);
+                let offset = rotate_vector_degree(-r.root, r.axis, rotation) + r.root;
                 let gravity = self.recovery.safety.expect("valid recovery").gravity;
                 let scale = 1. - turn_control::ease_in(rate(self.frame, 0, r.rotate_end));
-                let normal = gravity * pose_math::dot(gravity, offset);
-                let offset = offset - normal + normal * scale;
+                let offset = scale_vector_direction(gravity, offset, scale);
                 let height = r.quadratic * (progress * progress) + r.linear * progress;
                 let position = r.start + r.horizontal * progress + r.up * height + offset;
                 let ended = self.frame >= r.duration;
@@ -188,6 +184,30 @@ impl Player {
     }
 }
 
+const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
+
+/// The turn the bubble adds to its whole spins: the angle, flattened across the spin axis, from
+/// the actor's up to the safety point's up, wrapped to [0, 360) (calcAngleOnPlaneDegree and
+/// al::modf at 0x479e60..0x479e80).
+/// GUESS: the original's branch for a safety up parallel to the axis (arbitrary gravity, where
+/// it reads vectors only the 2D path fills) is not ported; it turns by no extra angle here.
+fn spin_degrees(up: Vec3, target_up: Vec3, axis: Vec3) -> f32 {
+    if pose_math::is_parallel_direction(target_up, axis, 0.01) {
+        return 0.;
+    }
+    (ground_pose::calc_angle_on_plane_degree(up, target_up, axis) + 360.) % 360. + 0.
+}
+/// al::rotateVectorDegree (0x922e88): `v` turned by the quaternion (axis*sin(h), cos(h)).
+fn rotate_vector_degree(v: Vec3, axis: Vec3, degrees: f32) -> Vec3 {
+    let half = (degrees * DEGREES_TO_RADIANS) * 0.5;
+    let (sine, cosine) = (console_libm::sinf(half), console_libm::cosf(half));
+    pose_math::rotate_by_quat(v, Quat::from_xyzw(axis.x * sine, axis.y * sine, axis.z * sine, cosine))
+}
+/// al::scaleVectorDirection (0x924e7c): the part of `v` along `direction` scaled by `scale`.
+fn scale_vector_direction(direction: Vec3, v: Vec3, scale: f32) -> Vec3 {
+    let along = direction * pose_math::dot(direction, v);
+    (v - along) + along * scale
+}
 /// al::rotateQuatRadian (0x92783c), including its normalization and scalar order.
 fn rotate_pose(q: Quat, axis: Vec3, angle: f32) -> Quat {
     let half = angle * 0.5;
@@ -273,17 +293,41 @@ mod checks {
 
     #[cfg_attr(test, test)]
     pub(super) fn rotation_oracle() {
+        // Cases come from the executable's own routines (local `gen_recovery_cases.py`).
         let Ok(path) = std::env::var("PJV_RECOVERY_CASES") else { return };
         let cases: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         for case in cases.as_array().unwrap() {
             let values = |key: &str| -> Vec<f32> {
                 case[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect()
             };
-            let q = values("q");
-            let axis = values("axis");
-            let got = rotate_pose(Quat::from_xyzw(q[0],q[1],q[2],q[3]), Vec3::new(axis[0],axis[1],axis[2]), case["angle"].as_f64().unwrap() as f32);
-            let expected = values("out");
-            for (actual, expected) in got.to_array().into_iter().zip(expected) {
+            let vec3 = |key: &str| {
+                let v = values(key);
+                Vec3::new(v[0], v[1], v[2])
+            };
+            let scalar = |key: &str| case[key].as_f64().unwrap() as f32;
+            let (got, expected): (Vec<f32>, Vec<f32>) = match case["f"].as_str().unwrap() {
+                "rotate_quat" => {
+                    let q = values("q");
+                    let pose = rotate_pose(Quat::from_xyzw(q[0], q[1], q[2], q[3]), vec3("axis"), scalar("angle"));
+                    (pose.to_array().to_vec(), values("out"))
+                }
+                "rotate_vec" => (
+                    rotate_vector_degree(vec3("v"), vec3("axis"), scalar("deg")).to_array().to_vec(),
+                    values("out"),
+                ),
+                "scale_dir" => (
+                    scale_vector_direction(vec3("dir"), vec3("v"), scalar("scale")).to_array().to_vec(),
+                    values("out"),
+                ),
+                "spin_angle" => (
+                    vec![ground_pose::calc_angle_on_plane_degree(vec3("frm"), vec3("to"), vec3("axis"))],
+                    vec![scalar("out")],
+                ),
+                other => panic!("unknown case {other}"),
+            };
+            for (actual, expected) in got.into_iter().zip(expected) {
+                // spin_angle's oracle is the wrapped angle; compare it after the same wrap.
+                let actual = if case["f"] == "spin_angle" { (actual + 360.) % 360. + 0. } else { actual };
                 assert_eq!(actual.to_bits(), expected.to_bits(), "{case}");
             }
         }

@@ -730,7 +730,7 @@ fn calc_distance_vec_to_plane(direction: Vec3, point: Vec3, normal: Vec3, on_pla
 
 /// `al::calcAngleOnPlaneDegree(from, to, normal)`: the signed angle between the two vectors
 /// flattened onto the plane across `normal`.
-fn calc_angle_on_plane_degree(from: Vec3, to: Vec3, normal: Vec3) -> f32 {
+pub(super) fn calc_angle_on_plane_degree(from: Vec3, to: Vec3, normal: Vec3) -> f32 {
     let flatten = |v: Vec3| {
         let along = (normal.x * v.x + normal.y * v.y) + normal.z * v.z;
         Vec3::new(
