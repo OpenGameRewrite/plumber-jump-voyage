@@ -124,6 +124,8 @@ NEVER = {
     "pre_input": "the game logs the raw words of its pre-input judges, the rewrite its own pending counts",
 }
 # Keys of a key=value column that are never comparable, with the reason.
+# The look_sensors keys that name another actor's sensor (`host/sensor/type`).
+LOOK_HOST_KEYS = ("candidate", "target")
 NEVER_KEYS = {
     "triggers": "raw trigger flag words of the game's player trigger object have no defined mapping",
 }
@@ -575,6 +577,32 @@ class Report:
         }
 
 
+def exported_look_hosts(game_path, geometry_path):
+    """Hosts of the look-at sensors the replay's stage export carries, or None without a matching export.
+
+    A replay knows other actors only through that export (static placements). The game's holder may
+    also pick a host the export cannot place: an NPC that patrols, a pipe's bind sensor. Which one it
+    picks there is the other actor's business, not Mario's.
+    """
+    if not geometry_path:
+        return None
+    with open(geometry_path, encoding="utf-8") as f:
+        geometry = json.load(f)
+    meta_path = os.path.join(os.path.dirname(game_path), "game.meta.json")
+    if not os.path.isfile(meta_path):
+        return None
+    with open(meta_path, encoding="utf-8") as f:
+        meta = json.load(f)
+    if geometry.get("stage") != meta.get("stage") or geometry.get("scenario") != meta.get("scenario_no"):
+        return None
+    return {sensor["host"] for sensor in geometry.get("look_sensors", [])}
+
+
+def sensor_host(label):
+    """`host/sensor/type` -> host."""
+    return label.rsplit("/", 2)[0]
+
+
 def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), lockstep=False,
             allow_contaminated=False, geometry_path=None):
     """Compare two trace files. Raises EnvironmentRefused for a contaminated run unless allowed."""
@@ -794,6 +822,7 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
         elif left_out:
             report.notes.append(f"{name}: {res.note}")
 
+    look_hosts = exported_look_hosts(game_path, geometry_path)
     # key=value columns: every key is its own result.
     for name, (sep, _) in KEY_VALUE.items():
         if name not in gcols and name not in rcols:
@@ -824,9 +853,14 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
             if not in_g or not in_r:
                 res.not_comparable("only in " + ("rewrite" if in_r else "game"))
                 continue
+            unplaced = 0
             for f in use:
                 g, r = gitems[f].get(key), ritems[f].get(key)
                 if g is None and r is None:
+                    continue
+                if (name == "look_sensors" and key in LOOK_HOST_KEYS and look_hosts is not None
+                        and g is not None and sensor_host(g) not in look_hosts):
+                    unplaced += 1
                     continue
                 if g is None or r is None:
                     res.game[f] = "absent" if g is None else g
@@ -837,6 +871,10 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
                     g, r = normalise_counter(key, g), normalise_counter(key, r)
                 err, ok = compare_value(g, r, tolerances[name])
                 res.add(f, err, [] if ok else [f"{g} vs {r}"])
+            if unplaced:
+                res.note = (f"{unplaced} frames left out: the game's {key} is a host the stage export does not "
+                            "place (it moves, or is a bind sensor), so the replay cannot know it")
+                report.notes.append(f"{name}.{key}: {res.note}")
 
     # Cap columns: only on frames where both sides have the cap out; who has it out is its own column.
     if "cap_state" in gcols or "cap_state" in rcols:
@@ -1022,6 +1060,21 @@ def self_check():
                 assert compare(game, rewrite, geometry_path=geometry).env_clean and expected
             except EnvironmentRefused:
                 assert not expected
+    # The holder's candidate is compared only where the game's host is one the stage export places.
+    with tempfile.TemporaryDirectory() as folder:
+        game, rewrite = [os.path.join(folder, name) for name in ("game.csv", "rewrite.csv")]
+        write_csv(game, [{"frame": "0", "look_sensors": "candidate=Coin/Body/12"},
+                         {"frame": "1", "look_sensors": "candidate=Walker/Body/18"},
+                         {"frame": "2", "look_sensors": "candidate=Coin/Body/12"}])
+        write_csv(rewrite, [{"frame": str(f), "look_sensors": "candidate=Coin/Body/12"} for f in range(3)])
+        geometry = os.path.join(folder, "geometry.json")
+        with open(geometry, "w", encoding="utf-8") as f:
+            json.dump(dict(stage="Test", scenario=1, look_sensors=[dict(host="Coin")]), f)
+        with open(os.path.join(folder, "game.meta.json"), "w", encoding="utf-8") as f:
+            json.dump(dict(stage="Test", scenario_no=1), f)
+        assert compare(game, rewrite).result("look_sensors.candidate").first_bad() == 1
+        placed = compare(game, rewrite, geometry_path=geometry).result("look_sensors.candidate")
+        assert placed.status == "PASS" and placed.compared == 2 and "1 frames left out" in placed.note
     # The head's rotation: only where a look was asked for or shown, and the animated head agrees.
     import math as _math
     half = lambda degrees: f"0/{_math.sin(_math.radians(degrees) / 2):.6f}/0/{_math.cos(_math.radians(degrees) / 2):.6f}"

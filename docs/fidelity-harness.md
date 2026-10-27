@@ -396,6 +396,11 @@ The head follows a nearby sensor the way the original's `PlayerEyeSensorHitHolde
   depends on the same head position (the 400 cm gate), so a head that leans differently can take a
   target a frame early or late; lockstep takes the head position, keeper counter and target from
   the game's previous row.
+* **Unplaced hosts.** With `--geometry`, `look_sensors.candidate` and `.target` are compared only on
+  frames where the game's host is one the export places. A patrolling Donsuke or a pipe's bind
+  sensor is picked by the holder when it is nearer than the static sensors; the replay cannot know
+  where it is, so the report counts those frames as left out instead of failing Mario's look-at.
+  Static placed coins come from `tools/export-coin-look-sensors.py`.
 
 ## Cap throw and catch
 
