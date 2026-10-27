@@ -244,6 +244,8 @@ mod abyss;
 pub(crate) mod console_libm;
 mod damage;
 mod damage_fire;
+mod damage_life;
+mod damage_swim;
 pub mod death;
 mod entrance_camera;
 #[path = "movement/ground.rs"]
@@ -475,6 +477,7 @@ pub mod clip {
             "Wait" | "Snooze" => Some(180.),
             "WaitRelax" => Some(1200.),
             "WaitHot" => Some(340.),
+            "DamageWait" => Some(120.),
             "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
@@ -575,6 +578,13 @@ pub enum Move {
     FireRun,
     FireFall,
     FireDead,
+    DamageAir,
+    DamageLand,
+    DamageDead,
+    DamageSwim,
+    DamageSurface,
+    DamageLandWater,
+    DamageSwimDead,
     Dead,
     AbyssFall,
     RecoveryStart,
@@ -591,7 +601,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 44] = [
+    pub const ALL: [Move; 51] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -623,6 +633,13 @@ impl Move {
         Self::FireRun,
         Self::FireFall,
         Self::FireDead,
+        Self::DamageAir,
+        Self::DamageLand,
+        Self::DamageDead,
+        Self::DamageSwim,
+        Self::DamageSurface,
+        Self::DamageLandWater,
+        Self::DamageSwimDead,
         Self::Dead,
         Self::AbyssFall,
         Self::RecoveryStart,
@@ -666,7 +683,9 @@ impl Move {
             Self::BurnBounce => "Hot! (bounce)",
             Self::FireRun => "Fire run",
             Self::FireFall => "Fire fall",
-            Self::FireDead | Self::Dead | Self::AbyssFall => "Dead",
+            Self::FireDead | Self::DamageDead | Self::DamageSwimDead | Self::Dead | Self::AbyssFall => "Dead",
+            Self::DamageAir | Self::DamageLand => "Damage",
+            Self::DamageSwim | Self::DamageSurface | Self::DamageLandWater => "Water damage",
             Self::RecoveryStart | Self::RecoveryTravel | Self::RecoveryFall => "Recovery",
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
@@ -985,6 +1004,7 @@ pub struct Player {
     nerve: Nerve,
     fire: FireControl,
     damage: Damage,
+    life: damage_life::LifeControl,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
     pole: PoleControl,
     rolling: RollControl,
@@ -1275,6 +1295,7 @@ impl Default for Player {
             nerve,
             fire: FireControl::default(),
             damage: Damage::default(),
+            life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),
             rolling: RollControl::default(),
             collider_end: None,
@@ -1831,6 +1852,7 @@ impl Player {
         // (The pole's hold has no pull into the floor under it, and the slope slide keeps the
         // game's own velocity, the pull included.)
         if self.grounded
+            && !self.in_damage_state()
             && !matches!(
                 self.mode,
                 Move::Pole
@@ -2103,7 +2125,7 @@ impl Player {
         if self.is_dead()
             && !self.death.abyss_pending_for_trace()
             && s.mode
-                .is_some_and(|m| !matches!(m, Move::FireDead | Move::Dead | Move::AbyssFall))
+                .is_some_and(|m| !matches!(m, Move::FireDead | Move::Dead | Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead))
         {
             self.damage = Damage::default();
             self.soot = Soot::default();
@@ -2125,7 +2147,7 @@ impl Player {
         }
         if let Some(mode) = s.mode {
             self.mode = mode;
-            if mode == Move::AbyssFall {
+            if matches!(mode, Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead) {
                 // The recorded state is the death-area fall: the actor is dead (health 0).
                 self.damage.hp = 0;
             }
@@ -2154,7 +2176,7 @@ impl Player {
         // read from them), not the actor nerve's.
         if matches!(
             self.mode,
-            Move::PoundLand | Move::GroundSpin | Move::SpinDrop
+            Move::PoundLand | Move::GroundSpin | Move::SpinDrop | Move::DamageAir | Move::DamageLand | Move::DamageDead | Move::DamageSwim | Move::DamageSurface | Move::DamageLandWater | Move::DamageSwimDead
         ) && let Some(steps) = s.sub_steps
         {
             self.frame = steps;
@@ -2657,7 +2679,7 @@ impl Player {
         self.update_cap(&o, scene);
         self.cap_sensor_phase(&o);
         self.start_pending_abyss();
-        self.dispatch_fire_damage(scene);
+        self.dispatch_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
@@ -2691,6 +2713,7 @@ impl Player {
             && self.mode != Move::GroundSpin
             && self.mode != Move::SlopeSlide
             && self.mode != Move::Swim
+            && !self.in_damage_state()
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
@@ -2785,6 +2808,8 @@ impl Player {
             Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead => {
                 self.damage_fire_step(o, scene)
             }
+            Move::DamageAir | Move::DamageLand | Move::DamageDead => self.damage_life_step(o, scene),
+            Move::DamageSwim | Move::DamageSurface | Move::DamageLandWater | Move::DamageSwimDead => self.damage_swim_step(o, scene),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -2863,7 +2888,11 @@ impl Player {
         self.wet.update();
         self.update_soot(scene);
         let dead = self.is_dead();
+        let was_hidden = self.damage.hidden;
         self.damage.update(dead);
+        if was_hidden && !self.damage.hidden {
+            self.interpolation_cleared = true;
+        }
         self.recovery.push_invalid = self.recovery.push_invalid.saturating_sub(1);
         self.death.update_scene(dead);
         // A state chosen this step has run no step yet: its first one is next.
@@ -3715,9 +3744,12 @@ impl Player {
     /// (`rs::isPlayerSideFaceToCameraZ`): the first jump then plays the clip
     /// that is not mirrored.
     fn side_faces_camera(&self) -> bool {
-        let look = Vec3::new(-self.camera_yaw.sin(), 0., -self.camera_yaw.cos());
-        let side = Vec3::new(self.facing.z, 0., -self.facing.x);
-        side.dot(look) < -1e-4
+        // rs::isPlayerSideFaceToCameraZ (0x55dc7c): read camera axes and
+        // actor matrix, project the side off camera up, normalize, strict dot<0.
+        let view = self.view.unwrap_or_else(|| move_input::locked_view(self.camera_yaw.to_degrees()));
+        let side = self.actor_pose().side();
+        let side = pose_math::try_normalize_or_zero(vector_lib::verticalize_vec(view[1],side)).0;
+        pose_math::dot(side,-view[2]) < 0.
     }
     /// The first, second or third jump of the combo. Which one it is, and
     /// what that does to the combo, is decided as the jump state appears (when

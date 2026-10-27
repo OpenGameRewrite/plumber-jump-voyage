@@ -227,7 +227,7 @@ impl TriangleMesh {
             objects,
             thickness: PRISM_THICKNESS,
             origin,
-            water: crate::water::WaterAreas::from_export(&root["areas"]),
+            water: crate::water::WaterAreas::from_export(&root["areas"]).with_oceans(&root["ocean_waves"]),
             death: crate::water::WaterAreas::from_export_named(&root["areas"], "DeathArea"),
             recovery: crate::water::WaterAreas::from_export_named(&root["areas"], "RecoveryArea"),
             recovery_ban: crate::water::WaterAreas::from_export_named(

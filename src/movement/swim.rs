@@ -316,7 +316,7 @@ impl Player {
     pub(super) fn judge_in_water(&mut self, scene: &Course) {
         if self.is_dead()
             || self.recovering()
-            || matches!(self.mode, Move::Swim | Move::Pole)
+            || matches!(self.mode, Move::Swim | Move::Pole) || self.in_damage_state()
             || self.nerve.deferred
         {
             return;
@@ -363,7 +363,7 @@ impl Player {
     /// `setNerve(Swim)`: the nerve machine starts the state in the same update that chose it
     /// (`PlayerStateSwim::appear` takes the velocity the old state left and the step's collision
     /// moves the body by what it sets); the first inner nerve executes with the next update.
-    fn start_swim(&mut self, scene: &Course) {
+    pub(super) fn start_swim(&mut self, scene: &Course) {
         // The state starts from the velocity the actor holds (`al::getVelocity`): a body that
         // ran into the water carries the floor-following velocity with the pull along the
         // floor's normal, which the ground states keep apart from `v`.
@@ -372,6 +372,13 @@ impl Player {
         self.frame = 0;
         self.nerve.choose_silently(true);
         self.swim_appear(scene);
+    }
+    /// Actor action20 skips the entry reaction after DamageSwim, action26 paddles.
+    pub(super) fn start_swim_after_damage(&mut self, scene: &Course, paddle: bool) {
+        let before = self.events.len();
+        self.start_swim(scene);
+        self.events.truncate(before);
+        if paddle { self.set_swim_nerve(SwimNerve::Paddle); }
     }
 
     /// Set the inner nerve: it is current at once, its first step is the next update's.
@@ -497,7 +504,7 @@ impl Player {
 
     /// `PlayerStateSwim::tryReactionWaterIn`: the splash and the entry sound; the dive and the
     /// hip drop (action triggers 9, 15, 19 and 29) enter harder.
-    fn try_reaction_water_in(&mut self, scene: &Course) {
+    pub(super) fn try_reaction_water_in(&mut self, scene: &Course) {
         if self.surface_to_splash(scene) {
             // (The large splash and the loud entry: one of the triggers 9, 15, 19, 29 is on.)
             let strong = self.swim.entered_by_hip_drop
@@ -509,7 +516,7 @@ impl Player {
 
     /// `PlayerStateSwim::tryReactionWaterOut`: the hit reaction of leaving the water and its
     /// splash.
-    fn try_reaction_water_out(&mut self, scene: &Course) {
+    pub(super) fn try_reaction_water_out(&mut self, scene: &Course) {
         if self.surface_to_splash(scene) {
             self.events.push(Fx::WaterOut);
         }
@@ -597,7 +604,7 @@ impl Player {
     /// The player is out of the water (`setNerveOnGround`): GUESS, no recording ends a swim
     /// outside of a jump; the ground states the controller has are chosen the way the other
     /// landings choose them.
-    fn leave_swim(&mut self, _o: &Orders) {
+    pub(super) fn leave_swim(&mut self, _o: &Orders) {
         if self.is_collided_ground() {
             self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
         } else {

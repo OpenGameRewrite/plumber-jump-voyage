@@ -37,6 +37,9 @@ fn limit_along(v: &mut Vec3, dir: Vec3, limit: f32) {
     }
     *v = parallel + perpendicular;
 }
+pub fn limit_velocity_dir(v: &mut Vec3, dir: Vec3, limit: f32) {
+    limit_along(v, dir, limit);
+}
 /// `al::addVectorLimit`: add `add` to `v` without letting the part of `v`
 /// along `add` pass `limit`. Returns whether anything was added.
 pub fn add_vector_limit(v: &mut Vec3, add: Vec3, limit: f32) -> bool {

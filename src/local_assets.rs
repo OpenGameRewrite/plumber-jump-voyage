@@ -229,13 +229,12 @@ fn colors(
 /// table; anything unlisted starts at once). Jumps out of the run cycle use
 /// the table's short "interp" entries.
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
-pub fn interp_frames(name: &str, from: &str) -> f32 {
+pub fn interp_frames(name: &str, _from: &str) -> f32 {
     match name {
-        "Jump" if from == "Move" => 3.,
         "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         // PlayerAnimation/AnimInterp.byml.
-        "DeadFall" | "WaitHot" | "TractorBubbleWait" => 10.,
+        "DeadFall" | "WaitHot" | "DamageWait" | "TractorBubbleWait" => 10.,
         "TractorBubbleStart" | "TractorBubbleEnd" => 5.,
         "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
         | "SquatWait" | "SwimLand" | "SwimStand" => 3.,
@@ -267,6 +266,9 @@ pub fn skeleton_clip(action: &str) -> &str {
         "StartSpinJumpR" | "RestartSpinJumpR" => "SpinJumpR",
         // The action table's swim clip names; the skeleton file has the surface swim as one clip.
         "SwimSurfaceNormal" | "SwimSurfaceCarry" => "SwimSurface",
+        "DamageDown" | "NoDamageDown" => "Damage",
+        "DamageDownSwim" | "NoDamageDownSwim" => "DamageSwim",
+        "DamageDownSwimSurface" | "NoDamageDownSwimSurface" => "DamageSwimSurface",
         other => other,
     }
 }
@@ -340,6 +342,7 @@ pub fn looping(name: &str) -> bool {
         "Wait"
             | "WaitHot"
             | "TractorBubbleWait"
+            | "DamageWait"
             | "WaitRelax"
             | "Snooze"
             | "Sleep"
@@ -443,7 +446,7 @@ mod imported {
         retargeted: bool,
         /// Each model material's own colour, and the soot levels last applied.
         stain_base: std::collections::HashMap<AssetId<StandardMaterial>, (Color, f32, f32)>,
-        stain_shown: Option<(f32, f32)>,
+        stain_shown: Option<(f32, f32, bool)>,
     }
     /// One pose source: weighted clips at fixed times.
     #[derive(Clone, Default)]
@@ -1495,10 +1498,10 @@ mod imported {
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
         let soot = p.soot;
-        if !loaded.finished || loaded.stain_shown == Some((soot.body, soot.cap)) {
+        if !loaded.finished || loaded.stain_shown == Some((soot.body, soot.cap, soot.poison)) {
             return;
         }
-        loaded.stain_shown = Some((soot.body, soot.cap));
+        loaded.stain_shown = Some((soot.body, soot.cap, soot.poison));
         for root in &roots {
             for e in children.iter_descendants(root) {
                 let Ok((part, handle)) = meshes.get(e) else {
@@ -1517,16 +1520,16 @@ mod imported {
                 };
                 loaded.stain_base.insert(handle.id(), base);
                 let (color, reflectance, roughness) = base;
-                let k = soot_blend(level);
+                let k = if soot.poison { 4. * crate::movement::joint_math::ease_out(level) } else { soot_blend(level) };
                 let c = color.to_linear();
-                let soot_color = 0.01 * k;
+                let stain_color = if soot.poison { [0.4,0.05,0.8] } else { [0.01;3] };
                 let Some(mut m) = materials.get_mut(&handle.0) else {
                     continue;
                 };
                 m.base_color = Color::LinearRgba(LinearRgba::new(
-                    c.red * (1. - k) + soot_color,
-                    c.green * (1. - k) + soot_color,
-                    c.blue * (1. - k) + soot_color,
+                    c.red * (1. - k) + stain_color[0] * k,
+                    c.green * (1. - k) + stain_color[1] * k,
+                    c.blue * (1. - k) + stain_color[2] * k,
                     c.alpha,
                 ));
                 m.reflectance = reflectance * (1. - k);

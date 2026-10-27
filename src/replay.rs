@@ -670,6 +670,12 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         orders.view = camera.view_rows(frame);
         // The game's camera (when the trace records it) is what its sound control hears.
         player.set_camera_position(camera.view(frame).map(|view| view.position * 100.));
+        // Scene RNG is external to a player-only replay. Feed raw getU32 results
+        // at the original getRandom(int,int) call site; the state chooses the clip.
+        player.set_damage_random(recorded.and_then(|game| game.cell(frame,"random")).into_iter()
+            .flat_map(|cell| cell.split('|'))
+            .filter_map(|item| item.strip_prefix("_ZN2al9getRandomEii+0x24="))
+            .filter_map(|hex| u32::from_str_radix(hex,16).ok()));
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (SETTLE_FRAMES + frame) as i64;

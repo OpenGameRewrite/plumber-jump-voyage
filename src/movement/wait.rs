@@ -104,6 +104,11 @@ impl Player {
     /// the landing hands over to `Wait`, and each stage of the idle sequence
     /// chooses the next one.
     pub(super) fn wait_nerve(&mut self, step: u32) {
+        if self.damage.hp == 1 {
+            // PlayerStateWait::exeWait selects DamageWait while one HP remains.
+            if self.clip() != "DamageWait" { self.start_clip("DamageWait"); }
+            return;
+        }
         if self.clip() == "WaitHot" {
             return;
         }

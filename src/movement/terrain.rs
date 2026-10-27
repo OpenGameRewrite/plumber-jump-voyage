@@ -278,7 +278,7 @@ impl Player {
             } else {
                 0.
             };
-            if matches!(
+            if self.in_damage_state() || matches!(
                 self.mode,
                 Move::SlopeSlide
                     | Move::Swim
@@ -292,7 +292,7 @@ impl Player {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;
-                if self.burning() && !self.is_on_ground_by(self.v) {
+                if (self.burning() || self.in_damage_state()) && !self.is_on_ground_by(self.v) {
                     self.grounded = false;
                     self.hop_contact = true;
                 }
@@ -355,6 +355,7 @@ impl Player {
     /// `rs::scaleVelocityInertiaWallHit`).
     fn keeps_velocity_at_walls(&self) -> bool {
         self.burning()
+            || self.in_damage_state()
             || matches!(self.mode, Move::WallSlide | Move::SlopeSlide | Move::Swim)
             || self.wall_keep_applies()
     }

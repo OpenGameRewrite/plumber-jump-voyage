@@ -226,6 +226,9 @@ pub struct SurfaceFinder {
 #[derive(Clone, Debug, Default)]
 pub struct WaterAreas {
     areas: Vec<Area>,
+    /// GUESS: OceanWave's flat-height fallback without GPU wave/depth textures.
+    /// Deep cave queries are covered by captures; animated surface parity is not.
+    ocean_heights: Vec<f32>,
 }
 
 impl WaterAreas {
@@ -260,7 +263,13 @@ impl WaterAreas {
                 ignore: entry["args"]["IsIgnoreArea"].as_bool().unwrap_or(false),
             });
         }
-        Self { areas }
+        Self { areas, ocean_heights: Vec::new() }
+    }
+    pub fn with_oceans(mut self, table: &serde_json::Value) -> Self {
+        self.ocean_heights = table.as_array().into_iter().flatten()
+            .filter(|o| o["preset"].as_i64() != Some(5))
+            .filter_map(|o| o["height"].as_f64().map(|h| h as f32)).collect();
+        self
     }
 
     /// A box of water for the demo course: its surface at `top`, the given extent below it
@@ -274,6 +283,7 @@ impl WaterAreas {
         depth: f32,
     ) -> Self {
         Self {
+            ocean_heights: Vec::new(),
             areas: vec![Area {
                 shape: Shape::CubeTop,
                 matrix: [1., 0., 0., center_x, 0., 1., 0., top, 0., 0., 1., center_z],
@@ -299,7 +309,7 @@ impl WaterAreas {
 
     /// `al::isInWaterPos`.
     pub fn is_water(&self, p: Vec3) -> bool {
-        self.volume_at(p).is_some_and(|area| !area.ignore)
+        self.volume_at(p).map_or_else(|| self.ocean_heights.iter().any(|h| p.y - h <= 0.001), |area| !area.ignore)
     }
 
     /// `al::calcFindWaterSurface` for the "Water" kind: the arrow runs from `start + dir * dist`

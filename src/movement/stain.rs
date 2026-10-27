@@ -1,6 +1,6 @@
 //! Fire stain requests and accumulation (`PlayerStainControl`, 0x465a84..0x46690c).
-//! Only fire type 2 is needed here. Other stain types can replace the active request without
-//! changing the damage states. The imported material remains a rendering approximation.
+//! Fire type 2 and poison type 1 share accumulation, hold, fade and washing.
+//! The imported material remains a rendering approximation.
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -9,22 +9,25 @@ pub struct Soot {
     pub cap: f32,
     pub smoking: bool,
     pub smoke_called: bool,
+    pub poison: bool,
     pub(super) hold: u32,
     decoration: f32,
     active: bool,
-    pending: Option<f32>,
+    pending: Option<(bool, f32)>,
 }
 impl Soot {
     /// Requests replace the pending increment; repeated requests are not accumulated here.
     pub fn record_damage_fire(&mut self) {
-        self.pending = Some(0.005);
+        self.pending = Some((false, 0.005));
     }
     pub fn record_damage_fire_dead(&mut self) {
-        self.pending = Some(1.);
+        self.pending = Some((false, 1.));
     }
     pub fn record_black_smoke(&mut self) {
-        self.pending = Some(0.02);
+        self.pending = Some((false, 0.02));
     }
+    /// PlayerStainControl::recordPoison (0x465ac8): type1, increment1.
+    pub fn record_poison(&mut self) { self.pending = Some((true,1.)); }
 
     fn update(&mut self, cap_on: bool, in_water: bool, wet: bool) {
         self.smoke_called = false;
@@ -40,7 +43,11 @@ impl Soot {
                 self.decoration *= 0.98;
             }
         }
-        if let Some(increment) = self.pending.take() {
+        if let Some((poison, increment)) = self.pending.take() {
+            if self.poison != poison {
+                self.body = 0.; self.cap = 0.; self.decoration = 0.; self.smoking = false;
+            }
+            self.poison = poison;
             self.active = true;
             self.body = (self.body + increment).min(self.body.max(1.));
             self.cap = if cap_on {
