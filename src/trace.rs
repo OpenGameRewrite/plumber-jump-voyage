@@ -198,7 +198,7 @@ impl Pose {
                     .into_iter().map(|(name, length, weight)| Layer {
                         name, frame: frame * (length / 80.), rate: a.rate * (length / 80.), weight,
                         covered: false, stage: 0,
-                    }).collect(),
+                    }).filter(|l| l.weight > 0.).collect(),
             };
         }
         if a.name != "Move" {

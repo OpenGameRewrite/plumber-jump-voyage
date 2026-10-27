@@ -111,12 +111,12 @@ impl Player {
             }
             return;
         }
-        if self.clip() == "WaitHot" {
+        if matches!(self.clip(), "WaitHot" | "WaitCold" | "WaitVeryCold") {
             return;
         }
         if self.clip() == "Wait"
-            && step >= RELAX_AFTER_STEPS
             && let Some(clip) = self.wait.area_clip
+            && (step >= RELAX_AFTER_STEPS || clip != "WaitHot")
         {
             // tryChangeAreaAnim starts its clip immediately, then chooses AreaAnimWait.
             self.start_clip(clip);

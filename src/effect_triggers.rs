@@ -695,11 +695,12 @@ impl Tracker {
         for change in changes {
             match change {
                 Change::Start { key, source, .. } => {
-                    let owner = owner(source);
+                    let sand = matches!(key.effect.as_str(), "SandWait" | "SandWalk");
+                    let owner = if sand { "player" } else { owner(source) };
                     if key.effect == "LandLava" {
                         self.lava_started = true;
                     }
-                    if matches!(source, Source::Reaction | Source::Emitted) {
+                    if sand || matches!(source, Source::Reaction | Source::Emitted) {
                         started.push(key.effect.clone());
                     } else {
                         started.push(format!("{}@{owner}", key.effect));
@@ -765,7 +766,7 @@ impl Tracker {
                         .iter()
                         .find(|live| live.key == key)
                         .map_or("model", |live| live.owner);
-                    started.push(format!("{}@{owner}", key.effect));
+                    started.push(if owner == "player" {key.effect.clone()} else {format!("{}@{owner}", key.effect)});
                 }
             }
         }

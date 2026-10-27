@@ -282,6 +282,7 @@ impl Player {
             };
             if self.in_sand_state()
                 || self.in_damage_state()
+            || self.run_nerve == RunNerve::WallPush && matches!(self.mode, Move::Walk | Move::Run)
                 || matches!(
                     self.mode,
                     Move::SlopeSlide
@@ -361,6 +362,7 @@ impl Player {
     fn keeps_velocity_at_walls(&self) -> bool {
         self.burning()
             || self.in_damage_state()
+            || self.run_nerve == RunNerve::WallPush && matches!(self.mode, Move::Walk | Move::Run)
             || matches!(self.mode, Move::WallSlide | Move::SlopeSlide | Move::Swim)
             || self.wall_keep_applies()
     }

@@ -62,6 +62,7 @@ impl Player {
     }
 
     pub fn fire_sub_steps(&self) -> Option<u32> {
+        if self.mode == Move::Idle && matches!(self.anim.name, "WaitCold" | "WaitVeryCold") { return Some(self.wait.steps); }
         if self.recovering() {
             // The probe observes the RecoveryDead child of Abyss, whose nerve
             // counter spans Start/Recovery/Fall, rather than its inner phase.

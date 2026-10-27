@@ -232,10 +232,11 @@ fn colors(
 pub fn interp_frames(name: &str, _from: &str) -> f32 {
     match name {
         "JumpInterp" | "JumpReverseInterp" => 3.,
-        "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
+        "SandWait" | "SandWalk" | "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         // PlayerAnimation/AnimInterp.byml.
-        "DeadFall" | "WaitHot" | "DamageWait" | "TractorBubbleWait" => 10.,
+        "DeadFall" | "WaitHot" | "WaitCold" | "DamageWait" | "TractorBubbleWait" => 10.,
+        "WaitVeryCold" => 7.,
         "TractorBubbleStart" | "TractorBubbleEnd" => 5.,
         "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
         | "SquatWait" | "SwimLand" | "SwimStand" => 3.,
@@ -340,7 +341,7 @@ impl<P: Default + Posed> Blend<P> {
 pub fn looping(name: &str) -> bool {
     matches!(
         name,
-        "SandWait" | "SandWalk" | "SandWaitNormal" | "SandWaitStrong" | "Wait"
+        "Push" | "WaitCold" | "WaitVeryCold" | "SandWait" | "SandWalk" | "SandWaitNormal" | "SandWaitStrong" | "Wait"
             | "WaitHot"
             | "TractorBubbleWait"
             | "DamageWait"

@@ -97,7 +97,7 @@ impl Player {
     }
     fn sand_ground_appear(&mut self) {
         let up = self.collided_ground_normal();
-        let from = if self.is_just_land() { Vec3::Y } else { self.sand.normal };
+        let from = if self.is_just_land() { Vec3::Y } else { up };
         self.v = pose_math::along_vector_normal_h(self.v, from, up) - up * GRAVITY_MOVE;
         self.sand.normal = up;
         self.sand.ground.reset(verticalize_vec(up, self.v), self.pose_axes().1, up);
@@ -202,6 +202,7 @@ impl Player {
         }
     }
     fn sand_end_ground(&mut self) {
+        if self.is_just_land() { self.events.push(Fx::Land { hard: false }); }
         if self.is_move() {
             self.go(Move::Walk, "Move");
             self.v = pose_math::along_vector_normal_h(self.v, Vec3::Y, self.collided_ground_normal()) - self.collided_ground_normal()*GRAVITY_MOVE;
@@ -248,7 +249,9 @@ impl Player {
             let n=length(tangent); if n>max_h && n>0. {tangent *= max_h/n;}
             self.v = parallel+tangent;
         }
+        let mut surface = false;
         if self.is_collided_ground() && self.sand_floor() {
+            surface = true;
             self.sand.safe = false;
             let pos = self.position_cm();
             let ground = scene.mesh.as_ref().map_or(self.collider.ground_position(), |m| m.relative_vec(self.collider.ground_position()));
@@ -264,11 +267,12 @@ impl Player {
             let hit = scene.mesh.as_ref().and_then(|mesh| crate::collider::first_strike(mesh,self.position_cm()+Vec3::Y*self.sand.depth,Vec3::NEG_Y*self.sand.depth,crate::collider::FaceFilter::Any)
                 .filter(|hit|mesh.codes_of(hit.triangle).floor=="SandSink"));
             if let Some(hit)=hit {
+                surface = true;
                 self.sand.depth = (hit.position.y-self.position_cm().y-self.sand.surface_offset).max(0.).min(self.sand.depth);
             } else { self.sand.safe = self.sand.depth>0.; self.sand.depth=0.; }
         } else { self.sand.safe = self.sand.depth>0.; self.sand.depth=0.; }
         if self.sand.depth.abs()<=0.001 {self.sand.safe=true;}
-        self.sand.effect = if self.sand.depth>0. && self.sand.depth+self.sand.surface_offset<HEIGHT {
+        self.sand.effect = if surface && self.sand.depth+self.sand.surface_offset<HEIGHT {
             Some(if self.is_move(){"SandWalk"}else{"SandWait"})
         } else { None };
         self.sand.called=self.sand.effect.is_some();

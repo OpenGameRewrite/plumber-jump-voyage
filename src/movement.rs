@@ -331,6 +331,7 @@ mod vector_lib;
 mod wait;
 #[path = "movement/wall_air.rs"]
 mod wall_air;
+mod wall_push;
 #[path = "movement/wall_along.rs"]
 mod wall_along;
 #[path = "movement/wall_slide.rs"]
@@ -363,6 +364,7 @@ const SLERP_QUAT_RATE: f32 = 0.15;
 enum RunNerve {
     Run,
     RunAfterTurn,
+    WallPush,
     Brake,
     Turn,
     Pivot,
@@ -1164,6 +1166,7 @@ pub struct Player {
     camera_yaw: f32,
     jump_held_frames: u32,
     run_frames: u32,
+    wall_push_counter: u32,
     after_turn: u32,
     quick_turn: u32,
     catch_window: u32,
@@ -1399,6 +1402,7 @@ impl Default for Player {
             camera_yaw: 0.,
             jump_held_frames: 0,
             run_frames: 0,
+            wall_push_counter: 0,
             after_turn: 0,
             quick_turn: 0,
             catch_window: 0,
@@ -2162,7 +2166,7 @@ impl Player {
                         | Move::Dead
                         | Move::AbyssFall
                         | Move::DamageDead
-                        | Move::DamageSwimDead
+                        | Move::DamageSwimDead | Move::SandDead
                 )
             })
         {
@@ -2188,7 +2192,7 @@ impl Player {
             self.mode = mode;
             if matches!(
                 mode,
-                Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead
+                Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead | Move::SandDead
             ) {
                 // The recorded state is the death-area fall: the actor is dead (health 0).
                 self.damage.hp = 0;
@@ -2233,7 +2237,7 @@ impl Player {
             self.frame = steps;
         }
         if let Some(steps) = s.sub_steps {
-            if self.burning() || self.is_dead() {
+            if self.burning() || self.is_dead() || self.in_sand_state() {
                 self.frame = steps;
             }
             self.set_wait_steps(steps);
@@ -2748,6 +2752,7 @@ impl Player {
         if !self.nerve.deferred {
             self.run_state(&o, scene);
             self.judge_sand_entry();
+            self.judge_wall_push(scene);
             self.judge_fall();
             self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
@@ -2849,7 +2854,7 @@ impl Player {
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
         self.update_ground_height(scene);
-        if self.mode == Move::Idle && self.nerve.step == 0 {
+        if self.mode == Move::Idle && (self.nerve.step == 0 || self.wait.area_clip.is_none()) {
             self.wait.area_clip = scene.mesh.as_ref().and_then(|m| {
                 m.temperature
                     .iter()
@@ -3081,6 +3086,8 @@ impl Player {
             // judges that leave it (the run, the jump) come after.
             self.wait_pose();
             self.stand(o);
+        } else if self.run_nerve == RunNerve::WallPush {
+            self.wall_push_step(o);
         } else {
             self.run_step(o);
         }
@@ -3459,7 +3466,8 @@ impl Player {
                 let front = self.facing;
                 self.pivot.reset(front);
             }
-            RunNerve::Run | RunNerve::RunAfterTurn => {}
+            RunNerve::WallPush => { self.joints.run.stopped(); self.cycle.effect=None; }
+            RunNerve::Run | RunNerve::RunAfterTurn => { self.wall_push_counter=0; }
         }
     }
     /// `PlayerStateRunHakoniwa2D3D::isEnableLookAt` hands `Run3D` to the base run state's own
@@ -3467,7 +3475,7 @@ impl Player {
     /// turn may look; the turn and the pivot (`TurnPoint`) may not. The nerve counts from the
     /// step that chooses it (the keeper reads it in that step, a step before the clip starts).
     fn run_nerve_blocks_look(&self) -> bool {
-        self.mode == Move::Turn
+        self.mode == Move::Turn || matches!(self.mode, Move::Walk | Move::Run) && self.run_nerve == RunNerve::WallPush
     }
     /// The run state dies and the actor chooses the standing state.
     fn end_run(&mut self) {
