@@ -239,17 +239,17 @@ pub type ControllerState = (
     look_at::LookAt,
     hip_spring::HipSpring,
 );
+mod abyss;
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
-pub mod death;
-mod abyss;
-mod entrance_camera;
-mod recovery_dead;
-mod safety;
 mod damage;
 mod damage_fire;
+pub mod death;
+mod entrance_camera;
 #[path = "movement/ground.rs"]
 mod ground;
+mod recovery_dead;
+mod safety;
 mod stain;
 use damage::Damage;
 use damage_fire::FireControl;
@@ -2040,7 +2040,8 @@ impl Player {
     /// The swim state has a nerve the actor chose after the state's update this step (the cap
     /// throw): the trace shows the old one and a step counter of -1.
     pub fn nerve_chosen_late(&self) -> bool {
-        self.death.abyss_pending || self.mode == Move::Swim && self.swim.chosen_after_update.is_some()
+        self.death.abyss_pending
+            || self.mode == Move::Swim && self.swim.chosen_after_update.is_some()
     }
     /// Steps the actor nerve has executed, as the game's `state_step` counts
     /// them: 0 in the frame a nerve is chosen, 1 after its first step.
@@ -2756,12 +2757,16 @@ impl Player {
         self.update_ground_height(scene);
         if self.mode == Move::Idle && self.nerve.step == 0 {
             self.wait.area_clip = scene.mesh.as_ref().and_then(|m| {
-                m.temperature.iter().rev().find(|(a, _)| a.volume_at(m.to_game_vec(self.position_cm())).is_some()).and_then(|(_, t)| match t {
-                    2.. => Some("WaitHot"),
-                    -2 => Some("WaitCold"),
-                    i32::MIN..=-3 => Some("WaitVeryCold"),
-                    _ => None,
-                })
+                m.temperature
+                    .iter()
+                    .rev()
+                    .find(|(a, _)| a.volume_at(m.to_game_vec(self.position_cm())).is_some())
+                    .and_then(|(_, t)| match t {
+                        2.. => Some("WaitHot"),
+                        -2 => Some("WaitCold"),
+                        i32::MIN..=-3 => Some("WaitVeryCold"),
+                        _ => None,
+                    })
             });
         }
         match self.mode {
@@ -2782,7 +2787,9 @@ impl Player {
             }
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
-            Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => self.recovery_step(&o, scene),
+            Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
+                self.recovery_step(o, scene)
+            }
             Move::LongJump => self.long_jump_air(o),
             Move::Backflip => self.back_jump_air(o),
             Move::Sideflip => self.turn_jump_air(o),
@@ -4967,7 +4974,10 @@ impl Player {
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
         // DeadFire disables movement collision; retain the last contact report.
-        if matches!(self.mode, Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel) {
+        if matches!(
+            self.mode,
+            Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel
+        ) {
             self.move_without_collision(scene);
             return;
         }

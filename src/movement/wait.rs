@@ -104,8 +104,13 @@ impl Player {
     /// the landing hands over to `Wait`, and each stage of the idle sequence
     /// chooses the next one.
     pub(super) fn wait_nerve(&mut self, step: u32) {
-        if self.clip() == "WaitHot" { return; }
-        if self.clip() == "Wait" && step >= RELAX_AFTER_STEPS && let Some(clip) = self.wait.area_clip {
+        if self.clip() == "WaitHot" {
+            return;
+        }
+        if self.clip() == "Wait"
+            && step >= RELAX_AFTER_STEPS
+            && let Some(clip) = self.wait.area_clip
+        {
             // tryChangeAreaAnim starts its clip immediately, then chooses AreaAnimWait.
             self.start_clip(clip);
             self.wait.steps = 0;

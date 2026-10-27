@@ -31,7 +31,9 @@ impl Player {
         self.death.abyss_pending = true;
     }
     pub(super) fn start_pending_abyss(&mut self) {
-        if !std::mem::take(&mut self.death.abyss_pending) { return; }
+        if !std::mem::take(&mut self.death.abyss_pending) {
+            return;
+        }
         self.nerve.clear();
         self.nerve.actor = "Abyss";
         self.nerve.step = 0;

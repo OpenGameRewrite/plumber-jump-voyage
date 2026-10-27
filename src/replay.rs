@@ -521,12 +521,23 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 return point["id"].as_str() == Some(id);
             }
             let position = point["position"].as_array();
-            point["kind"].as_str() == Some("stage") && spawn.zip(position).is_some_and(|(a,b)| a[0] == b[0] && a[2] == b[2])
+            point["kind"].as_str() == Some("stage")
+                && spawn
+                    .zip(position)
+                    .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
         });
         if let Some(point) = point {
-            let p = point["position"].as_array().ok_or("restart position missing")?;
-            let absolute = Vec3::new(p[0].as_f64().ok_or("restart x")? as f32, p[1].as_f64().ok_or("restart y")? as f32, p[2].as_f64().ok_or("restart z")? as f32);
-            let yaw = point["rotate"][1].as_f64().ok_or("restart rotation missing")? as f32;
+            let p = point["position"]
+                .as_array()
+                .ok_or("restart position missing")?;
+            let absolute = Vec3::new(
+                p[0].as_f64().ok_or("restart x")? as f32,
+                p[1].as_f64().ok_or("restart y")? as f32,
+                p[2].as_f64().ok_or("restart z")? as f32,
+            );
+            let yaw = point["rotate"][1]
+                .as_f64()
+                .ok_or("restart rotation missing")? as f32;
             player.death.restart_pose = Some((mesh.relative_vec(absolute) * 0.01, yaw));
         }
         player.death.external_reload = true;
@@ -543,8 +554,12 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         .camera
         .or(options.lockstep)
         .and_then(TraceFile::floor_material);
-    let mut recorder =
-        Recorder::new(options.table.clone(), options.library.clone(), floor.clone()).with_stage(options.geometry.clone());
+    let mut recorder = Recorder::new(
+        options.table.clone(),
+        options.library.clone(),
+        floor.clone(),
+    )
+    .with_stage(options.geometry.clone());
     let settle = Span {
         frames: 0,
         stick: Vec2::ZERO,
@@ -617,10 +632,16 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         }
         // The probe stops sampling Mario across scene teardown/loading. A boot-clock gap
         // is an external scene boundary, not extra scripted player updates or an HP sample.
-        if frame > 0 && player.is_dead() && let Some(game) = recorded {
+        if frame > 0
+            && player.is_dead()
+            && let Some(game) = recorded
+        {
             let previous_frame = game.number(frame - 1, "game_frame");
             let current_frame = game.number(frame, "game_frame");
-            if previous_frame.zip(current_frame).is_some_and(|(a,b)| b > a + 1.) {
+            if previous_frame
+                .zip(current_frame)
+                .is_some_and(|(a, b)| b > a + 1.)
+            {
                 if !player.death.ready() {
                     return Err(format!("scene reload at {frame} before death-wipe judge"));
                 }
@@ -629,7 +650,12 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 }
                 let previous_clip = player.anim.name;
                 player.restart_after_death(&course);
-                recorder = Recorder::new(options.table.clone(), options.library.clone(), floor.clone()).with_stage(options.geometry.clone());
+                recorder = Recorder::new(
+                    options.table.clone(),
+                    options.library.clone(),
+                    floor.clone(),
+                )
+                .with_stage(options.geometry.clone());
                 recorder.scene_started(previous_clip);
             }
         }

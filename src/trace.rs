@@ -350,7 +350,11 @@ impl Recorder {
     pub fn scene_started(&mut self, previous_clip: &'static str) {
         self.main_clip = "Wait";
         self.stale_clip = previous_clip;
-        self.restart = Some((previous_clip, 0, interp_frames("Wait", previous_clip) as u32));
+        self.restart = Some((
+            previous_clip,
+            0,
+            interp_frames("Wait", previous_clip) as u32,
+        ));
     }
 
     /// The frames recorded so far only warmed the animation state up: the next row is the first
@@ -883,7 +887,11 @@ impl Recorder {
         cells.text(&p.floor_normal().map_or(String::new(), |n| {
             format!("{}/{}/{}", num(n.x), num(n.y), num(n.z))
         }));
-        cells.int(if p.death.abyss_pending_for_trace() { -1 } else { p.state_frames() as i64 });
+        cells.int(if p.death.abyss_pending_for_trace() {
+            -1
+        } else {
+            p.state_frames() as i64
+        });
         // The sub-nerve's own step counter (see `last_state`).
         let label = p.nerve_name().name;
         self.sub_steps = match self.last_state {
@@ -1207,7 +1215,10 @@ impl TraceFile {
         let mut trace = Self::parse(&text)?;
         let meta = std::path::Path::new(path).with_extension("meta.json");
         if meta.exists() {
-            trace.metadata = serde_json::from_str(&std::fs::read_to_string(&meta).map_err(|e| format!("{}: {e}", meta.display()))?).map_err(|e| format!("{}: {e}", meta.display()))?;
+            trace.metadata = serde_json::from_str(
+                &std::fs::read_to_string(&meta).map_err(|e| format!("{}: {e}", meta.display()))?,
+            )
+            .map_err(|e| format!("{}: {e}", meta.display()))?;
         }
         Ok(trace)
     }
@@ -1228,7 +1239,10 @@ impl TraceFile {
                     .collect()
             })
             .collect();
-        Ok(Self { rows, metadata: serde_json::Value::Null })
+        Ok(Self {
+            rows,
+            metadata: serde_json::Value::Null,
+        })
     }
     /// A non-empty cell.
     pub fn cell(&self, row: usize, column: &str) -> Option<&str> {

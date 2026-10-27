@@ -26,7 +26,7 @@ impl Kind {
 enum Miss {
     #[default]
     Playing,
-    Miss,
+    Judging,
     CloseStart(u32),
     CloseWait(u32),
     CloseEnd(u32),
@@ -60,7 +60,9 @@ impl Default for Death {
     }
 }
 impl Death {
-    pub fn abyss_pending_for_trace(&self) -> bool { self.abyss_pending }
+    pub fn abyss_pending_for_trace(&self) -> bool {
+        self.abyss_pending
+    }
     pub fn ready(&self) -> bool {
         self.counter >= self.kind.start()
     }
@@ -73,8 +75,8 @@ impl Death {
         // WipeCloseAppearWaitEnd: each nerve chooses the next one for the next update.
         // WipeMiss's original layout has CloseStart=22 and CloseEnd=28 (pai1 frames).
         self.miss = match self.miss {
-            Miss::Playing if dead => Miss::Miss,
-            Miss::Miss if self.ready() => Miss::CloseStart(0),
+            Miss::Playing if dead => Miss::Judging,
+            Miss::Judging if self.ready() => Miss::CloseStart(0),
             Miss::CloseStart(22) => Miss::CloseWait(0),
             Miss::CloseStart(n) => Miss::CloseStart(n + 1),
             Miss::CloseWait(n) if n >= self.kind.wait() => Miss::CloseEnd(0),
@@ -91,7 +93,7 @@ impl Death {
     /// Presentation adapter; the original uses its animated WipeMiss layout.
     pub fn wipe_alpha(&self) -> f32 {
         match self.miss {
-            Miss::Playing | Miss::Miss => 0.,
+            Miss::Playing | Miss::Judging => 0.,
             Miss::CloseStart(n) => n as f32 / 22.,
             _ => 1.,
         }

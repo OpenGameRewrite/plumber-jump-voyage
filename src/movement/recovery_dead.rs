@@ -42,7 +42,10 @@ fn ease_in_out(x: f32) -> f32 {
 }
 impl Player {
     pub(super) fn recovering(&self) -> bool {
-        matches!(self.mode, Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall)
+        matches!(
+            self.mode,
+            Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall
+        )
     }
     pub fn recovery_bubble(&self) -> bool {
         matches!(self.mode, Move::RecoveryStart | Move::RecoveryTravel)
@@ -52,7 +55,11 @@ impl Player {
     }
     /// Explicit requests (recovery-area links and safe hosts) retain their own normal/gravity.
     pub fn set_safety_point(&mut self, position: Vec3, normal: Vec3, gravity: Vec3) {
-        self.recovery.safety = Some(SafetyPoint { position, normal, gravity });
+        self.recovery.safety = Some(SafetyPoint {
+            position,
+            normal,
+            gravity,
+        });
     }
     pub(super) fn begin_safety_recovery(&mut self) {
         self.damage.hp = self.damage.hp.saturating_sub(1);
@@ -79,14 +86,25 @@ impl Player {
         let height = pose_math::dot(up, vertical);
         let distance = length(horizontal);
         let positive_height = height.max(0.);
-        let duration = (distance.max(positive_height / 0.75) / 7.5).ceil().clamp(60., 120.) as u32;
+        let duration = (distance.max(positive_height / 0.75) / 7.5)
+            .ceil()
+            .clamp(60., 120.) as u32;
         let arch = (distance * 0.75 - positive_height).clamp(300., 1500.);
-        let peak = positive_height + if pose_math::dot(up, safety.gravity) > 0. { 0. } else { arch };
+        let peak = positive_height
+            + if pose_math::dot(up, safety.gravity) > 0. {
+                0.
+            } else {
+                arch
+            };
         let (quadratic, linear) = if peak.abs() < 0.001 {
             (0., height)
         } else {
             let root = (peak * peak - height * peak).sqrt();
-            let t = if height.abs() < 0.001 { 0.5 } else { (peak - root) / height };
+            let t = if height.abs() < 0.001 {
+                0.5
+            } else {
+                (peak - root) / height
+            };
             let coefficient = peak / (t * t);
             (-coefficient, height + coefficient)
         };
@@ -102,7 +120,8 @@ impl Player {
         self.recovery.linear = linear;
         self.recovery.duration = duration;
         self.recovery.rotate_end = rotate_end;
-        self.recovery.rotation = (rotate_end / 30) as f32 * 360. + spin_degrees(pose.up(), -safety.gravity, axis);
+        self.recovery.rotation =
+            (rotate_end / 30) as f32 * 360. + spin_degrees(pose.up(), -safety.gravity, axis);
         self.recovery.pose = pose.calc_quat();
         self.recovery.axis = axis;
         self.recovery.root = pose.up() * 80.;
@@ -119,7 +138,8 @@ impl Player {
                     self.v = Vec3::ZERO;
                     self.events.push(Fx::RecoveryBegin);
                 }
-                let position = self.recovery.start + Vec3::Y * (joint_math::ease_out(rate(self.frame, 0, 30)) * 80.);
+                let position = self.recovery.start
+                    + Vec3::Y * (joint_math::ease_out(rate(self.frame, 0, 30)) * 80.);
                 self.pos = position * UNIT;
                 self.collider_end = Some((self.pos, position));
                 if self.frame >= 45 {
@@ -133,7 +153,8 @@ impl Player {
                 }
                 let r = &self.recovery;
                 let progress = ease_in_out(ease_in_out(rate(self.frame, 0, r.duration)));
-                let rotation = joint_math::ease_out(rate(self.frame, 10, r.rotate_end)) * r.rotation;
+                let rotation =
+                    joint_math::ease_out(rate(self.frame, 10, r.rotate_end)) * r.rotation;
                 let pose = rotate_pose(r.pose, r.axis, rotation * DEGREES_TO_RADIANS);
                 let offset = rotate_vector_degree(-r.root, r.axis, rotation) + r.root;
                 let gravity = self.recovery.safety.expect("valid recovery").gravity;
@@ -148,7 +169,8 @@ impl Player {
                     self.pos = position * UNIT;
                     self.collider_end = Some((self.pos, position));
                     self.v = Vec3::ZERO;
-                    self.collider.reset_expand_check(self.facing.x.atan2(self.facing.z));
+                    self.collider
+                        .reset_expand_check(self.facing.x.atan2(self.facing.z));
                     self.recovery_choose(Move::RecoveryFall);
                 }
             }
@@ -160,7 +182,10 @@ impl Player {
                 self.v += gravity * 3.;
                 if let Some(wall) = self.touched.wall_contact.as_ref().filter(|w| w.at_face) {
                     let normal = wall.normal;
-                    self.set_pose(self.actor_pose().slerp_up_front(-gravity, -normal, 0.4, 180.));
+                    self.set_pose(
+                        self.actor_pose()
+                            .slerp_up_front(-gravity, -normal, 0.4, 180.),
+                    );
                     self.pos -= normal * (10. * UNIT);
                 }
                 if self.grounded && self.is_on_ground_by(self.v) {
@@ -201,7 +226,10 @@ fn spin_degrees(up: Vec3, target_up: Vec3, axis: Vec3) -> f32 {
 fn rotate_vector_degree(v: Vec3, axis: Vec3, degrees: f32) -> Vec3 {
     let half = (degrees * DEGREES_TO_RADIANS) * 0.5;
     let (sine, cosine) = (console_libm::sinf(half), console_libm::cosf(half));
-    pose_math::rotate_by_quat(v, Quat::from_xyzw(axis.x * sine, axis.y * sine, axis.z * sine, cosine))
+    pose_math::rotate_by_quat(
+        v,
+        Quat::from_xyzw(axis.x * sine, axis.y * sine, axis.z * sine, cosine),
+    )
 }
 /// al::scaleVectorDirection (0x924e7c): the part of `v` along `direction` scaled by `scale`.
 fn scale_vector_direction(direction: Vec3, v: Vec3, scale: f32) -> Vec3 {
@@ -241,7 +269,10 @@ mod checks {
         let mut p = Player::spawn_facing(Vec3::new(0., -25., 0.), 0.);
         p.start_in_air();
         p.set_safety_point(Vec3::ZERO, Vec3::Y, Vec3::NEG_Y);
-        assert!(!p.recovery.valid(), "a saved point alone cannot enable recovery");
+        assert!(
+            !p.recovery.valid(),
+            "a saved point alone cannot enable recovery"
+        );
         p.enable_assist_recovery(true);
         assert!(p.recovery.valid());
         p.begin_safety_recovery();
@@ -294,11 +325,19 @@ mod checks {
     #[cfg_attr(test, test)]
     pub(super) fn rotation_oracle() {
         // Cases come from the executable's own routines (local `gen_recovery_cases.py`).
-        let Ok(path) = std::env::var("PJV_RECOVERY_CASES") else { return };
-        let cases: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let Ok(path) = std::env::var("PJV_RECOVERY_CASES") else {
+            return;
+        };
+        let cases: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         for case in cases.as_array().unwrap() {
             let values = |key: &str| -> Vec<f32> {
-                case[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect()
+                case[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_f64().unwrap() as f32)
+                    .collect()
             };
             let vec3 = |key: &str| {
                 let v = values(key);
@@ -308,26 +347,42 @@ mod checks {
             let (got, expected): (Vec<f32>, Vec<f32>) = match case["f"].as_str().unwrap() {
                 "rotate_quat" => {
                     let q = values("q");
-                    let pose = rotate_pose(Quat::from_xyzw(q[0], q[1], q[2], q[3]), vec3("axis"), scalar("angle"));
+                    let pose = rotate_pose(
+                        Quat::from_xyzw(q[0], q[1], q[2], q[3]),
+                        vec3("axis"),
+                        scalar("angle"),
+                    );
                     (pose.to_array().to_vec(), values("out"))
                 }
                 "rotate_vec" => (
-                    rotate_vector_degree(vec3("v"), vec3("axis"), scalar("deg")).to_array().to_vec(),
+                    rotate_vector_degree(vec3("v"), vec3("axis"), scalar("deg"))
+                        .to_array()
+                        .to_vec(),
                     values("out"),
                 ),
                 "scale_dir" => (
-                    scale_vector_direction(vec3("dir"), vec3("v"), scalar("scale")).to_array().to_vec(),
+                    scale_vector_direction(vec3("dir"), vec3("v"), scalar("scale"))
+                        .to_array()
+                        .to_vec(),
                     values("out"),
                 ),
                 "spin_angle" => (
-                    vec![ground_pose::calc_angle_on_plane_degree(vec3("frm"), vec3("to"), vec3("axis"))],
+                    vec![ground_pose::calc_angle_on_plane_degree(
+                        vec3("frm"),
+                        vec3("to"),
+                        vec3("axis"),
+                    )],
                     vec![scalar("out")],
                 ),
                 other => panic!("unknown case {other}"),
             };
             for (actual, expected) in got.into_iter().zip(expected) {
                 // spin_angle's oracle is the wrapped angle; compare it after the same wrap.
-                let actual = if case["f"] == "spin_angle" { (actual + 360.) % 360. + 0. } else { actual };
+                let actual = if case["f"] == "spin_angle" {
+                    (actual + 360.) % 360. + 0.
+                } else {
+                    actual
+                };
                 assert_eq!(actual.to_bits(), expected.to_bits(), "{case}");
             }
         }

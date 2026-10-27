@@ -1645,7 +1645,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x311f95b16b519847,
+        hash, 0xa18a24d23f37b89,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]
