@@ -111,6 +111,8 @@ impl Player {
             .slerp_up_front(pose_up, dir, 1., t::HILL_POSE_DEGREE_MAX);
         self.set_pose(stored);
         self.throwing.dir = Some(dir);
+        // The cap is handed the up axis the direction was found across.
+        self.throwing.up = (up != UP).then_some(up);
     }
 
     /// The cap leaves on the throw frame (`PlayerSpinCapAttack::startCapThrow`).

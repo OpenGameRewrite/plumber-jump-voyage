@@ -114,6 +114,9 @@ pub struct Frame<'a> {
     /// Effects whose emit call the controller makes in this very frame (the
     /// roll calls its effect every frame it is on the ground).
     pub calls: &'a [&'a str],
+    /// Effects the controller starts and deletes within this very frame (the cap's resting
+    /// effect on the surface in the first step of its return): the original logs both.
+    pub flashes: &'a [&'a str],
     /// The main clip looped back to its start in this frame: its entries fire
     /// again, as they do when a clip starts.
     pub wrapped: bool,
@@ -404,6 +407,22 @@ impl Triggers {
                 });
             }
         }
+        for name in input.flashes {
+            if self.known.contains(*name) && !wanted.contains(name) {
+                let key = Self::code_key(name);
+                let source = if self.cap_owned.contains(*name) {
+                    Source::CapCode
+                } else {
+                    Source::Code
+                };
+                changes.push(Change::Start {
+                    key: key.clone(),
+                    source,
+                    once: false,
+                });
+                changes.push(Change::Stop { key });
+            }
+        }
         let dropped: Vec<Key> = self
             .running
             .iter()
@@ -446,14 +465,12 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
         wanted.push("Rolling");
     }
     // The effects of the cap skimming and resting on the water's surface (its own code).
-    if let Some(cap) = &p.cap {
-        let (skimming, resting) = cap.water_effects();
-        if skimming {
-            wanted.push("FlyWaterSurface");
-        }
-        if resting {
-            wanted.push("StayWaterSurfaceR");
-        }
+    let (skimming, resting) = p.cap_water_effects();
+    if skimming {
+        wanted.push("FlyWaterSurface");
+    }
+    if resting {
+        wanted.push("StayWaterSurfaceR");
     }
     // The rolling throw's grounding effect (the cap's own code starts it).
     if p.cap.as_ref().is_some_and(|cap| cap.grounding_effect().0) {
@@ -467,6 +484,18 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
         wanted.push("StateWet");
     }
     wanted
+}
+
+/// The effects the controller starts and deletes in the same frame.
+pub fn code_flashes(p: &Player) -> Vec<&'static str> {
+    let mut flashes = vec![];
+    if p.cap_water_flashes().1 {
+        flashes.push("StayWaterSurfaceR");
+    }
+    if p.cap_water_flashes().0 {
+        flashes.push("FlyWaterSurface");
+    }
+    flashes
 }
 
 /// The effects the controller emits by name in this frame: the water's splash.
@@ -624,6 +653,7 @@ impl Tracker {
             code: &code,
             emitted: &emitted,
             calls: &code_calls(p),
+            flashes: &code_flashes(p),
             wrapped: p.clip_wrapped,
         });
         let mut started = vec![];
@@ -764,6 +794,7 @@ pub fn self_check() {
         code: &[],
         emitted: &[],
         calls: &[],
+        flashes: &[],
         wrapped: false,
     };
     assert!(triggers.evaluate(&frame("Wait", 1, 0.)).is_empty());

@@ -12,7 +12,7 @@ use crate::{
     effect_render::{Painter, ParticleMaterial, View},
     effect_sim::{Attach, Draw, Flat, Instance, Pose},
     effect_triggers::{
-        Change, Frame, Key, Triggers, cap_clip, code_calls, code_driven, reactions_of,
+        Change, Frame, Key, Triggers, cap_clip, code_calls, code_driven, code_flashes, reactions_of,
     },
     fx::OriginalEffects,
     movement::{Course, Fx, Player},
@@ -337,6 +337,7 @@ fn tick(
         code: &code,
         emitted: &emitted,
         calls: &code_calls(&p),
+        flashes: &code_flashes(&p),
         wrapped: p.clip_wrapped,
     });
     // Joint positions of the model, when it has them.

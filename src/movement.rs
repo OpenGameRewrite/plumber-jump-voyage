@@ -241,6 +241,8 @@ mod t {
 /// left/right throw gesture sets one, and the rewrite's input has none.
 const BUTTON_THROW_SWING_ANGLE: f32 = 0.;
 
+#[path = "movement/cap_ground.rs"]
+pub(crate) mod cap_ground;
 #[path = "movement/cap_pose.rs"]
 pub(crate) mod cap_pose;
 #[path = "movement/cap_rolling.rs"]
@@ -946,6 +948,9 @@ struct ThrowControl {
     in_air: bool,
     /// The direction the cap leaves along, fixed on the state's first step.
     dir: Option<Vec3>,
+    /// The up axis the cap is handed with it, when it is not the world's (the swim's cap throw on
+    /// a slope: the ground's normal).
+    up: Option<Vec3>,
 }
 /// A partial animation playing on top of the main clip (`PlayerAnimator::startSubAnim`).
 /// While one plays the main clip's frame is counted by the animator itself
@@ -1176,6 +1181,8 @@ pub struct Player {
     /// Axes of the joints as the model last posed them (`al::getJointMtxPtr`, which the swim
     /// nerves read in their first step); the pose calculation keeps them.
     model_axes: swim_dive_in::ModelAxes,
+    /// The water effects of the cap that was caught in this step (they end in the next).
+    cap_water_left: (bool, bool),
     /// The head slide's flag that the `DiveInWater` judge passed during the slide
     /// (`PlayerStateHeadSliding::isEnableDiveInWater`).
     head_slide_dive_in: bool,
@@ -1380,6 +1387,7 @@ impl Default for Player {
             material_puddle: false,
             water_finder: crate::water::SurfaceFinder::default(),
             model_axes: swim_dive_in::ModelAxes::default(),
+            cap_water_left: (false, false),
             head_slide_dive_in: false,
             step_phase: 0.,
             landing_speed: 0.,
@@ -1920,6 +1928,22 @@ impl Player {
     pub fn model_frame(&self) -> Option<f32> {
         (self.sub.active && self.sub.name == self.anim.name).then_some(self.sub.frame)
     }
+    /// The cap's surface effects as they run (skimming, resting).
+    pub fn cap_water_effects(&self) -> (bool, bool) {
+        match &self.cap {
+            Some(cap) => cap.water_effects(),
+            // The cap that arrived this frame is gone from the player, its effects end with its
+            // next control.
+            None if self.catching == Some(-1) => self.cap_water_left,
+            None => (false, false),
+        }
+    }
+    /// The cap's surface effects that were started and deleted within this step.
+    pub fn cap_water_flashes(&self) -> (bool, bool) {
+        self.cap
+            .as_ref()
+            .map_or((false, false), |cap| cap.water_flashes())
+    }
     /// What the trace shows of the cap: its nerve, position (metres) and clip.
     /// Besides the flight this covers the spin attack before the throw frame
     /// and the catch after the arrival, when the cap sits on the player.
@@ -2241,6 +2265,7 @@ impl Player {
             air: !self.grounded,
             continuous: self.throwing.continuous,
             spiral_side: spiral_side_of(self.throwing.kind, self.throw_clip.ends_with("Left")),
+            up: Vec3::Y,
         };
         if s.throw.is_some_and(|hint| hint.launch) {
             self.launch = Some(launch);
@@ -4397,6 +4422,7 @@ impl Player {
         self.setup_attack_info();
 
         self.throwing.kind = Some(kind);
+        self.throwing.up = None;
         self.throwing.in_air = air;
         let name = throw_clip(
             kind,
@@ -4594,18 +4620,21 @@ impl Player {
         }
     }
     fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {
+        let dir = self.throwing.dir.unwrap_or(self.facing);
+        // A throw with an up axis of its own flies along the direction as given (it lies across
+        // that axis); the others along the horizontal.
+        let (front, up) = match self.throwing.up {
+            Some(up) => (dir, up),
+            None => (dir.with_y(0.).normalize_or(Vec3::NEG_Z), Vec3::Y),
+        };
         Launch {
-            front: self
-                .throwing
-                .dir
-                .unwrap_or(self.facing)
-                .with_y(0.)
-                .normalize_or(Vec3::NEG_Z),
+            front,
             kind,
             left: false,
             air: !self.grounded,
             continuous,
             spiral_side: spiral_side_of(Some(kind), !self.spin_clockwise),
+            up,
         }
     }
     /// `HackCap::startThrow`: the cap starts flying on the next frame.
@@ -4643,6 +4672,7 @@ impl Player {
             );
             self.cap_serial = cap.clip_serial();
             self.cap = Some(cap);
+            self.throwing.up = None;
             return;
         }
         let Some(cap) = &mut self.cap else {
@@ -4693,6 +4723,7 @@ impl Player {
                 CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {
+                    self.cap_water_left = cap.water_effects();
                     self.catch_window = t::CAP_CATCH_WINDOW;
                     if !self.catch_reacts() {
                         // The cap goes on the head (`putOnCapPlayer`): no catch
