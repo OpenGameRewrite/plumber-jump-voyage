@@ -822,6 +822,17 @@ area-animation sub-state); the free replays pass every comparable column.
 
 ### Damage Life/Swim environment corrections
 
+SandSink episodes use the same static-floor entry proof as damage: the entry
+sample or its predecessor must report grounded `gcode=SandSink`, a static
+collision host and its base matching exported static triangles with that
+floor/material code. SandDesert material alone is insufficient. A new entry
+after Slide needs a new proof. The episode includes SandSink/Dead and a direct
+transition to Dead; only probe-tagged player-death coins during Dead receive
+the existing coin exception. Missing geometry/replay, moving hosts, ordinary
+coins and handled actor messages remain refused. SandGeyserRaise is still an
+actor message and has no exception. `environment_rule.self_check()` covers
+these boundaries.
+
 The legacy recorder's `trace_tools.env_report` starts horizontal displacement at
 its teleport origin. Its `FIDP` placement/preroll samples are subsequent player
 updates, numbered -N..-1, before the scripted sample 0. The environment judge

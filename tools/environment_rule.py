@@ -269,10 +269,11 @@ class Judge:
         for f, row in sorted(rows.items()):
             family = row.get("state", "").split("/")[0]
             if family != previous_family:
-                cause = cause if family == "Dead" and previous_family in ("Damage", "DamageFire", "Abyss") else None
-                if family in ("DamageFire", "Damage", "DamageSwim", "Dead") and cause is None:
+                cause = cause if family == "Dead" and previous_family in ("Damage", "DamageFire", "Abyss", "SandSink") else None
+                if family in ("DamageFire", "Damage", "DamageSwim", "SandSink", "Dead") and cause is None:
                     codes = ({"DamageFire"} if family == "DamageFire" else {"Needle", "Poison"}
-                             if family == "Damage" else {"Needle"} if family == "DamageSwim" else {"Poison"})
+                             if family == "Damage" else {"Needle"} if family == "DamageSwim"
+                             else {"SandSink"} if family == "SandSink" else {"Poison"})
                     for g in (f - 1, f):
                         sample = rows.get(g, {})
                         flags = key_values(sample.get("collision", ""))
@@ -709,6 +710,38 @@ def self_check():
     # Only explicit origin + positive actor identity during a proved Dead state
     # exempts a player attack overlap. Legacy/placed/reused coins fail closed.
     coin = "k=a;w=player;s=Body:1;o=Body:12;h=Coin;c=Coin;m=;r=;actor=7;origin=player_death_coin"
+    # SandSink is caused by its floor code, including re-entry after Slide.
+    # Its child Dead inherits the proof; tagged coins are still Dead-only.
+    sand_mesh = dict(mesh, attributes=[{"FloorCode": "SandSink", "MaterialCode": "SandDesert"}])
+    sand_evidence = dict(geometry=sand_mesh, start=[0, 0, 0])
+    sand = rows(hit_hosts=static_floor,
+                state=lambda i: "Run/Run" if i == 0 else "SandSink/Dead" if i >= 4 else "SandSink/Wait",
+                collision="ground=1;gcode=SandSink;gmat=SandDesert")
+    assert not judge_run(sand, geometry, listed, **sand_evidence).refused
+    assert judge_run(sand, flat, listed, **sand_evidence).refused
+    assert judge_run(sand, geometry, listed).refused
+    for code in ("Ground", "Slide", "DamageFire"):
+        unproved = {f: dict(r, collision=f"ground=1;gcode={code};gmat=SandDesert") for f, r in sand.items()}
+        assert judge_run(unproved, geometry, listed, **sand_evidence).refused
+    for contact in (coin.replace("origin=player_death_coin", "origin=unknown"), push,
+                    push.replace("PushToPlayer", "SandGeyserRaise")):
+        touched = {f: dict(r, contacts=contact if f == 5 else "") for f, r in sand.items()}
+        assert 5 in judge_run(touched, geometry, listed, **sand_evidence).refused
+    touched = {f: dict(r, contacts=coin) for f, r in sand.items()}
+    assert set(judge_run(touched, geometry, listed, **sand_evidence).refused) == {0, 1, 2, 3}
+    moving = {f: dict(r, hit_hosts=r["hit_hosts"].replace("/15/1/0/", "/15/1/1/")) for f, r in sand.items()}
+    assert judge_run(moving, geometry, listed, **sand_evidence).refused
+    separate_dead = {f: dict(r, state="Dead/Dead" if f >= 4 else r["state"], contacts=coin if f >= 4 else "")
+                     for f, r in sand.items()}
+    assert not judge_run(separate_dead, geometry, listed, **sand_evidence).refused
+    reentry = {f: dict(r, state="Slide/Slide" if f == 3 else r["state"]) for f, r in sand.items()}
+    assert not judge_run(reentry, geometry, listed, **sand_evidence).refused
+    unproved_reentry = {f: dict(r, collision="ground=1;gcode=Ground;gmat=SandDesert" if f >= 3 else r["collision"])
+                        for f, r in reentry.items()}
+    assert 4 in judge_run(unproved_reentry, geometry, listed, **sand_evidence).refused
+    geyser = {f: dict(r, state="SandGeyser/Wait", contacts=push.replace("PushToPlayer", "SandGeyserRaise"))
+              for f, r in sand.items()}
+    assert judge_run(geyser, geometry, listed, **sand_evidence).refused
     touched = {f: dict(r, contacts=coin) for f, r in g.items()}
     v = judge_run(touched, geometry, listed, **evidence)
     assert set(v.refused) == {0, 1, 2, 3}, v.refused
