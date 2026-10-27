@@ -165,6 +165,9 @@ pub struct Keeper {
     /// Whether the keeper has arrows (`CollisionShapeKeeper::mHasShapeArrow`):
     /// the player's has, Cappy's does not, and the floor rules differ.
     has_arrow: bool,
+    /// Where the form hangs its arrows from the feet (the ledge and pole forms move them);
+    /// the sand's ground offset comes on top of it.
+    arrows_at: Vec3,
 }
 impl Keeper {
     pub fn new(form: Form) -> Self {
@@ -227,6 +230,7 @@ impl Keeper {
             shapes,
             check_step,
             has_arrow: true,
+            arrows_at,
         }
     }
 
@@ -244,6 +248,7 @@ impl Keeper {
             bounding_radius: enclosing_radius(&shapes),
             shapes,
             has_arrow: false,
+            arrows_at: Vec3::ZERO,
         }
     }
 }
@@ -1175,9 +1180,10 @@ impl PlayerCollider {
     /// Only arrows move; body spheres stop supporting the ground while sunk.
     pub fn set_ground_offset(&mut self, depth: f32) {
         self.ground_support = depth.abs() <= 0.001;
+        let arrows_at = self.keeper.arrows_at;
         for shape in &mut self.keeper.shapes {
             if let Shape::Arrow { start, index, .. } = shape {
-                *start = ring_arrow_start(*index, Vec3::Y * depth);
+                *start = ring_arrow_start(*index, arrows_at + Vec3::Y * depth);
             }
         }
         self.keeper.bounding_radius = enclosing_radius(&self.keeper.shapes);
