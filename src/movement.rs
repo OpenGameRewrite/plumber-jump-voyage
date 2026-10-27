@@ -2097,9 +2097,12 @@ impl Player {
         // A live injected snapshot overrides our dead status. Guess: health is not exported,
         // so a stage restart in lockstep initializes the standard three-HP keeper. This is
         // snapshot reconstruction only; free replay deliberately does not simulate respawn.
+        // (A fall into a death area that was just decided keeps its health: its nerve starts
+        // in the step that follows.)
         if self.is_dead()
+            && !self.death.abyss_pending_for_trace()
             && s.mode
-                .is_some_and(|m| !matches!(m, Move::FireDead | Move::Dead))
+                .is_some_and(|m| !matches!(m, Move::FireDead | Move::Dead | Move::AbyssFall))
         {
             self.damage = Damage::default();
             self.soot = Soot::default();
@@ -2121,6 +2124,10 @@ impl Player {
         }
         if let Some(mode) = s.mode {
             self.mode = mode;
+            if mode == Move::AbyssFall {
+                // The recorded state is the death-area fall: the actor is dead (health 0).
+                self.damage.hp = 0;
+            }
             self.gravity = match mode {
                 Move::DoubleJump => t::JUMP_GRAVITY_2ND,
                 Move::TripleJump => t::JUMP_GRAVITY_3RD,
