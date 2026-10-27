@@ -688,6 +688,9 @@ def self_check():
     reused = {f: dict(r, contacts=coin if f == 4 else coin.replace("origin=player_death_coin", "origin=unknown"))
               for f, r in g.items()}
     assert 5 in judge_run(reused, geometry, listed, **evidence).refused, "origin cleared on actor reuse"
+    ordinary = coin.replace("actor=7;origin=player_death_coin", "actor=8;origin=unknown")
+    mixed = {f: dict(r, contacts=coin + "|" + ordinary if f == 5 else "") for f, r in g.items()}
+    assert 5 in judge_run(mixed, geometry, listed, **evidence).refused, "same-name ordinary coin still refused"
     respawn = {f: dict(r, state="Run/Run" if f == 5 else r["state"], contacts=coin if f == 5 else "")
                for f, r in g.items()}
     assert 5 in judge_run(respawn, geometry, {}, **evidence).refused, "no waiver after leaving Dead"

@@ -564,7 +564,8 @@ before Dead, after leaving Dead, Cappy contacts and handled incoming messages
 retain their previous rules. Old recordings without these fields keep their
 verdict; the converter never fabricates origin. The environment self-check
 (`py tools/compare-traces.py --self-check`) covers missing/invalid identities,
-unknown or cleared origin, class mismatches, before/after Dead, unproved death,
+unknown or cleared origin, simultaneous same-name ordinary coins, class
+mismatches, before/after Dead, unproved death,
 Cappy and handled messages, as well as the accepted tagged death-coin case.
 
 ### Recording repeat determinism
