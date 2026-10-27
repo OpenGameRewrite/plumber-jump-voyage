@@ -41,7 +41,7 @@ pub fn apply(
             let forward_end = if script == "lava-twice" { 1.5 } else { 3.0 };
             *orders = Orders {
                 reset: started && now < 0.04,
-                direction: if script == "lava-twice" && (6.0..7.8).contains(&now) {
+                direction: if script == "lava-twice" && (10.0..11.8).contains(&now) {
                     Vec2::NEG_X * 0.6
                 } else if (0.1..forward_end).contains(&now) {
                     Vec2::X * 0.6

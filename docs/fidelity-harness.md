@@ -756,13 +756,27 @@ unsafe floor and wall codes, and the 100 cm slide search); actors answer the ori
 `AskSafetyPoint` message, so an export marks the objects that do with `ask_safety_point`
 (default false, which also means a moving host never answers).
 
+Normal-mode `RecoveryArea` entry is a separate pre-movement path. The actor
+remembers an active recovery area while inside it; after leaving all recovery
+volumes with a valid safety point, it starts the bubble immediately. This path
+does not force damage or apply the death-area HP-one check. The safety-point
+slide checks the projected dangerous position first when airborne: supported
+safe ground vetoes moving the saved point farther inland.
+
+`py tools/export-safety-hosts.py <geometry.json> --romfs <extracted RomFS>` adds
+verified `AskSafetyPoint` replies using the scenario's placement classes.
+`FixMapParts` accepts with no appear/kill switch links; `RippleFixMapParts`
+accepts directly. Other classes stay unmarked until their handlers are ported.
+
 The bubble (`RecoveryStart` 45 steps, `RecoveryTravel` 60 to 120 steps, `RecoveryFall`) is the
 original's own math: the travel's length, arch, eased progress, spin and root offset, whose
 routines (`al::rotateQuatRadian`, `al::rotateVectorDegree`, `al::scaleVectorDirection`,
 `al::calcAngleOnPlaneDegree`) are checked bit for bit against the executable with
 `PJV_RECOVERY_CASES=<local cases file> cargo test rotation_oracle` (the cases come from a
 local generator that runs the executable's routines; nothing of them is in the repository).
-No recorded run reaches a bubble recovery, so its sequence is decoded, not traced.
+The normal-mode RecoveryArea path is also compared against a complete recorded
+Start/Recovery/Fall/landing sequence. A gap in the game's pad counter is not
+an extra player update when its state and animation counters stay consecutive.
 After the landing the damage and push invalidation last 120 steps.
 
 Death is judged by `PlayerJudgeDeadWipeStart` (`death.rs`): the counter starts at -1 and

@@ -41,6 +41,34 @@ fn ease_in_out(x: f32) -> f32 {
     ((x * -2. + 3.) * x) * x
 }
 impl Player {
+    /// RecoveryDead's exposed counter spans its inner nerves. Their clips run
+    /// at rate one, so restore each inner clock from its sampled frame. The
+    /// choice row still plays the outgoing clip at the original step limit.
+    pub(super) fn resume_recovery_clock(&mut self, snapshot: &Snapshot) {
+        if !snapshot.mode.is_some_and(|mode| {
+            matches!(
+                mode,
+                Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall
+            )
+        }) {
+            return;
+        }
+        let Some((clip, frame)) = snapshot.anim else {
+            return;
+        };
+        let (mode, steps) = match clip {
+            "TractorBubbleStart" if frame >= 45. => (Move::RecoveryTravel, 0),
+            "TractorBubbleStart" => (Move::RecoveryStart, frame as u32 + 1),
+            "TractorBubbleWait" if frame >= self.recovery.duration as f32 => {
+                (Move::RecoveryFall, 0)
+            }
+            "TractorBubbleWait" => (Move::RecoveryTravel, frame as u32 + 1),
+            "TractorBubbleEnd" => (Move::RecoveryFall, frame as u32 + 1),
+            _ => return,
+        };
+        self.mode = mode;
+        self.frame = steps;
+    }
     pub(super) fn recovering(&self) -> bool {
         matches!(
             self.mode,
@@ -265,15 +293,29 @@ mod checks {
         let mut player = Player::default();
         player.mode = Move::RecoveryTravel;
         player.frame = 12;
+        player.recovery.duration = 120;
         player.inject(&Snapshot {
             mode: Some(Move::RecoveryStart),
             state_frames: Some(58),
             sub_steps: Some(58),
+            anim: Some(("TractorBubbleWait", 11.)),
             ..Default::default()
         });
         assert_eq!(player.mode, Move::RecoveryTravel);
         assert_eq!(player.frame, 12);
         assert_eq!(player.nerve.step, 58);
+        for (clip, frame, mode, steps) in [
+            ("TractorBubbleStart", 45., Move::RecoveryTravel, 0),
+            ("TractorBubbleWait", 120., Move::RecoveryFall, 0),
+            ("TractorBubbleEnd", 7., Move::RecoveryFall, 8),
+        ] {
+            player.resume_recovery_clock(&Snapshot {
+                mode: Some(Move::RecoveryStart),
+                anim: Some((clip, frame)),
+                ..Default::default()
+            });
+            assert_eq!((player.mode, player.frame), (mode, steps));
+        }
     }
 
     #[cfg_attr(test, test)]

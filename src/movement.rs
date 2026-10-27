@@ -2131,17 +2131,6 @@ impl Player {
     /// (gravity of the jump in progress, how far a jump may still extend,
     /// air-speed cap) is set to what entering that state would have given.
     pub fn inject(&mut self, s: &Snapshot) {
-        // The trace exposes the enclosing RecoveryDead counter, not its inner
-        // phase clock. Keep the live child's phase and arch setup in lockstep;
-        // replacing them with that counter would restart Start at each row.
-        let recovery_phase = (self.recovering()
-            && s.mode.is_some_and(|mode| {
-                matches!(
-                    mode,
-                    Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall
-                )
-            }))
-        .then_some((self.mode, self.frame));
         // A live injected snapshot overrides our dead status. Guess: health is not exported,
         // so a stage restart in lockstep initializes the standard three-HP keeper. This is
         // snapshot reconstruction only; free replay deliberately does not simulate respawn.
@@ -2232,10 +2221,7 @@ impl Player {
             }
             self.set_wait_steps(steps);
         }
-        if let Some((mode, frame)) = recovery_phase {
-            self.mode = mode;
-            self.frame = frame;
-        }
+        self.resume_recovery_clock(s);
         // On the ground in a state that flies: the contact row, whose landing
         // the next step decides.
         self.nerve.touchdown =
