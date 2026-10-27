@@ -31,6 +31,9 @@ CAP_REACTIONS = {
     # cap is trampled (the player's cap jump).
     'Stay状態開始': 'StayStart',
     '通常Trample': 'Trample',
+    # Raised by the cap's water update while it flies over the surface and while it stays there.
+    '水面移動': 'WaterSurfaceFly',
+    '水面待機': 'WaterSurfaceStay',
 }
 # Reactions only the effect tables listen to.
 EFFECT_REACTIONS = {

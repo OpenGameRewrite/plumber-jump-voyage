@@ -161,11 +161,10 @@ impl Player {
     /// The vertical speed of the surface spring (the helper at 0x48afe8): the speed along the
     /// water's up axis, damped and pulled toward the height the root floats at under the
     /// surface. `moving` is the stick being pushed; `damper` the counter that fades the spring
-    /// in.
-    fn surface_spring(&self, speed: f32, moving: bool) -> f32 {
+    /// in (the surface nerve's own, the nerve step for the cap throw).
+    fn surface_spring(&self, speed: f32, moving: bool, damper: i32) -> f32 {
         let finder = &self.water_finder;
-        let ramp =
-            (self.swim.damper - k::SURFACE_DAMPER_START) as f32 / k::SURFACE_DAMPER_FRAME as f32;
+        let ramp = (damper - k::SURFACE_DAMPER_START) as f32 / k::SURFACE_DAMPER_FRAME as f32;
         let ramp = ramp.clamp(0., 1.);
         if !finder.found {
             return speed;
@@ -191,7 +190,7 @@ impl Player {
     /// The motion of the surface nerves (the helper at 0x4860cc): the vertical speed follows
     /// the spring, the paddle's rise or the surface gravity; the stroke steers the rest. The
     /// ground normal the nerve keeps (`this+0xd8`) is updated on the way.
-    pub(super) fn swim_surface_motion(&mut self, stroke: Stroke) {
+    pub(super) fn swim_surface_motion(&mut self, stroke: Stroke, damper: i32) {
         let old_normal = self.swim.ground_normal;
         let (vertical, horizontal) = lib::separate_parallel_vertical(old_normal, self.v);
         let normal = if self.is_collided_ground() {
@@ -204,7 +203,7 @@ impl Player {
         let along = pose_math::dot(old_normal, vertical);
         let from_old = scaled(normal, along);
         let along_new = from_old.x * normal.x + from_old.y * normal.y + from_old.z * normal.z;
-        let speed = self.surface_spring(along_new, self.is_move());
+        let speed = self.surface_spring(along_new, self.is_move(), damper);
         let speed = if (k::RISE_FRAME as u32) > self.swim.since_paddle as u32 {
             let rising = k::RISE_POWER + speed;
             if rising > k::RISE_SPEED_MAX {

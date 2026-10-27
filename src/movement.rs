@@ -315,6 +315,8 @@ mod swim_dive;
 mod swim_dive_in;
 #[path = "movement/swim_ground.rs"]
 mod swim_ground;
+#[path = "movement/swim_spin_cap.rs"]
+mod swim_spin_cap;
 #[path = "movement/swim_move.rs"]
 mod swim_move;
 #[path = "movement/swim_pose.rs"]
@@ -522,6 +524,7 @@ pub mod clip {
     pub const SWIM_STAND: u32 = 32;
     pub const SWIM_LAND: u32 = 45;
     pub const SWIM_HIP_DROP_START: u32 = 30;
+    pub const SWIM_SPIN_CAP_START: u32 = 50;
     pub const SWIM_HIP_DROP_LAND: u32 = 74;
     pub const LAND: u32 = 26;
     /// The landing after a long fall (`PlayerStateWait`'s `LandStiffen` nerve).
@@ -844,6 +847,9 @@ pub enum Fx {
     CapBounce,
     /// The stay began while the button is held: the reaction it raises.
     CapStayStart,
+    /// The cap began to skim the water's surface / to rest on it (hit reactions of the cap).
+    CapWaterFly,
+    CapWaterStay,
     WallSlide,
     Ledge,
     Pole,
@@ -1167,9 +1173,9 @@ pub struct Player {
     /// The swim state (`PlayerStateSwim`) and the player's water surface finder.
     swim: swim::Swim,
     water_finder: crate::water::SurfaceFinder,
-    /// The `Spine1` joint's side axis as the model last posed it (`al::calcJointSideDir`, which
-    /// the dive into the water reads in its first step); the pose calculation keeps it.
-    spine_side: Vec3,
+    /// Axes of the joints as the model last posed them (`al::getJointMtxPtr`, which the swim
+    /// nerves read in their first step); the pose calculation keeps them.
+    model_axes: swim_dive_in::ModelAxes,
     /// The head slide's flag that the `DiveInWater` judge passed during the slide
     /// (`PlayerStateHeadSliding::isEnableDiveInWater`).
     head_slide_dive_in: bool,
@@ -1373,7 +1379,7 @@ impl Default for Player {
             material_water: false,
             material_puddle: false,
             water_finder: crate::water::SurfaceFinder::default(),
-            spine_side: Vec3::ZERO,
+            model_axes: swim_dive_in::ModelAxes::default(),
             head_slide_dive_in: false,
             step_phase: 0.,
             landing_speed: 0.,
@@ -2001,6 +2007,11 @@ impl Player {
     pub fn interpolation_cleared(&self) -> bool {
         self.interpolation_cleared
     }
+    /// The swim state has a nerve the actor chose after the state's update this step (the cap
+    /// throw): the trace shows the old one and a step counter of -1.
+    pub fn nerve_chosen_late(&self) -> bool {
+        self.mode == Move::Swim && self.swim.chosen_after_update.is_some()
+    }
     /// Steps the actor nerve has executed, as the game's `state_step` counts
     /// them: 0 in the frame a nerve is chosen, 1 after its first step.
     pub fn state_frames(&self) -> u32 {
@@ -2378,7 +2389,7 @@ impl Player {
             return crate::game_names::known(self.pole_nerve().name());
         }
         if self.mode == Move::Swim {
-            return crate::game_names::known(self.swim.nerve.name());
+            return crate::game_names::known(self.swim.shown_nerve().name());
         }
         crate::game_names::nerve(self.mode, self.clip())
     }
@@ -3026,10 +3037,8 @@ impl Player {
             actor,
         };
         let world = crate::skeleton_pose::world_pose(&actor, locals, &mut controls);
-        // The next step's nerves read the joint axes this calculation leaves (`al::calcJointSideDir`).
-        let spine = &world[crate::skeleton_pose::Joint::Spine1 as usize];
-        let side = Vec3::new(spine[0][0], spine[1][0], spine[2][0]);
-        self.spine_side = pose_math::try_normalize_or_zero(side).0;
+        // The next step's nerves read the joint axes this calculation leaves.
+        self.model_axes = swim_dive_in::ModelAxes::of(&world);
         world
     }
 
@@ -4363,16 +4372,9 @@ impl Player {
             Throw::Forward
         }
     }
-    /// The spin throw begins (`PlayerStateSpinCap` appearing and its first
-    /// step): the throw is counted among those in a row, the clip is chosen,
-    /// and the cap waits in its spin attack for the throw frame.
-    fn start_throw(&mut self, kind: Throw) {
-        if self.cap.is_some() || self.launch.is_some() {
-            return;
-        }
-        let air = !self.grounded;
-        // `PlayerSpinCapAttack::setupAttackInfo`: a throw soon after a catch
-        // continues the count; the third one is the continuous throw.
+    /// `PlayerSpinCapAttack::setupAttackInfo`: a throw soon after a catch continues the count;
+    /// the third one is the continuous throw.
+    fn setup_attack_info(&mut self) {
         let recent = self.catch_window > 0;
         self.throwing.count = if self.throwing.count != 0 && recent {
             self.throwing.count + 1
@@ -4383,6 +4385,16 @@ impl Player {
         if self.throwing.continuous {
             self.throwing.count = 0;
         }
+    }
+    /// The spin throw begins (`PlayerStateSpinCap` appearing and its first
+    /// step): the throw is counted among those in a row, the clip is chosen,
+    /// and the cap waits in its spin attack for the throw frame.
+    fn start_throw(&mut self, kind: Throw) {
+        if self.cap.is_some() || self.launch.is_some() {
+            return;
+        }
+        let air = !self.grounded;
+        self.setup_attack_info();
 
         self.throwing.kind = Some(kind);
         self.throwing.in_air = air;
@@ -4622,7 +4634,13 @@ impl Player {
         // sets it flying; the throw nerve itself runs from the next frame.
         if let Some(launch) = self.launch.take() {
             self.winding = false;
-            let cap = Cap::start_in(launch, self.pos, self.cap_serial + 1, scene.mesh.as_deref());
+            let cap = Cap::start_in(
+                launch,
+                self.pos,
+                self.cap_serial + 1,
+                scene.mesh.as_deref(),
+                Some(scene.water_areas()),
+            );
             self.cap_serial = cap.clip_serial();
             self.cap = Some(cap);
             return;
@@ -4650,6 +4668,7 @@ impl Player {
             player: self.pos,
             hold,
             mesh: scene.mesh.as_deref(),
+            water: Some(scene.water_areas()),
         };
         let moments = cap.update(&world);
         self.cap_serial = cap.clip_serial();
@@ -4668,6 +4687,8 @@ impl Player {
                 }
                 CapEvent::WallHit(strength) => self.events.push(Fx::CapWallHit(strength)),
                 CapEvent::Staying => self.events.push(Fx::CapStay),
+                CapEvent::WaterFly => self.events.push(Fx::CapWaterFly),
+                CapEvent::WaterStay => self.events.push(Fx::CapWaterStay),
                 CapEvent::StayStarted => self.events.push(Fx::CapStayStart),
                 CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),

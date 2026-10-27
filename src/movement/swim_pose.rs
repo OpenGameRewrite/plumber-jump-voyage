@@ -79,6 +79,11 @@ impl SwimPose {
         };
     }
 
+    /// The cap throw's first step: only the pitch is set (the angle the model's root leans).
+    pub fn set_pitch(&mut self, pitch: f32) {
+        self.pitch = pitch;
+    }
+
     /// The pitch follows the angle of the travel against the body (the helper at `0x488410`
     /// that the two dive-in nerves end with): a fifth of the way each step.
     pub fn follow_travel(&mut self, angle: f32) {

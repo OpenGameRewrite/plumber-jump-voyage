@@ -56,6 +56,10 @@ pub(super) enum SwimNerve {
     HeadIn,
     /// The dive in after a high fall (the `DiveInWater` clip).
     DiveIn,
+    /// The cap throw at the surface.
+    SpinCapSurface,
+    /// The cap throw under the surface and on the bottom.
+    SpinCap,
 }
 impl SwimNerve {
     /// The name `<actor nerve>/<state nerve>` the probe logs.
@@ -74,6 +78,8 @@ impl SwimNerve {
             Self::Dive => "Swim/SwimDive",
             Self::HeadIn => "Swim/SwimHeadIn",
             Self::DiveIn => "Swim/SwimDiveIn",
+            Self::SpinCapSurface => "Swim/SwimSpinCapSurface",
+            Self::SpinCap => "Swim/SwimSpinCap",
         }
     }
 }
@@ -147,8 +153,17 @@ pub(super) struct Swim {
     /// have risen toward keeping the stroke (`this+0x108`).
     pub(super) dive_in_steer: bool,
     pub(super) dive_in_keep: i32,
+    /// The nerve the trace still names: a nerve the actor chose after the state's update (the
+    /// cap throw) is applied by the next update, not shown before.
+    pub(super) chosen_after_update: Option<SwimNerve>,
     /// The body's turn.
     pub turn: TurnControl,
+}
+impl Swim {
+    /// The nerve the trace names.
+    pub(super) fn shown_nerve(&self) -> SwimNerve {
+        self.chosen_after_update.unwrap_or(self.nerve)
+    }
 }
 impl Default for Swim {
     fn default() -> Self {
@@ -178,6 +193,7 @@ impl Default for Swim {
             entered_by_dive_in: false,
             dive_in_steer: false,
             dive_in_keep: 0,
+            chosen_after_update: None,
             turn: TurnControl::swim(),
         }
     }
@@ -495,6 +511,7 @@ impl Player {
 
     /// `PlayerActorHakoniwa::exeSwim`: the state's update, then what the actor decides.
     pub(super) fn swim(&mut self, o: &Orders, scene: &Course) {
+        self.swim.chosen_after_update = None;
         let ended = self.swim_update(o, scene);
         if ended.is_some() {
             // Every way out of the water raises the reaction first.
@@ -532,7 +549,10 @@ impl Player {
         if !self.is_in_water(scene, SWIM_JUDGE) {
             self.try_reaction_water_out(scene);
             self.leave_swim(o);
+            return;
         }
+        // Still in the water: a cap throw may start (the state's nerves decide whether it can).
+        self.try_swim_cap_throw();
     }
 
     /// `EndSwimJumpPop`: the actor leaves the water into a jump with the power of the swim
@@ -586,6 +606,8 @@ impl Player {
             SwimNerve::Dive => self.exe_swim_dive(first, o, scene),
             SwimNerve::HeadIn => self.exe_swim_head_in(first, o, scene),
             SwimNerve::DiveIn => self.exe_swim_dive_in(first, o, scene),
+            SwimNerve::SpinCapSurface => self.exe_swim_spin_cap_surface(first, o, scene),
+            SwimNerve::SpinCap => self.exe_swim_spin_cap(first, o, scene),
         };
         if end.is_some() {
             return end;
@@ -692,10 +714,13 @@ impl Player {
         // The nerve lets go when the surface is out of reach and the hold has run out.
         let let_go =
             (!finder.found || finder.distance >= k::SURFACE_END_DIST) && self.swim.surface_hold < 1;
-        self.swim_surface_motion(Stroke {
-            surface: true,
-            ..Stroke::default()
-        });
+        self.swim_surface_motion(
+            Stroke {
+                surface: true,
+                ..Stroke::default()
+            },
+            self.swim.damper,
+        );
         if finder.found && self.is_move() {
             // The surface dropping since last step pulls the body down with it.
             let delta = Vec3::new(

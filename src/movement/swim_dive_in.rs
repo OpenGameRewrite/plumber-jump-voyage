@@ -20,6 +20,32 @@ use super::*;
 use crate::air_move;
 
 const GRAVITY: Vec3 = Vec3::NEG_Y;
+
+/// The axes of the model's joints that the swim nerves read in their first step, as the last
+/// pose calculation left them: `al::calcJointSideDir` of `Spine1` (its x axis) and the x and y
+/// axes of `JointRoot` (`PlayerAnimator::calcModelJointRootMtx`).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ModelAxes {
+    pub spine_side: Vec3,
+    pub root_side: Vec3,
+    pub root_up: Vec3,
+}
+impl ModelAxes {
+    pub(super) fn of(world: &crate::skeleton_pose::Matrices) -> Self {
+        use crate::skeleton_pose::Joint;
+        let column = |joint: Joint, c: usize| {
+            let m = &world[joint as usize];
+            // (`al::normalize` / `tryNormalizeOrZero` of the column.)
+            pose_math::try_normalize_or_zero(Vec3::new(m[0][c], m[1][c], m[2][c])).0
+        };
+        Self {
+            spine_side: column(Joint::Spine1, 0),
+            root_side: column(Joint::JointRoot, 0),
+            root_up: column(Joint::JointRoot, 1),
+        }
+    }
+}
+
 /// The pitch of the body toward the travel is held between these (degrees).
 const PITCH_LIMIT: f32 = 60.;
 
@@ -57,7 +83,7 @@ impl Player {
         // `rs::calcSpineSideDir` is the side axis of the `Spine1` joint as the model last
         // posed it (`Player::pose_skeleton` keeps it).
         let pose = self.actor_pose();
-        let angle = angle_on_plane_degree(pose.front(), self.spine_side, pose.side())
+        let angle = angle_on_plane_degree(pose.front(), self.model_axes.spine_side, pose.side())
             .clamp(-PITCH_LIMIT, PITCH_LIMIT);
         self.joints.swim.start_dive_in(angle);
         self.swim.dive_in_steer = true;

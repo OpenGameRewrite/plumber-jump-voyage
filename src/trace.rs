@@ -277,6 +277,8 @@ pub struct Recorder {
     /// state's own step.
     last_state: Option<(&'static str, u32)>,
     sub_steps: u32,
+    /// The previous row showed a nerve the actor had chosen after the state's update.
+    chosen_late: bool,
     /// The main clip of the previous row and the one before it, and the model's
     /// sub animation then: when a sub animation of another clip ends, the
     /// animator restarts the main clip with a blend from the clip before it
@@ -327,6 +329,7 @@ impl Recorder {
             last_sub: "",
             last_state: None,
             sub_steps: 0,
+            chosen_late: false,
             main_clip: "",
             stale_clip: "",
             sub_clip: None,
@@ -885,7 +888,19 @@ impl Recorder {
             Some(_) => 0,
         };
         self.last_state = Some((label, p.state_frames()));
-        cells.int(self.sub_steps as i64);
+        // A nerve the actor chose after the state's update (the swim's cap throw) shows -1 until
+        // the state applies it, and its first step then counts 1 (the keeper applied it and
+        // counted the step in the same update).
+        let chosen_late = p.nerve_chosen_late();
+        if chosen_late {
+            cells.int(-1);
+        } else if std::mem::take(&mut self.chosen_late) {
+            self.sub_steps = 1;
+            cells.int(1);
+        } else {
+            cells.int(self.sub_steps as i64);
+        }
+        self.chosen_late = chosen_late;
         cells.text(&format!(
             "{}/{}/{}",
             num(info.direction.x),

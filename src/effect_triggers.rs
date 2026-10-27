@@ -445,6 +445,16 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     if p.roll_effect_on() {
         wanted.push("Rolling");
     }
+    // The effects of the cap skimming and resting on the water's surface (its own code).
+    if let Some(cap) = &p.cap {
+        let (skimming, resting) = cap.water_effects();
+        if skimming {
+            wanted.push("FlyWaterSurface");
+        }
+        if resting {
+            wanted.push("StayWaterSurfaceR");
+        }
+    }
     // The rolling throw's grounding effect (the cap's own code starts it).
     if p.cap.as_ref().is_some_and(|cap| cap.grounding_effect().0) {
         wanted.push("FlyRollingGrounding");

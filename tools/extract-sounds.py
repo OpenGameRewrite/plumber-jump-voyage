@@ -366,14 +366,24 @@ def add_clips(a):
     for name in wanted_clips:
         if name not in added and name not in known:print(f'{name}: the game has no sound triggers for this clip')
     cap_known=table['cap']['actions']
-    cap_table=outfits.byml(db['PossessCap.byml']) if a.add_cap_action else {}
+    cap_table=outfits.byml(db['PossessCap.byml']) if a.add_cap_action or a.add_cap_reaction else {}
+    missing_cap=set()
     for item in cap_table.get('ActionInfoList',[]):
         name=item['Name']
-        if name not in a.add_cap_action or name in cap_known:continue
+        if name not in (a.add_cap_action or []) or name in cap_known:continue
         cap_known[name]=[{'play':x['Name'],'frame':x.get('StartFrame',0.),'once':x.get('IsOneTime',False)}
             for x in item.get('PlayInfoInActionList',[])]
         missing|={x['play'] for x in cap_known[name] if x['play'] not in table['cap']['plays']}
         added.append(f'cap {name}')
+    cap_reactions=table['cap']['reactions']
+    for item in cap_table.get('HitReactionInfoList',[]):
+        name=item['Name']
+        if name not in (a.add_cap_reaction or []):continue
+        english=reaction_names.english(name)
+        if english in cap_reactions:continue
+        cap_reactions[english]=[x['Name'] for x in item.get('PlayInfoList',[])]
+        missing_cap|={x for x in cap_reactions[english] if x not in table['cap']['plays']}
+        added.append(f'cap {name} ({english})')
     reactions=table['mario']['reactions']
     for item in mario.get('HitReactionInfoList',[]):
         name=item['Name']
@@ -385,6 +395,21 @@ def add_clips(a):
         added.append(f'{name} ({english})')
     for name in a.add_play or []:
         if name not in table['mario']['plays']:missing.add(name)
+    if missing_cap and a.vgmstream:
+        # The cap's own plays (`PossessCap.byml`), installed the same way next to the Mario ones.
+        cap_plays={item['Name']:item for item in cap_table.get('PlayInfoList',[])}
+        game=read_game(a)
+        new={name:play_entry(cap_plays[name],game[0]) for name in sorted(missing_cap) if name in cap_plays}
+        needed=sorted({l['resource'] for p in new.values() for l in p['layers']}-set(table['resources']))
+        temp=extract.ROOT/'local/audio'
+        temp.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True,exist_ok=True)
+        resources,skipped=install_resources(needed,a,game,output,temp)
+        table['cap']['plays'].update(new);table['resources'].update(resources)
+        for f in list(temp.glob('*.bfwav'))+list(temp.glob('*.wav')):f.unlink()
+        if skipped:print('Skipped sequences this tool cannot render: '+', '.join(skipped))
+        print('Added cap sounds for: '+', '.join(sorted(new)))
+        missing_cap-=set(new)
+    if missing_cap:print('Not installed yet (pass --vgmstream): '+', '.join(sorted(missing_cap)))
     if missing and a.vgmstream:
         load=lambda n:outfits.byml(db[n]) if n in db else {}
         plays={}
@@ -417,12 +442,13 @@ def main():
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the raw and decoded sound files in local/audio')
     p.add_argument('--output',type=Path,help='Write the sounds here instead of assets/local/sounds (to check them first)')
     p.add_argument('--add-cap-action',action='append',help='Add the sound triggers of this action of the cap (repeatable) to the installed table; nothing else changes')
+    p.add_argument('--add-cap-reaction',action='append',help='Add the plays of this hit reaction of the cap (its original name, repeatable) the same way')
     p.add_argument('--add-clip',action='append',help='Add the sound triggers of this Mario clip (repeatable) to the installed table, and with --vgmstream the sounds it plays that are missing; nothing else changes')
     p.add_argument('--add-reaction',action='append',help='Add the plays of this hit reaction of Mario (its original name, repeatable) the same way')
     p.add_argument('--add-play',action='append',help='Add this play the player code starts by name (repeatable) the same way')
     a=p.parse_args()
     if a.self_check:self_check();return
-    if a.add_clip or a.add_reaction or a.add_play or a.add_cap_action:add_clips(a);return
+    if a.add_clip or a.add_reaction or a.add_play or a.add_cap_action or a.add_cap_reaction:add_clips(a);return
     if not a.vgmstream and not a.list:p.error('Supply your installed --vgmstream executable')
     game=read_game(a)
     sounds,wave_files,files,db=game

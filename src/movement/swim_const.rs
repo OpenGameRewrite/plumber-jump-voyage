@@ -142,3 +142,9 @@ pub const DIVE_IN_KEEP_FRAME: i32 = 10;
 pub const HEAD_SLIDING_SIDE_ACCEL: f32 = 0.125;
 /// `SlerpQuatGrav`: how fast the pose follows the direction of travel.
 pub const SLERP_QUAT_GRAV: f32 = 0.4;
+
+/// The cap throw (`SwimSpinCapUpPower`, `SwimSpinCapUpSpeedMax`) lifts a body in the open water
+/// by the power, up to the speed; `SpinCapThrowFrameSwim` is the step the cap leaves on.
+pub const SPIN_CAP_UP_POWER: f32 = 10.;
+pub const SPIN_CAP_UP_SPEED_MAX: f32 = 4.5;
+pub const SPIN_CAP_THROW_FRAME: u32 = 12;

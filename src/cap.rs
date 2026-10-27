@@ -24,6 +24,7 @@ use crate::geometry::TriangleMesh;
 use crate::movement::cap_pose::{CapPose, direction_of, horizontal_length, length};
 use crate::movement::{Throw, UNIT};
 use crate::movement::{cap_rolling, cap_spiral};
+use crate::water::{SurfaceFinder, WaterAreas};
 use bevy::prelude::*;
 
 /// `HackCapThrowParam`, as stored in `MarioCapCommonInfo/ActorParam`:
@@ -101,6 +102,18 @@ pub const FOOT_SENSOR_Y: f32 = 40.;
 /// `rs::isEnableSendTrampleMsg`: the foot must be within 70 degrees of straight
 /// above the cap's sensor (cosine of 70 degrees).
 const TRAMPLE_ANGLE_COS: f32 = 0.342_020_15;
+/// `updateWaterArea` looks for the surface this far around the cap, and the cap counts as sunk
+/// when the surface is at least `SUBMERGED_DEPTH` above it.
+const WATER_FIND_DISTANCE: f32 = 100.;
+const SUBMERGED_DEPTH: f32 = 30.;
+/// The cap skims or rests on a surface that is closer than this, and a cap that has not sunk
+/// floats up to this far above it, a quarter of the remaining way each step.
+const SKIM_HEIGHT: f32 = 50.;
+const FLOAT_RATE: f32 = 0.25;
+/// A replay-relative position in the frame the water areas are placed in.
+fn stage_frame(mesh: Option<&TriangleMesh>, relative_cm: Vec3) -> Vec3 {
+    mesh.map_or(relative_cm, |mesh| mesh.to_game_vec(relative_cm))
+}
 /// Speed is considered gone below this (`al::isNearZero`).
 const NEAR_ZERO: f32 = 0.001;
 /// Frames over which the return gives up the velocity it had (ease-in).
@@ -223,6 +236,10 @@ pub enum CapEvent {
     /// reaction, its effect and the sound `HitCol`, which is louder the
     /// squarer the hit (the cosine of the angle).
     WallHit(f32),
+    /// The cap began to skim the water's surface (the reaction `水面移動`, its effect and sound).
+    WaterFly,
+    /// The cap began to rest on the water's surface (the reaction `水面待機`).
+    WaterStay,
 }
 
 /// What the cap needs to know of the player and the stage each frame.
@@ -234,6 +251,25 @@ pub struct CapWorld<'a> {
     pub hold: bool,
     /// The stage's triangles, when the replay has them.
     pub mesh: Option<&'a TriangleMesh>,
+    /// The water areas of the stage (`HackCap::updateWaterArea` asks them), when there are any
+    /// to ask.
+    pub water: Option<&'a WaterAreas>,
+}
+
+/// What the cap keeps of the water (`HackCap::updateWaterArea`).
+#[derive(Clone, Copy, Debug, Default)]
+struct CapWater {
+    /// The surface finder's last answer (`+0x170`).
+    finder: SurfaceFinder,
+    /// The cap is under the surface, at least `SUBMERGED_DEPTH` deep (`+0x29a`).
+    submerged: bool,
+    /// The splash bookkeeping (`+0x29c`, `+0x29d`): the surface was found when the cap last asked,
+    /// and the water area it was last in.
+    splash_found: bool,
+    splash_area: bool,
+    /// The skimming effect runs (`+0x30d`) and the resting effect (`+0x30e`).
+    fly_effect: bool,
+    stay_effect: bool,
 }
 
 /// What the rolling throw keeps: the up axis the model rolls about (`+0x24c`), how long and how
@@ -306,6 +342,7 @@ pub struct Cap {
     /// whether the collider found a wall in the previous frame.
     wall_memory: Vec3,
     wall_last_frame: bool,
+    water: CapWater,
 }
 impl Cap {
     /// Place a cap as `exeThrowStart` does on its one step: in front of the
@@ -313,7 +350,7 @@ impl Cap {
     /// the same frame.
     /// `serial` numbers the cap's first clip; later clips count on from it.
     pub fn start(launch: Launch, player: Vec3, serial: u32) -> Self {
-        Self::start_in(launch, player, serial, None)
+        Self::start_in(launch, player, serial, None, None)
     }
     /// [`Self::start`] in a stage's collision: the cap's first move, in the frame it appears, is
     /// the collider's (a cap thrown down lands on the floor in it).
@@ -322,6 +359,7 @@ impl Cap {
         player: Vec3,
         serial: u32,
         mesh: Option<&TriangleMesh>,
+        water: Option<&WaterAreas>,
     ) -> Self {
         let front = launch.front.with_y(0.).normalize_or_zero();
         let base = player / UNIT + Vec3::Y * param::THROW_HEIGHT;
@@ -381,12 +419,14 @@ impl Cap {
             collider: PlayerCollider::for_cap(),
             wall_memory: Vec3::ZERO,
             wall_last_frame: false,
+            water: CapWater::default(),
         };
         if rolled {
             cap.begin_rolling(front);
         }
         // `rs::resetCollisionExpandCheck` came with the start's `resetPosition`.
         cap.collider.reset_expand_check(0.);
+        cap.start_water(mesh, water);
         cap.advance(mesh);
         cap
     }
@@ -559,14 +599,14 @@ impl Cap {
             self.phase = CapPhase::Stay;
         }
         let next = match self.nerve {
-            CapNerve::Throw => self.throw(&mut events),
-            CapNerve::ThrowBrake => self.throw_brake(&mut events),
+            CapNerve::Throw => self.throw(&mut events, world),
+            CapNerve::ThrowBrake => self.throw_brake(&mut events, world),
             CapNerve::ThrowRolling => self.throw_rolling(),
             CapNerve::ThrowRollingBrake => self.throw_rolling_brake(),
             CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT),
-            CapNerve::ThrowStay => self.throw_stay(world.hold, &mut events),
+            CapNerve::ThrowStay => self.throw_stay(world, &mut events),
             CapNerve::Trample => self.trample(&mut events),
-            CapNerve::Return => self.go_back(head),
+            CapNerve::Return => self.go_back(head, world, &mut events),
         };
         self.step += 1;
         if let Some(next) = next {
@@ -658,12 +698,13 @@ impl Cap {
     }
     /// `HackCap::exeThrow`: fly on at the speed the throw set, until the
     /// cruise frames are used up.
-    fn throw(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+    fn throw(&mut self, events: &mut Vec<CapEvent>, world: &CapWorld) -> Option<CapNerve> {
         if self.step == 0 {
             events.push(CapEvent::Thrown);
         }
         self.wall_reaction(events);
         self.pose.face_back_along(self.front);
+        self.change_throw_param_in_water(world, events);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
     }
     /// `HackCap::exeThrowRolling`: roll along the surface at the throw's speed for the steps the
@@ -767,20 +808,122 @@ impl Cap {
     }
     /// `HackCap::exeThrowBrake`: take a tenth of the speed off each frame; the
     /// cap stays where it has stopped.
-    fn throw_brake(&mut self, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+    fn throw_brake(&mut self, events: &mut Vec<CapEvent>, world: &CapWorld) -> Option<CapNerve> {
         self.wall_reaction(events);
         self.pose.face_back_along(self.front);
+        self.change_throw_param_in_water(world, events);
         self.velocity += self.front * self.brake_step;
         let stopped = self.velocity.length() < NEAR_ZERO;
         let reversed = self.velocity.dot(self.front) < 0.;
         (stopped || reversed || self.step >= param::BRAKE_FRAMES).then_some(CapNerve::ThrowStay)
     }
+    // ---- The water ---------------------------------------------------------------------------
+
+    /// The first part of `exeThrowStart` that asks the water: the finder looks around the cap's
+    /// first position and the water area is updated (`updateWaterArea`, which has no effect to
+    /// start in the throw start's own nerve).
+    fn start_water(&mut self, mesh: Option<&TriangleMesh>, water: Option<&WaterAreas>) {
+        let Some(areas) = water else {
+            return;
+        };
+        let at = stage_frame(mesh, self.spot);
+        self.water.finder = areas.update_finder(at, Vec3::Y, WATER_FIND_DISTANCE);
+        self.water.splash_found = self.water.finder.found;
+        self.water.submerged = areas.is_water(at)
+            && self.water.finder.found
+            && self.water.finder.distance >= SUBMERGED_DEPTH;
+    }
+
+    /// `HackCap::updateWaterArea`: the cap's place in the water and, while it flies or stays
+    /// within reach of the surface, the effect and reaction of skimming or resting on it.
+    fn update_water_area(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) {
+        let Some(areas) = world.water else {
+            return;
+        };
+        let at = stage_frame(world.mesh, self.spot);
+        let in_area = areas.is_water(at);
+        let finder = areas.update_finder(at, Vec3::Y, WATER_FIND_DISTANCE);
+        self.water.finder = finder;
+        self.water.submerged = in_area && finder.found && finder.distance >= SUBMERGED_DEPTH;
+        // (The throw nerves, and the return; not the trample.)
+        let enabled = !self.water.splash_area
+            && !self.water.submerged
+            && !matches!(self.nerve, CapNerve::Trample);
+        if enabled
+            && let Some(skim) = self.surface_skim(&finder)
+        {
+            if skim {
+                if !self.water.fly_effect {
+                    self.water.stay_effect = false;
+                    self.water.fly_effect = true;
+                    events.push(CapEvent::WaterFly);
+                }
+            } else if !self.water.stay_effect {
+                self.water.fly_effect = false;
+                self.water.stay_effect = true;
+                events.push(CapEvent::WaterStay);
+            }
+        } else {
+            // Out of reach of the surface (or in the water): both effects end.
+            self.water.fly_effect = false;
+            self.water.stay_effect = false;
+        }
+        // The splash bookkeeping: the cap that loses the surface forgets it, and a change of the
+        // area it is in is recorded (the splash itself is not ported).
+        if self.water.splash_found {
+            if finder.found {
+                return;
+            }
+            self.water.splash_found = false;
+        }
+        if self.water.splash_area != in_area {
+            self.water.splash_found = finder.found;
+            self.water.splash_area = in_area;
+        }
+    }
+
+    /// Whether the cap skims the surface (`Some(true)`: moving over it, `Some(false)`: resting
+    /// on it) or is not close enough for either (`None`): the surface within `SKIM_HEIGHT` of the
+    /// cap, either way.
+    fn surface_skim(&self, finder: &SurfaceFinder) -> Option<bool> {
+        if !finder.found || finder.distance >= SKIM_HEIGHT {
+            return None;
+        }
+        // Moving: the velocity has a direction across the gravity.
+        let across = Vec3::new(self.velocity.x, 0., self.velocity.z);
+        let (_, moving) = crate::movement::pose_math::try_normalize_or_zero(across);
+        Some(moving)
+    }
+
+    /// `HackCap::changeThrowParamInWater`: a cap that has not sunk into the water is drawn up
+    /// toward the surface (a quarter of the way to 50 above it each step) while it flies.
+    fn change_throw_param_in_water(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) {
+        if world.water.is_none() {
+            return;
+        }
+        let was_submerged = self.water.submerged;
+        self.update_water_area(world, events);
+        if was_submerged || self.water.submerged || !self.water.finder.found {
+            return;
+        }
+        let lift = (self.water.finder.distance + SKIM_HEIGHT).max(0.) * FLOAT_RATE;
+        self.spot.y += lift;
+    }
+
+    /// The cap's two surface effects while they run: skimming and resting (the effects the
+    /// original emits by name).
+    pub fn water_effects(&self) -> (bool, bool) {
+        (self.water.fly_effect, self.water.stay_effect)
+    }
+
     /// `HackCap::exeThrowStay`: hover for the stay time, longer while the
     /// button is held, then go back.
-    fn throw_stay(&mut self, hold: bool, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+    fn throw_stay(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+        let hold = world.hold;
         if self.step == 0 {
             self.play(stay(self.left));
         }
+        self.update_water_area(world, events);
         events.push(CapEvent::Staying);
         if hold && !self.stay_reaction_done {
             self.stay_reaction_done = true;
@@ -825,7 +968,13 @@ impl Cap {
     /// the speed limit), then its front turns toward the head by at most the turn limit, and the
     /// cap flies along that front. The cap's front is the one it had when the return began: facing
     /// the player after a throw, the joint's front after a trample.
-    fn go_back(&mut self, head: Vec3) -> Option<CapNerve> {
+    fn go_back(
+        &mut self,
+        head: Vec3,
+        world: &CapWorld,
+        events: &mut Vec<CapEvent>,
+    ) -> Option<CapNerve> {
+        self.update_water_area(world, events);
         if self.step == 0 {
             // `tryStartActionIfNotPlaying`: a cap coming out of the spiral keeps its clip.
             let action = if self.spiral_side != 0. {
