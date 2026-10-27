@@ -10,7 +10,9 @@ impl Player {
             && self.recovery.area_active
             && self.recovery.valid()
             && scene.mesh.as_ref().is_some_and(|mesh| {
-                mesh.recovery.volume_at(mesh.to_game_vec(self.position_cm())).is_none()
+                mesh.recovery
+                    .volume_at(mesh.to_game_vec(self.position_cm()))
+                    .is_none()
             })
         {
             self.prepare_safety_recovery();

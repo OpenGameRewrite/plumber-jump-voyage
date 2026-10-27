@@ -23,7 +23,7 @@ fn preroll_interpolation() {
         };
         recorder.record(&info, &mut player);
         player.inject(&crate::movement::Snapshot {
-            anim: Some(("Jump", 0.)),
+            anim: Some(("SwimStandWait", 0.)),
             ..Default::default()
         });
         recorder.start_rows(carry);
@@ -31,7 +31,8 @@ fn preroll_interpolation() {
     };
     let column = COLUMNS.iter().position(|name| *name == "interp").unwrap();
     assert!(row(false)[column].is_empty());
-    assert!(row(true)[column].starts_with("Wait:"));
+    let carried = row(true)[column].clone();
+    assert!(carried.starts_with("Wait:"), "{carried:?}");
 }
 
 #[cfg_attr(test, test)]

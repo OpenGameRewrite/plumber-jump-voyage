@@ -255,9 +255,26 @@ pub(super) fn self_check() {
     checks::safety_enablement_and_recovery_lifecycle();
     checks::death_judge_and_scene_restart();
     checks::rotation_oracle();
+    checks::lockstep_keeps_inner_recovery_clock();
 }
 mod checks {
     use super::*;
+
+    #[cfg_attr(test, test)]
+    pub(super) fn lockstep_keeps_inner_recovery_clock() {
+        let mut player = Player::default();
+        player.mode = Move::RecoveryTravel;
+        player.frame = 12;
+        player.inject(&Snapshot {
+            mode: Some(Move::RecoveryStart),
+            state_frames: Some(58),
+            sub_steps: Some(58),
+            ..Default::default()
+        });
+        assert_eq!(player.mode, Move::RecoveryTravel);
+        assert_eq!(player.frame, 12);
+        assert_eq!(player.nerve.step, 58);
+    }
 
     #[cfg_attr(test, test)]
     pub(super) fn safety_enablement_and_recovery_lifecycle() {

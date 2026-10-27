@@ -20,6 +20,7 @@ plumber-jump-voyage --replay run.input --trace rewrite.csv --bits   # also rewri
 start x y z yaw_deg     # game units (cm); yaw 0 faces +Z, 90 faces +X
 start spawn yaw_deg     # the game's default spawn; only the facing matters here
 camera yaw_deg          # optional: camera yaw for the whole run
+preroll N               # optional: nonnegative idle frame count (default 10)
 shot 30 90              # optional: frames to capture in a rendered replay
 <frames> <lx> <ly> <buttons>
 ```
@@ -58,6 +59,29 @@ leaves those columns out). The camera's position (`cam_px/py/pz`) goes to the pl
 control hears the camera dip into the water (`CamWaterIn`, `CamWaterAmb`,
 `CamWaterOut`). No window, clock or random source is involved, so a run is
 byte-for-byte repeatable.
+
+`preroll N` changes the number of idle simulation steps after placement in both
+headless and rendered replays. It does not add scripted rows: the first input
+row remains frame 0, and `--bits` numbers the idle steps `-N` through `-1`.
+Zero skips those steps. The count must fit an unsigned 32-bit integer.
+`game.preroll.csv` is observation data for diagnostics and environment judging;
+the replay computes its own preroll and never injects those samples.
+
+An explicit `preroll` directive also selects the interpolation contract for new
+captures: the recorder carries its sampled clip and blended pose from preroll
+into frame 0, including the first row's `interp` label. A corresponding game
+trace converter must carry the `FIDP` animation history into `FIDE` rows and
+emit `game.preroll.csv` with the same `-N..-1` numbering. It must not seed the
+source clip with an empty string at frame 0. A pose displayed before teleport
+is unobserved; use enough preroll for its interpolation to finish before the
+compared interval, rather than reconstructing that pose from the recording.
+
+Scripts without the directive retain the original ten steps and the legacy
+first-row empty interpolation label, so existing captures keep their exact
+replay output. An explicit count of ten uses the same simulation steps but
+opts into the new first-row label convention when a blend is still active.
+The directive is a coordinated capture/replay contract; recorder support must
+be installed before using it to make new game recordings.
 
 ## Replaying in the real stage's collision
 

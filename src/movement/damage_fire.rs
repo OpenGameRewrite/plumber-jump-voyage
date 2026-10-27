@@ -231,6 +231,10 @@ impl Player {
         // choice of Run, before that nerve's first execution on the next frame.
         let from = if self.is_just_land() { Vec3::Y } else { up };
         self.v = pose_math::along_vector_normal_h(self.v, from, up) - up * GRAVITY_MOVE;
+        self.fire_ground_reset();
+    }
+    fn fire_ground_reset(&mut self) {
+        let up = self.mesh_ground.unwrap_or(Vec3::Y);
         let front = self.pose_axes().1;
         self.fire
             .ground
@@ -315,7 +319,7 @@ impl Player {
                         self.anim.rate = 18. * 0.3;
                     }
                     self.ground_lost = 0;
-                    self.fire_ground_appear();
+                    self.fire_ground_reset();
                     self.fire.brake = 20;
                 }
                 self.fire_run_motion();

@@ -34,12 +34,16 @@ pub fn apply(
             };
             return;
         }
-        if script == "lava" {
-            // From PJV_SPAWN: run +X onto the lava plate and keep going, then let go.
+        if script == "lava" || script == "lava-twice" {
+            // From PJV_SPAWN: cross the hot plate. The twice check returns
+            // across it after the first recovery, without resetting HP or stain.
             let now = time.elapsed_secs() - delay;
+            let forward_end = if script == "lava-twice" { 1.5 } else { 3.0 };
             *orders = Orders {
                 reset: started && now < 0.04,
-                direction: if (0.1..3.0).contains(&now) {
+                direction: if script == "lava-twice" && (6.0..7.8).contains(&now) {
+                    Vec2::NEG_X * 0.6
+                } else if (0.1..forward_end).contains(&now) {
                     Vec2::X * 0.6
                 } else {
                     Vec2::ZERO

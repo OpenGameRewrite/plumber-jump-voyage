@@ -6,6 +6,7 @@ unmarked: collision codes or an object's static flag do not establish its reply.
 import argparse
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 
@@ -43,5 +44,22 @@ def main():
     print(f'{args.geometry}: {count} accepting static safety hosts')
 
 
+def self_check():
+    for actor, links, expected in [
+        ('FixMapParts', {}, True),
+        ('FixMapParts', {'ViewGroup': [{}]}, True),
+        ('FixMapParts', {'SwitchAppear': [{}]}, False),
+        ('FixMapParts', {'SwitchKill': [{}]}, False),
+        ('RippleFixMapParts', {'SwitchKill': [{}]}, True),
+        ('Unknown', {}, False),
+    ]:
+        assert accepts({'UnitConfig': {'ParameterConfigName': actor}, 'Links': links}) == expected
+    assert not accepts({})
+    print('safety host export self-check PASS')
+
+
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--self-check']:
+        self_check()
+    else:
+        main()

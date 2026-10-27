@@ -434,19 +434,19 @@ impl Triggers {
                 changes.push(Change::Stop { key });
             }
         }
-        let dropped: Vec<Key> = self
-            .running
-            .iter()
-            .filter(|(k, (s, _))| {
-                (matches!(*s, Source::Code | Source::CapCode)
-                    || RUN_DUST.contains(&k.effect.as_str())
-                        && !self.mario.get(input.anim).is_some_and(|entries| {
-                            entries.iter().any(|entry| entry.key == **k)
-                        }))
-                    && !wanted.contains(&k.effect.as_str())
-            })
-            .map(|(k, _)| k.clone())
-            .collect();
+        let dropped: Vec<Key> =
+            self.running
+                .iter()
+                .filter(|(k, (s, _))| {
+                    (matches!(*s, Source::Code | Source::CapCode)
+                        || RUN_DUST.contains(&k.effect.as_str())
+                            && !self.mario.get(input.anim).is_some_and(|entries| {
+                                entries.iter().any(|entry| entry.key == **k)
+                            }))
+                        && !wanted.contains(&k.effect.as_str())
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
         for key in dropped {
             self.running.remove(&key);
             // The step that ended the effect made its emit call first.
@@ -801,13 +801,17 @@ impl Tracker {
         // No fixed burn/death duration belongs here: the default's own data gives its tail.
         if self.lava_started {
             let default_slot = p.touched.active
-                && self.library.effects.get("LandLava").is_some_and(|triggers| {
-                    triggers.iter().any(|trigger| {
-                        trigger
-                            .resource_for(p.touched.floor.as_ref().map(|c| c.material.as_str()))
-                            .is_some_and(|resource| resource.name == EMPTY_RESOURCE)
-                    })
-                });
+                && self
+                    .library
+                    .effects
+                    .get("LandLava")
+                    .is_some_and(|triggers| {
+                        triggers.iter().any(|trigger| {
+                            trigger
+                                .resource_for(p.touched.floor.as_ref().map(|c| c.material.as_str()))
+                                .is_some_and(|resource| resource.name == EMPTY_RESOURCE)
+                        })
+                    });
             if default_slot {
                 self.lava_default = true;
                 self.lava_default_tail = 0;
@@ -848,7 +852,9 @@ pub fn self_check() {
         "Thud":[{"table":"Reaction","reactions":["Land"],"resources":[{"name":"A"}]}],
         "Trail":[{"table":"Cap","actions":[{"name":"FlyingWaitR","start":-1}],
             "flags":["FollowTrans"]}],
-        "Run":[{"table":"Mario","resources":[{"name":"A"}]}]},
+        "Run":[{"table":"Mario","resources":[{"name":"A"}]}],
+        "Dash":[{"table":"Mario","actions":[{"name":"FireRun","start":-1}],
+            "flags":["FollowTrans"],"resources":[{"name":"A"}]}]},
         "resources":{"A":{"emitters":[{"emission":{"one_time":true,"duration":3},
             "life":{"frames":10}}]}}}"#;
     let library = Library::from_bytes(json).expect("test library");
@@ -872,6 +878,23 @@ pub fn self_check() {
         flashes: &[],
         wrapped: false,
     };
+    let mut fire = Triggers::new(&library);
+    let fire_start = fire.evaluate(&frame("FireRun", 1, 0.));
+    assert!(
+        fire_start
+            .iter()
+            .any(|change| { matches!(change, Change::Start { key, .. } if key.effect == "Dash") })
+    );
+    assert!(!fire_start.contains(&Change::Stop {
+        key: effect("Dash")
+    }));
+    assert!(fire.evaluate(&frame("FireRun", 1, 1.)).is_empty());
+    assert!(
+        fire.evaluate(&frame("Wait", 2, 0.))
+            .contains(&Change::Stop {
+                key: effect("Dash")
+            })
+    );
     assert!(triggers.evaluate(&frame("Wait", 1, 0.)).is_empty());
     let started = triggers.evaluate(&frame("Jump", 2, 0.));
     assert!(started.contains(&Change::Start {

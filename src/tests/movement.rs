@@ -1447,7 +1447,10 @@ fn burn_and_soot() {
     p.v.y = -5.;
     p.step(&Orders::default(), &cool);
     assert_eq!((p.mode, p.frame), (Move::FireRun, 0));
-    assert_eq!(p.v.y, -GRAVITY_MOVE, "appear applies Run's pull immediately");
+    assert_eq!(
+        p.v.y, -GRAVITY_MOVE,
+        "appear applies Run's pull immediately"
+    );
     let push = Orders {
         direction: Vec2::Y,
         ..default()
@@ -1646,7 +1649,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x65ecc0cbbcf2ff53,
+        hash, 0x3ce5b3b153f60fe0,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]
