@@ -526,7 +526,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         if let Some(point) = point {
             let p = point["position"].as_array().ok_or("restart position missing")?;
             let absolute = Vec3::new(p[0].as_f64().ok_or("restart x")? as f32, p[1].as_f64().ok_or("restart y")? as f32, p[2].as_f64().ok_or("restart z")? as f32);
-            let yaw = point["yaw"].as_f64().ok_or("restart yaw missing")? as f32;
+            let yaw = point["rotate"][1].as_f64().ok_or("restart rotation missing")? as f32;
             player.death.restart_pose = Some((mesh.relative_vec(absolute) * 0.01, yaw));
         }
         player.death.external_reload = true;
@@ -627,8 +627,10 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 if player.death.restart_pose.is_none() {
                     return Err("scene reload requires exported restart_points and recorded spawn_abs/restart_point_id".into());
                 }
+                let previous_clip = player.anim.name;
                 player.restart_after_death(&course);
                 recorder = Recorder::new(options.table.clone(), options.library.clone(), floor.clone()).with_stage(options.geometry.clone());
+                recorder.scene_started(previous_clip);
             }
         }
         let (mut orders, mut info) = orders_for(

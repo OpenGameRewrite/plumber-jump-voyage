@@ -343,6 +343,15 @@ impl Recorder {
         }
     }
 
+    /// The new actor starts Wait twice. Its six-step interpolation is between two
+    /// identical new Wait poses; the capture converter names it after the last sampled
+    /// clip (before loading). Keep that diagnostic label without blending the dead actor.
+    pub fn scene_started(&mut self, previous_clip: &'static str) {
+        self.main_clip = "Wait";
+        self.stale_clip = previous_clip;
+        self.restart = Some((previous_clip, 0));
+    }
+
     /// The frames recorded so far only warmed the animation state up: the next row is the first
     /// one written.
     pub fn start_rows(&mut self) {
@@ -873,7 +882,7 @@ impl Recorder {
         cells.text(&p.floor_normal().map_or(String::new(), |n| {
             format!("{}/{}/{}", num(n.x), num(n.y), num(n.z))
         }));
-        cells.int(p.state_frames() as i64);
+        cells.int(if p.death.abyss_pending_for_trace() { -1 } else { p.state_frames() as i64 });
         // The sub-nerve's own step counter (see `last_state`).
         let label = p.nerve_name().name;
         self.sub_steps = match self.last_state {
@@ -894,7 +903,7 @@ impl Recorder {
         // A nerve the actor chose after the state's update (the swim's cap throw) shows -1 until
         // the state applies it, and its first step then counts 1 (the keeper applied it and
         // counted the step in the same update).
-        let chosen_late = p.nerve_chosen_late();
+        let chosen_late = p.nerve_chosen_late() && !p.death.abyss_pending_for_trace();
         if chosen_late {
             cells.int(-1);
         } else if std::mem::take(&mut self.chosen_late) {

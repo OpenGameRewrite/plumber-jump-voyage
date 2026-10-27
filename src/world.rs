@@ -48,6 +48,10 @@ pub struct Pivot;
 #[derive(Component)]
 pub struct Body;
 #[derive(Component)]
+struct RecoveryBubble;
+#[derive(Component)]
+struct DeathWipe;
+#[derive(Component)]
 pub struct Part {
     pub kind: u8,
     pub base: Vec3,
@@ -89,9 +93,9 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Orbit>()
         .init_resource::<Progress>()
         .init_resource::<Shake>()
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, setup_death_presentation).chain())
         .add_systems(PreUpdate, moving_platforms.after(crate::input::read))
-        .add_systems(Update, (animate, collect, camera, preview).chain());
+        .add_systems(Update, (animate, collect, camera, preview, death_presentation).chain());
     if std::env::var_os("PJV_SHOT").is_some() {
         app.add_systems(Update, screenshot);
     }
@@ -712,6 +716,7 @@ fn spawn_player(
         start.checkpoint = at;
         start.reset();
     }
+    start.enable_assist_recovery(std::env::var_os("PJV_ASSIST_RECOVERY").is_some());
     let player = commands
         .spawn((
             start,
@@ -787,6 +792,48 @@ fn spawn_player(
         bevy::camera::visibility::RenderLayers::from_layers(&[0, 1]),
         Transform::from_xyz(0., 1.75, 5.),
     ));
+}
+
+fn setup_death_presentation(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    player: Single<Entity, With<Player>>,
+) {
+    // Presentation adapter: a translucent shell stands in for TractorBubble's child actor.
+    let bubble = commands.spawn((
+        RecoveryBubble,
+        Mesh3d(meshes.add(Sphere::new(1.))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgba(0.35, 0.75, 1., 0.2),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.12,
+            ..default()
+        })),
+        Transform::from_xyz(0., 0.8, 0.),
+        Visibility::Hidden,
+    )).id();
+    commands.entity(*player).add_child(bubble);
+    commands.spawn((
+        DeathWipe,
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        GlobalZIndex(100),
+    ));
+}
+
+fn death_presentation(
+    player: Single<&Player>,
+    mut bubble: Single<&mut Visibility, With<RecoveryBubble>>,
+    mut wipe: Single<&mut BackgroundColor, With<DeathWipe>>,
+) {
+    **bubble = if player.recovery_bubble() { Visibility::Inherited } else { Visibility::Hidden };
+    wipe.0 = Color::srgba(0., 0., 0., player.death.wipe_alpha());
 }
 fn moving_platforms(
     time: Res<Time<Real>>,

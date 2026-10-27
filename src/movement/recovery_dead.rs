@@ -136,10 +136,8 @@ impl Player {
                 let angle = rotation * 0.017_453_292;
                 let half = angle * 0.5;
                 let axis = r.axis * console_libm::sinf(half);
-                // U04 GUESS: glam quaternion multiplication until rotateQuatRadian's
-                // exact component order has an independent scalar oracle.
                 let spin = Quat::from_xyzw(axis.x, axis.y, axis.z, console_libm::cosf(half));
-                let pose = spin * r.pose;
+                let pose = rotate_pose(r.pose, r.axis, angle);
                 let offset = pose_math::rotate_by_quat(-r.root, spin) + r.root;
                 let gravity = self.recovery.safety.expect("valid recovery").gravity;
                 let scale = 1. - turn_control::ease_in(rate(self.frame, 0, r.rotate_end));
@@ -186,6 +184,108 @@ impl Player {
                 }
             }
             _ => unreachable!(),
+        }
+    }
+}
+
+/// al::rotateQuatRadian (0x92783c), including its normalization and scalar order.
+fn rotate_pose(q: Quat, axis: Vec3, angle: f32) -> Quat {
+    let half = angle * 0.5;
+    let c = console_libm::cosf(half);
+    let s = console_libm::sinf(half);
+    let a = axis * s;
+    let w = ((c * q.w - a.x * q.x) - a.y * q.y) - a.z * q.z;
+    let x = ((a.x * q.w + c * q.x) + a.y * q.z) - a.z * q.y;
+    let y = ((c * q.y - a.x * q.z) + a.y * q.w) + a.z * q.x;
+    let z = ((a.x * q.y + c * q.z) - a.y * q.x) + q.w * a.z;
+    let norm = (((w * w + x * x) + y * y) + z * z).sqrt();
+    if norm > 0. {
+        let inverse = 1. / norm;
+        Quat::from_xyzw(inverse * x, inverse * y, inverse * z, inverse * w)
+    } else {
+        Quat::from_xyzw(x, y, z, w)
+    }
+}
+
+pub(super) fn self_check() {
+    checks::safety_enablement_and_recovery_lifecycle();
+    checks::death_judge_and_scene_restart();
+    checks::rotation_oracle();
+}
+mod checks {
+    use super::*;
+
+    #[cfg_attr(test, test)]
+    pub(super) fn safety_enablement_and_recovery_lifecycle() {
+        let scene = crate::replay::flat_floor();
+        let mut p = Player::spawn_facing(Vec3::new(0., -25., 0.), 0.);
+        p.start_in_air();
+        p.set_safety_point(Vec3::ZERO, Vec3::Y, Vec3::NEG_Y);
+        assert!(!p.recovery.valid(), "a saved point alone cannot enable recovery");
+        p.enable_assist_recovery(true);
+        assert!(p.recovery.valid());
+        p.begin_safety_recovery();
+        assert_eq!(p.damage.hp, 2);
+        let mut visited_travel = false;
+        let mut visited_fall = false;
+        for _ in 0..220 {
+            p.step(&Orders::default(), &scene);
+            visited_travel |= p.mode == Move::RecoveryTravel;
+            visited_fall |= p.mode == Move::RecoveryFall;
+            if !p.recovering() {
+                assert!(visited_travel && visited_fall);
+                assert_eq!(p.damage.invalid, 119);
+                assert_eq!(p.recovery.push_invalid, 119);
+                assert!(!p.recovery.area_active);
+                return;
+            }
+        }
+        panic!("recovery never landed: {:?}", p.mode);
+    }
+
+    #[cfg_attr(test, test)]
+    pub(super) fn death_judge_and_scene_restart() {
+        let mut d = death::Death::default();
+        for _ in 0..30 {
+            d.update_judge(false);
+        }
+        assert_eq!(d.counter, -1);
+        for _ in 0..30 {
+            d.update_judge(true);
+        }
+        assert!(!d.ready());
+        d.update_judge(true);
+        assert!(d.ready());
+        let scene = Course::default();
+        let mut p = Player::spawn_at(Vec3::new(0., -20., 0.), Vec3::NEG_Z);
+        p.death.restart_pose = Some((SPAWN, 180.));
+        for _ in 0..300 {
+            p.step(&Orders::default(), &scene);
+            if p.death.generation > 0 {
+                assert!(!p.is_dead());
+                assert_eq!(p.damage.hp, 3);
+                assert_eq!(p.soot, Soot::default());
+                return;
+            }
+        }
+        panic!("dead toy player never restarted");
+    }
+
+    #[cfg_attr(test, test)]
+    pub(super) fn rotation_oracle() {
+        let Ok(path) = std::env::var("PJV_RECOVERY_CASES") else { return };
+        let cases: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for case in cases.as_array().unwrap() {
+            let values = |key: &str| -> Vec<f32> {
+                case[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect()
+            };
+            let q = values("q");
+            let axis = values("axis");
+            let got = rotate_pose(Quat::from_xyzw(q[0],q[1],q[2],q[3]), Vec3::new(axis[0],axis[1],axis[2]), case["angle"].as_f64().unwrap() as f32);
+            let expected = values("out");
+            for (actual, expected) in got.to_array().into_iter().zip(expected) {
+                assert_eq!(actual.to_bits(), expected.to_bits(), "{case}");
+            }
         }
     }
 }

@@ -42,6 +42,7 @@ pub struct Death {
     pub restart_pose: Option<(Vec3, f32)>,
     /// Replays consume scene-reload boundaries from the capture's discontinuous clock.
     pub external_reload: bool,
+    pub(super) abyss_pending: bool,
     miss: Miss,
 }
 impl Default for Death {
@@ -53,11 +54,13 @@ impl Default for Death {
             generation: 0,
             restart_pose: None,
             external_reload: false,
+            abyss_pending: false,
             miss: Miss::Playing,
         }
     }
 }
 impl Death {
+    pub fn abyss_pending_for_trace(&self) -> bool { self.abyss_pending }
     pub fn ready(&self) -> bool {
         self.counter >= self.kind.start()
     }
@@ -102,6 +105,10 @@ impl Player {
         let camera = self.camera_cm;
         *self = Self::spawn_facing(pose.0, pose.1);
         self.ground_contact = 0;
+        // al::tryGetQuat(PlacementInfo) uses f32 radians and half-angle libm.
+        let half = (pose.1 * pose_math::DEGREES_TO_RADIANS) * 0.5;
+        let native = Quat::from_xyzw(0., console_libm::sinf(half), 0., console_libm::cosf(half));
+        self.set_pose(pose_math::to_quat(pose_math::quat_to_axes(native)));
         self.death.restart_pose = Some(pose);
         self.death.external_reload = external;
         self.death.generation = generation;

@@ -92,6 +92,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
 /// Standing: the landing and stand-up clips are sub-states of their own.
 fn idle(anim: &str) -> Nerve {
     match anim {
+        "WaitHot" | "WaitCold" | "WaitVeryCold" => known("Wait/AreaAnimWait"),
         // The landing clip and its variants after a triple jump and a flip.
         "Land" | "LandJump3" | "LandTurn" | "LandRolling" => known("Wait/Land"),
         // After a spin drop the wait state's `LandStiffen` nerve plays the `LandDownFall` clip.

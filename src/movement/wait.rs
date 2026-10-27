@@ -78,6 +78,7 @@ pub(super) struct WaitControl {
     /// It starts over whenever a sub-nerve is chosen; the new nerve's first
     /// step, which starts its clip, is step 0.
     pub(super) steps: u32,
+    pub(super) area_clip: Option<&'static str>,
 }
 
 impl Player {
@@ -103,6 +104,15 @@ impl Player {
     /// the landing hands over to `Wait`, and each stage of the idle sequence
     /// chooses the next one.
     pub(super) fn wait_nerve(&mut self, step: u32) {
+        if self.clip() == "WaitHot" { return; }
+        if self.clip() == "Wait" && step >= RELAX_AFTER_STEPS && let Some(clip) = self.wait.area_clip {
+            // tryChangeAreaAnim starts its clip immediately, then chooses AreaAnimWait.
+            self.start_clip(clip);
+            self.wait.steps = 0;
+            self.sub_restarted = true;
+            self.nerve.choose_silently(false);
+            return;
+        }
         let Some(stage) = WaitStage::of_clip(self.clip()) else {
             // A landing or stand-up clip is still playing; `Wait` is chosen
             // when it ends.

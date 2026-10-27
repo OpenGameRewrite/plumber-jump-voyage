@@ -234,6 +234,9 @@ pub fn interp_frames(name: &str, from: &str) -> f32 {
         "Jump" if from == "Move" => 3.,
         "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
+        // PlayerAnimation/AnimInterp.byml.
+        "DeadFall" | "WaitHot" | "TractorBubbleWait" => 10.,
+        "TractorBubbleStart" | "TractorBubbleEnd" => 5.,
         "JumpBroad" | "JumpCapLeapFrog" | "SpinCap" | "SpinCapEnd" | "SpinCapWait"
         | "SquatWait" | "SwimLand" | "SwimStand" => 3.,
         "SpinJumpDownFall" => 4.,
@@ -335,6 +338,8 @@ pub fn looping(name: &str) -> bool {
     matches!(
         name,
         "Wait"
+            | "WaitHot"
+            | "TractorBubbleWait"
             | "WaitRelax"
             | "Snooze"
             | "Sleep"

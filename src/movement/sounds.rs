@@ -17,7 +17,7 @@ impl Player {
             phase: self.cycle.shown,
             run_start: self.cycle.weights[4],
             speed: self.move_speed,
-            vertical_speed: self.units_per_frame().y,
+            vertical_speed: if self.is_dead() || self.recovery_bubble() { 0. } else { self.units_per_frame().y },
             in_water: scene
                 .water_areas()
                 .is_water(scene.in_water_frame(self.position_cm())),

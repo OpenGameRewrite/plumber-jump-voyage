@@ -6,6 +6,8 @@ raises with this one table, and the game looks them up by the same English
 names (see src/reactions.rs).
 """
 MARIO_REACTIONS = {
+    "泡復帰ダメージ": "BubbleDamage",
+    "泡復帰開始": "BubbleStart",
     '着地': 'Land',
     '着地[走り]': 'LandRun',
     '転がり再加速[1回目]': 'RollBoost',

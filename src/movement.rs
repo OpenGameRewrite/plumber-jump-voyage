@@ -244,6 +244,7 @@ pub(crate) mod console_libm;
 pub mod death;
 mod abyss;
 mod recovery_dead;
+mod safety;
 mod damage;
 mod damage_fire;
 #[path = "movement/ground.rs"]
@@ -472,6 +473,7 @@ pub mod clip {
         match name {
             "Wait" | "Snooze" => Some(180.),
             "WaitRelax" => Some(1200.),
+            "WaitHot" => Some(340.),
             "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
@@ -2035,7 +2037,7 @@ impl Player {
     /// The swim state has a nerve the actor chose after the state's update this step (the cap
     /// throw): the trace shows the old one and a step counter of -1.
     pub fn nerve_chosen_late(&self) -> bool {
-        self.mode == Move::Swim && self.swim.chosen_after_update.is_some()
+        self.death.abyss_pending || self.mode == Move::Swim && self.swim.chosen_after_update.is_some()
     }
     /// Steps the actor nerve has executed, as the game's `state_step` counts
     /// them: 0 in the frame a nerve is chosen, 1 after its first step.
@@ -2329,7 +2331,9 @@ impl Player {
     }
     pub fn reset(&mut self) {
         let checkpoint = self.checkpoint;
+        let assist = self.recovery.assist;
         *self = Self::default();
+        self.recovery.assist = assist;
         self.pos = checkpoint;
         self.checkpoint = checkpoint;
     }
@@ -2641,7 +2645,7 @@ impl Player {
         // The cap updates before the player does, within the same frame.
         self.update_cap(&o, scene);
         self.cap_sensor_phase(&o);
-        self.check_death_area(scene);
+        self.start_pending_abyss();
         self.dispatch_fire_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -2672,6 +2676,7 @@ impl Player {
             && !was_grounded
             && !self.burning()
             && !self.is_dead()
+            && !self.recovering()
             && self.mode != Move::GroundSpin
             && self.mode != Move::SlopeSlide
             && self.mode != Move::Swim
@@ -2681,6 +2686,8 @@ impl Player {
             self.nerve.touchdown = true;
             self.touchdown_speed = self.landing_speed;
         }
+        self.check_death_area(scene);
+        self.update_recovery_point(scene);
         self.finish_frame(scene);
     }
     /// Changes of state the surroundings force, decided before the state runs: the ground
@@ -2735,6 +2742,16 @@ impl Player {
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
         self.update_ground_height(scene);
+        if self.mode == Move::Idle && self.nerve.step == 0 {
+            self.wait.area_clip = scene.mesh.as_ref().and_then(|m| {
+                m.temperature.iter().rev().find(|(a, _)| a.volume_at(m.to_game_vec(self.position_cm())).is_some()).and_then(|(_, t)| match t {
+                    2.. => Some("WaitHot"),
+                    -2 => Some("WaitCold"),
+                    i32::MIN..=-3 => Some("WaitVeryCold"),
+                    _ => None,
+                })
+            });
+        }
         match self.mode {
             Move::Idle | Move::Walk | Move::Run => self.run(o),
             Move::Skid | Move::Turn => self.brake(o),
@@ -2828,6 +2845,7 @@ impl Player {
         self.update_soot(scene);
         let dead = self.is_dead();
         self.damage.update(dead);
+        self.recovery.push_invalid = self.recovery.push_invalid.saturating_sub(1);
         self.death.update_scene(dead);
         // A state chosen this step has run no step yet: its first one is next.
         // The nerve's own steps restart with a new actor nerve, chosen or
@@ -5101,6 +5119,7 @@ mod spin_checks;
 mod wall_air_checks;
 
 pub fn self_check() {
+    recovery_dead::self_check();
     stain::self_check();
     checks::run();
     spin_checks::run();

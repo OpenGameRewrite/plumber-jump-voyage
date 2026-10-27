@@ -209,7 +209,7 @@ Jump JumpReverse Jump2 Jump3 JumpBack JumpTurn JumpBroad JumpBroad2 JumpBroad3 F
 SpinJumpStart SpinJumpLoop SpinJumpDownFall SpinGroundL SpinGroundR
 StartSpinJumpL StartSpinJumpR RestartSpinJumpL RestartSpinJumpR SpinJumpDownFallL SpinJumpDownFallR
 HipDropStart HipDrop HipDropLand JumpHipDrop RollingStart Rolling RollingEnd RollingJump RollingStandUp
-HeadSlidingStart HeadSliding Slide FireRunStart FireRun DeadFire SquatStart SquatWait SquatWalk SquatEnd
+HeadSlidingStart HeadSliding Slide FireRunStart FireRun DeadFire DeadFall TractorBubbleStart TractorBubbleWait TractorBubbleEnd WaitHot SquatStart SquatWait SquatWalk SquatEnd
 SpinCapStart SpinCapStartLeft SpinCapStartRight SpinCapStart2Left SpinCapStart2Right SpinCapStart3Left SpinCapStart3Right
 SpinCapStartDoubleUp SpinCapStartDoubleDown SpinCapStartDoubleLeft SpinCapStartDoubleRight
 SpinCapAirStart SpinCapAirStartLeft SpinCapAirStartRight SpinCapAirStartDoubleUp SpinCapAirStartDoubleDown
@@ -224,7 +224,7 @@ CAP_ACTIONS=['FlyingWait','FlyingWaitCapCatch','FlyingWaitSpiral','FlyingWaitRol
 # frame list): footfalls with their foot lift, material variant and clothes
 # rustle, the roll's spin and the wind of a fast fall.
 FOOT=['RunL','RunR','RunMatL','RunMatR','RunUpL','RunUpR','ShakeNoiseL','ShakeNoiseR','SquatRunL','SquatRunR',
-    'FootBrake','SwimRunL','SwimRunR','Roll','FallWhoosh_loop']
+    'FootBrake','SwimRunL','SwimRunR','Roll','FallWhoosh_loop','FallDown','vDeadFallDown','TractorBubble','TractorBubbleWait','TractorBubbleEnd']
 # Footwear sets (the original chooses these in code; this mapping is inferred).
 FOOTWEAR={'MarioAloha':'Sandal','MarioSwimwear':'Bare','MarioUnderwear':'Bare','MarioZombie':'Zombie','Mario64Metal':'Metal'}
 

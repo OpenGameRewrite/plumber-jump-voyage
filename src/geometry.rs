@@ -106,6 +106,11 @@ pub struct TriangleMesh {
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
     pub death: crate::water::WaterAreas,
+    pub recovery: crate::water::WaterAreas,
+    pub recovery_ban: crate::water::WaterAreas,
+    pub recovery_invalidate: crate::water::WaterAreas,
+    pub safety_hosts: Vec<bool>,
+    pub temperature: Vec<(crate::water::WaterAreas, i32)>,
     /// Original PlayerList / checkpoint restart placements, absolute centimetres.
     pub restart_points: Vec<serde_json::Value>,
     /// The hit sensors of the stage's placed actors the head can look at (the export's
@@ -224,6 +229,11 @@ impl TriangleMesh {
             origin,
             water: crate::water::WaterAreas::from_export(&root["areas"]),
             death: crate::water::WaterAreas::from_export_named(&root["areas"], "DeathArea"),
+            recovery: crate::water::WaterAreas::from_export_named(&root["areas"], "RecoveryArea"),
+            recovery_ban: crate::water::WaterAreas::from_export_named(&root["areas"], "RecoveryBanArea"),
+            recovery_invalidate: crate::water::WaterAreas::from_export_named(&root["areas"], "InvalidateRecoveryPosArea"),
+            safety_hosts: root["objects"].as_array().into_iter().flatten().map(|o| o["ask_safety_point"].as_bool().unwrap_or(false)).collect(),
+            temperature: root["areas"].as_array().into_iter().flatten().filter(|a| a["name"].as_str() == Some("TemperatureArea")).map(|a| (crate::water::WaterAreas::from_export_named(&serde_json::json!([a]), "TemperatureArea"), a["args"]["Temperature"].as_i64().unwrap_or(0) as i32)).collect(),
             restart_points: root["restart_points"].as_array().cloned().unwrap_or_default(),
             look_sensors: look_sensors_from_export(&root["look_sensors"], origin),
             ..Self::default()
