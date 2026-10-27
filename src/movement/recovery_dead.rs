@@ -290,9 +290,11 @@ mod checks {
 
     #[cfg_attr(test, test)]
     pub(super) fn lockstep_keeps_inner_recovery_clock() {
-        let mut player = Player::default();
-        player.mode = Move::RecoveryTravel;
-        player.frame = 12;
+        let mut player = Player {
+            mode: Move::RecoveryTravel,
+            frame: 12,
+            ..Default::default()
+        };
         player.recovery.duration = 120;
         player.inject(&Snapshot {
             mode: Some(Move::RecoveryStart),
