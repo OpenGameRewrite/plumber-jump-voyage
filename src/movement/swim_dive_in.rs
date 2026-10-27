@@ -292,7 +292,8 @@ impl Player {
         }
         // The steps the body has risen count toward keeping the stroke.
         if falling < 0. {
-            self.swim.dive_in_keep = lib::converge(self.swim.dive_in_keep, k::DIVE_IN_KEEP_FRAME, 1);
+            self.swim.dive_in_keep =
+                lib::converge(self.swim.dive_in_keep, k::DIVE_IN_KEEP_FRAME, 1);
         }
         if !slowed {
             return None;

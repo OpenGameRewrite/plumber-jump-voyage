@@ -909,9 +909,7 @@ impl Cap {
         let enabled = !self.water.splash_area
             && !self.water.submerged
             && !matches!(self.nerve, CapNerve::Trample);
-        if enabled
-            && let Some(skim) = self.surface_skim(&finder)
-        {
+        if enabled && let Some(skim) = self.surface_skim(&finder) {
             if skim {
                 if !self.water.fly_effect {
                     self.water.stay_effect = false;

@@ -100,9 +100,7 @@ pub fn follow(cap: Cap, mesh: Option<&TriangleMesh>, throw_height: f32) {
     if let Some(ground) = &ground {
         let level = dot(*cap.front, world_up) >= -NEAR_ZERO;
         let across = dot(new_up, ground.normal).abs();
-        if level
-            && across < TILT_COS
-            && dot(new_up, world_up).abs() < dot(ground.normal, world_up)
+        if level && across < TILT_COS && dot(new_up, world_up).abs() < dot(ground.normal, world_up)
         {
             let pull = ease_out(calc_rate01(*cap.counter as f32, 0., RATE_TO));
             let height = dot(*cap.spot - ground.position, ground.normal);

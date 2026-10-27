@@ -121,7 +121,7 @@ fn the_catch_is_the_sensor_contact() {
                 air: false,
                 continuous: false,
                 spiral_side: 0.,
-            up: Vec3::Y,
+                up: Vec3::Y,
             },
             Vec3::ZERO,
             1,

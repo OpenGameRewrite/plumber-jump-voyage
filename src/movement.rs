@@ -317,14 +317,14 @@ mod swim_dive;
 mod swim_dive_in;
 #[path = "movement/swim_ground.rs"]
 mod swim_ground;
-#[path = "movement/swim_spin_cap.rs"]
-mod swim_spin_cap;
-#[path = "movement/swim_trample.rs"]
-pub(crate) mod swim_trample;
 #[path = "movement/swim_move.rs"]
 mod swim_move;
 #[path = "movement/swim_pose.rs"]
 pub(crate) mod swim_pose;
+#[path = "movement/swim_spin_cap.rs"]
+mod swim_spin_cap;
+#[path = "movement/swim_trample.rs"]
+pub(crate) mod swim_trample;
 #[path = "movement/terrain.rs"]
 mod terrain;
 #[path = "movement/turn_control.rs"]
@@ -2845,9 +2845,8 @@ impl Player {
             Move::Swim => self.swim.nerve.name(),
             _ => self.nerve_name().name,
         };
-        let enabled = look_at::look_enabled(look_label)
-            && !self.run_nerve_blocks_look()
-            && !self.sub.active;
+        let enabled =
+            look_at::look_enabled(look_label) && !self.run_nerve_blocks_look() && !self.sub.active;
         let actor = self.pose_matrix();
         self.look.step(&actor, enabled, scene.look_sensors());
         self.run_state_frame();
