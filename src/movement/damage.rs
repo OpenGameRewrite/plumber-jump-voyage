@@ -1,4 +1,4 @@
-﻿//! HP and invalidation needed by the actor's damage dispatch. State-specific motion stays
+//! HP and invalidation needed by the actor's damage dispatch. State-specific motion stays
 //! with its consumer; scene restart and recovery do not belong to this keeper.
 use super::*;
 
@@ -7,10 +7,16 @@ pub(super) struct Damage {
     pub hp: u8,
     pub invalid: u32,
     pub hidden: bool,
+    fire_message: bool,
 }
 impl Default for Damage {
     fn default() -> Self {
-        Self { hp: 3, invalid: 0, hidden: false }
+        Self {
+            hp: 3,
+            invalid: 0,
+            hidden: false,
+            fire_message: false,
+        }
     }
 }
 impl Damage {
@@ -31,14 +37,26 @@ impl Damage {
     }
 }
 impl Player {
-    pub fn is_dead(&self) -> bool { self.damage.hp == 0 }
-    pub fn damage_hidden(&self) -> bool { self.damage.hidden }
+    /// A sensor's fire attack requests damage independently of the collision-code query.
+    pub fn request_fire_damage(&mut self) {
+        self.damage.fire_message = true;
+    }
+    pub fn is_dead(&self) -> bool {
+        self.damage.hp == 0
+    }
+    pub fn damage_hidden(&self) -> bool {
+        self.damage.hidden
+    }
 
     /// Collision causes are consumed before the nerve runs, not during collision resolution.
     /// The floor/wall/ceiling code queries are distinct from a sensor's fire request.
     pub(super) fn dispatch_fire_damage(&mut self, scene: &Course) {
-        if self.is_dead() { return; }
-        let fire = |codes: &Option<CollisionCodes>| codes.as_ref().is_some_and(|c| c.floor == "DamageFire");
+        if self.is_dead() {
+            return;
+        }
+        let fire = |codes: &Option<CollisionCodes>| {
+            codes.as_ref().is_some_and(|c| c.floor == "DamageFire")
+        };
         let floor = fire(&self.touched.floor) || self.grounded && scene.hot(self.pos);
         let wall = fire(&self.touched.wall);
         let ceiling = fire(&self.touched.ceiling);
@@ -46,9 +64,22 @@ impl Player {
         // a wall/ceiling must oppose the velocity. Fire-volume causes will feed this same
         // dispatch when the stage loader supports them; do not infer them from a material.
         let on_floor = floor && self.is_on_ground_by(self.v);
-        let against_wall = wall && self.collider.wall.as_ref().is_some_and(|c| self.v.dot(c.normal) < 0.);
-        let against_ceiling = ceiling && self.collider.ceiling.as_ref().is_some_and(|c| self.v.dot(c.normal) < 0.);
-        if !(on_floor || against_wall || against_ceiling) { return; }
+        let against_wall = wall
+            && self
+                .collider
+                .wall
+                .as_ref()
+                .is_some_and(|c| self.v.dot(c.normal) < 0.);
+        let against_ceiling = ceiling
+            && self
+                .collider
+                .ceiling
+                .as_ref()
+                .is_some_and(|c| self.v.dot(c.normal) < 0.);
+        let message = std::mem::take(&mut self.damage.fire_message);
+        if !(message || on_floor || against_wall || against_ceiling) {
+            return;
+        }
         self.damage.fire();
         self.appear_damage_fire(floor, wall, ceiling);
     }

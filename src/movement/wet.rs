@@ -50,8 +50,11 @@ impl Default for WetControl {
     }
 }
 impl WetControl {
-    /// PlayerWetControl::isWet reads the wetness counter.
-    pub(super) fn is_wet(&self) -> bool { self.wetness > 0 }
+    /// PlayerWetControl::isWet (0x492e5c): wetness above 179, or a wet area.
+    /// Wet areas are not loaded by this collision scene.
+    pub(super) fn is_wet(&self) -> bool {
+        self.wetness > 179
+    }
 
     /// `recordInWater`: the player is under the water.
     pub(super) fn record_in_water(&mut self) {

@@ -522,6 +522,12 @@ impl Player {
     /// The states that ask `PlayerJudgeWallCatchInputDir` after their step: the
     /// jump nerve's, the fall, the long jump, the air throw and the wall states.
     fn wall_catch_applies(&self) -> bool {
+        if self.is_dead() {
+            return false;
+        }
+        if self.burning() {
+            return self.state_frames() >= 20;
+        }
         if let (Move::Fall, Some(front)) = (self.mode, self.fall_after_ledge)
             && self.state_frames() <= RECATCH_LOCK_STEPS
             && self.facing.dot(front) >= std::f32::consts::FRAC_1_SQRT_2

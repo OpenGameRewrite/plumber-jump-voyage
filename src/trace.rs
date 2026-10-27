@@ -887,7 +887,9 @@ impl Recorder {
             Some(_) if p.restarted_by_sensor() => p.state_frames(),
             Some(_) => 0,
         };
-        if let Some(steps) = p.fire_sub_steps() { self.sub_steps = steps; }
+        if let Some(steps) = p.fire_sub_steps() {
+            self.sub_steps = steps;
+        }
         self.last_state = Some((label, p.state_frames()));
         // A nerve the actor chose after the state's update (the swim's cap throw) shows -1 until
         // the state applies it, and its first step then counts 1 (the keeper applied it and
@@ -1454,24 +1456,16 @@ impl TraceFile {
         let counter = keeper
             .split(';')
             .find_map(|kv| kv.strip_prefix("count=")?.parse().ok());
-        let point = |text: &str| {
-            let mut axes = text.split('/').map(|v| v.parse::<f32>());
-            Some(Vec3::new(
-                axes.next()?.ok()?,
-                axes.next()?.ok()?,
-                axes.next()?.ok()?,
-            ))
-        };
         let head = self
             .cell(row, "bones")
             .and_then(|bones| bones.split('|').find_map(|b| b.strip_prefix("Head:")))
-            .and_then(point);
+            .and_then(vector_cell);
         let n = |c| self.number(row, c).unwrap_or(0.);
         Some(LookHint {
             feet: Vec3::new(n("px"), n("py"), n("pz")),
             head,
             counter,
-            target_stage: self.cell(row, "look_target").and_then(point),
+            target_stage: self.cell(row, "look_target").and_then(vector_cell),
         })
     }
     /// The injectable player state a row records, for lockstep stepping.
@@ -1519,8 +1513,67 @@ impl TraceFile {
             lost += 1;
         }
         counters.push(("ground_lost".to_string(), lost as i64));
+        let collision = |at| {
+            self.cell(at, "collision")
+                .unwrap_or("")
+                .split(';')
+                .filter_map(|s| s.split_once('='))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let current = collision(row);
+        let floor_contact = if current.get("ground") == Some(&"1") {
+            current.get("gcode").map(|code| {
+                let mut steps = 1;
+                while steps <= row && collision(row - steps).get("ground") == Some(&"1") {
+                    steps += 1;
+                }
+                let normal = current
+                    .get("gn")
+                    .and_then(|s| vector_cell(s))
+                    .unwrap_or(Vec3::Y);
+                (
+                    crate::geometry::CollisionCodes {
+                        floor: (*code).into(),
+                        material: current.get("gmat").copied().unwrap_or("").into(),
+                        floor_index: current
+                            .get("gcodeidx")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                        ..Default::default()
+                    },
+                    normal,
+                    steps as u32,
+                )
+            })
+        } else {
+            None
+        };
+        let pose = self
+            .cell(row, "bits_quat")
+            .and_then(|text| {
+                let words = text
+                    .split('/')
+                    .map(|w| {
+                        u32::from_str_radix(w.trim_start_matches("0x"), 16)
+                            .ok()
+                            .map(f32::from_bits)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let [x, y, z, w] = words[..] else {
+                    return None;
+                };
+                Some(Quat::from_xyzw(x, y, z, w))
+            })
+            .or_else(|| {
+                ["qx", "qy", "qz", "qw"]
+                    .iter()
+                    .all(|c| self.number(row, c).is_some())
+                    .then(|| Quat::from_xyzw(n("qx"), n("qy"), n("qz"), n("qw")))
+            });
         Snapshot {
             mode,
+            pose,
+            floor_contact,
             pos: Vec3::new(n("px"), n("py"), n("pz")) * UNIT,
             v: Vec3::new(n("vx"), n("vy"), n("vz")),
             facing: Vec3::new(n("fx"), 0., n("fz")),
@@ -1539,6 +1592,14 @@ impl TraceFile {
             spin_fall,
         }
     }
+}
+fn vector_cell(text: &str) -> Option<Vec3> {
+    let mut axes = text.split('/').map(|v| v.parse::<f32>());
+    Some(Vec3::new(
+        axes.next()?.ok()?,
+        axes.next()?.ok()?,
+        axes.next()?.ok()?,
+    ))
 }
 /// A clip name as a `'static` string; each distinct name is kept once.
 fn intern(name: &str) -> &'static str {

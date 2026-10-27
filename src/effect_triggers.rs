@@ -512,7 +512,9 @@ pub fn emitted_by(fx: Fx) -> Vec<&'static str> {
 /// The effects whose emit call the controller makes in this frame.
 pub fn code_calls(p: &Player) -> Vec<&'static str> {
     let mut calls = vec![];
-    if p.soot.smoke_called { calls.push("StateFire"); }
+    if p.soot.smoke_called {
+        calls.push("StateFire");
+    }
     if p.roll_effect_called() {
         calls.push("Rolling");
     }
@@ -595,6 +597,11 @@ pub struct Tracker {
     /// the effect keeper learns the material code a step late, and the effect that depends on
     /// it ends a step after that.
     water: [bool; 2],
+    /// The continuous default slot of LandLava (DummyEmitter), alongside the one-shot
+    /// material splash. Effect::tryUpdateMaterial keeps these slots independently.
+    lava_default: bool,
+    lava_default_tail: u32,
+    lava_started: bool,
 }
 
 impl Tracker {
@@ -606,6 +613,9 @@ impl Tracker {
             live: Vec::new(),
             floor: None,
             water: [false; 2],
+            lava_default: false,
+            lava_default_tail: 0,
+            lava_started: false,
         }
     }
     /// Effects start on this floor material (the course's, when it has one).
@@ -662,6 +672,9 @@ impl Tracker {
             match change {
                 Change::Start { key, source, .. } => {
                     let owner = owner(source);
+                    if key.effect == "LandLava" {
+                        self.lava_started = true;
+                    }
                     if matches!(source, Source::Reaction | Source::Emitted) {
                         started.push(key.effect.clone());
                     } else {
@@ -759,6 +772,37 @@ impl Tracker {
             .iter()
             .map(|l| format!("{}:{}", l.owner, l.key.effect))
             .collect();
+        // LandLava has a finite material splash and a continuous default DummyEmitter.
+        // The default starts when no floor material matches; returning to a floor fades it.
+        // This is Effect::tryUpdateMaterial (0xa58fb8), not the splash's particle lifetime.
+        // No fixed burn/death duration belongs here: the default's own data gives its tail.
+        if self.lava_started {
+            let no_floor = p.touched.active && p.touched.floor.is_none();
+            if no_floor {
+                self.lava_default = true;
+                self.lava_default_tail = 0;
+            } else if std::mem::take(&mut self.lava_default) {
+                self.lava_default_tail =
+                    self.library.resources.get(EMPTY_RESOURCE).map_or(0, |r| {
+                        r.emitters
+                            .iter()
+                            .map(|e| e.emission.duration + e.life.frames.max(0) as u32)
+                            .max()
+                            .unwrap_or(0)
+                    });
+            }
+            if self.lava_default || self.lava_default_tail > 0 {
+                alive.push("player:LandLava".into());
+            }
+            self.lava_default_tail = self.lava_default_tail.saturating_sub(1);
+            if !no_floor
+                && !self.lava_default
+                && self.lava_default_tail == 0
+                && !self.live.iter().any(|l| l.key.effect == "LandLava")
+            {
+                self.lava_started = false;
+            }
+        }
         alive.sort();
         alive.dedup();
         (started, alive)

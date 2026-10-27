@@ -243,9 +243,9 @@ pub type ControllerState = (
 pub(crate) mod console_libm;
 mod damage;
 mod damage_fire;
-mod stain;
 #[path = "movement/ground.rs"]
 mod ground;
+mod stain;
 use damage::Damage;
 use damage_fire::FireControl;
 pub use stain::Soot;
@@ -731,6 +731,9 @@ pub struct Snapshot {
     pub v: Vec3,
     pub facing: Vec3,
     pub grounded: bool,
+    /// Observed pose and floor contact, needed by pre-movement damage dispatch in lockstep.
+    pub pose: Option<Quat>,
+    pub floor_contact: Option<(CollisionCodes, Vec3, u32)>,
     /// Clip and its frame (for "Move", the cycle phase).
     pub anim: Option<(&'static str, f32)>,
     pub state_frames: Option<u32>,
@@ -1803,7 +1806,18 @@ impl Player {
         // (The pole's hold has no pull into the floor under it, and the slope slide keeps the
         // game's own velocity, the pull included.)
         if self.grounded
-            && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim | Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::Dead)
+            && !matches!(
+                self.mode,
+                Move::Pole
+                    | Move::SlopeSlide
+                    | Move::Swim
+                    | Move::BurnJump
+                    | Move::BurnBounce
+                    | Move::FireRun
+                    | Move::FireFall
+                    | Move::FireDead
+                    | Move::Dead
+            )
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
             if self.landing_speed < 0. {
@@ -2055,12 +2069,31 @@ impl Player {
     /// (gravity of the jump in progress, how far a jump may still extend,
     /// air-speed cap) is set to what entering that state would have given.
     pub fn inject(&mut self, s: &Snapshot) {
+        // A live injected snapshot overrides our dead status. Guess: health is not exported,
+        // so a stage restart in lockstep initializes the standard three-HP keeper. This is
+        // snapshot reconstruction only; free replay deliberately does not simulate respawn.
+        if self.is_dead()
+            && s.mode
+                .is_some_and(|m| !matches!(m, Move::FireDead | Move::Dead))
+        {
+            self.damage = Damage::default();
+            self.soot = Soot::default();
+        }
         self.nerve.clear();
         self.pos = s.pos;
         self.prev = s.pos;
         self.v = s.v;
         self.facing = s.facing.with_y(0.).normalize_or(self.facing);
         self.grounded = s.grounded;
+        if let Some(pose) = s.pose {
+            self.set_pose(pose);
+        }
+        if let Some((codes, normal, steps)) = &s.floor_contact {
+            self.touched.active = true;
+            self.touched.floor = Some(codes.clone());
+            self.mesh_ground = Some(*normal);
+            self.ground_contact = *steps;
+        }
         if let Some(mode) = s.mode {
             self.mode = mode;
             self.gravity = match mode {
@@ -2094,12 +2127,15 @@ impl Player {
             self.frame = steps;
         }
         if let Some(steps) = s.sub_steps {
-            if self.burning() || self.is_dead() { self.frame = steps; }
+            if self.burning() || self.is_dead() {
+                self.frame = steps;
+            }
             self.set_wait_steps(steps);
         }
         // On the ground in a state that flies: the contact row, whose landing
         // the next step decides.
-        self.nerve.touchdown = self.grounded && self.mode.in_flight() && !self.burning() && !self.is_dead();
+        self.nerve.touchdown =
+            self.grounded && self.mode.in_flight() && !self.burning() && !self.is_dead();
         if self.nerve.touchdown {
             // The row reports the fall speed that reached the ground; the
             // ground has already stopped it.
@@ -2683,8 +2719,10 @@ impl Player {
             Move::RollJump => self.roll_jump_step(o),
             Move::Dive => self.head_sliding(o, scene),
             Move::SlopeSlide => self.slope_slide(o),
-            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead => self.damage_fire_step(o, scene),
-            Move::Dead => {},
+            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead => {
+                self.damage_fire_step(o, scene)
+            }
+            Move::Dead => {}
             Move::LongJump => self.long_jump_air(o),
             Move::Backflip => self.back_jump_air(o),
             Move::Sideflip => self.turn_jump_air(o),
@@ -2754,6 +2792,8 @@ impl Player {
     }
     fn finish_frame(&mut self, scene: &Course) {
         self.update_combo_counters();
+        // Original movement updates wetness before it records wet stain suppression.
+        self.wet.update();
         self.update_soot(scene);
         let dead = self.is_dead();
         self.damage.update(dead);
@@ -2777,8 +2817,7 @@ impl Player {
         self.vel = self.v * UNIT * FPS;
         self.move_speed = self.speed_h();
         self.update_loop_start();
-        // (`PlayerWetControl::update` ends the actor's movement; the player is never in a wet area.)
-        self.wet.update();
+
         self.update_material_code(scene);
         self.update_sounds(scene);
         self.timer = self.frame as f32 / FPS;
@@ -3413,8 +3452,8 @@ impl Player {
         self.pre_throw = 0;
         let kind = self.throw_kind(o);
         if kind == Throw::Spin && self.mode != Move::BurnJump {
-            self.start_throw(kind);
-            return true;
+            // The actor tries this cancellation after the child state update.
+            return false;
         }
         self.sub_anim = Some(Anim {
             name: "ThrowCapParts",
@@ -3433,7 +3472,7 @@ impl Player {
         false
     }
     fn end_burn(&mut self) {
-        if self.grounded {
+        if self.ground_lost < 5 {
             self.run_frames = t::BRAKE_ON_COUNTER;
             self.go(
                 Move::Run,
@@ -4812,7 +4851,12 @@ impl Player {
             // enough (`PlayerStateRolling::control`).
             Move::Roll => return,
             Move::SlopeSlide => {}
-            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::Dead => return,
+            Move::BurnJump
+            | Move::BurnBounce
+            | Move::FireRun
+            | Move::FireFall
+            | Move::FireDead
+            | Move::Dead => return,
             _ => {
                 // `PlayerActorHakoniwa::setNerveOnGround` asks its judges in
                 // this order: the buffered jump, `PlayerJudgeStartRun` (which
@@ -4863,7 +4907,9 @@ impl Player {
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
         // DeadFire disables movement collision; retain the last contact report.
-        if self.is_dead() { return; }
+        if self.is_dead() {
+            return;
+        }
         let old = self.pos;
         let was_grounded = self.grounded;
         self.grounded = false;
@@ -5024,6 +5070,7 @@ mod spin_checks;
 mod wall_air_checks;
 
 pub fn self_check() {
+    stain::self_check();
     checks::run();
     spin_checks::run();
     wall_air_checks::run();

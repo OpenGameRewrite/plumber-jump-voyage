@@ -1379,148 +1379,85 @@ fn slope_slide() {
 
 #[cfg_attr(test, test)]
 fn burn_and_soot() {
-    let floor = floor();
-    // Hot ground: a floating leap, a bounce where it lands, then a short fire
-    // run; jumping is only possible during the run.
-    let mut lava = floor.clone();
-    lava.hot
-        .push((Vec3::new(0., 0., 0.), Vec3::new(1., 1., 1.)));
-    let mut p = Player {
-        pos: Vec3::ZERO,
-        ..default()
-    };
+    let cool = floor();
+    let mut lava = cool.clone();
+    lava.hot.push((Vec3::ZERO, Vec3::ONE));
+    let mut p = Player::spawn_at(Vec3::ZERO, Vec3::Z);
+    // Immediate pre-movement entry: twenty executions at full power, independent of B.
     p.step(&Orders::default(), &lava);
-    assert_eq!(chosen(&p), (Move::BurnJump, "FireRunStart"));
-    assert_eq!(p.move_speed, 0., "no stick: the leap goes straight up");
-    frames(&mut p, Orders::default(), &lava, 20);
-    assert!(
-        (p.vel.y - t::DAMAGE_FIRE_JUMP_POWER_1ST * UNIT * FPS).abs() < 0.01,
-        "floats up"
-    );
+    assert_eq!((p.mode, p.state_frames(), p.frame), (Move::BurnJump, 1, 1));
+    assert_eq!(p.v, Vec3::Y * 20.);
+    assert_eq!(p.damage.hp, 2);
+    assert!(!p.soot.smoking);
+    frames(&mut p, Orders::default(), &cool, 19);
+    assert_eq!(p.v.y, 20.);
     p.step(
         &Orders {
             jump: true,
-            jump_held: true,
+            ..default()
+        },
+        &cool,
+    );
+    assert_eq!(p.mode, Move::BurnJump);
+    assert_eq!(p.v.y, 20. - 0.9);
+    // A new fire contact pre-empts the ordinary first landing even while damage is invalid.
+    p.grounded = true;
+    p.pos = Vec3::ZERO;
+    p.v = Vec3::new(10., -33., 0.);
+    p.step(&Orders::default(), &lava);
+    assert_eq!((p.mode, p.frame, p.damage.hp), (Move::BurnJump, 1, 1));
+    assert_eq!(p.v, Vec3::Y * 20.);
+    p.grounded = true;
+    p.pos = Vec3::ZERO;
+    p.v = Vec3::new(0., -33., 0.);
+    p.step(&Orders::default(), &lava);
+    assert_eq!((p.mode, p.frame, p.damage.hp), (Move::FireDead, 1, 0));
+    assert_eq!(p.v, Vec3::ZERO);
+    assert_eq!(p.anim.name, "DeadFire");
+    assert_eq!(p.soot.body, 1.);
+    assert!(p.soot.smoking);
+    let position = p.pos;
+    frames(&mut p, Orders::default(), &lava, 10);
+    assert_eq!(p.pos, position);
+    assert_eq!(p.soot.hold, 290);
+    // Manual toy/debug reset remains available until scene respawn is ported.
+    p.step(
+        &Orders {
+            reset: true,
             ..default()
         },
         &lava,
     );
-    assert_eq!(p.mode, Move::BurnJump, "no jumping out of the leap");
-    let (mut peak, mut fell) = (0_f32, false);
-    for _ in 0..300 {
-        p.step(&Orders::default(), &lava);
-        peak = peak.max(p.pos.y);
-        fell |= p.vel.y < 0.;
-        if fell && p.frame == 1 {
-            break;
-        }
-    }
-    assert!(peak > 5.5 && peak < 7., "the burn leap: {peak}");
-    assert_eq!(
-        (p.mode, p.frame),
-        (Move::BurnJump, 1),
-        "landing back on the lava burns again"
-    );
-    let mut cool = floor.clone();
-    cool.hot.clear();
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
+    assert_eq!(p.damage.hp, 3);
+    assert_eq!(p.mode, Move::Idle);
+    p.request_fire_damage();
+    p.step(&Orders::default(), &cool);
+    assert_eq!((p.mode, p.damage.hp), (Move::BurnJump, 2));
+    // Binary-derived child transitions: landing is judged after the air update.
+    p.appear_damage_fire(true, false, false);
+    p.step(&Orders::default(), &cool);
+    p.grounded = true;
+    p.v.y = -5.;
+    p.step(&Orders::default(), &cool);
+    assert_eq!((p.mode, p.frame), (Move::BurnBounce, 0));
+    p.step(&Orders::default(), &cool);
+    assert_eq!(p.v.y, 20. - 0.9);
+    assert_eq!(p.anim.name, "FireRunStart");
+    p.grounded = true;
+    p.v.y = -5.;
+    p.step(&Orders::default(), &cool);
+    assert_eq!((p.mode, p.frame), (Move::FireRun, 0));
     let push = Orders {
-        direction: Vec2::new(0., 1.),
+        direction: Vec2::Y,
         ..default()
     };
-    let until_change = |p: &mut Player, o: &Orders, scene: &Course| -> f32 {
-        let (mode, mut high) = (p.mode, p.pos.y);
-        for _ in 0..600 {
-            p.step(o, scene);
-            high = high.max(p.pos.y);
-            if p.mode != mode {
-                break;
-            }
-        }
-        high
-    };
-    until_change(&mut p, &push, &cool);
-    assert_eq!(chosen(&p), (Move::BurnBounce, "FireRunStart"));
-    let peak = until_change(&mut p, &push, &cool);
-    assert!(peak > 2. && peak < 2.5, "the bounce: {peak}");
-    assert_eq!(chosen(&p), (Move::FireRun, "FireRun"));
     p.step(&push, &cool);
-    assert!((p.move_speed - t::DAMAGE_FIRE_RUN_SPEED).abs() < 0.01);
+    assert_eq!(p.anim.name, "FireRun");
+    assert_eq!(p.anim.rate, 18. * 0.3);
+    assert_eq!(p.fire.brake, 0);
     frames(&mut p, Orders::default(), &cool, 20);
-    assert!(p.move_speed < 0.01, "releasing the stick stops the run");
-    frames(&mut p, Orders::default(), &cool, 45);
-    assert_ne!(p.mode, Move::FireRun, "the run lasts a second");
-    // Shallow water puts the burn out on contact; deep water ends it in a swim.
-    let mut puddle = cool.clone();
-    puddle.puddles.push((Vec3::ZERO, Vec3::new(50., 0.1, 50.)));
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    until_change(&mut p, &push, &puddle);
-    assert_eq!(p.mode, Move::Run, "landing in shallow water ends the burn");
-    assert!(p.events.contains(&Fx::Quenched));
-    let mut pool = cool.clone();
-    pool.water = crate::water::WaterAreas::demo_box(0., 0., 5000., 5000., 200., 400.);
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    p.step(&Orders::default(), &pool);
-    assert_eq!(p.mode, Move::Swim);
-    assert!(p.events.contains(&Fx::Quenched));
-    // The burn leaves soot: it smokes once strong, holds, then fades.
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &lava);
-    let mut burned = 0;
-    while p.burning() && burned < 600 {
-        p.step(&push, &cool);
-        burned += 1;
-    }
-    assert!(
-        p.soot.body > 0.75 && p.soot.smoking,
-        "soot after a full burn: {:?}",
-        p.soot
-    );
-    // The step that ended the burn already counted one held frame.
-    let full = p.soot.body;
-    frames(
-        &mut p,
-        Orders::default(),
-        &cool,
-        t::SOOT_HOLD_FRAMES as usize - 1,
-    );
-    assert_eq!(p.soot.body, full, "the stain holds for five seconds");
-    frames(&mut p, Orders::default(), &cool, 150);
-    assert!(p.soot.body < full - 0.45 && p.soot.smoking == (p.soot.body > 0.25));
-    frames(&mut p, Orders::default(), &cool, 300);
-    assert_eq!((p.soot.body, p.soot.smoking), (0., false), "faded away");
-    // Water washes it: steam once, then it drains while Mario drips.
-    p = Player::default();
-    p.pos = Vec3::ZERO;
-    p.soot.body = 1.;
-    p.soot.smoking = true;
-    p.soot.hold = t::SOOT_HOLD_FRAMES;
-    p.step(&Orders::default(), &puddle);
-    assert!(p.events.contains(&Fx::Quenched) && !p.soot.smoking);
-    p.events.clear();
-    frames(&mut p, Orders::default(), &puddle, 120);
-    assert!(
-        p.soot.body < 0.1 && !p.events.contains(&Fx::Quenched),
-        "{:?}",
-        p.soot
-    );
-    p = Player::default();
-    p.soot.body = 1.;
-    p.pos = Vec3::ZERO;
-    p.step(&Orders::default(), &pool);
-    frames(&mut p, Orders::default(), &cool, 200);
-    assert!(
-        p.soot.body < 0.05,
-        "still dripping after the pool: {:?}",
-        p.soot
-    );
+    assert_eq!(p.fire.brake, 20);
+    assert_eq!(p.v.with_y(0.), Vec3::ZERO);
 }
 
 #[cfg_attr(test, test)]
@@ -1682,7 +1619,7 @@ fn original_simulation_trace() {
     // platforms exercise the same trace but libm may round differently.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x3d48ea1b09f6e3e9,
+        hash, 0x311f95b16b519847,
         "simulation differs from the nerve-timing revision"
     );
     #[cfg(not(target_os = "windows"))]

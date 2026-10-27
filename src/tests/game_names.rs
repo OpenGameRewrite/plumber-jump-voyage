@@ -21,7 +21,7 @@ fn names_round_trip() {
         assert_eq!(nerve(back, anim).name, name, "{mode:?} {name}");
     }
     assert!(state_table().contains("Wait/Wait\n"));
-    assert!(state_table().contains("DamageFire/Jump2nd ?"));
+    assert!(state_table().contains("DamageFire/Jump2nd"));
     // A name without a known sub-state still finds the family.
     assert_eq!(
         state_from_nerve("Squat", "Wait", 0.),

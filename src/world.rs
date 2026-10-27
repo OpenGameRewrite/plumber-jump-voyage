@@ -835,7 +835,7 @@ pub fn animate(
     time: Res<Time>,
     mut fx: MessageReader<Fx>,
     mut vis: Local<Visual>,
-    p: Single<(&Player, &mut Transform)>,
+    p: Single<(&Player, &mut Transform, &mut Visibility)>,
     mut pivot: Single<&mut Transform, (With<Pivot>, Without<Player>, Without<Body>)>,
     mut body: Single<
         &mut Transform,
@@ -863,7 +863,12 @@ pub fn animate(
     >,
 ) {
     let dt = time.delta_secs().clamp(1e-4, 0.05);
-    let (p, mut t) = p.into_inner();
+    let (p, mut t, mut visibility) = p.into_inner();
+    *visibility = if p.damage_hidden() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
     for f in fx.read() {
         match f {
             Fx::Jump(_) | Fx::CapBounce => vis.squash_vel += 3.2,

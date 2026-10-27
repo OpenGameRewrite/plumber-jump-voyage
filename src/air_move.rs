@@ -12,6 +12,7 @@
 //!
 //! Positions and facing stay with the caller; these functions only change the
 //! velocity (and, for the diving jump, the facing the caller passes in).
+use crate::movement::pose_math::{dot, squared_length, try_normalize_or_zero};
 use bevy::prelude::*;
 
 /// Gravity points straight down in this game.
@@ -23,13 +24,18 @@ fn flat(v: Vec3) -> Vec3 {
 }
 /// `al::limitVelocityDir`: the part of `v` along `dir` is kept within `limit`.
 fn limit_along(v: &mut Vec3, dir: Vec3, limit: f32) {
-    let Some(dir) = dir.try_normalize() else {
-        return;
-    };
-    let along = v.dot(dir);
-    if along.abs() > limit {
-        *v += dir * (along.signum() * limit - along);
+    // 0x8e5568 separates and rejoins the two components even below the limit.
+    // Normalizing the supplied axis or applying a delta changes the original's rounding.
+    let mut parallel = dir * dot(*v, dir);
+    let perpendicular = *v - parallel;
+    let length_squared = squared_length(parallel);
+    if length_squared > limit * limit {
+        let length = length_squared.sqrt();
+        if length > 0. {
+            parallel *= limit / length;
+        }
     }
+    *v = parallel + perpendicular;
 }
 /// `al::addVectorLimit`: add `add` to `v` without letting the part of `v`
 /// along `add` pass `limit`. Returns whether anything was added.
@@ -269,6 +275,7 @@ impl AirMove {
         }
         self.steered = self.input_lock == 0;
         if self.input_lock == 0 {
+            self.dir = try_normalize_or_zero(flat(self.dir)).0;
             // The direction follows the velocity, whichever way it points. A
             // jump with no horizontal speed keeps the axis it was set up with
             // (the facing) and points it the way the stick pushes: the

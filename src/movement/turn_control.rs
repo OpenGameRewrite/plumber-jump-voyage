@@ -273,6 +273,17 @@ impl TurnControl {
         }
     }
 
+    /// PlayerActionTurnControl::calcTilt (0x41a6d0): rotate the support up about
+    /// the controlled front by the signed eased turn power and the requested tilt angle.
+    pub fn tilted_up(&self, up: Vec3, max_degrees: f32) -> Vec3 {
+        let half = ((self.power_signed(up) * max_degrees) * RADIANS) * 0.5;
+        let (sin, cos) = (sinf(half), cosf(half));
+        let axis = self.direction;
+        rotate_by_quat(
+            up,
+            Quat::from_xyzw(axis.x * sin, axis.y * sin, axis.z * sin, cos),
+        )
+    }
     /// The turn of the stick since its last direction, pushed on the ring of five, and the
     /// average of the ring (summed newest first).
     fn track_stick(&mut self, last: Vec3, new: Vec3, skip_tracking: bool) {

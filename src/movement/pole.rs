@@ -231,6 +231,12 @@ impl Player {
     /// ground nerves and the wall states do; the ground pound, swimming, the
     /// slope slide and the burns do not.
     fn pole_judge_applies(&self) -> bool {
+        if self.is_dead() {
+            return false;
+        }
+        if self.burning() {
+            return self.state_frames() >= 20;
+        }
         match self.mode {
             Move::Pole => self.pole.is_pole_jump(),
             Move::GroundPound

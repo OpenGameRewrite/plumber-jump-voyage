@@ -157,12 +157,22 @@ impl GroundMove {
     /// DamageFire's own setup (0x4686b0..0x468714). The constructor forces the
     /// turn control and keeps plain acceleration/no run-only drift.
     pub fn fire() -> Self {
-        Self { ramp: false, drift: false, turn: TurnControl::swim(), border: 10000,
-            min_speed: 18., brake_speed: 10000., brake_frames: 9999,
-            stick_brake_frames: 9999, ..Self::default() }
+        Self {
+            ramp: false,
+            drift: false,
+            turn: TurnControl::swim(),
+            border: 10000,
+            min_speed: 18.,
+            brake_speed: 10000.,
+            brake_frames: 9999,
+            stick_brake_frames: 9999,
+            ..Self::default()
+        }
     }
     /// The direction stored at +0x90, distinct from the support normal.
-    pub fn movement_direction(&self) -> Vec3 { self.movement }
+    pub fn movement_direction(&self) -> Vec3 {
+        self.movement
+    }
 
     /// The control of the spin throw's ground state: no ramp, no drift, and a counter border of 0
     /// (`PlayerStateSpinCap` passes 0 to `setup`), so a released stick always brakes over the

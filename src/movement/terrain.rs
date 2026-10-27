@@ -170,7 +170,18 @@ impl Player {
         self.ground_move = None;
         // (The slope slide's velocity is the game's own, the pull included, whatever its y.)
         if was_grounded
-            && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim | Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::Dead)
+            && !matches!(
+                self.mode,
+                Move::Pole
+                    | Move::SlopeSlide
+                    | Move::Swim
+                    | Move::BurnJump
+                    | Move::BurnBounce
+                    | Move::FireRun
+                    | Move::FireFall
+                    | Move::FireDead
+                    | Move::Dead
+            )
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
             velocity = self.ground_following();
@@ -267,10 +278,24 @@ impl Player {
             } else {
                 0.
             };
-            if matches!(self.mode, Move::SlopeSlide | Move::Swim | Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::Dead) {
+            if matches!(
+                self.mode,
+                Move::SlopeSlide
+                    | Move::Swim
+                    | Move::BurnJump
+                    | Move::BurnBounce
+                    | Move::FireRun
+                    | Move::FireFall
+                    | Move::FireDead
+                    | Move::Dead
+            ) {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
-                self.grounded = !self.burning() || self.is_on_ground_by(self.v);
+                self.grounded = true;
+                if self.burning() && !self.is_on_ground_by(self.v) {
+                    self.grounded = false;
+                    self.hop_contact = true;
+                }
                 if self.mode == Move::Swim && !self.is_on_ground_by(self.v) {
                     // Touching the floor while moving away from it (a stroke off the bottom):
                     // the collider reports the floor, the actor is not on the ground
@@ -329,7 +354,8 @@ impl Player {
     /// the fall, the wall states and the swim (which scales its speed against the wall itself,
     /// `rs::scaleVelocityInertiaWallHit`).
     fn keeps_velocity_at_walls(&self) -> bool {
-        matches!(self.mode, Move::WallSlide | Move::SlopeSlide | Move::Swim)
+        self.burning()
+            || matches!(self.mode, Move::WallSlide | Move::SlopeSlide | Move::Swim)
             || self.wall_keep_applies()
     }
 }

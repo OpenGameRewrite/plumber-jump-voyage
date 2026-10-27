@@ -30,11 +30,11 @@ pub(super) const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
 
 pub(super) use super::console_libm::{acosf, asinf, atan2f, cosf, sinf};
 
-pub(super) fn dot(a: Vec3, b: Vec3) -> f32 {
+pub(crate) fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
-pub(super) fn squared_length(v: Vec3) -> f32 {
+pub(crate) fn squared_length(v: Vec3) -> f32 {
     v.x * v.x + v.y * v.y + v.z * v.z
 }
 

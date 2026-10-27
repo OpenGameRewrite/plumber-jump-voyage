@@ -314,7 +314,7 @@ impl Player {
 
     /// The actor's water judge, asked after a state's own step: the player enters the water.
     pub(super) fn judge_in_water(&mut self, scene: &Course) {
-        if matches!(self.mode, Move::Swim | Move::Pole) || self.nerve.deferred {
+        if self.is_dead() || matches!(self.mode, Move::Swim | Move::Pole) || self.nerve.deferred {
             return;
         }
         if self.actor_name() == "Jump" && !self.out_in_water_judged(scene) {
