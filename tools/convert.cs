@@ -307,7 +307,7 @@ partial class ConvertOutfit {
         }
         // The clips the conversion keeps (one per name); the baked and the curve files use the same selection.
         IEnumerable<FSKA> ChosenClips(List<FSKA> all) {
-            var prefixes=new[]{"Wait","Run","Dash","Fire","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
+            var prefixes=new[]{"Wait","Run","Dash","Fire","DeadFire","Walk","Jump","Fall","Rolling","Roll","Cap","Throw","HipDrop","Squat","Dive","Swim","Wall","Spin","Pole","Climb","Slide","Land","Brake","Turn","HeadSliding"};
             // --clip=NAME (repeatable) selects exactly those clips, whatever their
             // length or name, to add them to an existing conversion.
             var chosen=new HashSet<string>(args.Where(a=>a.StartsWith("--clip=")).Select(a=>a.Substring(7)));

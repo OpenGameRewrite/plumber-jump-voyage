@@ -476,7 +476,7 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     if p.cap.as_ref().is_some_and(|cap| cap.grounding_effect().0) {
         wanted.push("FlyRollingGrounding");
     }
-    if matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun) || p.soot.smoking {
+    if p.soot.smoking {
         wanted.push("StateFire");
     }
     // The drops running off the player after he left the water.
@@ -512,6 +512,7 @@ pub fn emitted_by(fx: Fx) -> Vec<&'static str> {
 /// The effects whose emit call the controller makes in this frame.
 pub fn code_calls(p: &Player) -> Vec<&'static str> {
     let mut calls = vec![];
+    if p.soot.smoke_called { calls.push("StateFire"); }
     if p.roll_effect_called() {
         calls.push("Rolling");
     }

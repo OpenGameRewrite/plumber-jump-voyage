@@ -50,6 +50,9 @@ impl Default for WetControl {
     }
 }
 impl WetControl {
+    /// PlayerWetControl::isWet reads the wetness counter.
+    pub(super) fn is_wet(&self) -> bool { self.wetness > 0 }
+
     /// `recordInWater`: the player is under the water.
     pub(super) fn record_in_water(&mut self) {
         self.drip_wait = DRIP_WAIT;

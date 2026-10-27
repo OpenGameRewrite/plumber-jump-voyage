@@ -887,6 +887,7 @@ impl Recorder {
             Some(_) if p.restarted_by_sensor() => p.state_frames(),
             Some(_) => 0,
         };
+        if let Some(steps) = p.fire_sub_steps() { self.sub_steps = steps; }
         self.last_state = Some((label, p.state_frames()));
         // A nerve the actor chose after the state's update (the swim's cap throw) shows -1 until
         // the state applies it, and its first step then counts 1 (the keeper applied it and

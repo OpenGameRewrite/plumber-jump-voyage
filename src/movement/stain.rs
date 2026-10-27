@@ -1,0 +1,67 @@
+﻿//! Fire stain requests and accumulation (`PlayerStainControl`, 0x465a84..0x46690c).
+//! Only fire type 2 is needed here. Other stain types can replace the active request without
+//! changing the damage states. The imported material remains a rendering approximation.
+use super::*;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Soot {
+    pub body: f32,
+    pub cap: f32,
+    pub smoking: bool,
+    pub smoke_called: bool,
+    pub(super) hold: u32,
+    decoration: f32,
+    active: bool,
+    pending: Option<f32>,
+}
+impl Soot {
+    /// Requests replace the pending increment; repeated requests are not accumulated here.
+    pub fn record_damage_fire(&mut self) { self.pending = Some(0.005); }
+    pub fn record_damage_fire_dead(&mut self) { self.pending = Some(1.); }
+    pub fn record_black_smoke(&mut self) { self.pending = Some(0.02); }
+
+    fn update(&mut self, cap_on: bool, in_water: bool, wet: bool) {
+        self.smoke_called = false;
+        if in_water || wet {
+            // recordInWater / recordInWet: cancel the non-ice request and hold. Only the
+            // water path multiplies levels; lingering wetness is not a second water timer.
+            self.pending = None;
+            self.smoking = false;
+            self.hold = 0;
+            if in_water {
+                self.body *= 0.98;
+                self.cap *= 0.98;
+                self.decoration *= 0.98;
+            }
+        }
+        if let Some(increment) = self.pending.take() {
+            self.active = true;
+            self.body = (self.body + increment).min(self.body.max(1.));
+            self.cap = if cap_on { (self.cap + increment).min(self.cap.max(1.)) } else { 0. };
+            // The classic model has no separate decorated-cap gate (U07). Keep its level
+            // independently, rather than silently treating it as the body's material target.
+            self.decoration = (self.decoration + increment).min(self.decoration.max(1.));
+            self.hold = 300;
+            if self.body >= 0.75 { self.smoking = true; self.smoke_called = true; }
+        } else if self.active {
+            if self.hold > 0 {
+                self.hold -= 1;
+            } else {
+                self.body = (self.body - 1. / 300.).max(0.);
+                self.cap = (self.cap - 1. / 300.).max(0.);
+            }
+            if !cap_on { self.cap = 0.; }
+            // The third channel is retained on the ordinary fade path (0x46666c..0x466740).
+            if self.body.abs() < 0.001 && self.cap.abs() < 0.001 && self.decoration.abs() < 0.001 {
+                self.active = false;
+            }
+        }
+        if self.body <= 0.25 { self.smoking = false; }
+    }
+}
+impl Player {
+    pub(super) fn update_soot(&mut self, scene: &Course) {
+        let in_water = self.mode == Move::Swim || scene.wet(self.pos + Vec3::Y * 0.8);
+        self.soot.update(self.cap.is_none(), in_water, self.wet.is_wet());
+    }
+}

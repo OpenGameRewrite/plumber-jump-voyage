@@ -128,6 +128,11 @@ pub struct GroundMove {
     /// Frames of speed the brake counter needs before a release brakes over the brake frames
     /// (`mCounterBorder`, the last argument of `setup`).
     border: i32,
+    min_speed: f32,
+    brake_speed: f32,
+    brake_frames: i32,
+    stick_brake_frames: i32,
+    movement: Vec3,
 }
 impl Default for GroundMove {
     /// The run's control.
@@ -140,10 +145,25 @@ impl Default for GroundMove {
             turn_power: 0.,
             hill: 0.,
             border: t::BRAKE_ON_COUNTER as i32,
+            min_speed: NORMAL_MIN,
+            brake_speed: t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE,
+            brake_frames: t::BRAKE_FRAMES as i32,
+            stick_brake_frames: STICK_ON_BRAKE_FRAMES,
+            movement: Vec3::ZERO,
         }
     }
 }
 impl GroundMove {
+    /// DamageFire's own setup (0x4686b0..0x468714). The constructor forces the
+    /// turn control and keeps plain acceleration/no run-only drift.
+    pub fn fire() -> Self {
+        Self { ramp: false, drift: false, turn: TurnControl::swim(), border: 10000,
+            min_speed: 18., brake_speed: 10000., brake_frames: 9999,
+            stick_brake_frames: 9999, ..Self::default() }
+    }
+    /// The direction stored at +0x90, distinct from the support normal.
+    pub fn movement_direction(&self) -> Vec3 { self.movement }
+
     /// The control of the spin throw's ground state: no ramp, no drift, and a counter border of 0
     /// (`PlayerStateSpinCap` passes 0 to `setup`), so a released stick always brakes over the
     /// brake frames, whatever speed the control has built up (the run's border is 10 frames).
@@ -163,7 +183,7 @@ impl GroundMove {
         self.brake_counter = 0;
         self.hill = 0.;
         let speed = squared_length(velocity).sqrt();
-        if speed >= t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE {
+        if speed >= self.brake_speed {
             let (heading, moving) = try_normalize_or_zero(velocity);
             let (front, facing) = try_normalize_or_zero(verticalize_vec(up, actor_front));
             if moving && facing && !is_opposite_dir(front, heading) {
@@ -183,7 +203,7 @@ impl GroundMove {
         turn_power: f32,
     ) {
         let border = self.border;
-        self.brake_counter = if speed > t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE {
+        self.brake_counter = if speed > self.brake_speed {
             (steps as i32).min(border)
         } else {
             0
@@ -305,7 +325,7 @@ impl GroundMove {
             // Accelerate toward what the stick's tilt allows.
             let tilt = squared_length(input.stick).sqrt();
             let top = self.hill_speed() + input.max_speed;
-            target = tilt * top + (1. - tilt) * NORMAL_MIN;
+            target = tilt * top + (1. - tilt) * self.min_speed;
             if into_wall && target > input.max_speed {
                 target = input.max_speed;
             }
@@ -314,7 +334,7 @@ impl GroundMove {
         }
         // Frames that speed above the brake speed have lasted.
         let border = self.border;
-        if speed > t::NORMAL_MAX * t::BRAKE_ON_SPEED_RATE {
+        if speed > self.brake_speed {
             self.brake_counter = (self.brake_counter + 1).min(border);
         } else if self.brake_counter < border {
             self.brake_counter = 0;
@@ -328,13 +348,13 @@ impl GroundMove {
         let brake_frames = if into_wall {
             1
         } else if !moving_on && opposed {
-            t::BRAKE_FRAMES as i32
+            self.brake_frames
         } else if !(no_input || moving_on) {
             1
         } else if !(opposed || no_input) {
-            STICK_ON_BRAKE_FRAMES
+            self.stick_brake_frames
         } else if self.brake_counter >= border {
-            t::BRAKE_FRAMES as i32
+            self.brake_frames
         } else {
             1
         };
@@ -362,13 +382,15 @@ impl GroundMove {
             steer.velocity = Vec3::new(speed * wanted.x, speed * wanted.y, speed * wanted.z);
             steer.set_velocity = pull(steer.velocity);
             steer.brake_run = true;
+            self.movement = wanted;
             return steer;
         }
         // Turning the other way at a crawl: pivot on the spot.
-        if opposed && !(wanted_zero || (along >= 0. && speed > NORMAL_MIN)) {
+        if opposed && !(wanted_zero || (along >= 0. && speed > self.min_speed)) {
             steer.velocity = Vec3::new(speed * heading.x, speed * heading.y, speed * heading.z);
             steer.set_velocity = pull(steer.velocity);
             steer.pivot = true;
+            self.movement = wanted;
             return steer;
         }
         steer.stopped = is_near_zero_value(speed, NEAR_ZERO_SPEED) && !has_input;
@@ -382,7 +404,7 @@ impl GroundMove {
             let (side, has_side) = try_normalize_or_zero(verticalize_vec(wanted, heading));
             if has_side {
                 let keep = lerp_value(DRIFT_KEEP_LEAST, DRIFT_KEEP_MOST, smooth);
-                let forward = (speed * dot(wanted, heading)).max(NORMAL_MIN);
+                let forward = (speed * dot(wanted, heading)).max(self.min_speed);
                 let along_side = dot(heading, side);
                 let drift = Vec3::new(
                     keep * (speed * (side.x * along_side)),
@@ -409,6 +431,7 @@ impl GroundMove {
         if let Some((normal, true)) = input.wall {
             cut_climb(&mut velocity, -up * GRAVITY_MOVE, normal);
         }
+        self.movement = wanted;
         steer.velocity = velocity;
         steer.set_velocity = pull(velocity);
         steer

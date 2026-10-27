@@ -166,24 +166,6 @@ mod t {
     /// Frames in the air after which a roll's touchdown raises its reaction.
     pub const ROLL_LAND_AIR_FRAMES: i32 = 20;
 
-    pub const DAMAGE_FIRE_JUMP_POWER_1ST: f32 = 20.;
-    pub const DAMAGE_FIRE_JUMP_POWER_2ND: f32 = 20.;
-    pub const DAMAGE_FIRE_JUMP_MOVE: f32 = 10.;
-    pub const DAMAGE_FIRE_GRAVITY: f32 = 0.9;
-    pub const DAMAGE_FIRE_NO_GRAVITY_FRAMES: u32 = 20;
-    pub const DAMAGE_FIRE_RUN_TIME: u32 = 60;
-    pub const DAMAGE_FIRE_RUN_SPEED: f32 = 18.;
-    pub const DAMAGE_FIRE_RUN_BRAKE_FRAMES: f32 = 20.;
-    pub const DAMAGE_FIRE_RUN_ANIM_RATE: f32 = 0.3;
-    // Soot after a burn, from the original stain control's fire entry.
-    pub const SOOT_GAIN: f32 = 0.005;
-    pub const SOOT_HOLD_FRAMES: u32 = 300;
-    pub const SOOT_FADE_FRAMES: f32 = 300.;
-    pub const SOOT_SMOKE_ON: f32 = 0.75;
-    pub const SOOT_SMOKE_OFF: f32 = 0.25;
-    pub const SOOT_WASH: f32 = 0.98;
-    /// Mario stays wet this long after leaving deep water.
-    pub const WET_FRAMES: u32 = 300;
     pub const JUMP_ACCEL_TURN: f32 = 0.3;
     pub const SLOPE_SLIDE_ANGLE_START: f32 = 26.;
     pub const SLOPE_SLIDE_ANGLE_END: f32 = 10.;
@@ -259,8 +241,14 @@ pub type ControllerState = (
 );
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
+mod damage;
+mod damage_fire;
+mod stain;
 #[path = "movement/ground.rs"]
 mod ground;
+use damage::Damage;
+use damage_fire::FireControl;
+pub use stain::Soot;
 #[path = "movement/ground_move.rs"]
 pub(crate) mod ground_move;
 #[path = "movement/ground_pose.rs"]
@@ -579,6 +567,9 @@ pub enum Move {
     BurnJump,
     BurnBounce,
     FireRun,
+    FireFall,
+    FireDead,
+    Dead,
     WallSlide,
     WallJump,
     Ledge,
@@ -590,7 +581,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 37] = [
+    pub const ALL: [Move; 40] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -620,6 +611,9 @@ impl Move {
         Self::BurnJump,
         Self::BurnBounce,
         Self::FireRun,
+        Self::FireFall,
+        Self::FireDead,
+        Self::Dead,
         Self::WallSlide,
         Self::WallJump,
         Self::Ledge,
@@ -657,6 +651,8 @@ impl Move {
             Self::BurnJump => "Hot!",
             Self::BurnBounce => "Hot! (bounce)",
             Self::FireRun => "Fire run",
+            Self::FireFall => "Fire fall",
+            Self::FireDead | Self::Dead => "Dead",
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
             Self::Ledge => "Ledge hang",
@@ -919,20 +915,6 @@ impl Anim {
         }
     }
 }
-/// Soot left by a burn, as the original's stain control: it builds up while
-/// burning, stays for five seconds, then fades over five more. Water washes
-/// it off quickly, and keeps doing so while Mario drips afterwards.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Soot {
-    /// Stain strength on the body and on the worn cap, 0 to 1.
-    pub body: f32,
-    pub cap: f32,
-    /// Smoke wisps rise from a strong stain until it fades or gets wet.
-    pub smoking: bool,
-    hold: u32,
-    wet: u32,
-    washing: bool,
-}
 pub use crate::cap::{Cap, CapPhase};
 
 /// The throw state's own bookkeeping (`PlayerSpinCapAttack`).
@@ -968,24 +950,6 @@ struct SubClip {
     active: bool,
 }
 
-#[derive(Debug)]
-struct FireControl {
-    frames: u32,
-    direction: Vec3,
-    extend: u32,
-    brake: u32,
-}
-impl Default for FireControl {
-    fn default() -> Self {
-        Self {
-            frames: 0,
-            direction: Vec3::Z,
-            extend: 0,
-            brake: 0,
-        }
-    }
-}
-
 /// The pose of a run on a slope: the orientation, for the facing it was made
 /// for (a state that turns the player elsewhere makes it upright again).
 #[derive(Clone, Copy, Debug)]
@@ -999,6 +963,7 @@ pub struct Player {
     /// State changes decided last step, waiting for their first step.
     nerve: Nerve,
     fire: FireControl,
+    damage: Damage,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
     pole: PoleControl,
     rolling: RollControl,
@@ -1285,6 +1250,7 @@ impl Default for Player {
         Self {
             nerve,
             fire: FireControl::default(),
+            damage: Damage::default(),
             pole: PoleControl::default(),
             rolling: RollControl::default(),
             collider_end: None,
@@ -1785,9 +1751,6 @@ fn spin_air_takeoff() -> air_move::Takeoff {
         fall_max: t::FALL_MAX,
     }
 }
-fn lerp_clamped(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t.clamp(0., 1.)
-}
 impl Player {
     pub fn flat_speed(&self) -> f32 {
         self.vel.with_y(0.).length()
@@ -1840,7 +1803,7 @@ impl Player {
         // (The pole's hold has no pull into the floor under it, and the slope slide keeps the
         // game's own velocity, the pull included.)
         if self.grounded
-            && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim)
+            && !matches!(self.mode, Move::Pole | Move::SlopeSlide | Move::Swim | Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::Dead)
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
             if self.landing_speed < 0. {
@@ -2131,11 +2094,12 @@ impl Player {
             self.frame = steps;
         }
         if let Some(steps) = s.sub_steps {
+            if self.burning() || self.is_dead() { self.frame = steps; }
             self.set_wait_steps(steps);
         }
         // On the ground in a state that flies: the contact row, whose landing
         // the next step decides.
-        self.nerve.touchdown = self.grounded && self.mode.in_flight();
+        self.nerve.touchdown = self.grounded && self.mode.in_flight() && !self.burning() && !self.is_dead();
         if self.nerve.touchdown {
             // The row reports the fall speed that reached the ground; the
             // ground has already stopped it.
@@ -2617,6 +2581,7 @@ impl Player {
         // The cap updates before the player does, within the same frame.
         self.update_cap(&o, scene);
         self.cap_sensor_phase(&o);
+        self.dispatch_fire_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
@@ -2642,31 +2607,18 @@ impl Player {
             self.grounded,
             self.grounded && !was_grounded,
         );
-        // Hot ground takes over any landing; shallow water puts a burn out.
-        let hot = self.grounded && scene.hot(self.pos);
-        let quench = self.grounded && !hot && self.burning() && scene.puddle(self.pos);
-        if quench {
-            self.events.push(Fx::Quenched);
-            self.end_burn();
-        } else if self.grounded
+        if self.grounded
             && !was_grounded
-            && !hot
+            && !self.burning()
+            && !self.is_dead()
             && self.mode != Move::GroundSpin
             && self.mode != Move::SlopeSlide
             && self.mode != Move::Swim
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
-            // The contact is flagged now; the next step decides what it means.
-            // (The ground spin only regains the floor it let go of when it was
-            // chosen, and the run nerve runs on over a short drop: it judges
-            // the fall only after five steps without ground; neither looks at
-            // the contact as a landing.)
             self.nerve.touchdown = true;
             self.touchdown_speed = self.landing_speed;
-        }
-        if hot {
-            self.burn();
         }
         self.finish_frame(scene);
     }
@@ -2731,8 +2683,8 @@ impl Player {
             Move::RollJump => self.roll_jump_step(o),
             Move::Dive => self.head_sliding(o, scene),
             Move::SlopeSlide => self.slope_slide(o),
-            Move::BurnJump | Move::BurnBounce => self.burn_air(o),
-            Move::FireRun => self.fire_run(o),
+            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead => self.damage_fire_step(o, scene),
+            Move::Dead => {},
             Move::LongJump => self.long_jump_air(o),
             Move::Backflip => self.back_jump_air(o),
             Move::Sideflip => self.turn_jump_air(o),
@@ -2803,6 +2755,8 @@ impl Player {
     fn finish_frame(&mut self, scene: &Course) {
         self.update_combo_counters();
         self.update_soot(scene);
+        let dead = self.is_dead();
+        self.damage.update(dead);
         // A state chosen this step has run no step yet: its first one is next.
         // The nerve's own steps restart with a new actor nerve, chosen or
         // reached by a sub-state that belongs to another one.
@@ -3449,100 +3403,6 @@ impl Player {
         let downhill = plane::normalized_or_zero(normal.with_y(0.));
         heading != Vec3::ZERO && downhill != Vec3::ZERO && heading.dot(downhill) >= 0.
     }
-    /// Hot ground, as the original's fire damage: Mario leaps clutching his
-    /// seat, bounces once where he lands, then runs flat out for a second
-    /// before the normal run takes over. Touching hot ground again restarts it.
-    fn burn(&mut self) {
-        self.change(Move::BurnJump, "FireRunStart", |p| {
-            // The leap keeps the current speed, turned along the stick; with the
-            // stick at rest it goes straight up.
-            let h = if p.tilt > 0.05 {
-                p.stick * p.speed_h()
-            } else {
-                Vec3::ZERO
-            };
-            p.fire_leap(
-                h,
-                t::DAMAGE_FIRE_JUMP_POWER_1ST,
-                t::DAMAGE_FIRE_NO_GRAVITY_FRAMES,
-            );
-            p.events.push(Fx::Burned(false));
-        });
-    }
-    fn burning(&self) -> bool {
-        matches!(self.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun)
-    }
-    /// The soot stain: every burning frame darkens it, up to full strength
-    /// after 200 frames, and restarts the hold. Water multiplies it down each
-    /// frame and cancels the hold, so a quick dip clears it within seconds.
-    fn update_soot(&mut self, scene: &Course) {
-        let cap_on = self.cap.is_none();
-        let burning = self.burning();
-        let s = &mut self.soot;
-        let submerged = scene.wet(self.pos + Vec3::Y * 0.8);
-        s.wet = if submerged {
-            t::WET_FRAMES
-        } else {
-            s.wet.saturating_sub(1)
-        };
-        let soaked = submerged || s.wet > 0 || self.grounded && scene.puddle(self.pos);
-        if soaked {
-            // A puff of steam when water first reaches a visible stain.
-            if !s.washing && s.body > t::SOOT_SMOKE_OFF && !self.events.contains(&Fx::Quenched) {
-                self.events.push(Fx::Quenched);
-            }
-            s.smoking = false;
-            s.hold = 0;
-            s.body *= t::SOOT_WASH;
-            s.cap *= t::SOOT_WASH;
-        } else if burning {
-            s.body = (s.body + t::SOOT_GAIN).min(1.);
-            s.cap = if cap_on {
-                (s.cap + t::SOOT_GAIN).min(1.)
-            } else {
-                0.
-            };
-            s.hold = t::SOOT_HOLD_FRAMES;
-            s.smoking |= s.body >= t::SOOT_SMOKE_ON;
-        } else if s.hold > 0 {
-            s.hold -= 1;
-            if !cap_on {
-                s.cap = 0.;
-            }
-        } else {
-            let step = 1. / t::SOOT_FADE_FRAMES;
-            s.body = (s.body - step).max(0.);
-            s.cap = if cap_on { (s.cap - step).max(0.) } else { 0. };
-        }
-        s.washing = soaked;
-        if s.body <= t::SOOT_SMOKE_OFF {
-            s.smoking = false;
-        }
-        if s.body < 0.001 && s.cap < 0.001 {
-            s.body = 0.;
-            s.cap = 0.;
-        }
-    }
-    fn fire_leap(&mut self, h: Vec3, power: f32, extend: u32) {
-        let h = h.clamp_length_max(t::DAMAGE_FIRE_JUMP_MOVE);
-        self.fire.direction = h.normalize_or(self.facing);
-        self.v = h + Vec3::Y * power;
-        self.fire.extend = extend;
-        self.grounded = false;
-        self.cap_jump_possible = true;
-    }
-    /// The bounce after the leap: a second, lower hop without the float.
-    fn fire_bounce(&mut self) {
-        self.change(Move::BurnBounce, "FireRunStart", |p| {
-            let h = if p.tilt > 0.05 {
-                p.stick * p.speed_h()
-            } else {
-                Vec3::ZERO
-            };
-            p.fire_leap(h, t::DAMAGE_FIRE_JUMP_POWER_2ND, 0);
-            p.events.push(Fx::Burned(true));
-        });
-    }
     /// Throws while burning: the cap flies without interrupting the burn, except
     /// a spin throw once Mario has landed, which ends it.
     fn fire_throws(&mut self, o: &Orders) -> bool {
@@ -3571,98 +3431,6 @@ impl Player {
             false,
         );
         false
-    }
-    fn burn_air(&mut self, o: &Orders) {
-        if self.fire_throws(o) {
-            return;
-        }
-        self.fire_air(t::DAMAGE_FIRE_GRAVITY);
-    }
-    /// Air control during the burn: the stick pushes along and across the
-    /// leap's direction, within the leap's speed.
-    fn fire_air(&mut self, gravity: f32) {
-        if self.fire.extend > 0 {
-            self.fire.extend -= 1;
-        } else {
-            self.v.y = (self.v.y - gravity).max(-t::FALL_MAX);
-        }
-        let mut h = self.v.with_y(0.);
-        if h.dot(self.fire.direction) < 0. {
-            self.fire.direction = -self.fire.direction;
-        }
-        let dir = self.fire.direction;
-        let side = Vec3::Y.cross(dir);
-        let input = self.stick * self.tilt;
-        let along = input.dot(dir);
-        let accel = if along > 0. || along.abs() < 0.001 {
-            t::JUMP_ACCEL_FRONT
-        } else {
-            t::JUMP_ACCEL_BACK
-        };
-        h += dir * along * accel + (input - dir * along) * t::JUMP_ACCEL_TURN;
-        let limit = t::DAMAGE_FIRE_JUMP_MOVE;
-        self.set_h(dir * h.dot(dir).clamp(-limit, limit) + side * h.dot(side).clamp(-limit, limit));
-        if self.tilt > 0.05 {
-            self.facing = turn(self.facing, self.stick, 0.1);
-        }
-    }
-    fn start_fire_run(&mut self) {
-        self.fire.frames = 0;
-        self.fire_run_landed();
-    }
-    /// The run phase restarts on every landing; the burn's clock does not.
-    fn fire_run_landed(&mut self) {
-        let brake = t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32;
-        if self.mode == Move::FireRun {
-            // Landing again during the run: the clip loops on.
-            self.frame = 0;
-            self.fire.brake = brake;
-            return;
-        }
-        self.change(Move::FireRun, "FireRun", move |p| {
-            p.anim.rate = t::DAMAGE_FIRE_RUN_SPEED * t::DAMAGE_FIRE_RUN_ANIM_RATE;
-            p.fire.brake = brake;
-        });
-    }
-    /// Running on the burn: full fire speed while the stick is held, easing to
-    /// a stop when released. Only now can Mario jump out of it.
-    fn fire_run(&mut self, o: &Orders) {
-        if self.fire.frames >= t::DAMAGE_FIRE_RUN_TIME {
-            self.end_burn();
-            return;
-        }
-        self.fire.frames += 1;
-        if self.fire_throws(o) {
-            return;
-        }
-        if !self.grounded {
-            // Off a ledge: a plain fall within the leap's speed, still burning.
-            if self.frame == 0 {
-                self.fire_leap(self.v.with_y(0.), 0., 0);
-            }
-            self.frame = 1;
-            self.fire_air(t::GRAVITY_AIR);
-            return;
-        }
-        if self.pre_jump > 0 {
-            self.ground_jump(o);
-            return;
-        }
-        if self.tilt > 0.05 {
-            let limit = lerp_clamped(
-                t::ROUND_LIMIT_DEG,
-                t::ROUND_LIMIT_DEG_MIN,
-                t::DAMAGE_FIRE_RUN_SPEED / t::NORMAL_MAX,
-            );
-            self.facing = turn(self.facing, self.stick, limit.to_radians());
-            self.fire.brake = 0;
-        } else {
-            self.fire.brake = (self.fire.brake + 1).min(t::DAMAGE_FIRE_RUN_BRAKE_FRAMES as u32);
-        }
-        let k = self.fire.brake as f32 / t::DAMAGE_FIRE_RUN_BRAKE_FRAMES;
-        let ease = k * (1.5 - 0.5 * k * k);
-        self.set_h(self.facing * t::DAMAGE_FIRE_RUN_SPEED * (1. - ease).clamp(0., 1.));
-        self.v.y = -t::GRAVITY;
     }
     fn end_burn(&mut self) {
         if self.grounded {
@@ -5044,25 +4812,7 @@ impl Player {
             // enough (`PlayerStateRolling::control`).
             Move::Roll => return,
             Move::SlopeSlide => {}
-            // The leap lands in a bounce, keeping speed only along the stick.
-            Move::BurnJump => {
-                if self.tilt <= 0.05 {
-                    self.set_h(Vec3::ZERO);
-                }
-                self.fire_bounce();
-                return;
-            }
-            Move::BurnBounce => {
-                if self.tilt <= 0.05 {
-                    self.set_h(Vec3::ZERO);
-                }
-                self.start_fire_run();
-                return;
-            }
-            Move::FireRun => {
-                self.fire_run_landed();
-                return;
-            }
+            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead | Move::Dead => return,
             _ => {
                 // `PlayerActorHakoniwa::setNerveOnGround` asks its judges in
                 // this order: the buffered jump, `PlayerJudgeStartRun` (which
@@ -5112,6 +4862,8 @@ impl Player {
         });
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
+        // DeadFire disables movement collision; retain the last contact report.
+        if self.is_dead() { return; }
         let old = self.pos;
         let was_grounded = self.grounded;
         self.grounded = false;
