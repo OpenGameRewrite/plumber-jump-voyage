@@ -548,15 +548,24 @@ linked/conditional areas are unproved and retain the old rule. The game's
 `isNearZero` scale guard is preserved. A SignBoardDanger sensor is still an actor
 contact even though the sign also has exported collision.
 
-Death-drop coins cannot yet be distinguished in recorded `contacts`: class
-`Coin` supports both placed and unplaced instances (`Coin::init`), and a late
-first contact does not prove a late spawn. `Coin::appearPlayerDead` and
-`appearPlayerDeadReplace` establish the real origin, but the probe does not log
-their actor identities. Coin contacts therefore remain refused after death.
-The minimal probe addition is a stable actor token plus an origin tag set by
-those two appearance paths, cleared on every reuse/other appearance; include it
-in each typed contact. Placement absence alone is insufficient (other spawners
-also create Coin). No existing recording is retroactively tagged by timing.
+New probe contacts append `actor=<positive observation token>` and
+`origin=player_death_coin|unknown`. The token identifies one actor throughout
+its pooled reuse without recording a guest address; reconstruction at that
+address invalidates the old identity. The origin is set only on return from
+`Coin::appearPlayerDead` or `appearPlayerDeadReplace`, and cleared by the shared
+actor alive/dead paths before reuse or kill. Registry exhaustion emits token
+zero and unknown origin. Class `Coin`, placement absence and late contact timing
+alone cannot prove provenance; ordinary placed and other spawned coins remain unknown.
+
+A player attack overlap with class `Coin`, a positive token and explicit
+`player_death_coin` origin is accepted only while the trace is in a `Dead`
+state/substate of an episode whose static cause was proved above. Contacts
+before Dead, after leaving Dead, Cappy contacts and handled incoming messages
+retain their previous rules. Old recordings without these fields keep their
+verdict; the converter never fabricates origin. The environment self-check
+(`py tools/compare-traces.py --self-check`) covers missing/invalid identities,
+unknown or cleared origin, class mismatches, before/after Dead, unproved death,
+Cappy and handled messages, as well as the accepted tagged death-coin case.
 
 ### Recording repeat determinism
 

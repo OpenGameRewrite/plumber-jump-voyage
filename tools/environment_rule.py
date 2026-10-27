@@ -19,7 +19,8 @@ of Mario's sensors (docs/fidelity-harness.md, "Environment rule"):
   are static; without that the flat-floor model cannot reproduce them.
 * `floor height changed` on the frame a fall lands is the intended drop, not a moving floor.
 * Damage/death episodes need an entry caused by exported static floor codes or a DeathArea.
-  Actor contacts remain independent; the current probe cannot prove death-coin provenance.
+  During Dead, a typed player attack overlap with a probe-tagged player-death Coin is accepted.
+  Every other actor contact is still judged independently.
 
 Two kinds of probe log exist. A log with the `contacts` and `hit_hosts` columns (typed) names
 both sensors, the message and its answer, and the host of every surface. An older log only has
@@ -112,6 +113,7 @@ def parse_contacts(cell):
             "self": unescape(sname), "self_type": stype, "other": unescape(oname), "other_type": otype,
             "host": unescape(fields.get("h", "")), "host_class": unescape(fields.get("c", "")),
             "message": unescape(fields.get("m", "")), "answer": fields.get("r", ""),
+            "actor": fields.get("actor", ""), "origin": fields.get("origin", ""),
         })
     return out
 
@@ -456,6 +458,13 @@ class Judge:
                 v.eye_overlaps.setdefault(host, set()).add(f)
                 continue
             if c["kind"] == "a":
+                if (c["who"] == "player" and c["host_class"] == "Coin"
+                        and re.fullmatch(r"[1-9][0-9]*", c["actor"])
+                        and c["origin"] == "player_death_coin"
+                        and "Dead" in self.rows[f].get("state", "").split("/") and f in self._scripted):
+                    v.accept(f, "player death-drop coin",
+                             f"probe actor {c['actor']} tagged by Coin death appearance, during proved Dead episode")
+                    continue
                 self._physical_overlap(f, host, where, host_class=c["host_class"])
 
     # ---- map geometry ----
@@ -659,6 +668,29 @@ def self_check():
                     "k=a;w=player;s=Body:1;o=Cap:6;h=Sign;c=SignBoardDanger;m=;r="):
         touched = {f: dict(r, contacts=contact if f == 5 else "") for f, r in g.items()}
         assert 5 in judge_run(touched, geometry, listed, **evidence).refused
+    # Only explicit origin + positive actor identity during a proved Dead state
+    # exempts a player attack overlap. Legacy/placed/reused coins fail closed.
+    coin = "k=a;w=player;s=Body:1;o=Body:12;h=Coin;c=Coin;m=;r=;actor=7;origin=player_death_coin"
+    touched = {f: dict(r, contacts=coin) for f, r in g.items()}
+    v = judge_run(touched, geometry, listed, **evidence)
+    assert set(v.refused) == {0, 1, 2, 3}, v.refused
+    assert v.accepted["player death-drop coin"]["frames"] == {4, 5}
+    for invalid in (coin.replace(";origin=player_death_coin", ""),
+                    coin.replace(";actor=7", ""), coin.replace("actor=7", "actor=0"),
+                    coin.replace("actor=7", "actor=-1"), coin.replace("actor=7", "actor=bad"),
+                    coin.replace("origin=player_death_coin", "origin=unknown"),
+                    coin.replace("c=Coin;", "c=RunAwayNpc;"), coin.replace("w=player", "w=cap"),
+                    coin.replace("k=a", "k=p").replace("m=;r=", "m=rs::SensorMsgPushToPlayer;r=1")):
+        touched = {f: dict(r, contacts=invalid if f == 5 else "") for f, r in g.items()}
+        assert 5 in judge_run(touched, geometry, listed, **evidence).refused, invalid
+    touched = {f: dict(r, contacts=coin if f == 5 else "") for f, r in g.items()}
+    assert 5 in judge_run(touched, geometry, listed).refused, "unproved damage cause"
+    reused = {f: dict(r, contacts=coin if f == 4 else coin.replace("origin=player_death_coin", "origin=unknown"))
+              for f, r in g.items()}
+    assert 5 in judge_run(reused, geometry, listed, **evidence).refused, "origin cleared on actor reuse"
+    respawn = {f: dict(r, state="Run/Run" if f == 5 else r["state"], contacts=coin if f == 5 else "")
+               for f, r in g.items()}
+    assert 5 in judge_run(respawn, geometry, {}, **evidence).refused, "no waiver after leaving Dead"
     # Direct-start damage may begin in preroll, whose missing hosts require
     # exact start triangle identity plus vertices at the export's precision.
     pre = {-2: dict(g[0], hit_hosts=""), -1: dict(g[1], hit_hosts="", collision="ground=0")}
