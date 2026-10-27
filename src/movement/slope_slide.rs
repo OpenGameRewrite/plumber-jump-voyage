@@ -53,6 +53,12 @@ fn add_velocity_to_direction(velocity: Vec3, dir: Vec3, force: f32) -> Vec3 {
 }
 
 impl Player {
+    /// Lockstep: the counter a recorded slope slide has built up.
+    pub(super) fn resume_slope_slide(&mut self, s: &Snapshot) {
+        if self.mode == Move::SlopeSlide {
+            self.slide.force_counter = (s.slope_flat_steps as i32).min(t::SLOPE_FORCE_FRAMES as i32);
+        }
+    }
     /// PlayerStateSlope::isEnableCancelSandSink (0x481328).
     pub(super) fn sand_slope_cancel(&self) -> bool { self.slide.force_counter > 15 }
     /// `PlayerJudgePreInputJump::judge`: a jump press still buffered counts, except while the

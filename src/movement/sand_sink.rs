@@ -277,6 +277,38 @@ impl Player {
         } else { None };
         self.sand.called=self.sand.effect.is_some();
     }
+    /// Lockstep: the depth the row shows (zero when no sand is under the body), and for the
+    /// sand states the ground control, the pivot and the jump's air control as the row implies.
+    pub(super) fn resume_sand(&mut self, s: &Snapshot) {
+        self.sand.depth = s.sand.map_or(0., |hint| hint.depth);
+        self.sand.surface_offset = 0.;
+        self.sand.safe = self.sand.depth <= 0.;
+        if !self.in_sand_state() {
+            return;
+        }
+        let hint = s.sand.unwrap_or_default();
+        self.sand.normal = self.collided_ground_normal();
+        let steps = s.state_frames.unwrap_or(0);
+        self.sand.ground.resume(self.speed_h(), steps, hint.turn_rate, hint.last_input, hint.turn_power);
+        match self.mode {
+            Move::SandPivot => {
+                self.sand.pivot.reset(self.pose_axes().1);
+                self.sand.pivot.steps = s.sub_steps.unwrap_or(0).min(10);
+                self.sand.pivot.target = hint.last_input.normalize_or(self.pose_axes().1);
+            }
+            Move::SandJump if !self.grounded => {
+                let takeoff = air_move::Takeoff {
+                    speed_limit: t::JUMP_MOVE_MAX, base_speed: t::NORMAL_MAX, extend_frames: t::EXTEND_FRAMES,
+                    power: self.v.y, gravity: t::JUMP_GRAVITY, input_lock: 0, speed_window: None, fall_max: t::FALL_MAX,
+                };
+                // The jump nerve's own steps, not the whole actor nerve's (which counted the wait).
+                let jump_steps = s.sub_steps.unwrap_or(0);
+                let held = self.jump_held_frames > jump_steps;
+                self.sand.air.resume(self.v, self.facing, &takeoff, jump_steps, held && self.v.y > 0.);
+            }
+            _ => {}
+        }
+    }
     pub fn sand_effect(&self) -> (Option<&'static str>, bool) { (self.sand.effect,self.sand.called) }
     pub fn sand_blend(&self) -> Option<f32> { matches!(self.anim.name,"SandWait"|"SandWalk").then_some(self.sand.weight) }
     pub(super) fn sand_cap_enabled(&self) -> bool { self.sand.depth<=0. || self.sand.depth<30. }

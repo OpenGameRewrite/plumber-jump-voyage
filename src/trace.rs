@@ -1345,6 +1345,108 @@ impl TraceFile {
         hint.last_input = Vec3::new(parts.next()?, 0., parts.next()?);
         Some(hint)
     }
+    /// The quicksand's depth after the step a row records (`PlayerSandSinkAffect::update`),
+    /// rebuilt from the rows of the episode: the affect runs after the state's step on the
+    /// contacts and position the previous row ends with, so the depth follows from the floor
+    /// the previous row stood on and how far it sat below it. GUESS: the surface is flat under
+    /// the body (the last `SandSink` floor height stands for the probe's hit), and the episode
+    /// starts where no earlier row is in the sand's states, the slope slide or the air.
+    fn sand_depth(&self, row: usize) -> Option<f32> {
+        let collision = |at: usize| {
+            self.cell(at, "collision").unwrap_or("").split(';')
+                .filter_map(|s| s.split_once('=')).collect::<BTreeMap<_, _>>()
+        };
+        let on_sand = |at: usize| {
+            self.cell(at, "ground") == Some("1") && collision(at).get("gcode") == Some(&"SandSink")
+        };
+        let in_episode = |at: usize| {
+            let state = self.cell(at, "state").unwrap_or("");
+            self.cell(at, "ground") != Some("1")
+                || state.starts_with("SandSink")
+                || state.starts_with("Slope")
+                || on_sand(at)
+        };
+        if !in_episode(row) {
+            return None;
+        }
+        let mut start = row;
+        while start > 0 && in_episode(start - 1) {
+            start -= 1;
+        }
+        let (mut depth, mut safe, mut surface) = (0.0_f32, true, None);
+        for at in start.max(1)..=row {
+            let before = at - 1;
+            let y = self.number(before, "py").unwrap_or(0.);
+            if on_sand(before) {
+                let floor = self.number(before, "floor_y").unwrap_or(0.);
+                surface = Some(floor);
+                safe = false;
+                let measured = (floor - y).max(0.).min(depth);
+                let state = self.cell(at, "state").unwrap_or("");
+                let vy = self.number(at, "vy").unwrap_or(0.);
+                let sinking = state.starts_with("SandSink") && !state.ends_with("Jump") || vy <= 0.;
+                depth = (measured + if sinking { 200. / 240. } else { -vy }).max(0.);
+            } else if !safe && depth > 0. {
+                depth = match surface {
+                    Some(floor) if floor >= y && floor <= y + depth => (floor - y).max(0.).min(depth),
+                    _ => {
+                        safe = true;
+                        0.
+                    }
+                };
+            } else {
+                safe = depth > 0.;
+                depth = 0.;
+            }
+            if depth.abs() <= 0.001 {
+                safe = true;
+            }
+        }
+        (depth > 0.).then_some(depth)
+    }
+    /// `mSlopeForceCounter` of a recorded slope slide: the steps in a row, before this row, that
+    /// the body stood on ground flatter than `SlopeSlideAngleEnd`.
+    fn slope_flat_steps(&self, row: usize) -> u32 {
+        // The slide's step reads the contacts the previous row ended with.
+        let mut steps = 0;
+        let Some(mut at) = row.checked_sub(1) else {
+            return 0;
+        };
+        loop {
+            let flat = self.cell(at, "state").is_some_and(|s| s.starts_with("Slope"))
+                && self.cell(at, "ground") == Some("1")
+                && self.cell(at, "floor_normal").and_then(vector_cell).is_some_and(crate::movement::Player::is_slide_end_normal);
+            if !flat {
+                return steps;
+            }
+            steps += 1;
+            match at.checked_sub(1) {
+                Some(previous) => at = previous,
+                None => return steps,
+            }
+        }
+    }
+    fn sand_hint(&self, row: usize) -> Option<crate::movement::SandHint> {
+        let depth = self.sand_depth(row)?;
+        let mut hint = crate::movement::SandHint { depth, ..Default::default() };
+        let front = |r: usize| Vec3::new(self.number(r, "fx").unwrap_or(0.), 0., self.number(r, "fz").unwrap_or(0.));
+        if row > 0 {
+            hint.turn_rate = front(row).angle_between(front(row - 1)).to_degrees();
+        }
+        let mut power = 0.;
+        for r in row.saturating_sub(40).max(1)..=row {
+            let swing = front(r).angle_between(front(r - 1)).to_degrees();
+            power += (crate::movement::turn_power(swing) - power) * 0.15;
+        }
+        hint.turn_power = power;
+        if let Some(input) = self.cell(row, "move_input") {
+            let mut parts = input.split('/').filter_map(|v| v.parse::<f32>().ok());
+            if let (Some(x), Some(z)) = (parts.next(), parts.next()) {
+                hint.last_input = Vec3::new(x, 0., z);
+            }
+        }
+        Some(hint)
+    }
     /// The clip the next row starts (it differs from this row's and sits at
     /// its first frame): what a nerve chosen in this row plays.
     fn next_clip(&self, row: usize) -> Option<&'static str> {
@@ -1630,6 +1732,8 @@ impl TraceFile {
             sub: self.sub_hint(row),
             roll_brake: self.cell(row, "state") == Some("Rolling/Brake"),
             spin_fall,
+            sand: self.sand_hint(row),
+            slope_flat_steps: self.slope_flat_steps(row),
         }
     }
 }

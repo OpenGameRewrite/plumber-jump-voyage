@@ -103,6 +103,11 @@ impl Player {
         )
     }
 
+    /// Whether a floor normal is flatter than `SlopeSlideAngleEnd` (the test behind
+    /// `isOnGroundSlopeSlideEnd`), for the lockstep reconstruction of a recorded slide.
+    pub fn is_slide_end_normal(normal: Vec3) -> bool {
+        lib::is_floor_polygon_cos(normal, GRAVITY, lib::cos_of_degrees(t::SLOPE_SLIDE_ANGLE_END))
+    }
     /// `rs::isOnGroundSlopeSlideEnd`: on ground flatter than `SlopeSlideAngleEnd`.
     pub(super) fn on_ground_slope_slide_end(&self, velocity: Vec3) -> bool {
         self.is_on_ground_by(velocity) && self.ground_within(t::SLOPE_SLIDE_ANGLE_END)

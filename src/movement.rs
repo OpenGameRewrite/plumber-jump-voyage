@@ -816,6 +816,19 @@ pub struct Snapshot {
     pub roll_brake: bool,
     /// The state is the spin cap state's fall.
     pub spin_fall: bool,
+    /// The quicksand's hidden state as far as the row shows it.
+    pub sand: Option<SandHint>,
+    /// Steps the recorded slope slide has spent on ground flat enough to end it.
+    pub slope_flat_steps: u32,
+}
+/// What a recorded row shows of the quicksand state (`PlayerSandSinkAffect`): how deep the body
+/// sits below the sand's surface, and the turn in progress for the ground nerves.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SandHint {
+    pub depth: f32,
+    pub turn_rate: f32,
+    pub last_input: Vec3,
+    pub turn_power: f32,
 }
 /// What a recorded row shows of the spin throw state (`PlayerStateSpinCap`).
 #[derive(Clone, Copy, Debug)]
@@ -2258,7 +2271,7 @@ impl Player {
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
         self.air_for = None;
-        if self.mode.uses_air_control() && !self.grounded {
+        if self.mode.uses_air_control() && (!self.grounded || self.nerve.touchdown) {
             self.resume_air_control(s);
         }
         if self.mode == Move::WallSlide {
@@ -2284,7 +2297,7 @@ impl Player {
         // The trace's velocity includes the floor pull a grounded state applies; the
         // body carries only what is left of it, so a state chosen next (a run
         // pulling harder) starts from zero as it does in free replay.
-        if self.grounded && self.v.y == -self.pull && !self.mode.in_flight() {
+        if self.grounded && self.v.y == -self.pull && !self.mode.in_flight() && !self.in_sand_state() {
             self.v.y = 0.;
         }
         if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
@@ -2292,6 +2305,7 @@ impl Player {
                 Move::Skid => RunNerve::Brake,
                 Move::Turn if self.anim.name == "TurnPoint" => RunNerve::Pivot,
                 Move::Turn => RunNerve::Turn,
+                _ if self.anim.name == "Push" => RunNerve::WallPush,
                 _ => RunNerve::Run,
             };
             self.brake_dir = match self.mode {
@@ -2337,6 +2351,8 @@ impl Player {
                 s.roll_brake,
             );
         }
+        self.resume_sand(s);
+        self.resume_slope_slide(s);
         self.resume_cap(s);
         for (name, value) in &s.counters {
             self.set_counter(name, *value);
