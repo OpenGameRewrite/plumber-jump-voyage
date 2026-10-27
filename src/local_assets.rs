@@ -1473,8 +1473,8 @@ mod imported {
     /// Soot strength as the original's stain blend: an ease-out of the level
     /// scaled to 1.8, which saturates before the stain is at full strength.
     pub fn soot_blend(level: f32) -> f32 {
-        let ease = level * (1.5 - 0.5 * level * level);
-        (1.8 * ease).min(1.)
+        // 0x466804: original endpoint/easing; clamping adapts it to StandardMaterial.
+        (1.8 * crate::movement::joint_math::ease_out(level)).min(1.)
     }
     /// Soot on the original model. The game blends a near-black soot colour in
     /// through a stain pattern its shader masks; the export has neither, so
@@ -1512,7 +1512,7 @@ mod imported {
                 };
                 loaded.stain_base.insert(handle.id(), base);
                 let (color, reflectance, roughness) = base;
-                let k = 0.97 * soot_blend(level);
+                let k = soot_blend(level);
                 let c = color.to_linear();
                 let soot_color = 0.01 * k;
                 let Some(mut m) = materials.get_mut(&handle.0) else {

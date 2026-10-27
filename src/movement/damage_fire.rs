@@ -42,6 +42,25 @@ fn takeoff(power: f32, extend: u32, lock: u32, gravity: f32) -> air_move::Takeof
     }
 }
 impl Player {
+    /// `rs::isCollidedGroundRunAngle` (0x56968c..0x56989c). First contact measures
+    /// speed across gravity; subsequent contacts measure it across the floor normal.
+    pub(super) fn fire_run_angle_contact(&self) -> bool {
+        if !self.is_collided_ground() {
+            return false;
+        }
+        let normal = self.collided_ground_normal();
+        let reference = if self.is_just_land() {
+            Vec3::NEG_Y
+        } else {
+            normal
+        };
+        let speed = vector_lib::length(verticalize_vec(reference, self.v));
+        // PlayerConst: StandAngleMin/Max 60/70; HillAngleSpeedMin/Max 21/26.
+        let rate = turn_control::ease_in(joint_math::calc_rate01(speed, 21., 26.));
+        let angle = joint_math::lerp_value(t::STAND_ANGLE_MIN, 70., rate);
+        vector_lib::is_floor_polygon_cos(normal, Vec3::NEG_Y, vector_lib::cos_of_degrees(angle))
+    }
+
     pub fn fire_sub_steps(&self) -> Option<u32> {
         matches!(
             self.mode,

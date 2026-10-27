@@ -506,7 +506,7 @@ fn trails(
             }
         }
         Move::BurnJump | Move::BurnBounce | Move::FireRun => {
-            // Smoke trailing from the seat, with the odd ember.
+            // ROMless presentation fallback only: these wisps/embers are not original emitters.
             let hip = p.pos + Vec3::Y * 0.55 - p.facing * 0.25;
             let d = s.dir() * 0.1;
             s.particle(hip + d, Vec3::Y * 1.2 - p.facing + d, 0.45, 0.6, -1., 2., 5);
@@ -554,7 +554,7 @@ fn trails(
         }
         _ => {}
     }
-    // Soot smoulders after the burn: thin wisps from the seat, thinning out
+    // ROMless presentation fallback: soot wisps from the seat, thinning out
     // as the stain fades.
     let burning = matches!(p.mode, Move::BurnJump | Move::BurnBounce | Move::FireRun);
     if p.soot.smoking && !burning {
@@ -687,7 +687,7 @@ pub fn burst_frames(name: &str) -> u32 {
         _ => 27,
     }
 }
-/// Names of the continuous effects `trails` emits in the player's current
+/// ROMless placeholder names of the continuous effects `trails` emits in the player's current
 /// state (cap trail included). Randomised embers are left out.
 pub fn trail_names(p: &Player) -> Vec<&'static str> {
     let mut names = vec![];

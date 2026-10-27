@@ -145,6 +145,8 @@ def main():
         command+=['--part='+str(model(part))+fix for part,fix in body_parts('Mario',candidates['Mario']).items()]
         with output.with_suffix('.log').open('w',encoding='utf-8') as f:result=subprocess.run(command,stdout=f,stderr=subprocess.STDOUT)
         if result.returncode or not output.is_file():raise ValueError(f'Curve export failed; details in {output.with_suffix(".log")}')
+        if output.read_bytes()[:8] != b'PJVCURV1':
+            raise ValueError('Adapter did not write skeletal curves; rebuild it with tools/build-converter.ps1 or select a curves-capable --adapter. Installed curves were preserved.')
         shutil.copyfile(output,extract.ROOT/'assets/local/Mario.curves.bin')
         print(f'Wrote assets/local/Mario.curves.bin for {len(clips)} clips')
         if not a.keep_intermediates:shutil.rmtree(scratch,ignore_errors=True)

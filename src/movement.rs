@@ -1580,7 +1580,8 @@ impl Course {
             (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && (pos.y - c.y).abs() < 0.1
         })
     }
-    /// Feet in shallow water.
+    /// Feet in shallow water, for the installed effect material variants.
+    #[cfg(feature = "local-assets")]
     pub fn puddle(&self, pos: Vec3) -> bool {
         self.puddles.iter().any(|(c, h)| {
             (pos.x - c.x).abs() < h.x && (pos.z - c.z).abs() < h.z && (pos.y - c.y).abs() < 0.2
@@ -2667,12 +2668,16 @@ impl Player {
     }
     /// `PlayerJudgeSpeedCheckFall::update`, once a step before the nerve runs
     /// (it reads the contact the last step ended with): the steps without
-    /// ground under the player count up to five, any ground resets them. Only
-    /// the ground contact is read; the original also asks that the floor be
-    /// within the run angle (`rs::isCollidedGroundRunAngle`), which a steeper
-    /// floor than the stages' flat ground would change (not ported).
+    /// ground under the player count up to five. Fire uses the original speed-dependent
+    /// run angle; the other ground states still use their existing contact test.
+    /// The original judge's water-surface-run veto has no consumer in this rewrite yet.
     fn update_ground_lost(&mut self) {
-        self.ground_lost = if self.grounded {
+        let contact = if self.burning() {
+            self.fire_run_angle_contact()
+        } else {
+            self.grounded
+        };
+        self.ground_lost = if contact {
             0
         } else {
             (self.ground_lost + 1).min(GROUND_LOST_FRAMES + 1)

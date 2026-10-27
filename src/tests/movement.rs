@@ -1458,6 +1458,32 @@ fn burn_and_soot() {
     frames(&mut p, Orders::default(), &cool, 20);
     assert_eq!(p.fire.brake, 20);
     assert_eq!(p.v.with_y(0.), Vec3::ZERO);
+    // A floor between StandAngleMin/Max supports fast fire running, not a stopped player.
+    let angle = 65_f32.to_radians();
+    p.mesh_ground = Some(Vec3::new(angle.sin(), angle.cos(), 0.));
+    p.grounded = true;
+    p.ground_contact = 2;
+    p.v = Vec3::ZERO;
+    assert!(!p.fire_run_angle_contact());
+    p.v = Vec3::Z * 26.;
+    assert!(p.fire_run_angle_contact());
+    // Missing support is tolerated for four updates; Fall starts on the fifth, without
+    // starting an animation or resetting the shared Run/Fall duration.
+    p.mesh_ground = None;
+    p.grounded = false;
+    p.hop_contact = false;
+    p.pos.y = 20.;
+    p.v = Vec3::ZERO;
+    let clip = p.anim.serial;
+    let run_frames = p.fire.frames;
+    frames(&mut p, Orders::default(), &cool, 4);
+    assert_eq!(p.mode, Move::FireRun);
+    p.step(&Orders::default(), &cool);
+    assert_eq!((p.mode, p.frame), (Move::FireFall, 0));
+    p.step(&Orders::default(), &cool);
+    assert_eq!(p.anim.serial, clip);
+    assert_eq!(p.fire.frames, run_frames + 6);
+    assert_eq!(p.v.y, -1.5);
 }
 
 #[cfg_attr(test, test)]
