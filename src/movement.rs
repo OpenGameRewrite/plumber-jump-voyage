@@ -252,6 +252,7 @@ mod entrance_camera;
 mod ground;
 mod recovery_dead;
 mod safety;
+mod sand_sink;
 mod stain;
 use damage::Damage;
 use damage_fire::FireControl;
@@ -484,6 +485,8 @@ pub mod clip {
             "WaitHot" => Some(340.),
             "DamageWait" => Some(120.),
             "FireRun" => Some(60.),
+            "SandWait" | "SandWalk" | "SandWaitNormal" => Some(80.),
+            "SandWaitStrong" => Some(30.),
             "Sleep" | "SquatWait" => Some(120.),
             "SquatWalk" => Some(36.),
             "Rolling" => Some(9.),
@@ -523,7 +526,7 @@ pub mod clip {
             // 23, then 1) before they wrap.
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
-            "SwimStandSurface" | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" => 1.,
+            "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" => 1.,
             _ => 0.,
         }
     }
@@ -582,6 +585,11 @@ pub enum Move {
     FireRun,
     FireFall,
     FireDead,
+    SandWait,
+    SandRun,
+    SandPivot,
+    SandJump,
+    SandDead,
     DamageAir,
     DamageLand,
     DamageDead,
@@ -605,7 +613,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 51] = [
+    pub const ALL: [Move; 56] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -637,6 +645,11 @@ impl Move {
         Self::FireRun,
         Self::FireFall,
         Self::FireDead,
+        Self::SandWait,
+        Self::SandRun,
+        Self::SandPivot,
+        Self::SandJump,
+        Self::SandDead,
         Self::DamageAir,
         Self::DamageLand,
         Self::DamageDead,
@@ -687,7 +700,8 @@ impl Move {
             Self::BurnBounce => "Hot! (bounce)",
             Self::FireRun => "Fire run",
             Self::FireFall => "Fire fall",
-            Self::FireDead
+            Self::SandWait | Self::SandRun | Self::SandPivot | Self::SandJump => "Quicksand",
+            Self::SandDead | Self::FireDead
             | Self::DamageDead
             | Self::DamageSwimDead
             | Self::Dead
@@ -1012,6 +1026,7 @@ pub struct Player {
     /// State changes decided last step, waiting for their first step.
     nerve: Nerve,
     fire: FireControl,
+    sand: sand_sink::SandControl,
     damage: Damage,
     life: damage_life::LifeControl,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
@@ -1303,6 +1318,7 @@ impl Default for Player {
         Self {
             nerve,
             fire: FireControl::default(),
+            sand: sand_sink::SandControl::default(),
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),
@@ -1867,6 +1883,7 @@ impl Player {
         // game's own velocity, the pull included.)
         if self.grounded
             && !self.in_damage_state()
+            && !self.in_sand_state()
             && !matches!(
                 self.mode,
                 Move::Pole
@@ -2718,6 +2735,7 @@ impl Player {
         self.cap_sensor_phase(&o);
         self.start_pending_abyss();
         self.check_recovery_area_exit(scene);
+        self.dispatch_sand_death();
         self.dispatch_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -2729,12 +2747,14 @@ impl Player {
         // A state chosen above leaves its own first step to the next frame.
         if !self.nerve.deferred {
             self.run_state(&o, scene);
+            self.judge_sand_entry();
             self.judge_fall();
             self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
             self.judge_wall_keep(scene);
             self.judge_in_water(scene);
         }
+        self.update_sand_affect(scene);
         let moved = self.v;
         self.collide(&o, scene);
         self.update_water_finder(scene);
@@ -2753,6 +2773,7 @@ impl Player {
             && self.mode != Move::SlopeSlide
             && self.mode != Move::Swim
             && !self.in_damage_state()
+            && !self.in_sand_state()
             && !self.stands_on_ledge()
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
@@ -2769,7 +2790,18 @@ impl Player {
     /// reached last step. (Water is asked after the state's own step, see `judge_in_water`.)
     fn change_from_surroundings(&mut self, _scene: &Course, o: &Orders) {
         if std::mem::take(&mut self.nerve.touchdown) {
-            self.land(o);
+            if self.judge_sand_sink() {
+                if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
+                    let push = self.push();
+                    self.air.update(&mut self.v, push, o.jump_held, &air_move::Steering {
+                        front: t::JUMP_ACCEL_FRONT, back: t::JUMP_ACCEL_BACK, turn: t::JUMP_ACCEL_TURN,
+                    });
+                    self.turn_in_air(push);
+                }
+                self.appear_sand_sink();
+            } else {
+                self.land(o);
+            }
         }
     }
     /// `PlayerJudgeSpeedCheckFall::update`, once a step before the nerve runs
@@ -2854,6 +2886,7 @@ impl Player {
             | Move::DamageSurface
             | Move::DamageLandWater
             | Move::DamageSwimDead => self.damage_swim_step(o, scene),
+            Move::SandWait | Move::SandRun | Move::SandPivot | Move::SandJump | Move::SandDead => self.sand_step(o),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -4393,7 +4426,7 @@ impl Player {
     /// step): the throw is counted among those in a row, the clip is chosen,
     /// and the cap waits in its spin attack for the throw frame.
     fn start_throw(&mut self, kind: Throw) {
-        if self.cap.is_some() || self.launch.is_some() {
+        if self.cap.is_some() || self.launch.is_some() || !self.sand_cap_enabled() {
             return;
         }
         let air = !self.grounded;

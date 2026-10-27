@@ -154,6 +154,10 @@ impl Default for GroundMove {
     }
 }
 impl GroundMove {
+    /// Sand's setup: ordinary speed/brake constants, no run ramp or drift.
+    pub fn sand() -> Self {
+        Self { ramp: false, drift: false, ..Self::default() }
+    }
     /// DamageFire's own setup (0x4686b0..0x468714). The constructor forces the
     /// turn control and keeps plain acceleration/no run-only drift.
     pub fn fire() -> Self {

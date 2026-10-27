@@ -6,18 +6,19 @@ pub enum Kind {
     #[default]
     Damage,
     Abyss,
+    Sand,
     AbyssWithCapMessage,
 }
 impl Kind {
     pub fn start(self) -> i32 {
         match self {
-            Self::Damage | Self::Abyss => 30,
+            Self::Damage | Self::Sand | Self::Abyss => 30,
             Self::AbyssWithCapMessage => 90,
         }
     }
     pub fn wait(self) -> u32 {
         match self {
-            Self::Damage => 96,
+            Self::Damage | Self::Sand => 96,
             Self::Abyss | Self::AbyssWithCapMessage => 30,
         }
     }

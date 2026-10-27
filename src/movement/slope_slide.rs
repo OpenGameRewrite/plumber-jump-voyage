@@ -53,6 +53,8 @@ fn add_velocity_to_direction(velocity: Vec3, dir: Vec3, force: f32) -> Vec3 {
 }
 
 impl Player {
+    /// PlayerStateSlope::isEnableCancelSandSink (0x481328).
+    pub(super) fn sand_slope_cancel(&self) -> bool { self.slide.force_counter > 15 }
     /// `PlayerJudgePreInputJump::judge`: a jump press still buffered counts, except while the
     /// forced slope slide judges (the buffer runs down all the same).
     pub(super) fn pre_input_jump_judges(&self) -> bool {

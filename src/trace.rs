@@ -190,6 +190,17 @@ impl Pose {
     /// The clips of the main slot.
     fn main_clips(p: &Player) -> Self {
         let a = p.anim;
+        if let Some(weight) = p.sand_blend() {
+            let frame = (a.frame + p.anim_rate_change()) % 80.;
+            return Self {
+                slot: a.name, partial: Vec::new(),
+                layers: [("SandWaitNormal", 80., 1. - weight), ("SandWaitStrong", 30., weight)]
+                    .into_iter().map(|(name, length, weight)| Layer {
+                        name, frame: frame * (length / 80.), rate: a.rate * (length / 80.), weight,
+                        covered: false, stage: 0,
+                    }).collect(),
+            };
+        }
         if a.name != "Move" {
             return Self {
                 slot: a.name,

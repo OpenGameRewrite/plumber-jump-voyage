@@ -69,7 +69,7 @@ impl Player {
         }
         matches!(
             self.mode,
-            Move::BurnJump
+            Move::SandWait | Move::SandRun | Move::SandPivot | Move::SandJump | Move::SandDead | Move::BurnJump
                 | Move::BurnBounce
                 | Move::FireRun
                 | Move::FireFall

@@ -475,6 +475,7 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
         // The run state's first step started its dust and chose the jump.
         wanted.push(effect);
     }
+    wanted.extend(p.sand_effect().0);
     if p.roll_effect_on() {
         wanted.push("Rolling");
     }
@@ -537,6 +538,7 @@ pub fn code_calls(p: &Player) -> Vec<&'static str> {
             "StateFire"
         });
     }
+    if p.sand_effect().1 { calls.extend(p.sand_effect().0); }
     if p.roll_effect_called() {
         calls.push("Rolling");
     }

@@ -91,6 +91,7 @@ impl Player {
     fn prepare_collider(&mut self) {
         let form = self.collision_form();
         self.collider.set_form(form);
+        self.collider.set_ground_offset(self.sand.depth);
         // The hanging forms drop the push along the direction they face.
         self.collider.set_cut_direction(match form {
             Form::WallGrab => self.catch.front(),
@@ -170,6 +171,7 @@ impl Player {
         self.ground_move = None;
         // (The slope slide's velocity is the game's own, the pull included, whatever its y.)
         if was_grounded
+            && !self.in_sand_state()
             && !matches!(
                 self.mode,
                 Move::Pole
@@ -278,7 +280,8 @@ impl Player {
             } else {
                 0.
             };
-            if self.in_damage_state()
+            if self.in_sand_state()
+                || self.in_damage_state()
                 || matches!(
                     self.mode,
                     Move::SlopeSlide
@@ -294,7 +297,7 @@ impl Player {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;
-                if (self.burning() || self.in_damage_state()) && !self.is_on_ground_by(self.v) {
+                if (self.burning() || self.in_damage_state() || self.in_sand_state()) && !self.is_on_ground_by(self.v) {
                     self.grounded = false;
                     self.hop_contact = true;
                 }

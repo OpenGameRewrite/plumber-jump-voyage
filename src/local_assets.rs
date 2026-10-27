@@ -340,7 +340,7 @@ impl<P: Default + Posed> Blend<P> {
 pub fn looping(name: &str) -> bool {
     matches!(
         name,
-        "Wait"
+        "SandWait" | "SandWalk" | "SandWaitNormal" | "SandWaitStrong" | "Wait"
             | "WaitHot"
             | "TractorBubbleWait"
             | "DamageWait"
@@ -1170,7 +1170,11 @@ mod imported {
             &loaded.nodes
         };
         let anim = p.anim;
-        let mut pose = if anim.name == "Move" {
+        let mut pose = if let Some(weight) = p.sand_blend() {
+            let phase = ((anim.frame + p.anim_rate_change() + anim.rate*ahead) / 80.).rem_euclid(1.);
+            Pose { clips: [("SandWaitNormal",1.-weight),("SandWaitStrong",weight)].into_iter()
+                .filter_map(|(name,weight)| clip_in(main,name).map(|(node,len)|(node,weight,phase*len))).collect() }
+        } else if anim.name == "Move" {
             let cycle = p.run_cycle();
             let phase = ((cycle.phase + cycle.rate * ahead) / 60.).rem_euclid(1.);
             let clips = cycle

@@ -1095,6 +1095,7 @@ pub struct PlayerCollider {
     /// differs from the current one (after a reset, or a change of form), the next `collide`
     /// first sweeps the shapes' growth from the old radius to the new one in place.
     last_radius: f32,
+    ground_support: bool,
 }
 impl Default for PlayerCollider {
     fn default() -> Self {
@@ -1160,6 +1161,7 @@ impl PlayerCollider {
             last_tilt: None,
             shape_scale: 1.,
             last_radius,
+            ground_support: true,
         }
     }
 
@@ -1168,6 +1170,17 @@ impl PlayerCollider {
     /// floor contact's own point when no arrow average exists).
     pub fn ground_position(&self) -> Vec3 {
         self.ground_position
+    }
+    /// PlayerFormSensorCollisionArranger::setCollisionShapeOffsetGround.
+    /// Only arrows move; body spheres stop supporting the ground while sunk.
+    pub fn set_ground_offset(&mut self, depth: f32) {
+        self.ground_support = depth.abs() <= 0.001;
+        for shape in &mut self.keeper.shapes {
+            if let Shape::Arrow { start, index, .. } = shape {
+                *start = ring_arrow_start(*index, Vec3::Y * depth);
+            }
+        }
+        self.keeper.bounding_radius = enclosing_radius(&self.keeper.shapes);
     }
     pub fn set_form(&mut self, form: Form) {
         if form != self.form {
@@ -1519,7 +1532,7 @@ impl PlayerCollider {
                     } => result::ShapeFacts::Sphere {
                         support,
                         support_axis: pose.rotate(Vec3::Y),
-                        ignore_ground,
+                        ignore_ground: ignore_ground || !self.ground_support,
                         ignore_ceiling: false,
                     },
                     Shape::Arrow {
