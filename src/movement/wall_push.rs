@@ -4,6 +4,12 @@ use super::vector_lib::verticalize_vec;
 use super::*;
 
 impl Player {
+    /// The step that runs the push nerve (or chooses its end) keeps the nerve's own velocity
+    /// through the collision, like the other velocity-owning states.
+    pub(super) fn in_wall_push_frame(&self) -> bool {
+        self.run_nerve==RunNerve::WallPush
+            && (matches!(self.mode,Move::Walk|Move::Run) || self.mode==Move::Idle && self.nerve.deferred)
+    }
     fn wall_push_judge(&self) -> bool {
         let Some(wall) = &self.touched.wall_contact else {return false;};
         if !self.is_collided_ground() || !self.is_move()
@@ -36,7 +42,11 @@ impl Player {
     }
     pub(super) fn wall_push_step(&mut self,o:&Orders) {
         self.pull = t::GRAVITY;
-        if self.touched.wall_contact.is_none() || !self.is_move() {self.end_run();return;}
+        if self.touched.wall_contact.is_none() || !self.is_move() {
+            // The stand is chosen now but the push's step still collides with its own velocity.
+            self.change(Move::Idle,"Wait",|p|{p.set_h(Vec3::ZERO);p.run_nerve=RunNerve::Run;});
+            return;
+        }
         let wall=self.touched.wall_contact.as_ref().unwrap().normal;
         let up=self.collided_ground_normal();
         let front=joint_math::lerp_vec(self.pose_axes().1,-wall,0.1);

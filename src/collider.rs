@@ -919,7 +919,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
             Shape::Sphere { center, radius, .. } => {
                 let (world, radius) = pose.world_sphere(*center, *radius, scale);
                 let world_rel = mesh.relative_vec(world);
-                for i in mesh.candidates(Aabb::around(world_rel, radius)) {
+                for i in mesh.cell_triangles(Aabb::around(world_rel, radius)) {
                     let t = &mesh.triangles[i as usize];
                     let Some(hit) = sphere_hit(mesh, t, world, radius) else {
                         continue;

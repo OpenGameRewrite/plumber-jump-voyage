@@ -471,6 +471,21 @@ impl TriangleMesh {
     /// Indices of the triangles whose cells overlap `area`, each once and in
     /// ascending order (the order the export lists them in).
     pub fn candidates(&self, area: Aabb) -> Vec<u32> {
+        let mut found = self.cell_triangles(area);
+        found.retain(|&i| {
+            let t = &self.triangles[i as usize];
+            let lo = t.corners[0].min(t.corners[1]).min(t.corners[2]);
+            let hi = t.corners[0].max(t.corners[1]).max(t.corners[2]);
+            lo.cmple(area.max).all() && hi.cmpge(area.min).all()
+        });
+        found
+    }
+
+    /// Every triangle of the cells the box touches, in mesh order. The game's KCL server hands
+    /// the prisms of the touched cells to the shape's own test without comparing boxes first,
+    /// so a sphere that rests exactly on a face the world-frame numbers put a rounding step
+    /// away still reaches the prism's exact test, which runs in the part's frame.
+    pub fn cell_triangles(&self, area: Aabb) -> Vec<u32> {
         let mut found = Vec::new();
         for x in cell_of(area.min.x)..=cell_of(area.max.x) {
             for z in cell_of(area.min.z)..=cell_of(area.max.z) {
@@ -481,12 +496,6 @@ impl TriangleMesh {
         }
         found.sort_unstable();
         found.dedup();
-        found.retain(|&i| {
-            let t = &self.triangles[i as usize];
-            let lo = t.corners[0].min(t.corners[1]).min(t.corners[2]);
-            let hi = t.corners[0].max(t.corners[1]).max(t.corners[2]);
-            lo.cmple(area.max).all() && hi.cmpge(area.min).all()
-        });
         found
     }
 
