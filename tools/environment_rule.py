@@ -18,6 +18,8 @@ of Mario's sensors (docs/fidelity-harness.md, "Environment rule"):
   when the rewrite replayed the same stage's triangles (`--geometry`) and the surfaces' hosts
   are static; without that the flat-floor model cannot reproduce them.
 * `floor height changed` on the frame a fall lands is the intended drop, not a moving floor.
+* Damage/death episodes need an entry caused by exported static floor codes or a DeathArea.
+  Actor contacts remain independent; the current probe cannot prove death-coin provenance.
 
 Two kinds of probe log exist. A log with the `contacts` and `hit_hosts` columns (typed) names
 both sensors, the message and its answer, and the host of every surface. An older log only has
@@ -544,7 +546,7 @@ def in_death_area(area, p):
     if area.get("name") != "DeathArea" or area.get("shape") not in spans or area.get("links") or area.get("args"):
         return False
     m, scale = area.get("matrix", []), area.get("scale", [])
-    if len(m) != 12 or len(scale) != 3 or any(abs(s) <= 0.001 for s in scale):
+    if len(m) != 12 or len(scale) != 3 or any(abs(f32(s)) <= f32(0.001) for s in scale):
         return False  # the game's isNearZero scale guard, not a fitted tolerance
     delta = [f32(p[i] - f32(m[i * 4 + 3])) for i in range(3)]
     local = [f32(f32(f32(f32(delta[0] * f32(m[i])) + f32(delta[1] * f32(m[i + 4])))

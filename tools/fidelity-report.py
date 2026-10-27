@@ -209,6 +209,31 @@ def compact(report, values, frames, limit=14):
 
 
 def main():
+    if "--self-check" in sys.argv[1:]:
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            script = os.path.join(folder, "test.input")
+            game = os.path.join(folder, "game.csv")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write("start 0 0 0 0\n")
+            def export(name, value):
+                with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+                    json.dump(value, f)
+            export("game.meta.json", dict(stage="Test", scenario_no=1))
+            export("Test.json", dict(scenario=2))
+            assert replay_geometry(script, game, folder) is None
+            export("Test.json", dict(scenario=1))
+            assert replay_geometry(script, game, folder) == os.path.join(folder, "Test.json")
+            export("Test.s1.json", dict(scenario=1))
+            assert replay_geometry(script, game, folder) == os.path.join(folder, "Test.s1.json")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write("stage Override 3\n")
+            assert replay_geometry(script, game, folder) is None
+            export("Override.s3.json", dict(scenario=3))
+            assert replay_geometry(script, game, folder) == os.path.join(folder, "Override.s3.json")
+            assert replay_geometry(script, game, None) is None
+        print("fidelity-report checks passed.")
+        return
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs", help="folder with one sub-folder per scenario, each with a game.csv")
     ap.add_argument("--exe", help="the rewrite's executable (default: target/<profile>/plumber-jump-voyage)")

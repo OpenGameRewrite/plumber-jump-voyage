@@ -2,7 +2,7 @@
 
     py tools/compare-traces.py game.csv rewrite.csv --out diff.md
         [--lockstep] [--tol column=value ...] [--ignore-events se,voice] [--strict]
-        [--allow-contaminated] [--json report.json]
+        [--allow-contaminated] [--geometry export.json] [--json report.json]
 
 Both files are CSV with a header row and one row per player update. Frames are
 aligned on the `frame` column. A column that is empty in every row of one file
@@ -996,6 +996,32 @@ def self_check():
         report = compare(game, rewrite, allow_contaminated=True)
         assert report.excluded == [2] and report.result("counters.prejump").status == "PASS"
         assert any(n.startswith("CONTAMINATED") for n in report.notes)
+    # The comparator must pass actual replay geometry and require the recorded
+    # stage/scenario, rather than trusting a metadata path to an unrelated file.
+    with tempfile.TemporaryDirectory() as folder:
+        game, rewrite = [os.path.join(folder, name) for name in ("game.csv", "rewrite.csv")]
+        sample = dict(frame="0", state="DamageFire/Jump", px="0", py="0", pz="0", ground="1",
+                      collision="ground=1;gcode=DamageFire;gmat=Fire", contacts="",
+                      hit_hosts="ground=Floor/Collision/15/1/0/0/0/0")
+        write_csv(game, [sample])
+        write_csv(rewrite, [sample])
+        mesh = dict(stage="Test", scenario=1, objects=[dict(static=True, translate=[0, 0, 0])],
+                    attributes=[dict(FloorCode="DamageFire", MaterialCode="Fire")],
+                    triangles=[[0] * 16], areas=[])
+        def write_json(name, value):
+            path = os.path.join(folder, name)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(value, f)
+            return path
+        geometry = write_json("geometry.json", mesh)
+        write_json("game.env.json", {"clean": False, "contaminated": [
+            {"frame": 0, "reasons": ["floor material changed A -> Fire"]}]})
+        for stage, scenario, expected in (("Test", 1, True), ("Other", 1, False), ("Test", 2, False)):
+            write_json("game.meta.json", dict(stage=stage, scenario_no=scenario, start_abs=[0, 0, 0]))
+            try:
+                assert compare(game, rewrite, geometry_path=geometry).env_clean and expected
+            except EnvironmentRefused:
+                assert not expected
     # The head's rotation: only where a look was asked for or shown, and the animated head agrees.
     import math as _math
     half = lambda degrees: f"0/{_math.sin(_math.radians(degrees) / 2):.6f}/0/{_math.cos(_math.radians(degrees) / 2):.6f}"

@@ -568,14 +568,20 @@ and resource/set seed modes (`SetEmitterSetRandomSeed`); the probe resets only
 can vary despite identical movement and effect emission events. It is reported
 as **nondeterministic by design**, without a numeric tolerance.
 
-`fx_kills` includes every actor, not only Mario. Other-owner graphics updates
-also depend on boot/render scheduling: observed repeat differences include
-`stopcd` material updates, so attributing every difference to particle RNG would
-be a guess. Other-owner entries and Mario/cap natural set lifetime observations
+`fx_kills` includes every actor, not only Mario. Observed other-owner repeat
+differences include `stopcd` material updates; their exact source is unproved,
+so attributing every difference to particle RNG or render scheduling would be
+a guess. These graphics diagnostics are outside the player replay. Other-owner
+entries and Mario/cap natural set lifetime observations
 (`queue`, `invalid`, `fin`) are reported separately as nondeterministic by design.
 Explicit Mario/cap effect kills, unknown records, `fx_sets`, effect start/stop
 events, animation and every remaining column still match exactly. This policy
-only tests recording repeats; game-vs-rewrite effect comparisons remain strict,
+also separates `dropped=N`, overflow of the probe's all-owner kill buffer, and
+explicitly reports incomplete diagnostics. On a row where either repetition
+overflowed, `fx_kills` is unverified rather than equal/different; every other
+cell still matches exactly. Complete rows retain explicit-call equality.
+Current twice/late repeats contain that overflow. This policy only tests
+recording repeats; game-vs-rewrite effect comparisons remain strict,
 including the existing swim `effects_live` residual. The local recording runner
 imports this helper; `PJV_FIDELITY_TOOLS` can select a worktree's tools directory.
 Run `py tools/repeat_trace.py` and `py tools/compare-traces.py --self-check` to

@@ -21,10 +21,15 @@ def split_rows(rows):
             kept, observed = [], []
             for item in filter(None, row["fx_kills"].split("|")):
                 fields = dict(part.partition("=")[::2] for part in item.split(";"))
-                # The probe logs all actors. Other-owner graphics updates are
-                # also boot/render-scheduled. Keep explicit Mario/cap kill calls
-                # exact; only natural set lifetime is seed-dependent for them.
-                by_design = fields.get("o") == "other" or (
+                # The probe logs graphics updates of all actors. Other owners
+                # are outside the player replay; their precise source of repeat
+                # variation is unproved. Keep explicit Mario/cap calls exact;
+                # only natural set lifetime is seed-dependent for them.
+                # dropped=N counts overflow of the all-owner diagnostic buffer,
+                # not a player action. Report that lost coverage separately.
+                graphics_kinds = {"tkill", "delall", "delclr", "stopcd", "tupd", "setkill", "fin", "queue", "invalid"}
+                by_design = set(fields) == {"dropped"} or (
+                    fields.get("o") == "other" and fields.get("k") in graphics_kinds) or (
                     fields.get("o") in ("player", "model", "deco", "cap")
                     and fields.get("k") in ("queue", "invalid", "fin"))
                 (observed if by_design else kept).append(item)
@@ -51,6 +56,18 @@ def compare_repeats(first, second):
     sa, va = split_rows(a)
     sb, vb = split_rows(b)
     differences = Counter(k for x, y in zip(va, vb) for k in x.keys() | y.keys() if x.get(k) != y.get(k))
+    incomplete = 0
+    for x, y, sx, sy in zip(a, b, sa, sb):
+        if "dropped=" in x.get("fx_kills", "") or "dropped=" in y.get("fx_kills", ""):
+            incomplete += 1
+            # A shared all-owner buffer can truncate different Mario calls in
+            # otherwise matching rows. Missing observations prove neither a
+            # match nor a mismatch: expose the coverage gap, still check every
+            # other cell exactly. Complete rows retain explicit-call equality.
+            sx.pop("fx_kills", None)
+            sy.pop("fx_kills", None)
+    if incomplete:
+        differences["fx_kills_incomplete"] = incomplete
     return acols == bcols and sa == sb, dict(differences)
 
 
@@ -77,7 +94,11 @@ def self_check():
             changed = dict(other)
             changed[key] = "different"
             assert not compare_repeats(first, write("b.csv", [changed]))[0], key
+        dropped = dict(other, fx_kills=other["fx_kills"] + "|dropped=2")
+        assert compare_repeats(first, write("b.csv", [dropped]))[1]["fx_kills_incomplete"] == 1
+        assert compare_repeats(first, write("b.csv", [dict(dropped, px="1.000001")]))[0] is False
         assert not compare_repeats(first, write("b.csv", []))[0]
+        assert split_rows([dict(fx_kills="k=new-kind;o=other")])[0][0]["fx_kills"] == "k=new-kind;o=other"
     print("repeat-trace checks passed.")
 
 
