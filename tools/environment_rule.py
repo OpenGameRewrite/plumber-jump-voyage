@@ -212,6 +212,7 @@ class Judge:
 
     def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None):
         self.rows = game_rows
+        self.preroll = preroll or {}
         self.listed = listed
         self.verdict = Verdict()
         v = self.verdict
@@ -269,8 +270,9 @@ class Judge:
             family = row.get("state", "").split("/")[0]
             if family != previous_family:
                 cause = cause if family == "Dead" and previous_family in ("Damage", "DamageFire", "Abyss") else None
-                if family in ("DamageFire", "Damage", "Dead") and cause is None:
-                    codes = {"DamageFire"} if family == "DamageFire" else {"Needle", "Poison"} if family == "Damage" else {"Poison"}
+                if family in ("DamageFire", "Damage", "DamageSwim", "Dead") and cause is None:
+                    codes = ({"DamageFire"} if family == "DamageFire" else {"Needle", "Poison"}
+                             if family == "Damage" else {"Needle"} if family == "DamageSwim" else {"Poison"})
                     for g in (f - 1, f):
                         sample = rows.get(g, {})
                         flags = key_values(sample.get("collision", ""))
@@ -526,6 +528,20 @@ class Judge:
     def _displacement(self, f, reason):
         """Grounded displacement differing from velocity: allowed only where the geometry explains it."""
         v = self.verdict
+        # The recorder's legacy env_report measured row 0 from the teleport origin,
+        # although FIDP samples -N..-1 are movement updates after that teleport.
+        # Re-evaluate that one listed check against its actual immediate predecessor.
+        if f == 0 and -1 in self.preroll:
+            row, prev = self.rows[f], self.preroll[-1]
+            values = [number(r.get(k)) for r, k in
+                      ((row, "px"), (row, "pz"), (prev, "px"), (prev, "pz"), (row, "vx"), (row, "vz"))]
+            if None not in values and all(math.isfinite(x) for x in values):
+                px, pz, qx, qz, vx, vz = values
+                residual = math.hypot(px - qx - vx, pz - qz - vz)
+                if residual <= GROUND_RESIDUAL:
+                    v.accept(f, "frame-zero displacement from preroll",
+                             "the immediate frame -1 sample explains the legacy origin-based displacement flag")
+                    return
         flags = self._flags(f)
         tilt = self._normal_off_vertical(f)
         state = self._state(f)
@@ -633,6 +649,15 @@ def self_check():
     assert not verdict(rows(hit_hosts=static_floor, floor_normal="0.3/0.9/0"), geometry,
                        {2: ["horizontal displacement differs from velocity by 3.0 cm (blocked/pushed)"]}).refused
 
+    # Frame zero follows a real idle/preroll update, not the teleport origin.
+    g = rows(px="-26.169434", pz="0", vx="-2.328990", vz="0", hit_hosts=static_floor)
+    first = {0: ["horizontal displacement differs from velocity by 23.8 cm (blocked/pushed)"]}
+    pre = {-1: dict(g[0], frame="-1", px="-23.840332")}
+    assert not judge_run(g, geometry, first, preroll=pre).refused
+    assert 0 in judge_run(g, geometry, first).refused
+    assert 0 in judge_run(g, geometry, first, preroll={-2: pre[-1]}).refused
+    assert 0 in judge_run(g, geometry, first, preroll={-1: dict(pre[-1], px="-20")}).refused
+
     # an older probe log names the host only: harmless names pass, the others do not
     old = rows(contacts="", hit_hosts="")
     named = {1: ["hit-sensor contact 帽子のワールドホーム帽子ひっか\ufffd"], 2: ["hit-sensor contact 逃げるNpc"],
@@ -655,6 +680,19 @@ def self_check():
     assert not judge_run(g, geometry, listed, **evidence).refused
     assert judge_run(g, flat, listed, **evidence).refused
     assert judge_run(g, geometry, listed).refused
+    # checkDamageFromCollision's Needle trigger dispatches to DamageSwim while
+    # swimming (executePreMovementNerveChange). No new water/actor cause waiver.
+    swim_mesh = dict(mesh, attributes=[{"FloorCode": "Needle", "MaterialCode": "Stone"}])
+    swim = rows(hit_hosts=static_floor, state=lambda i: "Swim/SwimMove" if i == 0 else "DamageSwim/DamageSwim",
+                collision="ground=1;gcode=Needle;gmat=Stone")
+    swim_evidence = dict(geometry=swim_mesh, start=[0, 0, 0])
+    assert not judge_run(swim, geometry, listed, **swim_evidence).refused
+    for code in ("Ground", "DamageFire", "Poison"):
+        unproved = {f: dict(r, collision=f"ground=1;gcode={code};gmat=Stone") for f, r in swim.items()}
+        assert judge_run(unproved, geometry, listed, **swim_evidence).refused
+    assert judge_run(swim, flat, listed, **swim_evidence).refused
+    attacked = {f: dict(r, contacts=push if f == 3 else "") for f, r in swim.items()}
+    assert 3 in judge_run(attacked, geometry, listed, **swim_evidence).refused
     bad = rows(hit_hosts=static_floor, state="DamageFire/Jump", collision="ground=1;gcode=Ground;gmat=LavaPink")
     assert judge_run(bad, geometry, listed, **evidence).refused
     mesh["objects"][0]["static"] = False

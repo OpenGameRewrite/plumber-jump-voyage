@@ -763,3 +763,25 @@ original's layout animation and the fade-in after the scene loads are not drawn.
 replays of the target runs differ from free replay at the reload (one frame of a quarter-turn
 quaternion sign) and after the long idle in `burn-lava-twice-late` (the injected state has no
 area-animation sub-state); the free replays pass every comparable column.
+
+### Damage Life/Swim environment corrections
+
+The legacy recorder's `trace_tools.env_report` starts horizontal displacement at
+its teleport origin. Its `FIDP` placement/preroll samples are subsequent player
+updates, numbered -N..-1, before the scripted sample 0. The environment judge
+therefore rechecks a listed frame-zero displacement against `game.preroll.csv`'s
+frame -1 when present. It keeps the existing 1 cm grounded threshold and refuses
+an unexplained residual or missing immediate sample as before. No trace or
+recorded environment file needs rewriting. A recorded Lake example is
+px[-1]=-23.840332, px[0]=-26.169434, vx[0]=-2.328990: residual 0.000112 cm,
+not the origin-based 23.840444 cm. Other listed reasons still receive their own
+checks. `compare-traces.py --self-check` covers valid/missing/nonadjacent preroll
+and an actual displacement.
+
+`checkDamageFromCollision` (1.0.0 0x41fb00) raises ordinary damage for Needle;
+`executePreMovementNerveChange` (0x420378) dispatches a swimming actor to
+DamageSwim. The static-damage classifier now recognizes that family only for
+exported static Needle entry, retaining the existing host/code and geometry
+identity requirements. It does not infer damage from water or material alone,
+and does not waive physical actor contacts. Self-checks cover the accepted
+Needle and refused Ground/Fire/Poison, missing replay, and actor push cases.
