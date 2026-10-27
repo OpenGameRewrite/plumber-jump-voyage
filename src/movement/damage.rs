@@ -13,11 +13,30 @@ pub(super) struct Damage {
 
 pub(super) fn self_check() {
     tests::static_needle_uses_keeper_landing_and_scene_death();
+    tests::candle_spheres_use_strict_hit_and_receive_invalidation();
     tests::swim_cancel_reads_strict_post_update_steps();
     tests::poison_bypasses_invalidation_and_uses_poison_death();
 }
 mod tests {
     use super::*;
+    #[cfg_attr(test, test)]
+    pub(super) fn candle_spheres_use_strict_hit_and_receive_invalidation() {
+        let fire = Vec3::ZERO;
+        assert!(!candle_hits_player(Vec3::new(80., -40., 0.), fire));
+        assert!(candle_hits_player(Vec3::new(79., -40., 0.), fire));
+        assert!(candle_hits_player(Vec3::new(89., -75., 0.), fire));
+        assert!(!candle_hits_player(Vec3::new(90., -75., 0.), fire));
+        let mut p = Player::default();
+        p.damage.blocked = true;
+        p.request_fire_damage();
+        assert!(!p.damage.fire_message);
+        p.damage.blocked = false;
+        p.request_fire_damage();
+        p.dispatch_fire_damage(&Course::default());
+        assert!(p.burning());
+        assert_eq!(p.damage.hp, 2);
+        assert!(!p.damage.fire_message);
+    }
     #[cfg_attr(test, test)]
     pub(super) fn static_needle_uses_keeper_landing_and_scene_death() {
         let scene = Course {
@@ -107,7 +126,33 @@ impl Damage {
         self.invalid -= 1;
     }
 }
+/// HitSensorDirector::executeHitCheck, with the 3D InitSensor Player/PlayerFoot
+/// spheres (Foot, Body, Head). PlayerAttack and PlayerEye cannot receive this fire.
+fn candle_hits_player(feet: Vec3, fire: Vec3) -> bool {
+    [(40., 40.), (75., 50.), (110., 40.)]
+        .into_iter()
+        .any(|(y, radius)| {
+            let delta = feet + Vec3::Y * y - fire;
+            let distance = (delta.x * delta.x + delta.y * delta.y) + delta.z * delta.z;
+            distance < (radius + 40.) * (radius + 40.)
+        })
+}
 impl Player {
+    /// Sensors use the previous actor pose. Receive precedes this movement's
+    /// executePreMovementNerveChange, which consumes the request below.
+    pub(super) fn receive_candle_fire(&mut self, scene: &Course) {
+        if let Some(mesh) = &scene.mesh {
+            let feet = mesh.to_game_vec(self.position_cm());
+            if mesh
+                .candle_fire
+                .iter()
+                .any(|&fire| candle_hits_player(feet, fire))
+            {
+                self.request_fire_damage();
+            }
+        }
+    }
+
     pub(super) fn in_damage_state(&self) -> bool {
         matches!(
             self.mode,
@@ -163,7 +208,11 @@ impl Player {
     }
     /// A sensor's fire attack requests damage independently of the collision-code query.
     pub fn request_fire_damage(&mut self) {
-        self.damage.fire_message = true;
+        // PlayerActorHakoniwa::receiveMsg checks PlayerDamageKeeper's prevent byte.
+        // Static fire floors bypass it; an EnemyAttackFire message does not.
+        if !self.damage.blocked {
+            self.damage.fire_message = true;
+        }
     }
     pub fn is_dead(&self) -> bool {
         self.damage.hp == 0

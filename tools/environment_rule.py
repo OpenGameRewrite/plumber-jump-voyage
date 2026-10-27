@@ -233,6 +233,19 @@ class Judge:
             if any(max(b[i] for b in bases) - min(b[i] for b in bases) > 0.01 for i in range(3))
         }
         self._scripted = {}
+        self._candles = []
+        self._start = start
+        if geometry and start is not None and v.geometry_replay:
+            for candle in geometry.get("candlestands", []):
+                part = next((o for o in geometry.get("objects", []) if o.get("id") == candle.get("id")), {})
+                position = part.get("translate", [])
+                if (candle.get("is_burn_out") is False and candle.get("settled") is True
+                        and part.get("static") is True and part.get("model") == "LavaWorldCandlestand000"
+                        and part.get("rotate") == [0, 0, 0] and part.get("scale") == [1, 1, 1]
+                        and len(position) == 3
+                        and candle.get("fire_position") == [position[0], f32(position[1] + 200), position[2]]
+                        and candle.get("body_position") == [position[0], f32(position[1] + 210), position[2]]):
+                    self._candles.append(candle)
         if geometry and start is not None and v.geometry_replay:
             self._classify_damage(geometry, start, preroll or {}, start_triangle or {})
 
@@ -274,7 +287,14 @@ class Judge:
                     codes = ({"DamageFire"} if family == "DamageFire" else {"Needle", "Poison"}
                              if family == "Damage" else {"Needle"} if family == "DamageSwim"
                              else {"SandSink"} if family == "SandSink" else {"Poison"})
+                    if family == "DamageFire":
+                        for c in parse_contacts(row.get("contacts")):
+                            if self._candle_contact(f, c, message=True) and c["answer"] == "1":
+                                cause = f"exported candlestand EnemyAttackFire at frame {f}"
+                                break
                     for g in (f - 1, f):
+                        if cause:
+                            break
                         sample = rows.get(g, {})
                         flags = key_values(sample.get("collision", ""))
                         hosts = parse_hit_hosts(sample.get("hit_hosts"))
@@ -442,6 +462,44 @@ class Judge:
                "on the frame or the next") + note
         v.accept(f, f"physical overlap with {label}", why)
 
+    def _candle_contact(self, f, c, message=False):
+        """Only the reproduced Fire/Body pair, never a generic Candlestand waiver.
+
+        Hit checks precede movement and use the preceding pose. PlayerAttack
+        overlaps do not damage the player; received fire requires Player/PlayerFoot.
+        """
+        if not self._candles or c["who"] != "player" or c["host_class"] != "Candlestand":
+            return False
+        if message:
+            if (c["kind"] not in ("r", "p") or (c["kind"] == "p" and c["answer"] != "0") or c["message"] != "al::SensorMsgEnemyAttackFire"
+                    or c["answer"] not in ("0", "1") or (c["other"], c["other_type"]) != ("Fire", "10")):
+                return False
+        elif c["kind"] != "a" or c["message"] or c["answer"]:
+            return False
+        player = {("Foot", "3"): (40., 40.), ("Body", "1"): (75., 50.), ("Head", "1"): (110., 40.)}
+        if not message:
+            player.update({("Carry", "2"): (100., 130.), ("SpinAttack", "2"): (100., 130.),
+                           ("HipDropKnockDown", "2"): (0., 150.)})
+        own = player.get((c["self"], c["self_type"]))
+        other = {("Fire", "10"): ("fire_position", 40.), ("Body", "12"): ("body_position", 80.)}.get(
+            (c["other"], c["other_type"]))
+        if own is None or other is None:
+            return False
+        row = self.rows.get(f - 1, self.preroll.get(f - 1, {}))
+        feet = [number(row.get(k)) for k in ("px", "py", "pz")]
+        if None in feet:
+            return False
+        feet = [f32(f32(x) + f32(s)) for x, s in zip(feet, self._start)]
+        feet[1] = f32(feet[1] + own[0])
+        for candle in self._candles:
+            if c["host"] != candle["host"]:
+                continue
+            delta = [f32(a - f32(b)) for a, b in zip(feet, candle[other[0]])]
+            squared = f32(f32(f32(delta[0] * delta[0]) + f32(delta[1] * delta[1])) + f32(delta[2] * delta[2]))
+            if squared < (own[1] + other[1]) ** 2:
+                return True
+        return False
+
     def _judge_typed_contacts(self, f):
         v = self.verdict
         for c in parse_contacts(self.rows[f].get("contacts")):
@@ -449,6 +507,10 @@ class Judge:
             where = f" ({c['self']}:{c['self_type']} vs {c['other']}:{c['other_type']}" + (f", {c['host_class']}" if c["host_class"] else "") + ")"
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
+                continue
+            if self._candle_contact(f, c, message=c["kind"] in ("r", "p")):
+                v.accept(f, "exported candlestand sensor",
+                         "settled initially lit static placement; exact Fire/Body sphere overlap replayed")
                 continue
             if c["kind"] in ("r", "p"):
                 message = c["message"]

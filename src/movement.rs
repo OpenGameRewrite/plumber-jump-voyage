@@ -2766,6 +2766,7 @@ impl Player {
         self.start_pending_abyss();
         self.check_recovery_area_exit(scene);
         self.dispatch_sand_death();
+        self.receive_candle_fire(scene);
         self.dispatch_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
