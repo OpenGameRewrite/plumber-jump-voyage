@@ -314,8 +314,8 @@ pub fn read(
     window: Single<&Window>,
     mut active: Local<Option<Entity>>,
     mut repeat: Local<f32>,
-    mut smoke_phase: Local<u8>,
-    mut smoke_last: Local<f32>,
+    mut smoke: Local<crate::scripted_input::SmokeState>,
+    players: Query<&crate::movement::Player>,
 ) {
     *repeat = (*repeat - time.delta_secs()).max(0.);
     let mut f = FrameInput::default();
@@ -432,8 +432,8 @@ pub fn read(
         &time,
         menu.open,
         &mut orders,
-        &mut smoke_phase,
-        &mut smoke_last,
+        &mut smoke,
+        players.iter().next(),
     );
     *frame = f;
 }

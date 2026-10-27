@@ -1,13 +1,93 @@
 //! Scripted graphical checks feed the same Orders as real devices.
 use crate::input::Orders;
+use crate::movement::{Move, Player};
 use bevy::prelude::*;
+
+/// Where the toy course's hot plate stands (`world.rs`): centre x and half width.
+const HOT_PLATE_X: f32 = 4.;
+const HOT_PLATE_HALF_X: f32 = 1.5;
+
+/// Progress of the two-burn walk, which follows the player's state rather
+/// than the clock: a slow render stretches a burn in real time, so timed
+/// legs would reverse the stick before the first burn is over.
+#[derive(Default)]
+pub struct LavaTwice {
+    burns: u8,
+    was_burning: bool,
+    /// Real seconds spent standing after the last burn.
+    settled: f32,
+    /// Which side of the plate the last burn left Mario on (+1 or -1 along X).
+    side: f32,
+    walked_out: bool,
+}
+
+impl LavaTwice {
+    /// The stick for this frame: step onto the plate, stand through the burn,
+    /// walk away from the plate once Mario waits on safe ground, then back on.
+    fn direction(&mut self, player: &Player, delta: f32, now: f32) -> Vec2 {
+        let burning = matches!(
+            player.mode,
+            Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall
+        );
+        if burning != self.was_burning {
+            if burning {
+                self.burns += 1;
+                self.settled = 0.;
+                self.walked_out = false;
+            }
+            info!(
+                "smoke: burn {} {} at x={:.2} z={:.2}",
+                self.burns,
+                if burning { "starts" } else { "ends" },
+                player.pos.x,
+                player.pos.z
+            );
+            self.was_burning = burning;
+        }
+        if burning || now < 0.1 {
+            return Vec2::ZERO;
+        }
+        match self.burns {
+            0 => Vec2::X * 0.6,
+            1 => {
+                // The burn is over; give the ordinary Wait time to show.
+                if player.grounded && player.mode == Move::Idle {
+                    self.settled += delta;
+                }
+                if self.settled < 1.5 {
+                    return Vec2::ZERO;
+                }
+                let side = (player.pos.x - HOT_PLATE_X).signum();
+                if !self.walked_out {
+                    self.side = side;
+                    // Away from the plate until well clear of its edge.
+                    if (player.pos.x - HOT_PLATE_X).abs() > HOT_PLATE_HALF_X + 1.5 {
+                        self.walked_out = true;
+                    }
+                    return Vec2::X * side * 0.6;
+                }
+                // Back onto the plate for the second burn.
+                Vec2::X * -self.side * 0.6
+            }
+            _ => Vec2::ZERO,
+        }
+    }
+}
+
+/// What the scripted checks remember between frames.
+#[derive(Default)]
+pub struct SmokeState {
+    phase: u8,
+    last: f32,
+    lava_twice: LavaTwice,
+}
 
 pub fn apply(
     time: &Time<Real>,
     menu_open: bool,
     orders: &mut Orders,
-    smoke_phase: &mut u8,
-    smoke_last: &mut f32,
+    smoke: &mut SmokeState,
+    player: Option<&Player>,
 ) {
     // Optional graphical check drives the same orders through the real controller.
     if !menu_open && std::env::var_os("PJV_SMOKE").is_some() {
@@ -18,8 +98,8 @@ pub fn apply(
             .unwrap_or(0.);
         let started = time.elapsed_secs() >= delay;
         let phase = ((time.elapsed_secs() - delay).max(0.) / 0.7) as u8;
-        let edge = phase != *smoke_phase;
-        *smoke_phase = phase;
+        let edge = phase != smoke.phase;
+        smoke.phase = phase;
         let script = std::env::var("PJV_SCRIPT").unwrap_or_default();
         if script == "needle" {
             let now = time.elapsed_secs() - delay;
@@ -34,16 +114,29 @@ pub fn apply(
             };
             return;
         }
-        if script == "lava" || script == "lava-twice" {
-            // From PJV_SPAWN: cross the hot plate. The twice check returns
-            // across it after the first recovery, without resetting HP or stain.
+        if script == "lava-twice"
+            && let Some(player) = player
+        {
+            // From PJV_SPAWN west of the hot plate: burn, wait, walk out to the
+            // safe side and back for a second burn, without resetting HP or stain.
             let now = time.elapsed_secs() - delay;
-            let forward_end = if script == "lava-twice" { 1.5 } else { 3.0 };
             *orders = Orders {
                 reset: started && now < 0.04,
-                direction: if script == "lava-twice" && (10.0..11.8).contains(&now) {
-                    Vec2::NEG_X * 0.6
-                } else if (0.1..forward_end).contains(&now) {
+                direction: if started {
+                    smoke.lava_twice.direction(player, time.delta_secs(), now)
+                } else {
+                    Vec2::ZERO
+                },
+                ..default()
+            };
+            return;
+        }
+        if script == "lava" {
+            // From PJV_SPAWN: cross the hot plate.
+            let now = time.elapsed_secs() - delay;
+            *orders = Orders {
+                reset: started && now < 0.04,
+                direction: if (0.1..3.0).contains(&now) {
                     Vec2::X * 0.6
                 } else {
                     Vec2::ZERO
@@ -88,10 +181,10 @@ pub fn apply(
             *orders = Orders {
                 reset: started && now < 0.04,
                 crouch: now >= 0.4,
-                crouch_pressed: *smoke_last < 0.4 && now >= 0.4,
+                crouch_pressed: smoke.last < 0.4 && now >= 0.4,
                 ..default()
             };
-            *smoke_last = now;
+            smoke.last = now;
             return;
         }
         if script == "crouchwalk" {
@@ -104,10 +197,10 @@ pub fn apply(
                     Vec2::ZERO
                 },
                 crouch: now >= 1.0,
-                crouch_pressed: *smoke_last < 1.0 && now >= 1.0,
+                crouch_pressed: smoke.last < 1.0 && now >= 1.0,
                 ..default()
             };
-            *smoke_last = now;
+            smoke.last = now;
             return;
         }
         if script == "spin" || script == "spinjump" {
@@ -117,7 +210,7 @@ pub fn apply(
             let now = time.elapsed_secs() - delay;
             let circling = started && now < 2.6;
             let c = Vec2::new((now * 14.).cos(), (now * 14.).sin());
-            let crossed = |at: f32| *smoke_last < at && now >= at;
+            let crossed = |at: f32| smoke.last < at && now >= at;
             let jumping = script == "spinjump";
             *orders = Orders {
                 direction: if circling { c } else { Vec2::ZERO },
@@ -134,13 +227,13 @@ pub fn apply(
                 crouch_pressed: jumping && crossed(2.1),
                 ..default()
             };
-            *smoke_last = now;
+            smoke.last = now;
             return;
         }
         if script == "dive" || script == "diveroll" {
             // Run, jump, pound, dive forward; "diveroll" keeps crouch held to land rolling.
             let now = time.elapsed_secs() - delay;
-            let crossed = |at: f32| *smoke_last < at && now >= at;
+            let crossed = |at: f32| smoke.last < at && now >= at;
             *orders = Orders {
                 direction: if started && now < 1.1 {
                     Vec2::Y
@@ -154,7 +247,7 @@ pub fn apply(
                 throw_pressed: crossed(1.08),
                 ..default()
             };
-            *smoke_last = now;
+            smoke.last = now;
             return;
         }
         if script == "walk" {
