@@ -257,6 +257,7 @@ mod ground;
 mod recovery_dead;
 mod safety;
 pub mod sand_geyser;
+mod force_run;
 mod sand_sink;
 mod stain;
 use damage::Damage;
@@ -943,6 +944,8 @@ pub enum Fx {
     CapBounce,
     /// The stay began while the button is held: the reaction it raises.
     CapStayStart,
+    /// Equipment started a forced run (the reaction `強制走り開始`).
+    ForceRunStart,
     /// The cap began to skim the water's surface / to rest on it (hit reactions of the cap).
     CapWaterFly,
     CapWaterStay,
@@ -1067,6 +1070,8 @@ pub struct Player {
     fire: FireControl,
     sand: sand_sink::SandControl,
     geyser: sand_geyser::GeyserControl,
+    /// `PlayerCounterForceRun`: set by RocketFlower equipment.
+    force_run: force_run::ForceRun,
     damage: Damage,
     life: damage_life::LifeControl,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
@@ -1363,6 +1368,7 @@ impl Default for Player {
             fire: FireControl::default(),
             sand: sand_sink::SandControl::default(),
             geyser: sand_geyser::GeyserControl::default(),
+            force_run: force_run::ForceRun::default(),
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),

@@ -277,6 +277,11 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
             cap: true,
             name: "StayStart",
         }],
+        // `PlayerActorHakoniwa` raises it when equipment starts a forced run.
+        Fx::ForceRunStart => vec![Cue::Reaction {
+            cap: false,
+            name: "強制走り開始",
+        }],
         Fx::CapWaterFly => vec![Cue::Reaction {
             cap: true,
             name: "WaterSurfaceFly",
