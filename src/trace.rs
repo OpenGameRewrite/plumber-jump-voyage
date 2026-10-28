@@ -308,6 +308,9 @@ pub struct Recorder {
     main_clip: &'static str,
     stale_clip: &'static str,
     sub_clip: Option<&'static str>,
+    /// The model's sub animation ended while the catch's upper-body clip goes on (a forced run
+    /// started from a catch): the main clip's own blend is reported again.
+    upper_outlives_sub: bool,
     restart: Option<(&'static str, u32, u32)>,
     /// The sub animation on screen at the previous row (the clip, its shown frame, and whether
     /// it covered the whole body): when it ends, the main clip fades in from that pose.
@@ -354,6 +357,7 @@ impl Recorder {
             main_clip: "",
             stale_clip: "",
             sub_clip: None,
+            upper_outlives_sub: false,
             restart: None,
             shown_sub: None,
             shown_blend: None,
@@ -1107,9 +1111,15 @@ impl Recorder {
         // The animation that played over the main clip: the model's sub
         // animation, or the upper-body one of a catch on the move.
         let sub_now = p.model_sub().map(|(name, _)| name).or(p.upper_catch());
+        if p.ended_model_sub().is_some() && p.upper_catch().is_some() {
+            self.upper_outlives_sub = true;
+        } else if p.upper_catch().is_none() {
+            self.upper_outlives_sub = false;
+        }
         // The main slot's own blend is not reported while a sub animation of
         // another clip plays over it.
-        if sub_now.is_some_and(|name| name != p.anim.name) && p.upper_catch() != Some("CatchCap") {
+        let own_blend_shown = self.upper_outlives_sub && p.model_sub().is_none();
+        if sub_now.is_some_and(|name| name != p.anim.name) && !own_blend_shown {
             interp.clear();
         }
         if let Some(ended) = self.sub_clip
