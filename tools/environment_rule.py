@@ -32,6 +32,7 @@ import re
 import struct
 from sand_geyser import Evidence as GeyserEvidence
 from grab_ceil import Evidence as GrabCeilEvidence
+from rocket_flower import Evidence as RocketEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -212,7 +213,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -238,6 +239,7 @@ class Judge:
         self._grabceil_hosts = {p.get("host") for p in (geometry or {}).get("grab_ceil_bars", [])}
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
+        self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
         self._scripted = {}
         self._candles = []
         self._start = start
@@ -511,6 +513,9 @@ class Judge:
         for c in parse_contacts(self.rows[f].get("contacts")):
             host = c["host"]
             where = f" ({c['self']}:{c['self_type']} vs {c['other']}:{c['other_type']}" + (f", {c['host_class']}" if c["host_class"] else "") + ")"
+            if self._rocket.contact(f, c, self.rows, self.preroll, self._start):
+                v.accept(f, "exported RocketFlower equipment", "placement-bound sensors and independently reproduced pickup, watcher phase, refresh and expiry")
+                continue
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
                 continue

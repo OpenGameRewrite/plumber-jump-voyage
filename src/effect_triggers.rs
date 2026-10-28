@@ -670,6 +670,7 @@ impl Tracker {
         // The particle calculation that follows the previous sample runs before this frame's
         // update: a set with no emitter left alive in it is gone from this sample on.
         self.live.retain_mut(|live| {
+            live.age += p.scene_stop_ticks();
             if live.last_alive.is_some_and(|last| live.age > last) {
                 return false;
             }
@@ -791,7 +792,10 @@ impl Tracker {
         if let Some(effect) = p.run_start_effect()
             && !matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
-            self.live.retain(|l| l.key.effect != effect);
+            self.live.retain(|l| {
+                l.key.effect != effect
+                    && !(effect == "DashFast" && l.key.effect == "DashFastPuddle")
+            });
         }
         // The effect that depends on the water prefix ends two steps after the player's root
         // left the water.

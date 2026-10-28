@@ -582,6 +582,26 @@ pub(crate) fn update_static_clipping(player: &mut Player, course: &Course, view:
             }
         }
     }
+    if let Some(view) = view {
+        let forward = view.forward;
+        let side = forward.cross(Vec3::Y).normalize();
+        let up = side.cross(forward);
+        let slope = (view.fov_deg.to_radians() * 0.5).tan();
+        let horizontal = slope * (16. / 9.);
+        for source in &mut player.rocket.flowers {
+            let at = course
+                .mesh
+                .as_ref()
+                .map_or(source.position, |m| m.relative_vec(source.position));
+            let delta = at - view.position * 100.;
+            let dot = |a: Vec3, b: Vec3| (a.x * b.x + a.y * b.y) + a.z * b.z;
+            source.camera_clipped = dot(delta, up).abs()
+                > dot(delta, forward) * slope + (slope * slope + 1.).sqrt() * 300.
+                || dot(delta, side).abs()
+                    > dot(delta, forward) * horizontal
+                        + (horizontal * horizontal + 1.).sqrt() * 300.;
+        }
+    }
     player.set_clipped_candles(clipped);
     player.look.set_invalid_sensors(invalid);
 }

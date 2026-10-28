@@ -381,7 +381,7 @@ impl GroundMove {
             let tilt = squared_length(stick).sqrt();
             let top = self.hill_speed()
                 + if self.surface_run && input.max_speed * 0.99 - measured <= 0.001 {
-                    35.
+                    0.
                 } else {
                     input.max_speed
                 };

@@ -12,6 +12,8 @@ pub struct Flower {
     pub equip: Vec3,
     pub valid: bool,
     pub pending: Option<Vec3>,
+    pub camera_clipped: bool,
+    pub clipped: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -22,6 +24,8 @@ pub struct RocketFlowers {
     pub step: i32,
     pub head: Option<look_joint::Mat34>,
     pub stops: u32,
+    pub pending_stop: u32,
+    pub elapsed_stop: u32,
     pub pickup: bool,
     pub equip_request: bool,
     pub ended: bool,
@@ -99,10 +103,16 @@ impl Player {
                 equip: Vec3::ZERO,
                 valid: false,
                 pending: None,
+                camera_clipped: false,
+                clipped: false,
             });
         }
         self.rocket = control;
         Ok(())
+    }
+
+    pub fn scene_stop_ticks(&self) -> u32 {
+        self.rocket.elapsed_stop
     }
 
     pub fn rocket_diagnostic(&self) -> Option<String> {
@@ -141,6 +151,8 @@ impl Player {
     /// clock, while the flower's LiveActor movement remains stopped.
     pub(super) fn tick_rocket_flowers(&mut self, scene: &Course) {
         let mut c = std::mem::take(&mut self.rocket);
+        c.elapsed_stop = std::mem::take(&mut c.pending_stop);
+        c.step += c.elapsed_stop as i32;
         c.pickup = false;
         c.equip_request = false;
         c.ended = false;
@@ -153,11 +165,15 @@ impl Player {
             .map(|m| scene.in_water_frame(look_joint::translation(&m)));
         let mut stop = false;
         for f in &mut c.flowers {
-            if f.step < 0 {
-                f.step = 0;
-            }
             if let Some(pending) = f.pending.take() {
                 f.equip = pending;
+            }
+            f.clipped = f.phase == 0 && f.camera_clipped;
+            if f.clipped {
+                continue;
+            }
+            if f.step < 0 {
+                f.step = 0;
             }
             match f.phase {
                 1 => {
@@ -186,7 +202,7 @@ impl Player {
         }
         if stop {
             c.stops += 2;
-            c.step += 2;
+            c.pending_stop = 2;
         }
         if c.step < 0 {
             c.step = 0;
@@ -194,8 +210,8 @@ impl Player {
         if c.dash
             && let Some(m) = c.head
         {
-            let up = Vec3::new(m[0][1], m[1][1], m[2][1]);
-            let side = Vec3::new(m[0][0], m[1][0], m[2][0]);
+            let up = pose_math::normalize(Vec3::new(m[0][1], m[1][1], m[2][1]));
+            let side = pose_math::normalize(Vec3::new(m[0][0], m[1][0], m[2][0]));
             if let Some(head) = head {
                 for (slot, &i) in c.equipped.iter().enumerate() {
                     c.flowers[i].pending =
@@ -208,6 +224,7 @@ impl Player {
             c.flowers[old].phase = 0;
             c.flowers[old].step = -1;
             c.flowers[old].valid = false;
+            c.flowers[old].clipped = c.flowers[old].camera_clipped;
             if c.equipped.is_empty() {
                 c.dash = false;
                 c.step = -1;
@@ -225,6 +242,7 @@ impl Player {
         for i in 0..c.flowers.len() {
             let f = &mut c.flowers[i];
             if f.phase == 0
+                && !f.clipped
                 && let Some(cap) = cap
             {
                 // Cap item-get sphere (40), against the placed Body (70).

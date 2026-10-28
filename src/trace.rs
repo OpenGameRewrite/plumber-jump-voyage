@@ -1100,6 +1100,7 @@ impl Recorder {
         // A sub animation of another clip just ended: the main clip restarts
         // blending in over `RESTART_BLEND_FRAMES` from the clip it followed.
         if self.main_clip != p.anim.name {
+            self.restart = None;
             self.stale_clip = self.main_clip;
             self.main_clip = p.anim.name;
         }
@@ -1108,11 +1109,11 @@ impl Recorder {
         let sub_now = p.model_sub().map(|(name, _)| name).or(p.upper_catch());
         // The main slot's own blend is not reported while a sub animation of
         // another clip plays over it.
-        if sub_now.is_some_and(|name| name != p.anim.name) {
+        if sub_now.is_some_and(|name| name != p.anim.name) && p.upper_catch() != Some("CatchCap") {
             interp.clear();
         }
         if let Some(ended) = self.sub_clip
-            && sub_now.is_none()
+            && (sub_now.is_none() || p.ended_model_sub().is_some())
             && !p.upper_cleared()
             && ended != p.anim.name
             && !self.stale_clip.is_empty()
@@ -1132,13 +1133,18 @@ impl Recorder {
                     partial: Vec::new(),
                 })
                 .or_else(|| self.shown_blend.clone().map(|flat| Pose { slot, ..flat }));
-            let share = 1. - 1. / RESTART_BLEND_FRAMES as f32;
-            let fade = FPS / RESTART_BLEND_FRAMES as f32;
+            let restart_frames = if p.ended_model_sub().is_some() {
+                interp_frames(p.anim.name, ended) as u32
+            } else {
+                RESTART_BLEND_FRAMES
+            };
+            let share = 1. - 1. / restart_frames as f32;
+            let fade = FPS / restart_frames as f32;
             self.blend.old = frozen
                 .map(|pose| vec![(pose, share, fade)])
                 .unwrap_or_default();
             kept = self.blend.kept();
-            self.restart = Some((self.stale_clip, 0, RESTART_BLEND_FRAMES));
+            self.restart = Some((self.stale_clip, 0, restart_frames));
         }
         self.sub_clip = sub_now;
         // What the blend shows in this row, for the fade that follows a partial animation.

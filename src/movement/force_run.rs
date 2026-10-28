@@ -51,11 +51,6 @@ impl Player {
         )
     }
 
-    /// The counter the player holds (`PlayerCounterForceRun`).
-    pub fn force_run(&self) -> ForceRun {
-        self.force_run
-    }
-
     /// `PlayerActorHakoniwa::movement` (0x41df64..0x41df94), before the state choice: while the
     /// equipment user holds RocketFlower equipment the counter is set again; the hit reaction
     /// "強制走り開始" starts when it was not already running.

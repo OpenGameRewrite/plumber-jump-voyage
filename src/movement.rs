@@ -480,6 +480,7 @@ pub mod clip {
             "DamageSwimSurfaceLand" => Some(145),
             // (The fall's clip is 28 frames long and its counter stops one past that.)
             "Fall" => Some(28),
+            "JumpDashFast" => Some(30),
             "Jump" | "JumpReverse" => Some(84),
             "Jump2" => Some(42),
             "Jump3" | "JumpBack" => Some(68),
@@ -1074,7 +1075,7 @@ pub struct Player {
     geyser: sand_geyser::GeyserControl,
     /// `PlayerCounterForceRun`: set by RocketFlower equipment.
     force_run: force_run::ForceRun,
-    rocket: rocket_flower::RocketFlowers,
+    pub rocket: rocket_flower::RocketFlowers,
     surface_run: surface_run::SurfaceRun,
     damage: Damage,
     life: damage_life::LifeControl,
@@ -1252,6 +1253,7 @@ pub struct Player {
     /// A state chose its own sub-nerve again in this step (the trace's
     /// `sub_step` starts over although the name is the same).
     sub_restarted: bool,
+    ended_sub: Option<(&'static str, f32)>,
     /// The clip started in this step does not fade in from the one before it
     /// (`PlayerAnimator::clearInterpolation`).
     interpolation_cleared: bool,
@@ -1478,6 +1480,7 @@ impl Default for Player {
             catch_collider_at: None,
             fall_after_ledge: None,
             sub_restarted: false,
+            ended_sub: None,
             interpolation_cleared: false,
             age: 0,
             swim: swim::Swim::default(),
@@ -2108,6 +2111,10 @@ impl Player {
         })
     }
     /// The model's sub animation while it plays: its name and frame.
+    pub fn ended_model_sub(&self) -> Option<(&'static str, f32)> {
+        self.ended_sub
+    }
+
     pub fn model_sub(&self) -> Option<(&'static str, f32)> {
         self.sub.active.then_some((self.sub.name, self.sub.frame))
     }
@@ -2820,6 +2827,7 @@ impl Player {
         self.nerve.renewed = false;
         self.sensor_restart = false;
         self.sub_restarted = false;
+        self.ended_sub = None;
         self.interpolation_cleared = false;
         self.upper_cleared = false;
         self.age = self.age.saturating_add(1);
@@ -2949,7 +2957,8 @@ impl Player {
     /// is recorded (walking and running off a terrace); the other ground
     /// states are assumed to ask the same judge.
     fn judge_fall(&mut self) {
-        if !(self.start_surface_run() || self.surface_run.result && matches!(self.mode, Move::Walk | Move::Run))
+        if !(self.start_surface_run()
+            || self.surface_run.result && matches!(self.mode, Move::Walk | Move::Run))
             && self.ground_lost > GROUND_LOST_FRAMES
             && !self.nerve.deferred
             && (matches!(
@@ -3150,7 +3159,11 @@ impl Player {
         let actor = self.pose_matrix();
         let sensors = self.rocket_look_sensors(scene.look_sensors(), scene.mesh.as_deref());
         for (i, f) in self.rocket.flowers.iter().enumerate() {
-            if !f.valid {
+            if f.clipped {
+                self.look
+                    .invalidate_source_sensor(scene.look_sensors().len() + i * 2);
+            }
+            if !f.valid || f.clipped {
                 self.look
                     .invalidate_source_sensor(scene.look_sensors().len() + i * 2 + 1);
             }
@@ -3248,7 +3261,8 @@ impl Player {
             return;
         }
         if self.force_run.is_active() || self.tilt >= STICK_DEADZONE || self.auto_run_skate() {
-            if self.force_run.is_active() {
+            if self.force_run.is_active() && self.sub.active {
+                self.ended_sub = Some((self.sub.name, self.sub.frame));
                 self.sub.active = false;
             }
             // The state's own start-run judge comes before the actor's (jump,
@@ -3902,7 +3916,16 @@ impl Player {
         } else {
             0
         };
-        let takeoff = takeoff_of(mode, extend, power, gravity);
+        let mut takeoff = takeoff_of(mode, extend, power, gravity);
+        if self.force_run.is_active()
+            && matches!(mode, Move::Jump | Move::DoubleJump | Move::TripleJump)
+        {
+            takeoff.speed_window = Some((
+                0.,
+                air_move::tune::JUMP_BASE_SPEED_MAX.max(self.force_run.speed),
+            ));
+            takeoff.speed_limit = takeoff.speed_limit.max(self.force_run.speed);
+        }
         self.air.setup(&mut self.v, self.facing, &takeoff);
         self.air_turn.reset();
         self.air_for = Some(mode);
@@ -4946,6 +4969,9 @@ impl Player {
                     self.catch_clip = self.clip_of_catch();
                     if self.catch_clip == "CatchCap" {
                         self.start_sub("CatchCap", 10., -1.);
+                        // movement starts the partial too (0x41de54 -> 0x41deac).
+                        // It survives an early endSubAnim when Run interrupts the catch.
+                        self.upper_catch = Some(-1);
                     } else {
                         self.upper_catch = Some(-1);
                     }
