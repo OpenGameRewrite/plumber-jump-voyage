@@ -59,13 +59,15 @@ const START_DISTANCE: f32 = 150.;
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
 /// The cap is caught when its `Catch` hit sensor (a sphere of 100 around the cap's centre,
-/// added by `PlayerFunction::initCapModelActor`) touches the player's `Body` sensor (50, see
-/// `CATCH_CENTER_HEIGHT`). The sensors' contact is read after the cap has moved in the frame
+/// added by `PlayerFunction::initCapModelActor`) touches a Player sensor: Body (50 at75)
+/// or Head (40 at110). PlayerActorHakoniwa::attackSensor checks isSensorPlayer,
+/// so both InitSensor entries participate. Contact is read after the cap has moved in the frame
 /// and before the player's movement (`HackCap::receiveMsg` takes `PlayerCapCatch` and flags the
 /// cap, the player's movement then puts it on), so a cap that flew into range this frame is
 /// caught in it.
 const CATCH_SENSOR_RADIUS: f32 = 100.;
 const BODY_SENSOR_RADIUS: f32 = 50.;
+const HEAD_SENSOR_RADIUS: f32 = 40.;
 /// Height of the player's `Body` sensor above the feet (`PlayerActorHakoniwa/InitSensor`).
 const CATCH_CENTER_HEIGHT: f32 = 75.;
 /// The return only slows down this near the head: speed is limited to a
@@ -664,7 +666,8 @@ impl Cap {
         self.advance(world.mesh);
         // The sensors touch where the cap has come to.
         if self.nerve == CapNerve::Return
-            && (self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
+            && ((self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
+                || (self.spot - head).length() < CATCH_SENSOR_RADIUS + HEAD_SENSOR_RADIUS)
         {
             events.push(CapEvent::Caught);
         }

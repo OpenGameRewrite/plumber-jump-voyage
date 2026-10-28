@@ -9,8 +9,8 @@
 //! limit that depends on it, the drift of the velocity), so none of it is simplified.
 //!
 //! Checked bit for bit against the executable's routine run in a local interpreter
-//! (`PJV_TURN_CASES`, see `tests/turn_control.rs`). Not ported: the executable's branch for a
-//! body walking on a ceiling (its byte at +0x89 is set by states this player does not have).
+//! (`PJV_TURN_CASES`, see `tests/turn_control.rs`). `update_sky` also enables the ceiling-side
+//! branch used by air control (its byte at +0x89).
 use super::console_libm::{acosf, cosf, sinf};
 use super::joint_math::{calc_rate01, converge, make_quat_rotation_limit};
 use super::pose_math::{

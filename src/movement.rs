@@ -1051,6 +1051,8 @@ struct ThrowControl {
     up: Option<Vec3>,
     /// SpinAir preserves the tilted model root, unwinding its translation over ten steps.
     model_shift: Option<Vec3>,
+    /// Offset handed to HackCap::startThrow while SpinAir repays its root shift.
+    launch_offset: Vec3,
 }
 /// A partial animation playing on top of the main clip (`PlayerAnimator::startSubAnim`).
 /// While one plays the main clip's frame is counted by the animator itself
@@ -4813,6 +4815,10 @@ impl Player {
         // The cap leaves on the throw frame, if it is still the spin attack.
         if self.winding && self.launch.is_none() && step == self.throw_frame(kind, air) {
             self.launch_cap(kind, self.throwing.continuous);
+            if air && let Some(shift) = self.throwing.model_shift {
+                // exeSpinAir (0x4828b0) supplies the un-repaid shift after this step.
+                self.throwing.launch_offset = -shift * 9_u32.saturating_sub(step) as f32;
+            }
         }
         if air {
             self.spin_air(o, step);
@@ -4964,6 +4970,7 @@ impl Player {
     }
     /// `HackCap::startThrow`: the cap starts flying on the next frame.
     fn launch_cap(&mut self, kind: Throw, continuous: bool) {
+        self.throwing.launch_offset = Vec3::ZERO;
         self.launch = Some(self.throw_launch(kind, continuous));
     }
     /// The cap's frame, which comes before the player's
@@ -4990,7 +4997,7 @@ impl Player {
             self.winding = false;
             let cap = Cap::start_in(
                 launch,
-                self.pos,
+                self.pos + self.throwing.launch_offset * UNIT,
                 self.cap_serial + 1,
                 scene.mesh.as_deref(),
                 Some(scene.water_areas()),

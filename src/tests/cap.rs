@@ -146,6 +146,14 @@ fn the_catch_is_the_sensor_contact() {
     assert!(returning(220.).update(&world).contains(&CapEvent::Caught));
     // 250 away it only comes to about 170: not yet.
     assert!(!returning(250.).update(&world).contains(&CapEvent::Caught));
+    // A cap approaching from above reaches Head before Body. Both sensors
+    // have type Player in InitSensor and may send PlayerCapCatch.
+    let mut above = returning(0.);
+    above.spot = Vec3::new(0., 250., 0.);
+    above.velocity = Vec3::NEG_Y;
+    above.return_speed = 0.;
+    above.pose.stand_facing(Vec3::NEG_Y);
+    assert!(above.update(&world).contains(&CapEvent::Caught));
 }
 
 /// The standing throw of the recorded `capthrow` run: the cap appears 150 in

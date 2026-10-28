@@ -2,6 +2,25 @@ use super::*;
 
 pub(super) fn run() {
     the_exes_turn_control_agrees_bit_for_bit();
+    ceiling_turn_uses_the_requested_direction();
+}
+
+#[cfg_attr(test, test)]
+fn ceiling_turn_uses_the_requested_direction() {
+    let mut turn = TurnControl::air();
+    let frame = TurnFrame {
+        actor_front: Vec3::NEG_Z,
+        actor_up: Vec3::NEG_Y,
+        stick: Vec3::X,
+        up: Vec3::Y,
+    };
+    assert!(turn.update_sky(frame));
+    assert_eq!(turn.direction, Vec3::X);
+    assert_eq!(turn.rate, turn.fast_limit);
+    assert!(!turn.update_sky(TurnFrame {
+        actor_up: Vec3::Y,
+        ..frame
+    }));
 }
 
 fn vec3(v: &serde_json::Value) -> Vec3 {
