@@ -1177,3 +1177,9 @@ water, a jump and the expiry after 240 equipment frames).
   The stage/water and equipped flower models are not drawn, the placeholder floor occludes
   Mario below its height, and existing run/water effects render oversized overlapping geometry.
   These captures establish a native application smoke, not visual or audio parity with SMO.
+
+The `pole-top-end` and `pole-top-end-turn` captures exercise TopEnd from both
+TopWait and TopTurn. Their observed `PoleHandStandEnd` transition retains the
+outgoing pose at half weight for one frame (a two-frame interpolation).
+The typed contacts include CapHanger and ReactionObject physical overlaps;
+the existing environment rule checks their handlers and consequence markers.
