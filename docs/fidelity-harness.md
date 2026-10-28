@@ -444,8 +444,16 @@ same step sets the air control up with the spin's limits (speed 7, lift 6, gravi
 ground fall judge never ends an air spin (it lasts 23 steps). A ground spin ends
 when its clip does, after the cap is away; the run starts only then.
 
+An air throw out of a tilted model root (including `DiveInWater`) hands the
+root's orientation to the actor while preserving its world translation. The
+translation difference is repaid over ten steps; the launch receives an offset
+for the unpaid remainder. The air pose relaxes at rate 0.1, retaining the
+ceiling-side hemisphere while inverted. A ground-pound cancel within the first
+21 steps ends that pose interpolation immediately.
+
 The cap is caught when its `Catch` sensor (radius 100) touches the player's `Body`
-sensor (50, 75 above the feet) after the cap moved in the frame. The catch plays
+sensor (50, 75 above the feet) or `Head` (40, 110 above the feet), both of type
+Player, after the cap moved in the frame. The catch plays
 its animation and reaction only in the states that ask for them (standing,
 running, spinning, falling, the ground pound, the long jump, a plain jump or wall
 jump, swimming); in any other (squat, roll, dive, flips, slide, ledge, pole) the
@@ -453,6 +461,15 @@ cap goes on the head at once and the frame is the last one that reports the cap.
 A jump pressed in the catch window, in the air, pops the player up; without the
 press an air catch changes nothing. The cap reads the throw button as the frame
 before left it.
+
+The water head slide and its braking end use their own surface spring, speed
+limits and joint bending (`movement/swim_dive.rs`). HeadSliding does not add the
+ordinary swim gravity. The end can paddle or start another ground pound before
+it slows into SwimMove. `DiveInWater` starts directly when its original judge
+succeeds; its 48-frame nonlooping clip has no separate timing heuristic.
+Cappy's area-entry and area-exit reactions use the installed cap sound/effect
+tables. The splash recording covers entry; exit and moving-fluid displacement
+remain unverified.
 
 ## Sample point
 

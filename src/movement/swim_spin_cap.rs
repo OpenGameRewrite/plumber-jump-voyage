@@ -31,10 +31,9 @@ impl Player {
     /// slide's end.
     fn is_enable_cap_throw_surface(&self) -> bool {
         self.water_finder.found
-            && matches!(
-                self.swim.nerve,
-                SwimNerve::Surface | SwimNerve::HipDropHeadSlidingEnd
-            )
+            && (self.swim.nerve == SwimNerve::Surface
+                || self.swim.nerve == SwimNerve::HipDropHeadSlidingEnd
+                    && self.water_finder.distance <= k::SURFACE_START_DIST)
     }
 
     /// `PlayerStateSwim::isEnableCapThrow`: under the surface, on the bottom, in the paddle and
