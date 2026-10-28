@@ -562,6 +562,7 @@ impl Player {
             hint.turn_rate,
             hint.last_input,
             hint.turn_power,
+            false,
         );
         match self.mode {
             Move::SandPivot => {

@@ -48,6 +48,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    skate_requires_the_contacted_floor_and_keeps_neutral_inertia();
     original_simulation_trace();
     the_spin_throw_brakes_only_along_its_front();
     state_changes_follow_the_nerve_machine();
@@ -81,6 +82,32 @@ pub(super) fn run() {
     quicksand();
     low_ceiling();
     wall_collision_and_stress();
+}
+
+#[cfg_attr(test, test)]
+fn skate_requires_the_contacted_floor_and_keeps_neutral_inertia() {
+    let mut scene = floor();
+    scene.solids[0].floor_code = "Skate";
+    let mut p = Player::default();
+    frames(&mut p, Orders::default(), &scene, 10);
+    assert!(p.on_ground_skate());
+    p.v = p.facing * 14.;
+    assert!(p.auto_run_skate());
+    p.step(&Orders::default(), &scene);
+    assert!(matches!(p.mode, Move::Walk | Move::Run));
+    frames(&mut p, Orders::default(), &scene, 2);
+    assert!(p.speed_h() > 3.);
+    p.v = Vec3::Y;
+    assert!(!p.on_ground_skate(), "contact while leaving is not Skate");
+    p.v = Vec3::ZERO;
+    p.touched.floor.as_mut().unwrap().floor = "Slip".into();
+    assert!(!p.on_ground_skate(), "Slip24 is not Skate22");
+    p.touched.floor.as_mut().unwrap().floor = "Ground".into();
+    p.touched.floor.as_mut().unwrap().material = "Ice".into();
+    assert!(
+        !p.on_ground_skate(),
+        "ice material alone does not select Skate"
+    );
 }
 
 #[cfg_attr(test, test)]

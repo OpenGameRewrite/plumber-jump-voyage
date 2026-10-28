@@ -515,10 +515,29 @@ impl Trace {
     }
 }
 
-/// Candlestand's InitClipping sphere is r300 at the placement (not at the flame).
-/// FrustumRadar::judgeInArea tests the two vertical planes with the camera's
-/// projection slope. This fixture only models those planes: side/far clipping,
-/// other actor classes and arbitrary camera roll are outside its contract.
+/// The probe's gcode prints Ground for Skate because it only tests selected
+/// codes. Keep recorded contact/normal state, but recover its code from the
+/// actual exported floor at the injected position.
+fn snapshot_with_geometry(
+    game: &TraceFile,
+    row: usize,
+    course: &Course,
+) -> crate::movement::Snapshot {
+    let mut snapshot = game.snapshot(row);
+    if let Some((codes, _, _)) = &mut snapshot.floor_contact
+        && let Some(mesh) = &course.mesh
+    {
+        let p = snapshot.pos / crate::movement::UNIT;
+        if let Some((_, exported)) = mesh.floor_below_with_codes(p.x, p.z, p.y + 40., 0.3) {
+            *codes = exported.clone();
+        }
+    }
+    snapshot
+}
+
+/// Static InitClipping spheres use FrustumRadar's four side planes. The camera
+/// uses CameraPoseUpdater's original 16:9 aspect. Near/far/group clipping and
+/// arbitrary camera roll remain outside these recorded fixtures' coverage.
 fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<View>) {
     let Some(mesh) = &course.mesh else { return };
     let mut clipped = Vec::new();
@@ -533,7 +552,11 @@ fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<Vie
             let delta = mesh.relative_vec(*center) - view.position * 100.;
             let dot = |a: Vec3, b: Vec3| (a.x * b.x + a.y * b.y) + a.z * b.z;
             let limit = (slope * slope + 1.).sqrt() * radius;
-            if dot(delta, up).abs() > dot(delta, forward) * slope + limit {
+            let horizontal = slope * (16. / 9.);
+            let side_limit = (horizontal * horizontal + 1.).sqrt() * radius;
+            if dot(delta, up).abs() > dot(delta, forward) * slope + limit
+                || dot(delta, side).abs() > dot(delta, forward) * horizontal + side_limit
+            {
                 invalid.extend(
                     mesh.look_sensors
                         .iter()
@@ -746,10 +769,15 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             && frame - 1 < game.rows.len()
         {
             let last = frame - 1;
-            let just_chosen = game
-                .number(last, "sub_step")
-                .or(game.number(last, "state_step"))
-                == Some(0.);
+            // tryChangeAreaAnim starts its clip immediately before silently
+            // choosing AreaAnimWait; replaying the preceding row starts it twice.
+            let area_started = game.cell(last, "state") == Some("Wait/AreaAnimWait")
+                && game.number(last, "anim_frame") == Some(0.);
+            let just_chosen = !area_started
+                && game
+                    .number(last, "sub_step")
+                    .or(game.number(last, "state_step"))
+                    == Some(0.);
             let grab_ceil_transition = game
                 .cell(last, "state")
                 .is_some_and(|state| state.starts_with("GrabCeil/"))
@@ -759,12 +787,12 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                         .cell(last - 1, "state")
                         .is_some_and(|state| state.starts_with("GrabCeil/"));
             if grab_ceil_transition {
-                player.inject_grab_ceil(&game.snapshot(last));
+                player.inject_grab_ceil(&snapshot_with_geometry(game, last, &course));
                 if let Some(hint) = game.look_hint(last) {
                     player.look.restore(&hint, course.look_sensors());
                 }
             } else if !just_chosen {
-                player.inject(&game.snapshot(last));
+                player.inject(&snapshot_with_geometry(game, last, &course));
                 if let Some(hint) = game.look_hint(last) {
                     player.look.restore(&hint, course.look_sensors());
                 }
@@ -773,7 +801,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 // step, with the clip, the impulse and the sounds, is still to
                 // come, and a snapshot cannot hold that. Choose it again from
                 // the row before, with that frame's input.
-                player.inject(&game.snapshot(last - 1));
+                player.inject(&snapshot_with_geometry(game, last - 1, &course));
                 if let Some(hint) = game.look_hint(last - 1) {
                     player.look.restore(&hint, course.look_sensors());
                 }

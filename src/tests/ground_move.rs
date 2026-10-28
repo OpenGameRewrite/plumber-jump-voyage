@@ -2,6 +2,64 @@ use super::*;
 
 pub(super) fn run() {
     the_exes_ground_move_agrees_bit_for_bit();
+    skate_keeps_signed_inertia_and_forces_reversal();
+}
+
+#[cfg_attr(test, test)]
+fn skate_keeps_signed_inertia_and_forces_reversal() {
+    let mut control = GroundMove::default();
+    let mut input = SteerInput {
+        skate: true,
+        velocity: Vec3::ZERO,
+        up: Vec3::Y,
+        actor_front: Vec3::Z,
+        actor_up: Vec3::Y,
+        stick: Vec3::Z,
+        wall: None,
+        max_speed: 14.,
+        accel_frames: 40,
+    };
+    let first = control.update(&input);
+    assert_eq!(first.velocity.z.to_bits(), (14_f32 / 60.).to_bits());
+    // A mature slide retains its signed side component at a 90-degree input
+    // change, then a reverse uses high braking while facing turns independently.
+    control.brake_counter = control.border;
+    input.velocity = Vec3::new(10., 0., 8.);
+    input.stick = Vec3::Z;
+    let crossed = control.update(&input);
+    assert_eq!(
+        crossed.velocity.x.to_bits(),
+        (10_f32 - 14. / 120.).to_bits()
+    );
+    input.velocity = Vec3::Z * 10.;
+    input.stick = Vec3::NEG_Z;
+    let reversed = control.update(&input);
+    assert_eq!(
+        reversed.velocity.z.to_bits(),
+        (10_f32 - 14. / 60.).to_bits()
+    );
+    assert!(!reversed.brake_run && !reversed.pivot && reversed.slip_ice);
+    assert!(control.turn.reverse_forced);
+    assert_ne!(reversed.front, input.actor_front);
+    input.velocity = first.velocity;
+    input.stick = Vec3::ZERO;
+    let released = control.update(&input);
+    assert_eq!(
+        released.velocity.z.to_bits(),
+        (14_f32 / 60. - 14. / 120.).to_bits()
+    );
+    assert!(!released.stopped);
+    control.brake_counter = control.border;
+    control.resume(18., 1, 0., Vec3::ZERO, 0., true);
+    assert_eq!(
+        control.brake_counter, control.border,
+        "fast arrival hold survives injection"
+    );
+    control.resume(1., 80, 0., Vec3::ZERO, 0., true);
+    assert_eq!(
+        control.brake_counter, control.border,
+        "slow ice retains its hold"
+    );
 }
 
 fn vec3(v: &serde_json::Value) -> Vec3 {

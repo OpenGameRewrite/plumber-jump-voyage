@@ -10,7 +10,7 @@
 //! the plane of the floor under the player (`mGroundNormal`, which is straight up on level
 //! ground): velocities, the facing and the stick are vectors of that plane.
 //!
-//! Not ported: the original's forced-run input (`_9c`), the dash judge, the skate floor and the
+//! Not ported: the original's forced-run input (`_9c`), the dash judge and the
 //! 2D area's hold, none of which the states that own a control here use.
 //!
 //! Checked bit for bit against the executable's routine run in a local interpreter
@@ -222,16 +222,28 @@ impl GroundMove {
         turn_rate: f32,
         last_input: Vec3,
         turn_power: f32,
+        skate: bool,
     ) {
         let border = self.border;
-        self.brake_counter = if speed > self.brake_speed {
+        self.brake_counter = if skate {
+            // Keep the controller's hidden hold: appear may already fill it
+            // when a fast roll/landing chooses Run, regardless of clip age.
+            self.brake_counter.max((steps as i32).min(border))
+        } else if speed > self.brake_speed {
             (steps as i32).min(border)
         } else {
             0
         };
-        self.turn
-            .resume(turn_rate, try_normalize_or_zero(last_input).0);
-        self.turn_power = turn_power;
+        if !skate {
+            self.turn
+                .resume(turn_rate, try_normalize_or_zero(last_input).0);
+            self.turn_power = turn_power;
+        } else {
+            // Its turn rate/history are hidden state, retained just like the
+            // hold. An angle inferred from the printed actor front can cross
+            // the strict rate/limit comparison even when the turn was exact.
+            self.turn_power = 0.;
+        }
     }
     /// `calcAccelRate`: the speed gained this frame. The ramp is a straight
     /// start plus a growing push, so it reaches the top speed in `frames`.
@@ -464,7 +476,8 @@ impl GroundMove {
 
     /// `updateSkateMove` (0x416d10): independent signed components, not scalar
     /// friction. Slope drive and wall braking follow the executable but have
-    /// no coverage in the seven flat IceWalker recordings.
+    /// no coverage in the seven flat IceWalker recordings. ForceRun/dash and
+    /// 2D-only squat-hold overrides are not implemented.
     fn update_skate(&mut self, input: &SteerInput) -> Steer {
         use super::pose_math::{cross, normalize};
         use super::vector_lib::{calc_angle_degree, calc_dir_slide, parallelize_vec};

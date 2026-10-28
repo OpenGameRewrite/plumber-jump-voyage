@@ -681,7 +681,18 @@ impl TriangleMesh {
     /// Height (cm) of the highest floor-like surface at or below `y_max` at
     /// the horizontal position (x, z): a vertical ray against the triangles.
     pub fn floor_below(&self, x: f32, z: f32, y_max: f32, min_up: f32) -> Option<f32> {
-        let mut best: Option<f32> = None;
+        self.floor_below_with_codes(x, z, y_max, min_up)
+            .map(|(y, _)| y)
+    }
+
+    pub fn floor_below_with_codes(
+        &self,
+        x: f32,
+        z: f32,
+        y_max: f32,
+        min_up: f32,
+    ) -> Option<(f32, &CollisionCodes)> {
+        let mut best: Option<(f32, &CollisionCodes)> = None;
         // Anything under the probe, however far down.
         let column = Aabb {
             min: Vec3::new(x - 0.01, f32::MIN, z - 0.01),
@@ -698,8 +709,8 @@ impl TriangleMesh {
             let y = t.corners[0].y
                 - ((x - t.corners[0].x) * t.normal.x + (z - t.corners[0].z) * t.normal.z)
                     / t.normal.y;
-            if y <= y_max && best.is_none_or(|b| y > b) {
-                best = Some(y);
+            if y <= y_max && best.is_none_or(|(b, _)| y > b) {
+                best = Some((y, self.codes_of(i)));
             }
         }
         best

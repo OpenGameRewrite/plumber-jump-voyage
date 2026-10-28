@@ -49,6 +49,7 @@ fn scripts() {
     assert_eq!(script.shots, [5, 9]);
     assert_eq!(script.frame_count(), 5);
     assert_eq!(script.spans[0].buttons, ["B", "ZL"]);
+    assert_eq!(script.spans[0].stick, Vec2::new(0.5, -1.));
     assert!(Script::parse("1 0 0 -").unwrap_err().contains("start"));
     let spawn = Script::parse("start spawn 90\n1 0 0 -").unwrap();
     assert_eq!((spawn.start, spawn.start_yaw_deg), (Vec3::ZERO, 90.));

@@ -1048,3 +1048,45 @@ GrabCeil. Converted animation joints and AllRoot offsets are compared, but this
 is not evidence for the unrecorded lateral joint branch. No windowed bar smoke
 or full stage presentation fidelity is claimed; the rendered-replay driver still
 uses its plain course.
+
+
+## Skate / ice recordings
+
+FloorCode22 (`Skate`) selects GroundMove's two signed-component passes from
+actual ground contact and its velocity/normal test. Ice material10 alone does
+not select it; Slide23 and the unresolved Slip24 are separate. The ordinary
+turn controller uses the Ice setup and forced reversals. Neutral inertia keeps
+Run active; its animation and IK consume DashJudgeSpeed + RunSkateAnimSpeedOffset
+(19.5), while movement retains its actual speed and the turn tilt is zero.
+Squat preserves backward velocity and uses its Skate brake/side parameters;
+Rolling selects its Skate slope-control parameters. The toy's unused slick flag
+has been removed: its ice platform now reports the actual Skate floor code.
+
+The seven `ice-*` captures cover straight acceleration, cap14, release, turns,
+reversal, small steering, jump/landing, squat braking and rolling/stand-up.
+Code22 slope drive and wall braking are ported but unverified by these recordings.
+Squat side steering on slopes and SpinCap's special ice entry/reaction remain
+outside this recording coverage; the latter entry/reaction is not yet ported.
+ForceRun/water-surface overrides, 2D hold rules and Slip24 remain unresolved here.
+
+The exported infinite TemperatureArea(-3) selects WaitVeryCold through the
+existing area handling; its original36-frame loop shows the end frame for one
+row before wrapping. No run-name condition or environment-rule exception is used.
+For lockstep, recorded floor contact/normal is retained but the contacted code is
+read from the geometry export: the probe's boolean gcode classifier reports
+Ground even on Skate. Raw input components are retained in `in_stick` while
+movement still clamps the stick length to1.
+
+`tools/export-figure-walking-look.py <geometry.json> --romfs <romfs>` adds the
+idle FigureWalkingNpc's original NokonokoNpc Body sensor and InitClipping sphere.
+Back up the geometry in its local `old/` directory first. The class loads that
+archive in its init; do not look for an archive named FigureWalkingNpc. The replay
+uses the visible camera and the original16:9 side-plane formula for exported
+static clipping spheres; near/far/group clipping and camera roll are unverified.
+This fixture only covers the idle NPC before its minigame starts.
+
+Windowed replay smoke captures are local under orch-bin/ice-smoke, frames90,
+150 and250 of ice-weave. Mario animates, slides and stops visibly. This is a
+controller/presentation smoke, not a reproduction of IceWalker stage visuals:
+the replay renders a plain floor and placeholder dust; the original ice shading,
+chill-snow atmosphere and stage models are not installed by this port.

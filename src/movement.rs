@@ -2369,6 +2369,7 @@ impl Player {
                     hint.turn_rate,
                     hint.last_input,
                     hint.turn_power,
+                    self.on_ground_skate(),
                 );
                 // A nerve chosen in this row starts in the next step.
                 if let Some(clip) = hint.chosen {
