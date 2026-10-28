@@ -36,6 +36,8 @@ CAP_REACTIONS = {
     # Raised by the cap's water update while it flies over the surface and while it stays there.
     '水面移動': 'WaterSurfaceFly',
     '水面待機': 'WaterSurfaceStay',
+    '帽子入水': 'CapEnterWater',
+    '帽子出水': 'CapLeaveWater',
 }
 # Reactions only the effect tables listen to.
 EFFECT_REACTIONS = {
@@ -46,8 +48,6 @@ EFFECT_REACTIONS = {
     '汚れ落とし(スス)': 'SootWash',
     '入水落下': 'WaterDive',
     '飛び込み後の水面顔出し': 'WaterHeadOut',
-    '帽子入水': 'CapEnterWater',
-    '帽子出水': 'CapLeaveWater',
     '踏みつけヒット': 'StompHit',
     'ヒップドロップヒット': 'PoundHit',
     '帽子ヒット': 'CapHit',
