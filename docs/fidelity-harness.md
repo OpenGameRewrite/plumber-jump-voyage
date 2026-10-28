@@ -978,7 +978,17 @@ identity correction, not an unknown-state comparison exception.
 
 Limits: this fixture uses the recorded alive/unclipped source lifecycle and fixed
 world-down gravity. It does not implement clipping/reinitialization or linked switch
-behavior for other geyser placements. The moving KCL/source simulation is used by
-headless and rendered replays; the bare replay scene does not render the geyser
+behavior for other geyser placements. Moving KCL/source simulation is currently a
+headless replay feature; the existing rendered-replay driver runs on its flat
+course and does not reproduce this source. The bare scene does not render the geyser
 model, its actor sand emitters/audio, or Mario's SandDesert heavy-land stain.
 Player animation/effect/sound columns do not establish those presentation details.
+
+The 1200-frame `sand-geyser` capture passes every comparable column in free replay,
+including a full source cycle, the next rise and Mario's subsequent sand death.
+Lockstep restores the state's pre-integration collider position from the preceding
+sample and passes the entire launch/exit; its remaining 15 failing columns originate
+in the run transition at110 and the hot-Wait transitions at303/545, including their
+sub-state counter, interpolation/effect consequences and the re-executed transition's
+moving-ground history. Those hidden-state reconstruction limits do not affect free
+replay. No comparator tolerance or contamination exclusion was added for the capture.

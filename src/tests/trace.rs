@@ -5,6 +5,20 @@ pub(super) fn run() {
     game_rows();
     sample_point();
     preroll_interpolation();
+    geyser_collider_pose();
+}
+
+#[cfg_attr(test, test)]
+fn geyser_collider_pose() {
+    let trace = TraceFile::parse(
+        "frame,px,py,pz,state,anim\n0,1,20,3,SandGeyser/SandGeyser,Fall\n1,1,40,3,SandGeyser/SandGeyser,Fall\n2,1,70,3,Fall/Fall,Fall\n",
+    ).unwrap();
+    assert_eq!(trace.snapshot(0).geyser_collider_from, None);
+    assert_eq!(
+        trace.snapshot(1).geyser_collider_from,
+        Some(Vec3::new(1., 20., 3.))
+    );
+    assert_eq!(trace.snapshot(2).geyser_collider_from, None);
 }
 
 #[cfg_attr(test, test)]
