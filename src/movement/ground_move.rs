@@ -477,7 +477,7 @@ impl GroundMove {
     /// `updateSkateMove` (0x416d10): independent signed components, not scalar
     /// friction. Slope drive and wall braking follow the executable but have
     /// no coverage in the seven flat IceWalker recordings. ForceRun/dash and
-    /// 2D-only squat-hold overrides are not implemented.
+    /// optional squat-hold overrides are not implemented.
     fn update_skate(&mut self, input: &SteerInput) -> Steer {
         use super::pose_math::{cross, normalize};
         use super::vector_lib::{calc_angle_degree, calc_dir_slide, parallelize_vec};
