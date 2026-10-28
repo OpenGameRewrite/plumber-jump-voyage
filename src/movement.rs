@@ -493,6 +493,7 @@ pub mod clip {
             "Wait" | "Snooze" => Some(180.),
             "WaitRelax" => Some(1200.),
             "WaitHot" => Some(340.),
+            "WaitVeryCold" => Some(36.),
             "DamageWait" => Some(120.),
             "FireRun" => Some(60.),
             "SandWait" | "SandWalk" | "SandWaitNormal" => Some(80.),
@@ -537,7 +538,7 @@ pub mod clip {
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
             "GrabCeilWait" | "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal"
-            | "SwimStandWait" | "SwimWalk" => 1.,
+            | "SwimStandWait" | "SwimWalk" | "WaitVeryCold" => 1.,
             _ => 0.,
         }
     }
@@ -967,6 +968,7 @@ pub enum Fx {
     },
     /// The ambience of the camera under the water, held while the player is under it too.
     CameraWaterHold,
+    SlipIce,
     /// The swim stroke's clip began or looped (`PlayerSeCtrl::update`).
     SwimStrokeSound {
         camera_under: bool,
@@ -1229,7 +1231,6 @@ pub struct Player {
     /// without the camera.
     raw_stick: Vec2,
     slope: f32,
-    slick: bool,
     /// The ledge hang in progress (`PlayerStateWallCatch`), and where the
     /// collider stood (cm) after the last step of it.
     catch: WallCatchControl,
@@ -1461,7 +1462,6 @@ impl Default for Player {
             tilt: 0.,
             raw_stick: Vec2::ZERO,
             slope: 0.,
-            slick: false,
             catch: WallCatchControl::default(),
             catch_collider_at: None,
             fall_after_ledge: None,
@@ -1517,7 +1517,7 @@ pub struct Solid {
     pub half: Vec3,
     pub slope: f32,
     pub moving: bool,
-    pub slippery: bool,
+    pub floor_code: &'static str,
 }
 impl Solid {
     pub fn top(&self, x: f32) -> f32 {
@@ -3211,7 +3211,7 @@ impl Player {
         if self.try_force_slope_slide() {
             return;
         }
-        if self.tilt >= STICK_DEADZONE {
+        if self.tilt >= STICK_DEADZONE || self.auto_run_skate() {
             // The state's own start-run judge comes before the actor's (jump,
             // crouch, throw): a jump pressed with the stick is taken by the
             // run state's first step (`pole-climb` rows 10-11).
@@ -3491,6 +3491,7 @@ impl Player {
             (t::NORMAL_MAX, t::ACCEL_FRAMES as i32)
         };
         let steer = self.ground.update(&SteerInput {
+            skate: self.on_ground_skate(),
             velocity: in_plane,
             up,
             actor_front: pose_front,
@@ -3504,10 +3505,22 @@ impl Player {
             max_speed,
             accel_frames,
         });
+        if steer.slip_ice {
+            self.events.push(Fx::SlipIce);
+        }
         self.run_steps += 1;
-        self.joints
-            .run
-            .run_step(steer.speed, self.ground.turn_tilt_rate(up));
+        // exeRun replaces its speed local before both animation and IK (0x47f184).
+        let pose_speed = if self.on_ground_skate() {
+            t::DASH_JUDGE + 5.
+        } else {
+            steer.speed
+        };
+        let turn_tilt = if self.on_ground_skate() {
+            0.
+        } else {
+            self.ground.turn_tilt_rate(up)
+        };
+        self.joints.run.run_step(pose_speed, turn_tilt);
         self.steer_pose(up, steer.front);
         self.set_h(steer.velocity);
         self.v.y = -GRAVITY_MOVE;
@@ -3520,7 +3533,7 @@ impl Player {
         };
         self.run_frames = self.ground.brake_counter as u32;
         if step == 0 {
-            self.cycle.reset(steer.speed, after_turn);
+            self.cycle.reset(pose_speed, after_turn);
         }
         self.update_move_anim(steer.speed);
         if step == 0 {
@@ -3609,6 +3622,11 @@ impl Player {
             return;
         }
         let tilt = self.ground_stick().length();
+        let speed = if self.on_ground_skate() {
+            t::DASH_JUDGE + 5.
+        } else {
+            speed
+        };
         self.cycle.update(speed, tilt);
         self.anim.rate = self.cycle.rate;
         self.step_phase = self.cycle.phase;
@@ -4688,6 +4706,7 @@ impl Player {
             }
             let (actor_up, actor_front) = self.pose_axes();
             let steer = self.spin_ground_move.update(&SteerInput {
+                skate: self.on_ground_skate(),
                 up: Vec3::Y,
                 wall: None,
                 velocity: self.v,
@@ -5353,12 +5372,17 @@ impl Player {
                                 self.v.y = 0.;
                             }
                             self.grounded = true;
+                            self.touched.active = true;
+                            self.touched.floor = Some(CollisionCodes {
+                                floor: b.floor_code.into(),
+                                floor_index: if b.floor_code == "Skate" { 22 } else { 8 },
+                                ..default()
+                            });
                             self.slope = if (self.pos.x - b.center.x).abs() < b.half.x {
                                 b.slope
                             } else {
                                 0.
                             };
-                            self.slick = b.slippery;
                         } else if self.v.y > 0.
                             && before.y + height <= lo.y + 0.1
                             && self.pos.y + height >= lo.y

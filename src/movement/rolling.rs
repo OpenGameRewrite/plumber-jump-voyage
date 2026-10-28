@@ -505,8 +505,11 @@ impl Player {
             self.ground_jump(o);
         } else if o.crouch {
             self.start_squat();
-        } else if self.is_move() {
+        } else if self.is_move() || self.auto_run_skate() {
             self.run_frames = t::BRAKE_ON_COUNTER;
+            self.pull = GRAVITY_MOVE;
+            // GroundMove::appear replaces the stand-up's old vertical pull.
+            self.v.y = 0.;
             self.go(Move::Run, "Move");
         } else {
             self.wait_state_appears_after_roll(self.v);
@@ -598,13 +601,14 @@ impl Player {
     /// instead) and the stick steers it; in the air gravity pulls. The facing
     /// follows the travel.
     fn slide_update(&mut self) {
+        let skate = self.on_ground_skate();
         let params = SlideParams {
-            accel: t::ROLL_SLOPE_ACCEL,
-            brake: t::ROLL_BRAKE,
+            accel: if skate { 0.9 } else { t::ROLL_SLOPE_ACCEL },
+            brake: if skate { 0.999 } else { t::ROLL_BRAKE },
             against: t::ROLL_AGAINST,
             angle_power_max: t::ROLL_ANGLE_POWER_MAX,
             max_speed: t::ROLL_MAX,
-            side_accel: t::ROLL_SIDE_ACCEL,
+            side_accel: if skate { 0.6 } else { t::ROLL_SIDE_ACCEL },
             side_brake: t::ROLL_SIDE_BRAKE,
             side_max_speed: t::ROLL_SIDE_MAX,
             turn_degree: t::SLOPE_TURN_DEG,

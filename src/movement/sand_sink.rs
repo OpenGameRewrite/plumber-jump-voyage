@@ -285,6 +285,7 @@ impl Player {
                 self.sand.normal = up;
                 let (actor_up, actor_front) = self.pose_axes();
                 let input = SteerInput {
+                    skate: false,
                     velocity: v,
                     up,
                     actor_front,

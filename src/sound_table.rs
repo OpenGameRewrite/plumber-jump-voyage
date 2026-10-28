@@ -299,6 +299,7 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         // the water; from above only the louder surfacing sound).
         Fx::CameraWater { entered: true } => vec![Cue::Play("CamWaterIn")],
         Fx::CameraWater { entered: false } => vec![Cue::Play("CamWaterOut")],
+        Fx::SlipIce => vec![Cue::Hold("SlipIceLv")],
         Fx::CameraWaterHold => vec![Cue::Hold("CamWaterAmb")],
         Fx::SwimStrokeSound { camera_under: true } => {
             vec![Cue::Play("SwimStandBubble"), Cue::Play("SwimStand")]

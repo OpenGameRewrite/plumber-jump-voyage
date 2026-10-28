@@ -44,6 +44,22 @@ pub(super) fn to_cm_exact(metres: Vec3) -> Vec3 {
 }
 
 impl Player {
+    /// FloorCode22 comes from the contacted geometry, never its material or
+    /// the probe's lossy gcode label. Slip24 remains unresolved.
+    pub(super) fn on_ground_skate(&self) -> bool {
+        self.is_on_ground_by(self.v)
+            && self
+                .touched
+                .floor
+                .as_ref()
+                .is_some_and(|c| c.floor == "Skate")
+    }
+
+    pub(super) fn auto_run_skate(&self) -> bool {
+        self.on_ground_skate()
+            && vector_lib::length(self.velocity_in_plane(self.collided_ground_normal())) >= 0.5
+    }
+
     /// The body's position in centimetres relative to the replay's start, as the collider holds
     /// it (the metres of `pos` cannot keep every digit of a stage-sized position).
     pub fn position_cm(&self) -> Vec3 {

@@ -341,14 +341,14 @@ fn setup(
                    mat: Handle<StandardMaterial>,
                    slope: f32,
                    moving: bool,
-                   slippery: bool| {
+                   skate: bool| {
         let i = course.solids.len();
         course.solids.push(Solid {
             center: c,
             half: size * 0.5,
             slope,
             moving,
-            slippery,
+            floor_code: if skate { "Skate" } else { "Ground" },
         });
         let entity = if slope == 0. {
             block(&mut commands, &mut meshes, mat, c, size)
@@ -484,7 +484,7 @@ fn setup(
     );
     add(
         Vec3::new(-15., 0.5, 12.),
-        Vec3::new(4., 1., 5.),
+        Vec3::new(12., 1., 18.),
         white.clone(),
         0.,
         false,
@@ -598,7 +598,7 @@ fn setup(
         half: lava_half,
         slope: 0.,
         moving: false,
-        slippery: false,
+        floor_code: "Ground",
     });
     course
         .hot
@@ -618,7 +618,7 @@ fn setup(
             half: s * 0.5,
             slope: 0.,
             moving: false,
-            slippery: false,
+            floor_code: "Ground",
         });
         block(&mut commands, &mut meshes, white.clone(), c, s);
     }

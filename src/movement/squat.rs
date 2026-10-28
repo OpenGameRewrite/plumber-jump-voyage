@@ -131,7 +131,7 @@ impl Player {
         let mut plane = self.v.with_y(0.);
         let front = self.facing.with_y(0.).normalize_or_zero();
         let mut along = front.dot(plane);
-        if along < 0. {
+        if along < 0. && !self.on_ground_skate() {
             plane -= front * along;
             along = 0.;
         }
@@ -160,12 +160,16 @@ impl Player {
     }
     /// `exeBrake`: slide on the momentum until it is spent.
     fn squat_brake(&mut self, o: &Orders) {
-        let slide = self.inertia_slide(
-            t::SQUAT_BRAKE_RATE,
-            BRAKE_SIDE_ACCEL,
-            BRAKE_SIDE_RATE,
-            BRAKE_SIDE_MAX_RATE,
-        );
+        let slide = if self.on_ground_skate() {
+            self.inertia_slide(0.985, 0.1, 0.975, BRAKE_SIDE_MAX_RATE)
+        } else {
+            self.inertia_slide(
+                t::SQUAT_BRAKE_RATE,
+                BRAKE_SIDE_ACCEL,
+                BRAKE_SIDE_RATE,
+                BRAKE_SIDE_MAX_RATE,
+            )
+        };
         // `rs::slerpUp`: the pose's up follows the floor's normal.
         let (_, front) = self.pose_axes();
         self.steer_pose(self.mesh_ground.unwrap_or(Vec3::Y), front);

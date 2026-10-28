@@ -252,6 +252,7 @@ impl Player {
         let up = self.mesh_ground.unwrap_or(Vec3::Y);
         let (actor_up, actor_front) = self.pose_axes();
         let steer = self.fire.ground.update(&SteerInput {
+            skate: false,
             velocity: verticalize_vec(up, self.v),
             up,
             actor_front,

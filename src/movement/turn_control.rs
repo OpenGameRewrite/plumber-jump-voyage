@@ -178,6 +178,26 @@ pub struct TurnControl {
     pub reverse_forced: bool,
 }
 impl TurnControl {
+    /// Skate forces the facing through reversals instead of entering Brake.
+    pub fn setup_ice(&mut self) {
+        self.tuning.forced = true;
+        self.setup(TurnSetup {
+            min_degrees: 3.,
+            fast_degrees: 45.,
+            accel_frames: 20,
+            accel_frames_fast: 1,
+            brake_frames: 30,
+            limit: 25.,
+            fast_limit: 25.,
+        });
+    }
+
+    pub fn setup_ground(&mut self, forced: bool) {
+        self.tuning = TurnTuning {
+            forced,
+            ..TurnTuning::default()
+        };
+    }
     /// The controller the squat state keeps for crawling.
     pub fn crawl() -> Self {
         Self {

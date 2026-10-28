@@ -68,6 +68,8 @@ const NORMAL_MIN: f32 = t::NORMAL_MIN;
 
 /// What the ground move control needs of the player each frame.
 pub struct SteerInput {
+    /// The contacted FloorCode is Skate and the velocity is not leaving it.
+    pub skate: bool,
     /// The velocity in the plane of the floor (`updateNormalAndSnap`), units
     /// per frame.
     pub velocity: Vec3,
@@ -90,6 +92,7 @@ pub struct SteerInput {
 /// What one frame of ground movement decided.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Steer {
+    pub slip_ice: bool,
     /// The velocity in the plane of the floor, before the pull into the floor.
     pub velocity: Vec3,
     /// The velocity the control sets on the actor (`al::setVelocity`): `velocity` less the pull
@@ -307,6 +310,10 @@ impl GroundMove {
     }
     /// One frame of `updateNormalMove` for the run.
     pub fn update(&mut self, input: &SteerInput) -> Steer {
+        if input.skate {
+            return self.update_skate(input);
+        }
+        self.turn.setup_ground(self.border == 10000);
         let up = input.up;
         let mut ground = input.velocity;
         let measured = squared_length(ground).sqrt();
@@ -453,6 +460,143 @@ impl GroundMove {
         steer.velocity = velocity;
         steer.set_velocity = pull(velocity);
         steer
+    }
+
+    /// `updateSkateMove` (0x416d10): independent signed components, not scalar
+    /// friction. Slope drive and wall braking follow the executable but have
+    /// no coverage in the seven flat IceWalker recordings.
+    fn update_skate(&mut self, input: &SteerInput) -> Steer {
+        use super::pose_math::{cross, normalize};
+        use super::vector_lib::{calc_angle_degree, calc_dir_slide, parallelize_vec};
+        let up = input.up;
+        self.turn.setup_ice();
+        self.turn_power = 0.;
+        self.turn.update(TurnFrame {
+            actor_front: input.actor_front,
+            actor_up: input.actor_up,
+            stick: input.stick,
+            up,
+        });
+        let (stick_dir, has_input) = try_normalize_or_zero(input.stick);
+        let wanted = if has_input {
+            stick_dir
+        } else {
+            self.turn.direction
+        };
+        self.update_hill(up, wanted, has_input);
+        let downhill = calc_dir_slide(Vec3::NEG_Y, up);
+        let flat = is_near_zero(downhill, NEAR_ZERO_SPEED);
+        let slope = if flat {
+            0.
+        } else {
+            ((90. - calc_angle_degree(Vec3::NEG_Y, downhill)) / 30.).clamp(0., 1.)
+        };
+        self.brake_counter = (self.brake_counter + 1).min(self.border);
+        let mut across = wanted;
+        let mut across_input = has_input;
+        if !flat {
+            let (projected, ok) = try_normalize_or_zero(verticalize_vec(downhill, wanted));
+            across = projected;
+            if !ok {
+                across = normalize(cross(up, wanted));
+                across_input = false;
+            }
+        }
+        let wall = input.wall.map_or(Vec3::ZERO, |(n, _)| n);
+        let mut side_speed = dot(across, input.velocity);
+        let side_reverse = side_speed < -self.min_speed;
+        let side_wall = dot(wall, across * side_speed) < 0.;
+        let mut side_target = 0.;
+        if !side_reverse && across_input {
+            let drive = dot(across, input.stick).clamp(0., 1.);
+            let top = accel(
+                self.hill_speed() + input.max_speed,
+                input.max_speed,
+                input.max_speed / input.accel_frames as f32,
+            );
+            side_target = drive * top + (1. - drive) * self.min_speed;
+            side_speed = accel(side_speed, side_target, input.max_speed / 60.);
+        }
+        let frames = if side_wall {
+            15
+        } else if across_input && side_reverse {
+            60
+        } else if self.brake_counter >= self.border || has_input {
+            120
+        } else {
+            1
+        };
+        if side_speed.abs() > side_target {
+            side_speed = brake(side_speed, frames, input.max_speed);
+        }
+        let (mut along, mut along_input) = if !flat {
+            let (axis, ok) = try_normalize_or_zero(parallelize_vec(downhill, wanted));
+            (axis, ok && has_input)
+        } else {
+            (Vec3::ZERO, false)
+        };
+        if flat || is_near_zero(along, NEAR_ZERO_SPEED) {
+            along = normalize(cross(up, wanted));
+            along_input = false;
+        }
+        let mut along_speed = dot(along, input.velocity);
+        let along_wall = dot(wall, along * along_speed) < 0.;
+        let along_reverse = has_input && along_speed < -self.min_speed;
+        let mut along_target = 0.;
+        if !along_reverse && along_input {
+            let slope_drive = slope
+                * if dot(along, downhill) < 0. {
+                    -0.5
+                } else {
+                    0.75
+                };
+            let drive = (dot(along, input.stick) + slope_drive).clamp(0., 1.);
+            let top = accel(
+                self.hill_speed() + input.max_speed,
+                input.max_speed,
+                input.max_speed / input.accel_frames as f32,
+            );
+            along_target = drive * top;
+            along_speed = accel(
+                along_speed,
+                along_target,
+                (1. + slope) * (input.max_speed / 60.),
+            );
+        }
+        let frames = if along_wall {
+            15
+        } else if along_reverse {
+            60
+        } else if self.brake_counter >= self.border || has_input {
+            120
+        } else {
+            1
+        };
+        if along_speed.abs() > along_target {
+            along_speed = brake(along_speed, frames, input.max_speed);
+        }
+        let velocity = Vec3::new(
+            along_speed * along.x + side_speed * across.x,
+            along_speed * along.y + side_speed * across.y,
+            along_speed * along.z + side_speed * across.z,
+        );
+        let speed = (side_speed * side_speed + along_speed * along_speed).sqrt();
+        self.movement = self.turn.direction;
+        Steer {
+            velocity,
+            set_velocity: Vec3::new(
+                velocity.x - GRAVITY_MOVE * up.x,
+                velocity.y - GRAVITY_MOVE * up.y,
+                velocity.z - GRAVITY_MOVE * up.z,
+            ),
+            up,
+            front: self.turn.direction,
+            speed,
+            stopped: is_near_zero_value(side_speed.abs() + along_speed.abs(), NEAR_ZERO_SPEED)
+                && !has_input,
+            slip_ice: speed > 3. && dot(velocity, wanted) < 0.,
+            ..Steer::default()
+        }
     }
 }
 

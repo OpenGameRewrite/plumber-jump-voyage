@@ -45,6 +45,7 @@ fn the_exes_ground_move_agrees_bit_for_bit() {
         for (step, frame) in sequence["frames"].as_array().unwrap().iter().enumerate() {
             let wall = frame["wall"].as_bool().unwrap();
             let steer = control.update(&SteerInput {
+                skate: false,
                 velocity: vec3(&frame["velocity"]),
                 up: vec3(&frame["normal"]),
                 actor_front: vec3(&frame["front"]),

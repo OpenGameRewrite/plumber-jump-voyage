@@ -156,7 +156,7 @@ impl Script {
                     let n = numbers(&[lx, ly])?;
                     script.spans.push(Span {
                         frames,
-                        stick: Vec2::new(n[0], n[1]).clamp_length_max(1.),
+                        stick: Vec2::new(n[0], n[1]),
                         buttons: parse_buttons(buttons).map_err(|e| at(&e))?,
                     });
                 }
@@ -429,7 +429,7 @@ pub fn flat_floor() -> Course {
             half: Vec3::new(2000., 0.5, 2000.),
             slope: 0.,
             moving: false,
-            slippery: false,
+            floor_code: "Ground",
         }],
         ..default()
     }
@@ -529,6 +529,19 @@ fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<Vie
         let up = side.cross(forward);
         let slope = (view.fov_deg.to_radians() * 0.5).tan();
         let radius_limit = (slope * slope + 1.).sqrt() * 300.;
+        for (host, center, radius) in &mesh.look_clipping {
+            let delta = mesh.relative_vec(*center) - view.position * 100.;
+            let dot = |a: Vec3, b: Vec3| (a.x * b.x + a.y * b.y) + a.z * b.z;
+            let limit = (slope * slope + 1.).sqrt() * radius;
+            if dot(delta, up).abs() > dot(delta, forward) * slope + limit {
+                invalid.extend(
+                    mesh.look_sensors
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, s)| (&s.host == host).then_some(i)),
+                );
+            }
+        }
         for (i, fire) in mesh.candle_fire.iter().enumerate() {
             let center = mesh.relative_vec(*fire - Vec3::Y * 200.);
             let delta = center - view.position * 100.;

@@ -17,7 +17,7 @@ fn floor() -> Course {
             half: Vec3::new(100., 0.5, 100.),
             slope: 0.,
             moving: false,
-            slippery: false,
+            floor_code: "Ground",
         }],
         ..default()
     }

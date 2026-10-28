@@ -157,6 +157,7 @@ mod tests {
         let mut velocity = Vec3::ZERO;
         for frame in 1..=3 {
             let steer = control.update(&SteerInput {
+                skate: false,
                 velocity,
                 up: Vec3::Y,
                 wall: None,
@@ -182,6 +183,7 @@ mod tests {
         let step = |mut control: GroundMove, velocity: Vec3| {
             control.reset(velocity, Vec3::new(-0.587_803, 0., -0.809_004), Vec3::Y);
             control.update(&SteerInput {
+                skate: false,
                 velocity,
                 up: Vec3::Y,
                 wall: None,

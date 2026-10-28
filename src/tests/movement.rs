@@ -7,7 +7,7 @@ fn floor() -> Course {
             half: Vec3::new(100., 0.5, 100.),
             slope: 0.,
             moving: false,
-            slippery: false,
+            floor_code: "Ground",
         }],
         ..default()
     }
@@ -1089,7 +1089,7 @@ fn wall_slide_and_ledge() {
         half: Vec3::new(3., 3., 0.3),
         slope: 0.,
         moving: false,
-        slippery: false,
+        floor_code: "Ground",
     });
     let mut p = Player {
         pos: Vec3::new(0., 1.5, -1.2),
@@ -1317,7 +1317,7 @@ fn slope_slide() {
         half: Vec3::new(4., 1.4, 2.),
         slope: -0.7,
         moving: false,
-        slippery: false,
+        floor_code: "Ground",
     });
     let mut p = Player {
         pos: Vec3::new(-2., ramp.solids[1].top(-2.), 0.),
@@ -1578,7 +1578,7 @@ fn low_ceiling() {
         half: Vec3::new(2., 0.3, 2.),
         slope: 0.,
         moving: false,
-        slippery: false,
+        floor_code: "Ground",
     });
     let mut p = Player::default();
     frames(
@@ -1602,7 +1602,7 @@ fn wall_collision_and_stress() {
         half: Vec3::new(3., 3., 0.3),
         slope: 0.,
         moving: false,
-        slippery: false,
+        floor_code: "Ground",
     });
     let mut p = Player::default();
     // Walls block.
@@ -1638,14 +1638,14 @@ macro_rules! scene {
                     half: Vec3::new(100., 0.5, 100.),
                     slope: 0.,
                     moving: false,
-                    slippery: false,
+                    floor_code: "Ground",
                 },
                 $m::Solid {
                     center: Vec3::new(0., 3., -2.),
                     half: Vec3::new(3., 3., 0.3),
                     slope: 0.,
                     moving: false,
-                    slippery: false,
+                    floor_code: "Ground",
                 },
             ],
             poles: vec![$m::Pole {

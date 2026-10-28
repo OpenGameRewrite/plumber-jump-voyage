@@ -117,6 +117,8 @@ pub struct TriangleMesh {
     /// The hit sensors of the stage's placed actors the head can look at (the export's
     /// `look_sensors`), in the replay's frame.
     pub look_sensors: Vec<crate::movement::look_at::LookSensor>,
+    /// Static hosts' InitClipping spheres: host, stage centre and radius.
+    pub look_clipping: Vec<(String, Vec3, f32)>,
     /// Settled, initially lit candlestands; positions stay in absolute stage centimetres.
     pub candle_fire: Vec<Vec3>,
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
@@ -290,6 +292,18 @@ impl TriangleMesh {
                 .cloned()
                 .unwrap_or_default(),
             look_sensors: look_sensors_from_export(&root["look_sensors"], origin),
+            look_clipping: root["look_clipping"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| {
+                    Some((
+                        item["host"].as_str()?.to_owned(),
+                        Vec3::from(floats::<3>(item.get("position"))?),
+                        item["radius"].as_f64()? as f32,
+                    ))
+                })
+                .collect(),
             candle_fire: root["candlestands"]
                 .as_array()
                 .into_iter()

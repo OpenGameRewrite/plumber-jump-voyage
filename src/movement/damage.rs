@@ -46,7 +46,7 @@ mod tests {
                 half: Vec3::new(50., 1., 50.),
                 slope: 0.,
                 moving: false,
-                slippery: false,
+                floor_code: "Ground",
             }],
             needles: vec![(Vec3::ZERO, Vec3::splat(50.))],
             ..default()
