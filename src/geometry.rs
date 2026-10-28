@@ -385,17 +385,37 @@ impl TriangleMesh {
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
         for source in root["sand_geysers"].as_array().into_iter().flatten() {
             let id = source["id"].as_str().ok_or("geyser id")?;
-            let object = root["objects"].as_array().unwrap().iter().position(|o| o["id"] == id).ok_or("geyser part")?;
+            let object = root["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|o| o["id"] == id)
+                .ok_or("geyser part")?;
             let part = object_part[object].ok_or("geyser missing raw part")? as usize;
-            let position = Vec3::from_array(floats(source.get("position")).ok_or("geyser position")?);
-            mesh.geysers.push(crate::movement::sand_geyser::SandGeyserSource {
-                id: id.into(), position, target_y: source["target_y"].as_f64().ok_or("geyser target")? as f32,
-                up_start: source["up_start"].as_u64().ok_or("geyser up_start")? as u32,
-                up_time: source["up_time"].as_u64().filter(|n| *n > 0).ok_or("geyser up_time")? as u32,
-                end_wait: source["end_wait"].as_u64().ok_or("geyser end_wait")? as u32,
-                phase: 0, step: 0, top: 0., radius: 450., centre: position, valid: true, part,
-                animation: 0, animation_frame: 0, animation_started: false,
-            });
+            let position =
+                Vec3::from_array(floats(source.get("position")).ok_or("geyser position")?);
+            mesh.geysers
+                .push(crate::movement::sand_geyser::SandGeyserSource {
+                    id: id.into(),
+                    position,
+                    target_y: source["target_y"].as_f64().ok_or("geyser target")? as f32,
+                    up_start: source["up_start"].as_u64().ok_or("geyser up_start")? as u32,
+                    up_time: source["up_time"]
+                        .as_u64()
+                        .filter(|n| *n > 0)
+                        .ok_or("geyser up_time")? as u32,
+                    end_wait: source["end_wait"].as_u64().ok_or("geyser end_wait")? as u32,
+                    phase: 0,
+                    step: 0,
+                    top: 0.,
+                    radius: 450.,
+                    centre: position,
+                    valid: true,
+                    part,
+                    animation: 0,
+                    animation_frame: 0,
+                    animation_started: false,
+                });
         }
         Ok(mesh)
     }
@@ -406,21 +426,29 @@ impl TriangleMesh {
         for source in &mut self.geysers {
             let mut base = self.parts[source.part].base;
             let mut offset = Vec3::ZERO;
-            if source.animation == 1 && let Some(curves) = &self.geyser_curves {
-                let channels = curves["top_translation"].as_array().expect("Top xyz curves");
+            if source.animation == 1
+                && let Some(curves) = &self.geyser_curves
+            {
+                let channels = curves["top_translation"]
+                    .as_array()
+                    .expect("Top xyz curves");
                 let sample = |axis: usize| {
                     let keys = channels[axis].as_array().expect("Top translation keys");
                     let frame = source.animation_frame as f32;
                     let next = keys.partition_point(|k| k[0].as_f64().unwrap() as f32 <= frame);
                     let key = &keys[next.saturating_sub(1)];
                     let value = |i: usize| key[i].as_f64().unwrap() as f32;
-                    if next == 0 || next == keys.len() { return value(1); }
-                    let t = (frame-value(0))/(keys[next][0].as_f64().unwrap() as f32-value(0));
-                    ((value(4)*t+value(3))*t+value(2))*t+value(1)
+                    if next == 0 || next == keys.len() {
+                        return value(1);
+                    }
+                    let t =
+                        (frame - value(0)) / (keys[next][0].as_f64().unwrap() as f32 - value(0));
+                    ((value(4) * t + value(3)) * t + value(2)) * t + value(1)
                 };
                 offset = Vec3::new(sample(0), sample(1), sample(2));
                 // JointRoot is multiplied into the actor frame before Top's local translation.
-                base[7] = (source.position.y + curves["parent_y"].as_f64().unwrap() as f32) + offset.y;
+                base[7] =
+                    (source.position.y + curves["parent_y"].as_f64().unwrap() as f32) + offset.y;
             } else {
                 base[7] = source.position.y;
             }
@@ -429,11 +457,17 @@ impl TriangleMesh {
             base[7] += source.top;
             self.parts[source.part] = PartFrame::new(base).expect("upright geyser matrix");
             source.tick();
-            if !source.valid { self.disabled_parts.push(source.part); }
+            if !source.valid {
+                self.disabled_parts.push(source.part);
+            }
         }
         for i in 0..self.triangles.len() {
-            let Some(local) = self.triangles[i].local else { continue };
-            if !self.geysers.iter().any(|s| s.part == local.part as usize) { continue; }
+            let Some(local) = self.triangles[i].local else {
+                continue;
+            };
+            if !self.geysers.iter().any(|s| s.part == local.part as usize) {
+                continue;
+            }
             let world = local.prism.world_triangle(&self.parts[local.part as usize]);
             self.triangles[i].corners = world.corners.map(|c| self.relative_point(c));
             self.triangles[i].normal = Vec3::from_array(world.normal);
@@ -562,7 +596,11 @@ impl TriangleMesh {
                 }
             }
         }
-        found.retain(|&i| self.triangles[i as usize].local.is_none_or(|p| !self.disabled_parts.contains(&(p.part as usize))));
+        found.retain(|&i| {
+            self.triangles[i as usize]
+                .local
+                .is_none_or(|p| !self.disabled_parts.contains(&(p.part as usize)))
+        });
         found.sort_unstable();
         found.dedup();
         found

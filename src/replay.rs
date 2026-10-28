@@ -551,7 +551,9 @@ fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<Vie
 }
 
 fn tick_geysers(course: &mut Course) {
-    if let Some(mesh) = &mut course.mesh && !mesh.geysers.is_empty() {
+    if let Some(mesh) = &mut course.mesh
+        && !mesh.geysers.is_empty()
+    {
         Arc::make_mut(mesh).tick_geysers();
     }
 }
@@ -568,16 +570,27 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     };
     if let Some(mesh) = &mut course.mesh {
         let mesh = Arc::make_mut(mesh);
-        if let Some(seed) = options.camera.or(options.lockstep).and_then(|g| g.geyser_seed.as_ref()) {
+        if let Some(seed) = options
+            .camera
+            .or(options.lockstep)
+            .and_then(|g| g.geyser_seed.as_ref())
+        {
             if seed["stage"].as_str() != script.stage.as_deref()
                 || seed["scenario"].as_u64() != script.scenario.map(u64::from)
-                || seed["frame"].as_i64() != Some(-(script.preroll_frames() as i64)) {
+                || seed["frame"].as_i64() != Some(-(script.preroll_frames() as i64))
+            {
                 return Err("geyser seed stage/scenario/preroll mismatch".into());
             }
             for source in &mesh.geysers {
-                let row = seed["sources"].as_array().and_then(|rows| rows.iter().find(|r| r["id"] == source.id))
+                let row = seed["sources"]
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|r| r["id"] == source.id))
                     .ok_or("missing geyser source seed")?;
-                if row["phase"] != "Wait" || row["step"] != "0" || row["dead"] != "0" || row["clipped"] != "0" {
+                if row["phase"] != "Wait"
+                    || row["step"] != "0"
+                    || row["dead"] != "0"
+                    || row["clipped"] != "0"
+                {
                     return Err("unsupported geyser seed".into());
                 }
             }

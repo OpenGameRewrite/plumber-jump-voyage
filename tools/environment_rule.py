@@ -615,7 +615,7 @@ class Judge:
                     v.accept(f, "frame-zero displacement from preroll",
                              "the immediate frame -1 sample explains the legacy origin-based displacement flag")
                     return
-        if self._geysers.floor(f, self._hosts.get(f, {}).get("ground"), self._start):
+        if self._geysers.carries(f, self._hosts.get(f, {}).get("ground"), self._start, self.rows, GROUND_RESIDUAL):
             v.accept(f, "exported geyser platform carry", "verified Top matrix motion carries the grounded player")
             return
         flags = self._flags(f)
@@ -699,6 +699,8 @@ def _check_candlestands():
 
 def self_check():
     """Synthetic runs for every branch of the rule."""
+    from sand_geyser import self_check as check_geysers
+    check_geysers()
     _check_candlestands()
 
     def rows(count=6, **overrides):

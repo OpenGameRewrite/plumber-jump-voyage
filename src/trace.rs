@@ -1244,8 +1244,13 @@ impl TraceFile {
         }
         let seed = std::path::Path::new(path).with_extension("geyser_seed.json");
         if seed.exists() {
-            trace.geyser_seed = Some(serde_json::from_str(&std::fs::read_to_string(&seed)
-                .map_err(|e| format!("{}: {e}", seed.display()))?).map_err(|e| e.to_string())?);
+            trace.geyser_seed = Some(
+                serde_json::from_str(
+                    &std::fs::read_to_string(&seed)
+                        .map_err(|e| format!("{}: {e}", seed.display()))?,
+                )
+                .map_err(|e| e.to_string())?,
+            );
         }
         Ok(trace)
     }
@@ -1751,6 +1756,13 @@ impl TraceFile {
             });
         Snapshot {
             mode,
+            geyser_collider_from: (mode == Some(Move::SandGeyser) && row > 0).then(|| {
+                Vec3::new(
+                    self.number(row - 1, "px").unwrap_or(0.),
+                    self.number(row - 1, "py").unwrap_or(0.),
+                    self.number(row - 1, "pz").unwrap_or(0.),
+                )
+            }),
             pose,
             floor_contact,
             pos: Vec3::new(n("px"), n("py"), n("pz")) * UNIT,

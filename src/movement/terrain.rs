@@ -258,7 +258,11 @@ impl Player {
             }),
         };
         // The collision part under the feet: `rs::waitGround` follows its frame.
-        self.ground_part = collider.floor.as_ref().and_then(|c| mesh.triangles.get(c.triangle as usize)?.local).map(|p| p.part as usize);
+        self.ground_part = collider
+            .floor
+            .as_ref()
+            .and_then(|c| mesh.triangles.get(c.triangle as usize)?.local)
+            .map(|p| p.part as usize);
         self.ground_frame = collider
             .floor
             .as_ref()

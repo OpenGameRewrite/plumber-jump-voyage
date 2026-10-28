@@ -850,8 +850,8 @@ floor/material code. SandDesert material alone is insufficient. A new entry
 after Slide needs a new proof. The episode includes SandSink/Dead and a direct
 transition to Dead; only probe-tagged player-death coins during Dead receive
 the existing coin exception. Missing geometry/replay, moving hosts, ordinary
-coins and handled actor messages remain refused. SandGeyserRaise is still an
-actor message and has no exception. `environment_rule.self_check()` covers
+coins and handled actor messages remain refused. SandGeyserRaise requires the
+independent source proof described below. `environment_rule.self_check()` covers
 these boundaries.
 
 The legacy recorder's `trace_tools.env_report` starts horizontal displacement at
@@ -920,3 +920,65 @@ camera roll, visibility-group state or other actors' clipping. Without a recorde
 camera, those sensors remain active. No full actor-clipping parity is claimed.
 The existing `candle-look` head controller discrepancy at its braking frame61
 remains outside the fire-cause fix.
+
+### Timed SandGeyser sources
+
+`tools/export-sand-geysers.py <geometry.json> --romfs <romfs> --phase
+<game.geysers.csv> --curves <SandGeyser.curves.bin>` adds placement-bound sources
+and original Top translation coefficients to an existing raw-KCL stage export.
+Back up the geometry in its local `old/` directory first. The separate curve
+export uses `PJVCURV1`; it does not replace Mario's or Cappy's curves. Upright,
+unit-scale placements with their raw Top KCL and original target/args are supported.
+The exporter also adds stationary, unattached CoinRing Body look sensors from the
+stage placement and original InitSensor, without making rings physical launchers.
+
+The recorder supplies `game.geysers.csv` (one row per source per sample, including
+preroll), `game.geyser_messages.csv` (receive/push observations with payload bits),
+and the exporter writes `game.geyser_seed.json` beside them. Copy all three with
+`game.csv`, `game.meta.json`, `game.env.json` and `game.preroll.csv` into a private
+dashboard directory. Actor CSV positions are absolute centimetres; placement IDs
+and stable actor tokens identify sources independently of their shared display name.
+The supported initial seed is independently observed pending Wait0, local Top0,
+Raise valid with radius450 at the placement. Missing seed disables source simulation;
+an incompatible stage/scenario/preroll or unsupported seed is an error.
+
+Each source advances its own Wait/UpStart/UpLoop/UpWait/UpEnd/UpEndWait sequence,
+including the division-before-multiplication rise and step61 overshoot. The original
+UpStart Top polynomial is composed after its parent translation; collision uses the
+preceding animated sample. UpLoop resets the collision matrix history when validated.
+The original UpEnd action ends at frame30 (executed steps0..30), independently
+recorded on all four actors. Raise attacks use strict sphere broad phase followed
+by the original inclusive cylinder/height checks. The source attacks after Mario,
+before its own nerve update; Mario consumes that latch on the next pre-movement pass.
+There is no player-position or launch-frame table in the source simulation.
+
+The state disables collision, attracts horizontally toward the source origin and
+raises at the payload speed until the original height test fails or the latch is
+absent. It then enables collision and supplies world-up30. PlayerCollider first
+sweeps from its retained pre-integration pose to the actor, correcting against Top,
+then sweeps its own velocity. Thus the exit includes a geometric correction before
+the impulse; no measured displacement is added. Grounded states follow the raw
+moving part frame; Wait also applies its platform-motion joint impulse.
+
+Acceptance requires all source phase/step/Top/radius/centre/validity rows and the
+replay's `collision.geysers` diagnostics to agree for the entire capture, with raw
+initial transform, nerve identity, generation and UpEnd query results checked.
+Only the identified Raise sensor's proved overlaps and payload-bound receive/push
+observations qualify. Top floor acceptance additionally checks its independently
+predicted base; carry must explain the horizontal residual under the existing
+grounded threshold. Unknown tokens, missing phase/replay data, changed payloads,
+Cappy and unrelated hosts remain refused. Synthetic checks run through
+`py tools/compare-traces.py --self-check`; cycle, boundary, latch and exit-sweep
+checks also run in both Rust tests and `--self-check`.
+
+Local recorder naming: main-relative nerve `1d9a478` is
+`PlayerStateSandGeyser`'s SandGeyser sub-nerve, so `trace_tools.py` maps it to
+`SandGeyser` (actor/sub-state `SandGeyser/SandGeyser`). This is an executable
+identity correction, not an unknown-state comparison exception.
+
+Limits: this fixture uses the recorded alive/unclipped source lifecycle and fixed
+world-down gravity. It does not implement clipping/reinitialization or linked switch
+behavior for other geyser placements. The moving KCL/source simulation is used by
+headless and rendered replays; the bare replay scene does not render the geyser
+model, its actor sand emitters/audio, or Mario's SandDesert heavy-land stain.
+Player animation/effect/sound columns do not establish those presentation details.

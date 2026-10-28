@@ -252,8 +252,8 @@ mod entrance_camera;
 mod ground;
 mod recovery_dead;
 mod safety;
-mod sand_sink;
 pub mod sand_geyser;
+mod sand_sink;
 mod stain;
 use damage::Damage;
 use damage_fire::FireControl;
@@ -798,6 +798,9 @@ pub struct Snapshot {
     /// Observed pose and floor contact, needed by pre-movement damage dispatch in lockstep.
     pub pose: Option<Quat>,
     pub floor_contact: Option<(CollisionCodes, Vec3, u32)>,
+    /// SandGeyser disables collision before integration: its collider still stood at this
+    /// preceding sample when collision is enabled again. Centimetres, replay-relative.
+    pub geyser_collider_from: Option<Vec3>,
     /// Clip and its frame (for "Move", the cycle phase).
     pub anim: Option<(&'static str, f32)>,
     pub state_frames: Option<u32>,
@@ -2204,6 +2207,10 @@ impl Player {
         self.pos = s.pos;
         self.prev = s.pos;
         self.v = s.v;
+        if s.mode == Some(Move::SandGeyser) {
+            self.collider.invalidate(self.facing.x.atan2(self.facing.z));
+            self.trans_carry = s.geyser_collider_from;
+        }
         self.facing = s.facing.with_y(0.).normalize_or(self.facing);
         self.grounded = s.grounded;
         if let Some(pose) = s.pose {
@@ -5355,6 +5362,7 @@ mod spin_checks;
 mod wall_air_checks;
 
 pub fn self_check() {
+    sand_geyser::self_check();
     recovery_dead::self_check();
     stain::self_check();
     checks::run();
