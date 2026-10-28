@@ -267,6 +267,12 @@ fn command_line() {
         crate::shots::Driver::new(&shots, camera(&shots), "out".into(), None, Some(&recorded))
             .is_err()
     );
+    let recorded =
+        TraceFile::parse("frame,look_keeper,bones,head_q\n0,count=3,Head:10/90/20,0/0/0/1\n")
+            .unwrap();
+    let head = recorded.look_hint(0).unwrap();
+    assert_eq!(head.head, Some(Vec3::new(10., 90., 20.)));
+    assert_eq!(head.head_rotation, Some(bevy::prelude::Quat::IDENTITY));
 }
 
 #[cfg_attr(test, test)]

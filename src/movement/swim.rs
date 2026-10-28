@@ -226,7 +226,7 @@ impl Player {
 
     /// `PlayerActorHakoniwa::updateCollider` ends by asking the surface finder, from the root's
     /// final position, for the surface along the up axis within 200.
-    pub(super) fn update_water_finder(&mut self, scene: &Course) {
+    pub(crate) fn update_water_finder(&mut self, scene: &Course) {
         let at = scene.in_water_frame(self.position_cm());
         self.water_finder = scene.water_areas().update_finder(at, UP, FINDER_DISTANCE);
     }

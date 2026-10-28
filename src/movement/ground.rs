@@ -8,7 +8,7 @@
 //! and confirmed against recorded runs. The maths is in the plane of the
 //! floor under the player (`mGroundNormal`, which is straight up on level
 //! ground): velocities, the facing and the stick are vectors of that plane.
-//! The original's forced-run input has no counterpart yet and is left out.
+//! RocketFlower's forced run supplies the original full-length steering input.
 pub use super::ground_move::{GroundMove, SteerInput};
 use super::t;
 pub use super::turn_control::{

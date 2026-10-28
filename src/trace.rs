@@ -1684,6 +1684,15 @@ impl TraceFile {
         Some(LookHint {
             feet: Vec3::new(n("px"), n("py"), n("pz")),
             head,
+            head_rotation: self.cell(row, "head_q").and_then(|text| {
+                let mut axes = text.split('/').map(|v| v.parse::<f32>());
+                Some(Quat::from_xyzw(
+                    axes.next()?.ok()?,
+                    axes.next()?.ok()?,
+                    axes.next()?.ok()?,
+                    axes.next()?.ok()?,
+                ))
+            }),
             counter,
             target_stage: self.cell(row, "look_target").and_then(vector_cell),
         })

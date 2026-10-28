@@ -10,8 +10,8 @@
 //! the plane of the floor under the player (`mGroundNormal`, which is straight up on level
 //! ground): velocities, the facing and the stick are vectors of that plane.
 //!
-//! Not ported: the original's forced-run input (`_9c`), the dash judge and the
-//! 2D area's hold, none of which the states that own a control here use.
+//! RocketFlower supplies the forced-run input (`_9c`) and the enabled surface
+//! judge. The 2D area's hold remains outside this controller's recorded coverage.
 //!
 //! Checked bit for bit against the executable's routine run in a local interpreter
 //! (`PJV_MOVE_CASES`, see `tests/ground_move.rs`).

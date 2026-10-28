@@ -23,7 +23,7 @@
 //! know are static placements whose hosts answer neither query.
 use super::look_joint::{HeadLookAt, Mat34, translation};
 use super::vector_lib::converge;
-use bevy::prelude::Vec3;
+use bevy::prelude::{Quat, Vec3};
 
 /// The eye sensor: reach (cm) and height over the feet (`PlayerActorHakoniwa/InitSensor`).
 const EYE_RADIUS: f32 = 800.;
@@ -135,6 +135,9 @@ pub struct LookAt {
 pub struct LookHint {
     pub feet: Vec3,
     pub head: Option<Vec3>,
+    /// Observed head orientation, used only to restore the preceding player
+    /// pose that an independently ticked equipment source reads in lockstep.
+    pub head_rotation: Option<Quat>,
     pub counter: Option<i32>,
     pub target_stage: Option<Vec3>,
 }

@@ -2328,9 +2328,13 @@ impl Player {
         self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
-        self.air_for = None;
-        if self.mode.uses_air_control() && (!self.grounded || self.nerve.touchdown) {
-            self.resume_air_control(s);
+        let keep_forced_air = s.anim.is_some_and(|(name, _)| name == "JumpDashFast")
+            && self.air_for == Some(self.mode);
+        if !keep_forced_air {
+            self.air_for = None;
+            if self.mode.uses_air_control() && (!self.grounded || self.nerve.touchdown) {
+                self.resume_air_control(s);
+            }
         }
         if self.mode == Move::WallSlide {
             self.resume_wall_slide(s);
@@ -2382,14 +2386,18 @@ impl Player {
                 }
                 self.cycle = RunCycle::from_recorded(hint.phase, hint.rate, hint.weights, steps);
                 self.step_phase = hint.phase;
-                self.ground.resume(
-                    self.speed_h(),
-                    steps,
-                    hint.turn_rate,
-                    hint.last_input,
-                    hint.turn_power,
-                    self.on_ground_skate(),
-                );
+                // Forced/surface steering carries hidden turn acceleration;
+                // the printed facing delta is not that controller's turn rate.
+                if !(self.force_run.is_active() || self.surface_run.result) {
+                    self.ground.resume(
+                        self.speed_h(),
+                        steps,
+                        hint.turn_rate,
+                        hint.last_input,
+                        hint.turn_power,
+                        self.on_ground_skate(),
+                    );
+                }
                 // A nerve chosen in this row starts in the next step.
                 if let Some(clip) = hint.chosen {
                     let (mode, nerve) = match clip {
@@ -2433,8 +2441,11 @@ impl Player {
         self.launch = None;
         self.winding = false;
         self.winding_age = 0;
+        let continued_catch = self.catching.is_some() && s.catching.is_some();
         self.catching = s.catching;
-        self.catch_clip = self.clip_of_catch();
+        if !continued_catch {
+            self.catch_clip = self.clip_of_catch();
+        }
         self.upper_catch = None;
         self.sub = SubClip::default();
         if let Some((name, frame, length)) = s.sub {
@@ -2776,6 +2787,16 @@ impl Player {
 
     /// Advance one original frame.
     pub fn step(&mut self, o: &Orders, scene: &Course) {
+        self.step_with_sources(o, scene, true);
+    }
+
+    /// Reconstruct Mario's chosen nerve without advancing independently owned
+    /// actors or delivering their sensor messages a second time.
+    pub(crate) fn repeat_step_for_lockstep(&mut self, o: &Orders, scene: &Course) {
+        self.step_with_sources(o, scene, false);
+    }
+
+    fn step_with_sources(&mut self, o: &Orders, scene: &Course, advance_sources: bool) {
         if self.death.restart_pending {
             self.restart_after_death(scene);
         }
@@ -2835,9 +2856,13 @@ impl Player {
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
         // The cap updates before the player does, within the same frame.
-        self.tick_rocket_flowers(scene);
+        if advance_sources {
+            self.tick_rocket_flowers(scene);
+        }
         self.update_cap(&o, scene);
-        self.rocket_sensor_phase(scene);
+        if advance_sources {
+            self.rocket_sensor_phase(scene);
+        }
         self.query_equipment_force_run();
         self.cap_sensor_phase(&o);
         self.start_pending_abyss();
@@ -3954,7 +3979,7 @@ impl Player {
             s.state_frames
         }
         .unwrap_or(0);
-        let (extend, gravity) = match self.mode {
+        let (extend, mut gravity) = match self.mode {
             Move::DoubleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_2ND),
             Move::TripleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_3RD),
             Move::Jump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY),
@@ -3964,13 +3989,25 @@ impl Player {
             Move::WallJump => (0, t::WALL_JUMP_GRAVITY),
             _ => (0, t::JUMP_GRAVITY),
         };
-        let takeoff = if self.mode == Move::Fall {
+        let forced_jump = s.anim.is_some_and(|(name, _)| name == "JumpDashFast");
+        if forced_jump {
+            gravity = 1.;
+            self.gravity = gravity;
+        }
+        let mut takeoff = if self.mode == Move::Fall {
             fall_takeoff(self.v.y)
         } else if self.mode == Move::WallJump {
             wall_air::wall_jump_takeoff()
         } else {
             takeoff_of(self.mode, extend, self.v.y, gravity)
         };
+        if forced_jump {
+            takeoff.speed_window = Some((
+                0.,
+                air_move::tune::JUMP_BASE_SPEED_MAX.max(self.force_run.speed),
+            ));
+            takeoff.speed_limit = takeoff.speed_limit.max(self.force_run.speed);
+        }
         // The window is still open when the button was held since take-off.
         let held = self.jump_held_frames > frames;
         self.air

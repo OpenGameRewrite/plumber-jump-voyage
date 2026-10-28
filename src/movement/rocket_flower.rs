@@ -291,6 +291,8 @@ mod checks {
         the_watcher_keeps_three_flowers_and_displaces_the_oldest();
         pickup_stops_the_scene_and_expiry_ends_the_equipment();
         lineup_preserves_the_executable_quaternion_arithmetic();
+        reconstructing_mario_does_not_tick_the_sources_twice();
+        an_injected_run_keeps_the_catch_clip_chosen_before_it();
     }
 
     #[cfg(test)]
@@ -312,6 +314,33 @@ mod checks {
             camera_clipped: false,
             clipped: false,
         }
+    }
+
+    fn reconstructing_mario_does_not_tick_the_sources_twice() {
+        let mut player = Player::default();
+        player.rocket.flowers = vec![flower("independent")];
+        let course = Course::default();
+        let orders = Orders::default();
+        player.step(&orders, &course);
+        let source = player.rocket.diagnostic();
+        player.repeat_step_for_lockstep(&orders, &course);
+        assert_eq!(player.rocket.diagnostic(), source);
+        player.step(&orders, &course);
+        assert_ne!(player.rocket.diagnostic(), source);
+    }
+
+    fn an_injected_run_keeps_the_catch_clip_chosen_before_it() {
+        let mut player = Player {
+            mode: Move::Run,
+            catching: Some(2),
+            catch_clip: "CatchCap",
+            ..default()
+        };
+        player.resume_cap(&Snapshot {
+            catching: Some(2),
+            ..default()
+        });
+        assert_eq!(player.catch_clip, "CatchCap");
     }
 
     fn lineup_preserves_the_executable_quaternion_arithmetic() {

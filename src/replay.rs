@@ -867,9 +867,31 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 orders.view = camera.view_rows(last);
                 let spin = player.spin_input();
                 update_static_clipping(&mut player, &course, camera.view(last));
-                player.step(&orders, &course);
+                if !player.rocket.flowers.is_empty() {
+                    player.update_water_finder(&course);
+                }
+                player.repeat_step_for_lockstep(&orders, &course);
                 player.set_spin_input(spin);
                 player.events.clear();
+            }
+            // Lockstep restores the observed preceding player pose, including
+            // the head read by equipment movement. Never restore source phases
+            // or sensor centres from their recorded side files.
+            if !player.rocket.flowers.is_empty() {
+                // The cached finder belongs to the injected position, not to
+                // the outgoing position of the frame being reconstructed.
+                player.update_water_finder(&course);
+            }
+            if !player.rocket.flowers.is_empty()
+                && let Some(hint) = game.look_hint(last)
+                && let (Some(head), Some(rotation)) = (hint.head, hint.head_rotation)
+            {
+                let [x, y, z] = crate::movement::pose_math::quat_to_axes(rotation);
+                player.rocket.head = Some([
+                    [x.x, y.x, z.x, head.x],
+                    [x.y, y.y, z.y, head.y],
+                    [x.z, y.z, z.z, head.z],
+                ]);
             }
         }
         // The probe stops sampling Mario across scene teardown/loading. A boot-clock gap
