@@ -233,7 +233,7 @@ class Judge:
             key for key, bases in spans.items()
             if any(max(b[i] for b in bases) - min(b[i] for b in bases) > 0.01 for i in range(3))
         }
-        self._geysers = GeyserEvidence(geometry, geysers, rewrite_rows, geyser_seed)
+        self._geysers = GeyserEvidence(geometry, geysers, rewrite_rows, geyser_seed, geyser_messages)
         self._scripted = {}
         self._candles = []
         self._start = start
@@ -510,7 +510,7 @@ class Judge:
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
                 continue
-            if self._geysers.contact(f, c):
+            if self._geysers.contact(f, c, self.rows, self.preroll, self._start):
                 v.accept(f, "exported SandGeyser source", "placement-bound source with independently verified phase and reproduced timeline")
                 continue
             if self._candle_contact(f, c, message=c["kind"] in ("r", "p")):
@@ -546,7 +546,7 @@ class Judge:
             host = hosts.get(surface)
             if host is None:
                 return False, f"no {surface} host logged on this frame"
-            if self._geysers.floor(f, host):
+            if self._geysers.floor(f, host, self._start):
                 continue
             if host["moving"] == "1" or host["parts_flag"] == "0":
                 return False, f"{surface} host {host['host']} is a moving collision part"
@@ -573,6 +573,9 @@ class Judge:
     def _floor_height(self, f, reason):
         v = self.verdict
         row, prev = self._row(f), self._row(f - 1)
+        if self._geysers.floor(f, self._hosts.get(f, {}).get("ground"), self._start):
+            v.accept(f, "exported geyser Top floor", "raw KCL follows verified source phase and original joint animation")
+            return
         landing = prev is not None and not prev.get("floor_y") and bool(row and row.get("floor_y"))
         if landing:
             if v.typed:
@@ -612,6 +615,9 @@ class Judge:
                     v.accept(f, "frame-zero displacement from preroll",
                              "the immediate frame -1 sample explains the legacy origin-based displacement flag")
                     return
+        if self._geysers.floor(f, self._hosts.get(f, {}).get("ground"), self._start):
+            v.accept(f, "exported geyser platform carry", "verified Top matrix motion carries the grounded player")
+            return
         flags = self._flags(f)
         tilt = self._normal_off_vertical(f)
         state = self._state(f)

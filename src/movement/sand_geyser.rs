@@ -83,9 +83,13 @@ impl Player {
     pub(super) fn follow_geyser_ground(&mut self, scene: &Course) {
         if !self.grounded || self.mode == Move::SandGeyser { return; }
         let (Some(mesh), Some(part), Some((_, inverse))) = (&scene.mesh, self.ground_part, self.ground_frame) else { return };
-        if !mesh.geysers.iter().any(|s| s.part == part) { return; }
+        let Some(source) = mesh.geysers.iter().find(|s| s.part == part) else { return };
+        // UpLoop validates/resets the Top collision: its previous matrix becomes its current
+        // matrix, so the first update must not carry the UpStart animation back to rest.
+        if source.phase == 2 && source.step == 1 { return; }
         let local = crate::prism::transform_point(&inverse, mesh.to_game(self.position_cm()));
         let end = mesh.relative_point(crate::prism::transform_point(&mesh.parts[part].base, local));
+        if self.mode == Move::Idle { self.wait_platform_control(end - self.position_cm()); }
         self.pos = end * UNIT;
         self.collider_end = Some((self.pos, end));
     }

@@ -428,8 +428,8 @@ impl TriangleMesh {
             base[11] = source.position.z + offset.z;
             base[7] += source.top;
             self.parts[source.part] = PartFrame::new(base).expect("upright geyser matrix");
-            if !source.valid { self.disabled_parts.push(source.part); }
             source.tick();
+            if !source.valid { self.disabled_parts.push(source.part); }
         }
         for i in 0..self.triangles.len() {
             let Some(local) = self.triangles[i].local else { continue };

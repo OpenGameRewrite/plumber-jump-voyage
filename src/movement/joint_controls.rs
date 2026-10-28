@@ -120,6 +120,8 @@ pub struct JointState {
     /// [`Player::velocity_when_landing_state_is_chosen`]); the state's `appear` reads it for its
     /// impulse, ahead of `PlayerActionGroundMoveControl::appear` laying it into the floor's plane.
     run_arrival_velocity: Option<Vec3>,
+    wait_platform_power: Vec3,
+    wait_platform_counter: i32,
 }
 
 /// The run's impulse is this share of the velocity (`appear` and `control` pass `0.3`).
@@ -206,6 +208,26 @@ impl Player {
         if self.joints.was_running {
             self.run_state_control();
         }
+    }
+
+    /// PlayerStateWait::control (0x48cfc0): a sudden change in the ground's motion
+    /// adds a bounded follow-up impulse to the centre dynamics.
+    pub(super) fn wait_platform_control(&mut self, power: Vec3) {
+        let inverse = self.actor_pose().calc_quat().inverse();
+        let local = verticalize_vec(Vec3::NEG_Y, pose_math::rotate_by_quat(power, inverse));
+        let change = local - self.joints.wait_platform_power;
+        self.joints.wait_platform_power = local;
+        if vector_lib::length(change) < 3. {
+            self.joints.wait_platform_counter = (self.joints.wait_platform_counter - 1).max(0);
+            return;
+        }
+        let rate = joint_math::ease_out(joint_math::calc_rate01(self.joints.wait_platform_counter as f32, 0., 10.));
+        let share = joint_math::lerp_value(0.5, 0.01, rate);
+        let impulse = pose_math::rotate_by_quat(change * -share, self.actor_pose().calc_quat());
+        let length = vector_lib::length(impulse);
+        self.joints.center.follow_up = true;
+        self.joints.center.follow_up_vector = if length > 4. { impulse * (4./length) } else { impulse };
+        self.joints.wait_platform_counter = 10;
     }
 
     /// The end of a frame, for the run state: the actor choosing it calls its `appear` in that

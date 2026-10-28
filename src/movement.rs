@@ -2732,7 +2732,6 @@ impl Player {
             self.restart_after_death(scene);
         }
         self.death.update_judge(self.is_dead());
-        self.follow_geyser_ground(scene);
         self.prev = self.pos;
         self.prev_cap = self.cap.as_ref().map(|c| c.pos);
         if self.hitstop > 0. {
@@ -2898,6 +2897,7 @@ impl Player {
     }
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
+        self.follow_geyser_ground(scene);
         self.update_ground_height(scene);
         if self.mode == Move::Idle && (self.nerve.step == 0 || self.wait.area_clip.is_none()) {
             self.wait.area_clip = scene.mesh.as_ref().and_then(|m| {
@@ -5151,6 +5151,12 @@ impl Player {
             self.mode,
             Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel | Move::SandGeyser
         ) {
+            if self.mode == Move::SandGeyser {
+                // updateCollider's no-collision branch resets at the pre-integration pose.
+                // The next enabled collision sweeps from that pose before its own velocity.
+                self.collider.invalidate(self.facing.x.atan2(self.facing.z));
+                self.trans_carry = Some(self.position_cm());
+            }
             self.move_without_collision(scene);
             return;
         }

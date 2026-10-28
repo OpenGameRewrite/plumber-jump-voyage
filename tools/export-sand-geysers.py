@@ -96,6 +96,18 @@ def main():
                 or any(seed[k] != '0' for k in ('dead', 'clipped', 'registry_dropped'))
                 or any(seed[k] != '1' for k in ('valid', 'system'))):
             raise ValueError('Unsupported or inconsistent independent source seed')
+    rings = outfits.archive(args.romfs / 'ObjectData' / 'CoinRing.szs')
+    body, = outfits.byml(rings['InitSensor.byml'])
+    if body != dict(Name='Body', Radius=140., Type='MapObj'):
+        raise ValueError('CoinRing Body schema changed')
+    looks = geometry.setdefault('look_sensors', [])
+    looks[:] = [s for s in looks if s.get('source') != 'stationary_coin_ring']
+    for obj in placement.get('ObjectList', []):
+        if (obj['UnitConfigName'] == 'CoinRing' and obj.get('MoveType') == 0
+                and not obj.get('Links') and obj.get('IsConnectToCollision') is False
+                and all(obj['Rotate'][a] == 0 and obj['Scale'][a] == 1 for a in 'XYZ')):
+            looks.append(dict(source='stationary_coin_ring', id=obj['Id'], host=obj['UnitConfig']['DisplayName'],
+                              name='Body', type=12, radius=140., position=[obj['Translate'][a] for a in 'XYZ']))
     geometry['sand_geysers'] = sources
     geometry['sand_geyser_curves'] = top_curves(args.curves)
     args.geometry.write_text(json.dumps(geometry, separators=(',', ':')), encoding='utf8')

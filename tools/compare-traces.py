@@ -651,6 +651,10 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
                 if os.path.isfile(actor_path) and os.path.isfile(seed_path):
                     with open(actor_path, encoding="utf8") as actor_file:
                         evidence["geysers"] = list(csv.DictReader(actor_file))
+                    message_path = os.path.join(os.path.dirname(game_path), "game.geyser_messages.csv")
+                    if os.path.isfile(message_path):
+                        with open(message_path, encoding="utf8") as message_file:
+                            evidence["geyser_messages"] = list(csv.DictReader(message_file))
                     with open(seed_path, encoding="utf8") as seed_file:
                         evidence["geyser_seed"] = json.load(seed_file)
         verdict = judge_run(game, rew, listed, **evidence)
