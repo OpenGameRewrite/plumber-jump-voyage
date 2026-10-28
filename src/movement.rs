@@ -2935,7 +2935,7 @@ impl Player {
     /// (it reads the contact the last step ended with): the steps without
     /// ground under the player count up to five. Fire uses the original speed-dependent
     /// run angle; the other ground states still use their existing contact test.
-    /// The original judge's water-surface-run veto has no consumer in this rewrite yet.
+    /// A successful water-surface start judge vetoes the lost-ground counter.
     fn update_ground_lost(&mut self) {
         let contact = if self.start_surface_run() {
             true

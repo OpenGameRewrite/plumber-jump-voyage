@@ -719,6 +719,8 @@ def self_check():
     check_geysers()
     from grab_ceil import self_check as check_grabceil
     check_grabceil()
+    from rocket_flower import self_check as check_rocket
+    check_rocket()
     _check_candlestands()
 
     def rows(count=6, **overrides):

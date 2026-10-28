@@ -54,6 +54,7 @@ mod checks {
     pub(super) fn run() {
         the_start_judge_needs_a_forced_run_a_surface_and_a_fall();
         the_sustain_judge_is_enabled_by_the_forced_run_and_then_by_speed();
+        surface_running_vetoes_fall_without_keeping_other_states_afloat();
     }
 
     #[cfg(test)]
@@ -108,5 +109,29 @@ mod checks {
         player.v = Vec3::new(20., 0., 0.);
         player.update_surface_run();
         assert!(!player.surface_run.result, "the comparison is strict");
+    }
+
+    fn surface_running_vetoes_fall_without_keeping_other_states_afloat() {
+        let mut player = above_water(1.);
+        player.force_run.setup(2, 38.);
+        player.v.y = -1.;
+        player.ground_lost = GROUND_LOST_FRAMES + 1;
+        player.update_ground_lost();
+        assert_eq!(player.ground_lost, 0);
+
+        // The approach can turn velocity upward. Run still has its enabled
+        // sustain result, including the fast tail after the equipment expires.
+        player.force_run.setup(0, 38.);
+        player.v.y = 1.;
+        player.surface_run.result = true;
+        player.mode = Move::Run;
+        player.ground_lost = GROUND_LOST_FRAMES + 1;
+        player.judge_fall();
+        assert_eq!(player.mode, Move::Run);
+
+        // A cached Run-wrapper result must never veto a fall in another state.
+        player.mode = Move::Crouch;
+        player.judge_fall();
+        assert_eq!(player.mode, Move::Fall);
     }
 }

@@ -2,6 +2,16 @@
 //! Only the upright, unlinked flower composition is supported here.
 use super::*;
 
+/// `RocketFlowerEquipWatcher::lineUp` (0x2fecd4), including the quaternion's
+/// round trip rather than assuming the head matrix's axes remain orthogonal.
+fn line_up(rotation: Quat, origin: Vec3, slot: usize) -> Vec3 {
+    let side = pose_math::rotate_by_quat(Vec3::X, rotation);
+    let up = pose_math::rotate_by_quat(Vec3::Y, rotation);
+    let front = pose_math::rotate_by_quat(Vec3::Z, rotation);
+    let offset = (side * 0. + up * 40.) - front * 10.;
+    origin + offset * (slot + 1) as f32
+}
+
 #[derive(Clone, Debug)]
 pub struct Flower {
     pub id: String,
@@ -53,14 +63,15 @@ impl RocketFlowers {
             .iter()
             .map(|f| {
                 format!(
-                    "{}/{}/{}/{:08x}/{:08x}/{:08x}/{}",
+                    "{}/{}/{}/{:08x}/{:08x}/{:08x}/{}/{}",
                     f.id,
                     f.phase,
                     f.step,
                     f.equip.x.to_bits(),
                     f.equip.y.to_bits(),
                     f.equip.z.to_bits(),
-                    u8::from(f.valid)
+                    u8::from(f.valid),
+                    u8::from(f.clipped)
                 )
             })
             .collect::<Vec<_>>()
@@ -213,9 +224,10 @@ impl Player {
             let up = pose_math::normalize(Vec3::new(m[0][1], m[1][1], m[2][1]));
             let side = pose_math::normalize(Vec3::new(m[0][0], m[1][0], m[2][0]));
             if let Some(head) = head {
+                let rotation = pose_math::quat_front_up(side, -up);
+                let origin = (head + up * 16.) + side * 0.;
                 for (slot, &i) in c.equipped.iter().enumerate() {
-                    c.flowers[i].pending =
-                        Some(head + up * 16. + (-up * 40. - side * 10.) * (slot + 1) as f32);
+                    c.flowers[i].pending = Some(line_up(rotation, origin, slot));
                 }
             }
         }
@@ -278,6 +290,7 @@ mod checks {
         seeds_are_validated_and_take_their_clocks_one_tick_early();
         the_watcher_keeps_three_flowers_and_displaces_the_oldest();
         pickup_stops_the_scene_and_expiry_ends_the_equipment();
+        lineup_preserves_the_executable_quaternion_arithmetic();
     }
 
     #[cfg(test)]
@@ -298,6 +311,27 @@ mod checks {
             pending: None,
             camera_clipped: false,
             clipped: false,
+        }
+    }
+
+    fn lineup_preserves_the_executable_quaternion_arithmetic() {
+        let origin = Vec3::new(100., 120., -50.);
+        assert_eq!(
+            line_up(Quat::IDENTITY, origin, 2),
+            Vec3::new(100., 240., -80.)
+        );
+        // Scalar-float executable oracle, including a non-unit input: normalizing
+        // the quaternion or substituting matrix columns changes these results.
+        let rotation = Quat::from_xyzw(0.2, -0.3, 0.4, 0.8);
+        for (slot, expected) in [
+            Vec3::new(72.8, 146.8, -53.5),
+            Vec3::new(45.6, 173.6, -57.),
+            Vec3::new(18.399994, 200.4, -60.5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(line_up(rotation, origin, slot), expected);
         }
     }
 
