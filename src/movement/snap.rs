@@ -5,9 +5,9 @@
 //! current pose at the start of every step (`followCollision`).
 //!
 //! Written from the 1.0.0 executable. The game keeps full matrices; the
-//! controller keeps what its two users need, a position and the way the body
-//! faces (about a vertical axis). Moving collision, which the snap also
-//! follows, is not ported.
+//! ledge and pole consumers retain their upright position/yaw path. GrabCeil
+//! uses full static orientation without changing that arithmetic. Following
+//! moving collision parts is not ported.
 use bevy::prelude::{Quat, Vec3};
 
 /// The single-precision degree factor the game multiplies by.

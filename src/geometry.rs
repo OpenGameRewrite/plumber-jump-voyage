@@ -106,6 +106,7 @@ pub struct TriangleMesh {
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
     pub death: crate::water::WaterAreas,
+    pub snap_move: Vec<crate::water::WaterAreas>,
     pub recovery: crate::water::WaterAreas,
     pub recovery_ban: crate::water::WaterAreas,
     pub recovery_invalidate: crate::water::WaterAreas,
@@ -236,6 +237,24 @@ impl TriangleMesh {
             water: crate::water::WaterAreas::from_export(&root["areas"])
                 .with_oceans(&root["ocean_waves"]),
             death: crate::water::WaterAreas::from_export_named(&root["areas"], "DeathArea"),
+            snap_move: root["areas"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|a| {
+                    a["name"] == "SnapMoveArea"
+                        && a["args"]["MoveType"] == "AirOnly"
+                        && a["args"]["IsKidsOnly"] == false
+                        && a["rotate"] == serde_json::json!([0., 0., 0.])
+                        && a["links"].as_array().is_some_and(Vec::is_empty)
+                })
+                .map(|a| {
+                    crate::water::WaterAreas::from_export_named(
+                        &serde_json::json!([a]),
+                        "SnapMoveArea",
+                    )
+                })
+                .collect(),
             recovery: crate::water::WaterAreas::from_export_named(&root["areas"], "RecoveryArea"),
             recovery_ban: crate::water::WaterAreas::from_export_named(
                 &root["areas"],
@@ -397,11 +416,20 @@ impl TriangleMesh {
                     active: false,
                 });
         }
-        mesh.look_sensors.extend(look_sensors_from_export(&serde_json::Value::Array(
-            root["grab_ceil_bars"].as_array().into_iter().flatten().map(|source| {
-                serde_json::json!({"host": source["host"], "name": "Snap", "type": 12,
+        mesh.look_sensors.extend(look_sensors_from_export(
+            &serde_json::Value::Array(
+                root["grab_ceil_bars"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|source| {
+                        serde_json::json!({"host": source["host"], "name": "Snap", "type": 12,
                     "radius": 150., "position": source["position"]})
-            }).collect()), origin));
+                    })
+                    .collect(),
+            ),
+            origin,
+        ));
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
         for source in root["sand_geysers"].as_array().into_iter().flatten() {
             let id = source["id"].as_str().ok_or("geyser id")?;

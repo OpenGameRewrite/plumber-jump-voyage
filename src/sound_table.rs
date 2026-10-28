@@ -195,7 +195,11 @@ fn landing_reaction(mode: Move) -> Option<&'static str> {
 pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
     let reaction = |name| vec![Cue::Reaction { cap: false, name }];
     match fx {
-        Fx::GrabCeilSwing { forward } => vec![Cue::Play(if forward { "GrabCeilSwingForward" } else { "GrabCeilSwingBack" })],
+        Fx::GrabCeilSwing { forward } => vec![Cue::Play(if forward {
+            "GrabCeilSwingForward"
+        } else {
+            "GrabCeilSwingBack"
+        })],
         Fx::Abyss => vec![Cue::Play("FallDown"), Cue::Play("vDeadFallDown")],
         Fx::RecoveryDamage => reaction("BubbleDamage"),
         Fx::RecoveryBegin => reaction("BubbleStart"),

@@ -217,19 +217,7 @@ fn rotate(v: Vec3, axis: Vec3, degrees: f32) -> Vec3 {
 
 impl Player {
     pub(super) fn receive_grab_ceil_force(&mut self, scene: &Course) {
-        self.grab_ceil.snap_force = None;
         if self.grounded || self.is_dead() {
-            return;
-        }
-        if self.mode == Move::GrabCeil
-            && (self.grab_ceil.is_form()
-                || self.grab_ceil.steps
-                    <= if self.grab_ceil.nerve == GrabNerve::Jump {
-                        10
-                    } else {
-                        30
-                    })
-        {
             return;
         }
         let Some(mesh) = &scene.mesh else { return };
@@ -247,16 +235,62 @@ impl Player {
             }
         }
     }
-    pub fn grab_ceil_sources(&self) -> &str { &self.grab_ceil.sources }
+    /// Lockstep replaces observed actor values, retaining the unobserved springs,
+    /// source latch and the already chosen nerve's first-step work.
+    pub fn inject_grab_ceil(&mut self, snapshot: &Snapshot) {
+        let nerve = std::mem::take(&mut self.nerve);
+        let pre_jump = self.pre_jump;
+        self.inject(snapshot);
+        self.nerve = nerve;
+        self.pre_jump = pre_jump;
+    }
+    pub(super) fn take_grab_ceil_force(&mut self) -> Option<Vec3> {
+        if self.mode != Move::GrabCeil || !self.grab_ceil.is_form() && self.grab_ceil_snap_allowed()
+        {
+            self.grab_ceil.snap_force.take()
+        } else {
+            None
+        }
+    }
+    fn grab_ceil_snap_allowed(&self) -> bool {
+        self.grab_ceil.steps
+            > if self.grab_ceil.nerve == GrabNerve::Jump {
+                10
+            } else {
+                30
+            }
+    }
+    pub fn grab_ceil_sources(&self) -> &str {
+        &self.grab_ceil.sources
+    }
     pub(super) fn sample_grab_ceil_sources(&mut self, scene: &Course) {
         let Some(mesh) = &scene.mesh else { return };
-        self.grab_ceil.sources = mesh.grab_ceil_bars.iter().map(|b| {
-            let attached = self.attached_grab_ceil_bar() == Some(b.id.as_str());
-            let phase = if b.active && b.phase == 0 && attached { 1 } else if b.active && b.phase == 1 && !attached { 2 } else { b.phase };
-            let step = if phase != b.phase { -1 } else { b.step as i32 };
-            format!("{}/{}/{}/{:08x}/{:08x}/{:08x}/{}", b.id, phase, step,
-                b.centre.x.to_bits(), b.centre.y.to_bits(), b.centre.z.to_bits(), u8::from(b.active))
-        }).collect::<Vec<_>>().join("|");
+        self.grab_ceil.sources = mesh
+            .grab_ceil_bars
+            .iter()
+            .map(|b| {
+                let attached = self.attached_grab_ceil_bar() == Some(b.id.as_str());
+                let phase = if b.active && b.phase == 0 && attached {
+                    1
+                } else if b.active && b.phase == 1 && !attached {
+                    2
+                } else {
+                    b.phase
+                };
+                let step = if phase != b.phase { -1 } else { b.step as i32 };
+                format!(
+                    "{}/{}/{}/{:08x}/{:08x}/{:08x}/{}",
+                    b.id,
+                    phase,
+                    step,
+                    b.centre.x.to_bits(),
+                    b.centre.y.to_bits(),
+                    b.centre.z.to_bits(),
+                    u8::from(b.active)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
     }
     pub fn attached_grab_ceil_bar(&self) -> Option<&str> {
         (self.mode == Move::GrabCeil)
@@ -327,6 +361,7 @@ impl Player {
             fit.front = -fit.front;
         }
         let mut control = GrabCeilControl {
+            snap_force: self.grab_ceil.snap_force,
             original_front: fit.front,
             side: pose_math::normalize(fit.front.cross(Vec3::NEG_Y)),
             ..default()
@@ -397,12 +432,8 @@ impl Player {
                 mesh.grab_ceil_bars
                     .iter()
                     .find(|b| {
-                        let at = mesh.to_game_vec(fit.pos);
-                        let d = at - b.position;
-                        pose_math::dot(d, b.side) >= 0.
-                            && pose_math::dot(d, b.side) <= 440.
-                            && (d - b.side * pose_math::dot(d, b.side)).length() <= 20.
-                            && (part.part as usize) < mesh.parts.len()
+                        let base = &mesh.parts[part.part as usize].base;
+                        Vec3::new(base[3], base[7], base[11]) == b.position
                     })
                     .map(|b| b.id.clone())
             });
@@ -485,7 +516,25 @@ impl Player {
                     turn: t::JUMP_ACCEL_TURN,
                 },
             );
-            self.turn_in_air(push);
+            // slerpSkyPoseAir preserves the ceiling-side hemisphere while upside down.
+            let (up, front) = self.pose_axes();
+            self.air_turn.update(turn_control::TurnFrame {
+                actor_front: front,
+                actor_up: up,
+                stick: if self.air.steered() { push } else { Vec3::ZERO },
+                up: Vec3::Y,
+            });
+            let target = self.air_turn.direction;
+            let pose = self.actor_pose();
+            self.set_pose(if pose_math::dot(front, target) > 0. || up.y > 0. {
+                pose.slerp_up_front(Vec3::Y, target, t::SLERP_QUAT_RATE, 0.)
+            } else {
+                pose_math::slerp(
+                    pose.calc_quat(),
+                    pose_math::quat_up_front(Vec3::Y, target),
+                    t::SLERP_QUAT_RATE,
+                )
+            });
             if self.grounded {
                 self.grab_ceil.bar = None;
                 self.v.y = -t::GRAVITY;
@@ -563,7 +612,9 @@ impl Player {
             let angle = self.grab_ceil.spring.angle;
             let landmark = if angle >= old_angle { 30. } else { -30. };
             if (angle + landmark) * (old_angle + landmark) < -0.1 {
-                self.events.push(Fx::GrabCeilSwing { forward: old_angle >= 0. });
+                self.events.push(Fx::GrabCeilSwing {
+                    forward: old_angle >= 0.,
+                });
             }
             match nerve {
                 GrabNerve::Start
@@ -607,8 +658,11 @@ impl Player {
         let mut root = self.grab_ceil.root_offset;
         if jump {
             let old = self.actor_pose();
-            let local = Vec3::new(pose_math::dot(root, old.side()),
-                pose_math::dot(root, old.up()), pose_math::dot(root, old.front()));
+            let local = Vec3::new(
+                pose_math::dot(root, old.side()),
+                pose_math::dot(root, old.up()),
+                pose_math::dot(root, old.front()),
+            );
             let c = &self.grab_ceil;
             let angle = -direction * 135.;
             let up = pose_math::normalize(rotate(c.original_front.cross(c.side), c.side, angle));
@@ -623,7 +677,8 @@ impl Player {
         self.v += front * if jump { direction * 15. } else { -1. };
         self.grab_ceil.gravity = if jump { 1. } else { 1.2 };
         self.grab_ceil.invalid = if jump { 10 } else { 0 };
-        self.collider.reset_expand_check(self.facing.x.atan2(self.facing.z));
+        self.collider
+            .reset_expand_check(self.facing.x.atan2(self.facing.z));
         self.catch_collider_at = None;
         self.set_grab_ceil_nerve(
             if jump {
@@ -637,11 +692,25 @@ impl Player {
     }
 }
 
-#[cfg(test)]
-mod tests {
+pub(super) fn self_check() {
+    checks::run();
+}
+
+mod checks {
     use super::*;
 
+    pub(super) fn run() {
+        fixed_bar_follow_force_and_strict_grab_end();
+        spring_pose_advances_before_force_and_lateral_has_no_drive();
+        snap_force_waits_for_the_strict_exit_gate();
+    }
+
+    #[cfg(test)]
     #[test]
+    fn port_checks() {
+        run();
+    }
+
     fn fixed_bar_follow_force_and_strict_grab_end() {
         let mut bar = GrabCeilBar {
             id: "fixture".into(),
@@ -657,10 +726,10 @@ mod tests {
         assert_eq!(bar.force(Vec3::new(200., -200., 0.)), Some(Vec3::Y * 50.));
         assert!(bar.force(Vec3::new(-1., -200., 0.)).is_none());
         bar.tick(Vec3::ZERO, true);
-        assert_eq!((bar.phase, bar.step), (1, 0));
+        assert_eq!((bar.phase, bar.step), (1, 1));
         assert!(bar.force(Vec3::ZERO).is_none());
         bar.tick(Vec3::ZERO, false);
-        for _ in 0..31 {
+        for _ in 0..30 {
             bar.tick(Vec3::ZERO, false);
         }
         assert_eq!((bar.phase, bar.step), (2, 31));
@@ -668,7 +737,6 @@ mod tests {
         assert_eq!((bar.phase, bar.step), (0, 0));
     }
 
-    #[test]
     fn spring_pose_advances_before_force_and_lateral_has_no_drive() {
         let mut spring = Springs {
             angle: 20.,
@@ -682,5 +750,20 @@ mod tests {
         assert!(!spring.drive(0., false, false, false));
         assert_eq!(spring.speed, -2. + -(18. * 0.01 + -2. * 0.06));
         assert_eq!(spring.lateral_speed, 1. + -(11. * 0.01 + 0.05));
+    }
+    fn snap_force_waits_for_the_strict_exit_gate() {
+        let mut player = Player::default();
+        player.mode = Move::GrabCeil;
+        let force = Vec3::new(0., 40., 2.);
+        for (nerve, limit) in [(GrabNerve::Jump, 10), (GrabNerve::Fall, 30)] {
+            player.grab_ceil.nerve = nerve;
+            player.grab_ceil.steps = limit;
+            player.grab_ceil.snap_force = Some(force);
+            assert_eq!(player.take_grab_ceil_force(), None);
+            assert_eq!(player.grab_ceil.snap_force, Some(force));
+            player.grab_ceil.steps += 1;
+            assert_eq!(player.take_grab_ceil_force(), Some(force));
+            assert_eq!(player.take_grab_ceil_force(), None);
+        }
     }
 }

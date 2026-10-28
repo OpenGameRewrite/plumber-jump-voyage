@@ -657,6 +657,15 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
                             evidence["geyser_messages"] = list(csv.DictReader(message_file))
                     with open(seed_path, encoding="utf8") as seed_file:
                         evidence["geyser_seed"] = json.load(seed_file)
+                for key, suffix in (("grabceil_bars", "grabceil_bars.csv"), ("grabceil_messages", "grabceil_messages.csv")):
+                    side = os.path.join(os.path.dirname(game_path), "game." + suffix)
+                    if os.path.isfile(side):
+                        with open(side, encoding="utf8") as source:
+                            evidence[key] = list(csv.DictReader(source))
+                side = os.path.join(os.path.dirname(game_path), "game.grabceil_seed.json")
+                if os.path.isfile(side):
+                    with open(side, encoding="utf8") as source:
+                        evidence["grabceil_seed"] = json.load(source)
         verdict = judge_run(game, rew, listed, **evidence)
         for f, reasons in listed.items():
             if not reasons:

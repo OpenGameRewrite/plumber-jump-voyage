@@ -31,6 +31,7 @@ import math
 import re
 import struct
 from sand_geyser import Evidence as GeyserEvidence
+from grab_ceil import Evidence as GrabCeilEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -211,7 +212,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -234,6 +235,8 @@ class Judge:
             if any(max(b[i] for b in bases) - min(b[i] for b in bases) > 0.01 for i in range(3))
         }
         self._geysers = GeyserEvidence(geometry, geysers, rewrite_rows, geyser_seed, geyser_messages)
+        self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
+                                         grabceil_messages, game_rows, preroll or {}, start)
         self._scripted = {}
         self._candles = []
         self._start = start
@@ -510,6 +513,9 @@ class Judge:
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
                 continue
+            if self._grabceil.contact(f, c, self.rows, self.preroll, self._start):
+                v.accept(f, "exported fixed ceiling bar", "placement-bound Snap overlap, force payload and independently reproduced source lifecycle")
+                continue
             if self._geysers.contact(f, c, self.rows, self.preroll, self._start):
                 v.accept(f, "exported SandGeyser source", "placement-bound source with independently verified phase and reproduced timeline")
                 continue
@@ -701,6 +707,8 @@ def self_check():
     """Synthetic runs for every branch of the rule."""
     from sand_geyser import self_check as check_geysers
     check_geysers()
+    from grab_ceil import self_check as check_grabceil
+    check_grabceil()
     _check_candlestands()
 
     def rows(count=6, **overrides):

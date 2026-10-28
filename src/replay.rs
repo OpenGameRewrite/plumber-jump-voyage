@@ -737,7 +737,20 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 .number(last, "sub_step")
                 .or(game.number(last, "state_step"))
                 == Some(0.);
-            if !just_chosen {
+            let grab_ceil_transition = game
+                .cell(last, "state")
+                .is_some_and(|state| state.starts_with("GrabCeil/"))
+                || just_chosen
+                    && last > 0
+                    && game
+                        .cell(last - 1, "state")
+                        .is_some_and(|state| state.starts_with("GrabCeil/"));
+            if grab_ceil_transition {
+                player.inject_grab_ceil(&game.snapshot(last));
+                if let Some(hint) = game.look_hint(last) {
+                    player.look.restore(&hint, course.look_sensors());
+                }
+            } else if !just_chosen {
                 player.inject(&game.snapshot(last));
                 if let Some(hint) = game.look_hint(last) {
                     player.look.restore(&hint, course.look_sensors());
@@ -823,10 +836,32 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 .filter_map(|hex| u32::from_str_radix(hex, 16).ok()),
         );
         update_candle_clipping(&mut player, &course, camera.view(frame));
+        let axis = course.mesh.as_ref().and_then(|mesh| {
+            mesh.snap_move
+                .iter()
+                .find(|area| {
+                    !player.grounded
+                        && area
+                            .volume_at(mesh.to_game_vec(player.position_cm()))
+                            .is_some()
+                })
+                .map(|_| Vec3::X)
+        });
+        if let Some(axis) = axis {
+            let input = {
+                let v = Vec3::new(info.direction.x, 0., info.direction.y);
+                v - axis * v.dot(axis)
+            };
+            info.direction = Vec2::new(input.x, input.z);
+        }
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (preroll + frame) as i64;
-        if !course.mesh.as_ref().is_none_or(|mesh| mesh.grab_ceil_bars.is_empty()) {
+        if !course
+            .mesh
+            .as_ref()
+            .is_none_or(|mesh| mesh.grab_ceil_bars.is_empty())
+        {
             recorder = recorder.with_stage(course.mesh.clone());
         }
         rows.push(recorder.record(&info, &mut player));

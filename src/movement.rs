@@ -979,7 +979,9 @@ pub enum Fx {
     RecoveryDamage,
     RecoveryBegin,
     RecoveryWait,
-    GrabCeilSwing { forward: bool },
+    GrabCeilSwing {
+        forward: bool,
+    },
 }
 /// Clip the presentation should play: an original animation name, or "Move"
 /// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
@@ -1305,6 +1307,7 @@ pub struct Player {
     /// The camera's view rows when the orders carry them: the stick is then laid on the world as
     /// `PlayerInput::calcMoveInput` does (`move_input.rs`).
     view: Option<move_input::ViewRows>,
+    snap_move_axis: Option<Vec3>,
     /// The frame (base matrix, inverse) of the collision part the last collision found ground on,
     /// when the stage's export has it: `rs::waitGround` carries the pose along it.
     ground_frame: Option<([f32; 12], [f32; 12])>,
@@ -1485,6 +1488,7 @@ impl Default for Player {
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
             view: None,
+            snap_move_axis: None,
             ground_frame: None,
             ground_part: None,
             ground: GroundMove::default(),
@@ -2780,6 +2784,23 @@ impl Player {
             o.crouch = true;
             o.jump = false;
         }
+        self.snap_move_axis = scene.mesh.as_ref().and_then(|mesh| {
+            mesh.snap_move
+                .iter()
+                .rev()
+                .find(|area| {
+                    !self.grounded
+                        && area
+                            .volume_at(mesh.to_game_vec(self.position_cm()))
+                            .is_some()
+                })
+                .map(|_| Vec3::X)
+        });
+        if let Some(axis) = self.snap_move_axis {
+            let input = Vec3::new(o.direction.x, 0., o.direction.y);
+            let input = vector_lib::verticalize_vec(axis, input);
+            o.direction = Vec2::new(input.x, input.z);
+        }
         self.read_input(&o);
         self.landing_speed = 0.;
         self.nerve.deferred = false;
@@ -2842,6 +2863,7 @@ impl Player {
             && !self.in_damage_state()
             && !self.in_sand_state()
             && !self.stands_on_ledge()
+            && !(self.mode == Move::Idle && self.standing_clip_playing())
             && !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         {
             self.nerve.touchdown = true;
@@ -3203,6 +3225,11 @@ impl Player {
         }
         self.run_frames = 0;
         let step = self.count_wait_step();
+        if !self.grounded && self.standing_clip_playing() {
+            self.wait_nerve(step);
+            self.v.y = (self.v.y - t::GRAVITY).max(-t::FALL_MAX);
+            return;
+        }
         let s = (self.speed_h() - t::NORMAL_MAX / t::BRAKE_FRAMES).max(0.);
         self.set_h(self.facing * s);
         if s <= 0. {
@@ -3245,9 +3272,12 @@ impl Player {
     /// along the slope as the camera sees it, the side axis is across that.
     fn plane_stick(&self, up: Vec3) -> Vec3 {
         if let Some(view) = &self.view {
-            return self
+            let input = self
                 .wall_along
                 .snap(move_input::move_input(self.raw_stick, view, up), up);
+            return self
+                .snap_move_axis
+                .map_or(input, |axis| vector_lib::verticalize_vec(axis, input));
         }
         let stick = self.ground_stick();
         let input = if up == Vec3::Y {
@@ -5172,7 +5202,11 @@ impl Player {
                     if anim != "LandJump3" {
                         self.wait_state_appears_after_landing(arrival);
                     }
-                    self.change(Move::Idle, anim, |p| p.set_h(Vec3::ZERO));
+                    self.change(Move::Idle, anim, |p| {
+                        if p.grounded {
+                            p.set_h(Vec3::ZERO);
+                        }
+                    });
                 }
             }
         }
@@ -5409,6 +5443,7 @@ pub fn self_check() {
     swim_pose::self_check();
     swim_move::self_check();
     pole_pose::self_check();
+    grab_ceil::self_check();
     cap_throw::self_check();
     hip_spring::self_check();
     look_at::self_check();
