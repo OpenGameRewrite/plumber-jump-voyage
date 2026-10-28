@@ -259,7 +259,7 @@ pub fn interp_frames(name: &str, _from: &str) -> f32 {
         "PoleTurn" => 2.,
         "PoleHandStandStart" => 3.,
         "PoleHandStandWait" => 4.,
-        // Both recorded TopEnd entries retain half the outgoing pose for one step.
+        // PlayerAnimation.szs/AnimInterp.byml: PoleHandStandEnd = 2.
         "PoleHandStandEnd" => 2.,
         _ => 0.,
     }

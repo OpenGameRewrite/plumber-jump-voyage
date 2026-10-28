@@ -1952,6 +1952,8 @@ impl Player {
             && !matches!(
                 self.mode,
                 Move::Pole
+                    | Move::Roll
+                    | Move::RollEnd
                     | Move::SlopeSlide
                     | Move::Swim
                     | Move::BurnJump
@@ -2321,6 +2323,7 @@ impl Player {
         // The row reports the fall speed that reached the ground; the ground
         // has already stopped it (the bubble's fall lands by itself).
         if self.nerve.touchdown || self.grounded && self.mode == Move::RecoveryFall {
+            self.touchdown_speed = self.v.y;
             self.v.y = 0.;
         }
         self.spin_fall = s.spin_fall;
@@ -2362,6 +2365,7 @@ impl Player {
         if self.grounded
             && self.v.y == -self.pull
             && !self.mode.in_flight()
+            && !matches!(self.mode, Move::Roll | Move::RollEnd)
             && !self.in_sand_state()
         {
             self.v.y = 0.;
@@ -5175,9 +5179,18 @@ impl Player {
         }
         // A floor with the `Slide` code takes the actor to the slope slide before any landing
         // state (`setNerveOnGround`, `tryChangeNerveFromAir`).
-        if self.try_force_slope_slide() || self.try_force_rolling() {
+        if self.try_force_slope_slide() {
             return;
         }
+        // The original collider retains the incoming velocity. Restore the
+        // vertical part our landing bookkeeping took out before Rolling::appear
+        // reads it; ordinary landing states still replace it themselves.
+        let before = self.v;
+        self.v.y = self.touchdown_speed;
+        if self.try_force_rolling() {
+            return;
+        }
+        self.v = before;
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
         let air_step_ran = self.mode.uses_air_control() && self.air_for == Some(self.mode);

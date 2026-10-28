@@ -72,7 +72,10 @@ impl Player {
         }
         let down = vector_lib::calc_dir_slide(Vec3::NEG_Y, self.collided_ground_normal());
         if down != Vec3::ZERO {
-            self.facing = down;
+            self.set_pose(pose_math::quat_front_up(
+                down,
+                self.collided_ground_normal(),
+            ));
         }
         self.start_roll(RollStart::Forced);
         true
@@ -218,6 +221,8 @@ impl Player {
             && !matches!(
                 self.mode,
                 Move::Pole
+                    | Move::Roll
+                    | Move::RollEnd
                     | Move::SlopeSlide
                     | Move::Swim
                     | Move::BurnJump
@@ -339,6 +344,8 @@ impl Player {
                 || matches!(
                     self.mode,
                     Move::SlopeSlide
+                        | Move::Roll
+                        | Move::RollEnd
                         | Move::Swim
                         | Move::BurnJump
                         | Move::BurnBounce

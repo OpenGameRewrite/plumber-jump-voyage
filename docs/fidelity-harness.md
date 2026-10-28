@@ -1179,7 +1179,25 @@ water, a jump and the expiry after 240 equipment frames).
   These captures establish a native application smoke, not visual or audio parity with SMO.
 
 The `pole-top-end` and `pole-top-end-turn` captures exercise TopEnd from both
-TopWait and TopTurn. Their observed `PoleHandStandEnd` transition retains the
-outgoing pose at half weight for one frame (a two-frame interpolation).
+TopWait and TopTurn. `PlayerAnimation.szs/AnimInterp.byml` sets `PoleHandStandEnd` to 2;
+this retains the outgoing pose at half weight for one frame. The blend is
+asset-derived, and both captures independently verify it.
 The typed contacts include CapHanger and ReactionObject physical overlaps;
 the existing environment rule checks their handlers and consequence markers.
+
+
+Forced rolling uses the automatic actor helper (1.0.0 `0x4229d0`): ActionTrigger8
+and a FrontUp pose from the slide direction and ground normal, followed by
+Rolling::appear (`0x47a988`). Its speed addition projects the actual actor front
+against `calcGroundNormalExceptJustLandOrGravityDir`; the incoming landing
+velocity is preserved. Trigger8 preloads the roll counters and selects Rolling
+before the ordinary Start/trigger17 BoostStart branches. The cached ForceRolling
+judge (+0xb0) bypasses stand-up and jump (`0x47ba50`) and slow UnRoll (`0x47bb98`),
+without acting as synthetic crouch input. Control (`0x47ad4c`) still advances
+counters and resets charge on the actual StartRolling judge.
+
+The collider's form-change carry and velocity sweep share the reached quaternion
+(`PlayerCollider::moveCollide`, `0x430874`, in/out quaternion argument). Reusing the
+old orientation for both sweeps incorrectly swept the large landing tilt twice.
+The port now retains each sweep's reached orientation, including collision rounds.
+No trace values supply movement rules or comparison tolerances.

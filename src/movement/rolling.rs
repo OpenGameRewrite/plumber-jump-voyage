@@ -158,6 +158,10 @@ impl Player {
 
     /// Start rolling (`PlayerStateRolling::appear`, then the first nerve).
     pub(super) fn start_roll(&mut self, kind: RollStart) {
+        // appear calls startHitReactionLandIfLanding(actor, collision, false).
+        if self.is_just_land() {
+            self.events.push(Fx::Land { hard: false });
+        }
         let (nerve, floor_speed, frames, charge, restarts) = match kind {
             RollStart::Normal => (RollNerve::Start, t::ROLL_START, 0, 0, 0),
             RollStart::Boost => (RollNerve::BoostStart, t::ROLL_BOOST, 0, 0, 1),
@@ -181,11 +185,22 @@ impl Player {
             forced: self.on_ground_force_rolling(),
             ..RollControl::default()
         };
-        // GUESS: horizontal application of the forced entrance speed; trace still diverges.
+        // Trigger 8: appear (0x47aa44..0x47aab8) projects the actor front
+        // against the ground normal, except on the first landing frame where
+        // calcGroundNormalExceptJustLandOrGravityDir returns -gravity.
         if kind == RollStart::Forced {
             self.v = self.units_per_frame();
-            let front = self.facing.with_y(0.).normalize_or_zero();
-            let missing = (floor_speed - self.v.dot(front)).max(0.);
+            let up = if self.is_just_land() {
+                Vec3::Y
+            } else {
+                self.floor_up()
+            };
+            let front = pose_math::try_normalize_or_zero(vector_lib::verticalize_vec(
+                up,
+                self.actor_pose().front(),
+            ))
+            .0;
+            let missing = (floor_speed - pose_math::dot(self.v, front)).max(0.);
             self.v += front * missing;
         } else {
             self.raise_speed_along_front(floor_speed);
@@ -243,11 +258,8 @@ impl Player {
         next_clip: Option<&'static str>,
         brake: bool,
     ) {
-        // A row on the ground reports the pull or the fall the floor already
-        // took out of the velocity.
-        if self.grounded {
-            self.v.y = 0.;
-        }
+        // The slope control owns the complete velocity, including its normal
+        // component. Collision does not remove it in the original.
         let clip = next_clip.unwrap_or(self.anim.name);
         let nerve = match clip {
             _ if brake => RollNerve::Brake,
@@ -311,7 +323,8 @@ impl Player {
             effect_on: self.is_on_ground() && self.anim.name == "Rolling",
             effect_called: false,
             frame_kept: false,
-            forced: self.on_ground_force_rolling(),
+            // Cache belongs to appear, not the floor under each injected row.
+            forced: self.rolling.forced,
         };
         if let Some(clip) = next_clip {
             if self.mode == Move::RollEnd {
@@ -362,12 +375,13 @@ impl Player {
         self.roll_move();
         self.rolling.effect_on = self.is_on_ground();
         self.rolling.effect_called = self.rolling.effect_on;
-        // GUESS: forced ground inhibits stand-up; original judge remains to be traced.
+        // exeRolling (0x47ba50) skips both stand-up and jump judges while
+        // appear's ForceRolling cache is set; 0x47bb98 also blocks UnRoll.
         if !o.crouch && !self.rolling.forced && self.rolling.frames >= t::ROLL_FRAMES_MIN {
             self.roll_stand_up();
             return;
         }
-        if self.roll_jump_wanted() {
+        if !self.rolling.forced && self.roll_jump_wanted() {
             self.roll_jump(o);
             return;
         }

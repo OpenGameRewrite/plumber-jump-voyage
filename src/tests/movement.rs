@@ -62,6 +62,7 @@ pub(super) fn run() {
     pound_jump_window();
     dive_from_pound();
     dive_roll_landing();
+    forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump();
     roll_timing_and_boost();
     roll_winds_down();
     roll_boost_needs_the_force_to_fill();
@@ -1759,4 +1760,37 @@ fn original_simulation_trace() {
     );
     #[cfg(not(target_os = "windows"))]
     assert_ne!(hash, 0);
+}
+
+#[cfg_attr(test, test)]
+fn forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump() {
+    let mut p = Player {
+        mode: Move::GroundPound,
+        grounded: true,
+        ground_contact: 1,
+        mesh_ground: Some(Vec3::new(0., 0.8, -0.6)),
+        ..default()
+    };
+    p.touched.floor = Some(crate::geometry::CollisionCodes {
+        floor: "Rolling".into(),
+        ..default()
+    });
+    p.touchdown_speed = -40.;
+    p.land(&Orders::default());
+    assert_eq!(p.mode, Move::Roll);
+    assert_eq!(p.v.y, -40.);
+    assert_eq!(p.v.z, -t::ROLL_START);
+    assert!(
+        p.events
+            .iter()
+            .any(|fx| matches!(fx, Fx::Land { hard: false }))
+    );
+    p.nerve.deferred = false;
+    p.pre_jump = 1;
+    p.roll(&Orders::default());
+    assert_eq!(p.mode, Move::Roll);
+    assert!(
+        !p.nerve.deferred,
+        "cached ForceRolling bypasses stand-up and jump"
+    );
 }

@@ -399,6 +399,19 @@ impl Pose {
             ..*self
         }
     }
+    /// moveCollide writes the reached quaternion back through its argument
+    /// (0x430d2c and the contact loop). A later sweep starts there.
+    fn keep_orientation(&mut self, sweep: &Sweep) {
+        if let Some(tilt) = &mut self.tilt {
+            tilt.from = normalize_quat(crate::movement::plane::slerp(
+                tilt.from,
+                tilt.to,
+                sweep.current,
+            ));
+        } else {
+            self.from_yaw = sweep.yaw(self.from_yaw, self.yaw);
+        }
+    }
     /// `v` turned by the pose (`CollisionShapeInfo*::calcWorldShapeInfo`): each
     /// component `(x*m0 + y*m1) + z*m2`.
     fn rotate(&self, local: Vec3) -> Vec3 {
@@ -1304,7 +1317,7 @@ impl PlayerCollider {
         };
         // Inside, positions are the game's own absolute ones.
         let pos = mesh.to_game_vec(pos);
-        let pose = Pose::new(pos, from_yaw, yaw, tilted);
+        let mut pose = Pose::new(pos, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);
         self.last_tilt = tilt;
         // `collide` forgets the last frame's push directions and the deepest
@@ -1331,12 +1344,13 @@ impl PlayerCollider {
             || (radius - radius_now).abs() >= NEAR_ZERO;
         let mut collided = false;
         if carried {
+            let target = pose.pos;
             collided |= self.move_collide(
                 mesh,
-                &pose,
+                &mut pose,
                 &mut at,
                 (&mut radius, radius_now),
-                pose.pos,
+                target,
                 carry,
                 (range * CARRY_STEP_SCALE).min(LONGEST_STEP),
                 false,
@@ -1346,7 +1360,7 @@ impl PlayerCollider {
         let target = at + velocity;
         collided |= self.move_collide(
             mesh,
-            &pose,
+            &mut pose,
             &mut at,
             (&mut radius, radius_now),
             target,
@@ -1398,7 +1412,7 @@ impl PlayerCollider {
     fn move_collide(
         &mut self,
         mesh: &TriangleMesh,
-        pose: &Pose,
+        pose: &mut Pose,
         at: &mut Vec3,
         (radius, radius_to): (&mut f32, f32),
         target: Vec3,
@@ -1414,6 +1428,7 @@ impl PlayerCollider {
         if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
             *at = sweep.pos();
             *radius = sweep.radius();
+            pose.keep_orientation(&sweep);
             return false;
         }
         let mut rounds = 0;
@@ -1429,6 +1444,7 @@ impl PlayerCollider {
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
+                pose.keep_orientation(&sweep);
                 return true;
             }
             // The push's direction (the reciprocal of its length multiplied in), if it has one.
@@ -1454,18 +1470,21 @@ impl PlayerCollider {
             // A remaining move against the intended one ends the sweep.
             let against = dot(intended, remain);
             if against < 0. && !near_zero(against, NEAR_ZERO) {
+                pose.keep_orientation(&sweep);
                 return true;
             }
             // (`(pz*dz) + ((py*dy) + (px*dx))`: the sum in the machine code's order.)
             let turned_back = previous_direction.z * direction.z
                 + (previous_direction.y * direction.y + previous_direction.x * direction.x);
             if near_zero_vec(remain, NEAR_ZERO) && turned_back < 0. {
+                pose.keep_orientation(&sweep);
                 return true;
             }
             previous_direction = direction;
             // Sweep again from the pose that was in collision to where the
             // corrected body wants to go, skipping the pose already handled.
             let collided_at = *at - fix;
+            pose.keep_orientation(&sweep);
             sweep = Sweep::new(collided_at, *at + remain, step, *radius, radius_to);
             sweep.advance();
             // What the next round is told of this one: how far the pose it
@@ -1478,10 +1497,12 @@ impl PlayerCollider {
             if !self.find_collide_pos(mesh, pose, &mut sweep, &mut results) {
                 *at = sweep.pos();
                 *radius = sweep.radius();
+                pose.keep_orientation(&sweep);
                 return true;
             }
             // The 101st round is the last (the count is tested before it is raised).
             if rounds > MAX_ROUNDS - 1 {
+                pose.keep_orientation(&sweep);
                 return true;
             }
             rounds += 1;

@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn run() {
+    a_carry_keeps_the_orientation_for_the_velocity_sweep();
     standing_is_held_by_the_arrows();
     upright_fall_needs_to_go_below_the_floor();
     crouched_fall_touches_on_arrival();
@@ -367,4 +368,36 @@ fn the_exes_sweep_poses_agree_bit_for_bit() {
         );
     }
     eprintln!("sweep poses checked against the executable: {poses}");
+}
+
+/// The radius-change carry reaches the requested orientation before the
+/// frame's translation starts (moveCollide's quaternion is an in/out argument).
+#[cfg_attr(test, test)]
+fn a_carry_keeps_the_orientation_for_the_velocity_sweep() {
+    let mesh = TriangleMesh::from_corners(&[]);
+    let mut collider = PlayerCollider::default();
+    collider.collide(&mesh, Vec3::ZERO, Vec3::ZERO, 0.);
+    collider.set_form(Form::Mini);
+    let from = Quat::IDENTITY;
+    let to = Quat::from_rotation_x(0.7);
+    let mut pose = Pose::new(Vec3::ZERO, 0., 0., Some(Tilt { from, to }));
+    let mut at = Vec3::ZERO;
+    let mut radius = 160.;
+    assert!(!collider.move_collide(
+        &mesh,
+        &mut pose,
+        &mut at,
+        (&mut radius, 110.),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        35.,
+        false,
+    ));
+    assert_eq!(pose.tilt.unwrap().from, normalize_quat(to));
+    let mut moving = Sweep::new(at, Vec3::NEG_Z * 20., 5., radius, radius);
+    moving.advance();
+    assert_eq!(
+        pose.along(&moving).rotation,
+        rotation_of(normalize_quat(to))
+    );
 }
