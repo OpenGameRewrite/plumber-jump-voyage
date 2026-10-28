@@ -322,10 +322,11 @@ impl Player {
             .min(t::ROLL_RESTART_FORCE),
             restarts,
             air_frames: 0,
-            control: SlideControl {
-                horizontal_velocity: self.v.with_y(0.),
-                ..self.slide_control_setup()
-            },
+            // The contact in this row is newer than the ground the last
+            // control update used. Keep that update's cached normal and
+            // in-plane velocity; rebuilding from the post-move contact
+            // incorrectly rotates the next velocity from the new plane.
+            control: self.rolling.control,
             effect_on: self.is_on_ground() && self.anim.name == "Rolling",
             effect_called: false,
             frame_kept: false,

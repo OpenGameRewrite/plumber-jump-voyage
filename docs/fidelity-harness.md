@@ -1201,3 +1201,20 @@ The collider's form-change carry and velocity sweep share the reached quaternion
 old orientation for both sweeps incorrectly swept the large landing tilt twice.
 The port now retains each sweep's reached orientation, including collision rounds.
 No trace values supply movement rules or comparison tolerances.
+
+
+The forced-roll lockstep restore retains the slide control's preceding ground
+plane, in-plane velocity and appear cache. The row's ground contact is from
+collision after that control update, so using it as the previous plane rotates
+the next velocity incorrectly. Whole-run lockstep still has residuals from the
+approach's run-cycle/pose restoration and initial rolling presentation; the
+hip-drop recording also has a resumed first-collision position/pose residual.
+Pole TopEnd free replay passes, while pole lockstep still lacks complete snap
+and outgoing animation-history restoration. These are diagnostic limits, not
+exemptions from free replay comparison.
+
+A native forced-slope replay was visually inspected at frames92 and110 (local
+`orch-bin/rollpole2-smoke`). Mario rolls in the slope pose and the installed
+rolling effects render. Stage surfaces remain placeholder visuals, with
+oversized/overlapping effect particles and an empty-mesh warning; this smoke
+does not establish stage, lighting or effects fidelity to the game.
