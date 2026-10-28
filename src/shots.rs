@@ -48,6 +48,7 @@ pub struct Driver {
     /// Where the recorded stage placed the sensors the head looks at (replay frame, cm).
     look_sensors: Vec<LookSensor>,
     geometry: Option<Arc<TriangleMesh>>,
+    initial_rocket: crate::movement::rocket_flower::RocketFlowers,
 }
 #[derive(PartialEq)]
 enum Phase {
@@ -65,6 +66,7 @@ impl Driver {
         camera: CameraTrack,
         dir: PathBuf,
         geometry: Option<Arc<TriangleMesh>>,
+        recorded: Option<&crate::trace::TraceFile>,
     ) -> Result<Self, String> {
         if script.shots.is_empty() {
             return Err("the script has no 'shot <frame>...' line".into());
@@ -72,6 +74,8 @@ impl Driver {
         let mut shots = script.shots.clone();
         shots.sort_unstable();
         shots.dedup();
+        let mut player = Player::default();
+        crate::replay::seed_rocket_flowers(&mut player, script, recorded)?;
         Ok(Self {
             frames: script.frames().cloned().collect(),
             camera,
@@ -89,6 +93,7 @@ impl Driver {
                 .as_ref()
                 .map_or_else(Vec::new, |m| m.look_sensors.clone()),
             geometry,
+            initial_rocket: player.rocket,
         })
     }
     /// Where the picture of the frame being captured goes.
@@ -148,6 +153,7 @@ fn begin(
     menu.begun = true;
     orbit.locked = true;
     **player = Player::spawn_facing(Vec3::ZERO, driver.start_yaw_deg);
+    player.rocket = driver.initial_rocket.clone();
     driver.phase = Phase::Loading;
     time.pause();
 }

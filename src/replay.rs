@@ -638,6 +638,23 @@ fn restore_look(player: &mut Player, hint: &LookHint, course: &Course) {
     player.look.restore(hint, &sensors);
 }
 
+pub(crate) fn seed_rocket_flowers(
+    player: &mut Player,
+    script: &Script,
+    recorded: Option<&TraceFile>,
+) -> Result<(), String> {
+    if let Some(seed) = recorded.and_then(|g| g.rocket_seed.as_ref()) {
+        if seed["stage"].as_str() != script.stage.as_deref()
+            || seed["scenario"].as_u64() != script.scenario.map(u64::from)
+            || seed["frame"].as_i64() != Some(-(script.preroll_frames() as i64))
+        {
+            return Err("rocket seed stage/scenario/preroll mismatch".into());
+        }
+        player.seed_rocket_flowers(seed)?;
+    }
+    Ok(())
+}
+
 pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let camera = CameraTrack::new(script, options.camera)?;
     let bindings = Settings::default().bindings;
@@ -756,15 +773,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         .camera
         .or(options.lockstep)
         .and_then(TraceFile::floor_material);
-    if let Some(seed) = recorded.and_then(|g| g.rocket_seed.as_ref()) {
-        if seed["stage"].as_str() != script.stage.as_deref()
-            || seed["scenario"].as_u64() != script.scenario.map(u64::from)
-            || seed["frame"].as_i64() != Some(-(script.preroll_frames() as i64))
-        {
-            return Err("rocket seed stage/scenario/preroll mismatch".into());
-        }
-        player.seed_rocket_flowers(seed)?;
-    }
+    seed_rocket_flowers(&mut player, script, recorded)?;
     let mut recorder = Recorder::new(
         options.table.clone(),
         options.library.clone(),
@@ -1134,8 +1143,8 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
     }
     shots_dir
         .map(|dir| {
-            let camera = CameraTrack::new(&script, camera.as_ref())?;
-            crate::shots::Driver::new(&script, camera, dir.into(), geometry)
+            let track = CameraTrack::new(&script, camera.as_ref())?;
+            crate::shots::Driver::new(&script, track, dir.into(), geometry, camera.as_ref())
         })
         .transpose()
 }
