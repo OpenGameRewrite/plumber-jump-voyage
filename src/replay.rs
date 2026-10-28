@@ -19,6 +19,7 @@ use crate::{
     input::{ACTIONS, Orders, Settings, bound, rotate},
     movement::{
         Course, Player, Solid,
+        look_at::LookHint,
         move_input::{ViewRows, locked_view},
     },
     sound_table::Table,
@@ -630,6 +631,13 @@ fn tick_geysers(course: &mut Course, player: &Player) {
     }
 }
 
+/// Start the player's look-at from a recorded row. The keeper's target is found among the
+/// stage's sensors and the independently ticked RocketFlower sensors the player owns.
+fn restore_look(player: &mut Player, hint: &LookHint, course: &Course) {
+    let sensors = player.rocket_look_sensors(course.look_sensors(), course.mesh.as_deref());
+    player.look.restore(hint, &sensors);
+}
+
 pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let camera = CameraTrack::new(script, options.camera)?;
     let bindings = Settings::default().bindings;
@@ -818,12 +826,12 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             if grab_ceil_transition {
                 player.inject_grab_ceil(&snapshot_with_geometry(game, last, &course));
                 if let Some(hint) = game.look_hint(last) {
-                    player.look.restore(&hint, course.look_sensors());
+                    restore_look(&mut player, &hint, &course);
                 }
             } else if !just_chosen {
                 player.inject(&snapshot_with_geometry(game, last, &course));
                 if let Some(hint) = game.look_hint(last) {
-                    player.look.restore(&hint, course.look_sensors());
+                    restore_look(&mut player, &hint, &course);
                 }
             } else if last > 0 {
                 // A row at step 0 shows a state that was only chosen: its first
@@ -832,7 +840,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 // the row before, with that frame's input.
                 player.inject(&snapshot_with_geometry(game, last - 1, &course));
                 if let Some(hint) = game.look_hint(last - 1) {
-                    player.look.restore(&hint, course.look_sensors());
+                    restore_look(&mut player, &hint, &course);
                 }
                 let before: &[&str] = if last > 1 {
                     &spans[last - 1].buttons

@@ -266,3 +266,111 @@ impl Player {
         self.rocket = c;
     }
 }
+
+pub(super) fn self_check() {
+    checks::run();
+}
+
+mod checks {
+    use super::*;
+
+    pub(super) fn run() {
+        seeds_are_validated_and_take_their_clocks_one_tick_early();
+        the_watcher_keeps_three_flowers_and_displaces_the_oldest();
+        pickup_stops_the_scene_and_expiry_ends_the_equipment();
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn port_checks() {
+        run();
+    }
+
+    fn flower(id: &str) -> Flower {
+        Flower {
+            id: id.into(),
+            host: "flower".into(),
+            position: Vec3::ZERO,
+            phase: 0,
+            step: 0,
+            equip: Vec3::ZERO,
+            valid: false,
+            pending: None,
+            camera_clipped: false,
+            clipped: false,
+        }
+    }
+
+    fn seed(position: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "watcher_step": 7,
+            "flowers": [{"id": "a", "host": "h", "position": position, "step": 5}],
+        })
+    }
+
+    fn seeds_are_validated_and_take_their_clocks_one_tick_early() {
+        let mut player = Player::default();
+        assert!(
+            player
+                .seed_rocket_flowers(&seed(serde_json::json!([1., 2.])))
+                .is_err()
+        );
+        player
+            .seed_rocket_flowers(&seed(serde_json::json!([1., 2., 3.])))
+            .expect("a complete seed");
+        // The recorded clocks are the ones of the frame after the seed's tick.
+        assert_eq!(player.rocket.step, 6);
+        assert_eq!(player.rocket.flowers[0].step, 4);
+        assert_eq!(player.rocket.flowers[0].position, Vec3::new(1., 2., 3.));
+        assert!(!player.rocket.dash);
+    }
+
+    fn the_watcher_keeps_three_flowers_and_displaces_the_oldest() {
+        let mut control = RocketFlowers {
+            flowers: (0..4).map(|i| flower(&format!("f{i}"))).collect(),
+            ..default()
+        };
+        for i in 0..4 {
+            control.equip(i);
+        }
+        assert_eq!(control.equipped, vec![1, 2, 3]);
+        assert!(control.dash && control.equip_request);
+        assert_eq!(control.flowers[0].phase, 0);
+        assert!(!control.flowers[0].valid);
+        assert!(control.flowers[1..].iter().all(|f| f.phase == 3));
+    }
+
+    fn pickup_stops_the_scene_and_expiry_ends_the_equipment() {
+        let course = Course::default();
+        let mut player = Player::default();
+        let mut picked = flower("picked");
+        picked.phase = 1;
+        picked.step = 0;
+        player.rocket.flowers = vec![picked];
+        player.tick_rocket_flowers(&course);
+        // The first Follow step asks the scene to stop for two ticks, which the watcher's
+        // clock (not the flower's) spends on the next tick; with no cap the flower turns
+        // into the equipment item.
+        assert_eq!(player.rocket.pending_stop, 2);
+        assert_eq!(
+            (player.rocket.flowers[0].phase, player.rocket.flowers[0].valid),
+            (2, true)
+        );
+        player.tick_rocket_flowers(&course);
+        assert_eq!(player.scene_stop_ticks(), 2);
+
+        let mut worn = flower("worn");
+        worn.phase = 3;
+        player.rocket = RocketFlowers {
+            flowers: vec![worn],
+            equipped: vec![0],
+            dash: true,
+            step: 239,
+            ..default()
+        };
+        player.tick_rocket_flowers(&course);
+        assert!(player.rocket.ended && !player.rocket.dash);
+        assert!(player.rocket.equipped.is_empty());
+        assert_eq!(player.rocket.flowers[0].phase, 0);
+    }
+}

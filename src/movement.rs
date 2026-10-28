@@ -5549,4 +5549,7 @@ pub fn self_check() {
     hip_spring::self_check();
     look_at::self_check();
     damage::self_check();
+    force_run::self_check();
+    rocket_flower::self_check();
+    surface_run::self_check();
 }

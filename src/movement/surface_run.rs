@@ -43,3 +43,64 @@ impl Player {
         self.move_trans(scene, Vec3::ZERO);
     }
 }
+
+pub(super) fn self_check() {
+    checks::run();
+}
+
+mod checks {
+    use super::*;
+
+    pub(super) fn run() {
+        the_start_judge_needs_a_forced_run_a_surface_and_a_fall();
+        the_sustain_judge_is_enabled_by_the_forced_run_and_then_by_speed();
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn port_checks() {
+        run();
+    }
+
+    fn above_water(distance: f32) -> Player {
+        let mut player = Player::default();
+        player.water_finder.found = true;
+        player.water_finder.distance = distance;
+        player
+    }
+
+    fn the_start_judge_needs_a_forced_run_a_surface_and_a_fall() {
+        let mut player = above_water(3.);
+        player.v.y = -1.;
+        assert!(!player.start_surface_run(), "no forced run");
+        player.force_run.setup(2, 38.);
+        assert!(player.start_surface_run());
+        player.v.y = 1.;
+        assert!(!player.start_surface_run(), "rising");
+        player.v.y = -1.;
+        player.water_finder.distance = -0.5;
+        assert!(!player.start_surface_run(), "the surface is below the player");
+        player.water_finder.distance = -0.0005;
+        assert!(player.start_surface_run(), "the near-zero tolerance");
+        player.water_finder.found = false;
+        assert!(!player.start_surface_run(), "no surface");
+    }
+
+    fn the_sustain_judge_is_enabled_by_the_forced_run_and_then_by_speed() {
+        let mut player = above_water(1.);
+        player.v = Vec3::new(30., 0., 0.);
+        player.update_surface_run();
+        assert!(!player.surface_run.result, "a fast run alone never enabled it");
+        player.force_run.setup(2, 38.);
+        player.update_surface_run();
+        assert!(player.surface_run.enabled && player.surface_run.result);
+        // The enable stays; the forced run may end while the speed keeps the judge true.
+        player.force_run.update();
+        player.force_run.update();
+        player.update_surface_run();
+        assert!(player.surface_run.result, "speed above the dash border");
+        player.v = Vec3::new(20., 0., 0.);
+        player.update_surface_run();
+        assert!(!player.surface_run.result, "the comparison is strict");
+    }
+}

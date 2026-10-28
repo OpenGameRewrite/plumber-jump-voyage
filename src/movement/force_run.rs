@@ -69,3 +69,62 @@ impl Player {
         self.force_run.update();
     }
 }
+
+pub(super) fn self_check() {
+    checks::run();
+}
+
+mod checks {
+    use super::*;
+
+    pub(super) fn run() {
+        the_counter_converges_and_keeps_its_speed();
+        equipment_refreshes_the_counter_and_starts_the_reaction_once();
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn port_checks() {
+        run();
+    }
+
+    fn the_counter_converges_and_keeps_its_speed() {
+        let mut counter = ForceRun::default();
+        assert!(!counter.is_active());
+        counter.setup(2, 38.);
+        assert!(counter.is_active());
+        counter.update();
+        assert_eq!((counter.counter, counter.speed), (1, 38.));
+        counter.update();
+        counter.update();
+        assert_eq!((counter.counter, counter.speed), (0, 38.));
+        assert!(!counter.is_active());
+        // A negative counter (a setter this port does not use) converges up to zero.
+        counter.setup(-2, 12.);
+        counter.update();
+        assert_eq!(counter.counter, -1);
+    }
+
+    fn equipment_refreshes_the_counter_and_starts_the_reaction_once() {
+        let mut player = Player::default();
+        player.query_equipment_force_run();
+        assert!(!player.force_run.is_active(), "no equipment, no forced run");
+        player.rocket.dash = true;
+        player.query_equipment_force_run();
+        assert_eq!(player.force_run.counter, EQUIPMENT_FRAMES);
+        assert_eq!(player.force_run.speed, EQUIPMENT_SPEED);
+        assert_eq!(player.events.len(), 1);
+        // The late decrement takes the window to 1; the next query sets it again and the
+        // reaction does not repeat while the counter is positive.
+        player.update_force_run_counter();
+        assert_eq!(player.force_run.counter, EQUIPMENT_FRAMES - 1);
+        player.query_equipment_force_run();
+        assert_eq!(player.force_run.counter, EQUIPMENT_FRAMES);
+        assert_eq!(player.events.len(), 1);
+        // Without the equipment the window runs out in two updates.
+        player.rocket.dash = false;
+        player.update_force_run_counter();
+        player.update_force_run_counter();
+        assert!(!player.force_run.is_active());
+    }
+}
