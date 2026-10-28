@@ -563,6 +563,14 @@ fn tick_geysers(course: &mut Course, player: &Player) {
                 player.attached_grab_ceil_bar() == Some(bar.id.as_str()),
             );
         }
+        let count = mesh.grab_ceil_bars.len();
+        let first = mesh.look_sensors.len() - count;
+        for i in 0..count {
+            let centre = mesh.grab_ceil_bars[i].centre;
+            let relative = mesh.relative_point(centre.to_array());
+            mesh.look_sensors[first + i].stage_position = centre;
+            mesh.look_sensors[first + i].position = relative;
+        }
     }
 }
 
@@ -818,6 +826,9 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (preroll + frame) as i64;
+        if !course.mesh.as_ref().is_none_or(|mesh| mesh.grab_ceil_bars.is_empty()) {
+            recorder = recorder.with_stage(course.mesh.clone());
+        }
         rows.push(recorder.record(&info, &mut player));
         tick_geysers(&mut course, &player);
         previous = span.buttons.clone();

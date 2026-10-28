@@ -457,6 +457,7 @@ impl Player {
         let first = self.grab_ceil.steps == 0;
         if matches!(nerve, GrabNerve::Jump | GrabNerve::Fall) {
             if first {
+                self.air_turn.reset();
                 let current_vertical = self.v.y;
                 self.air.setup(
                     &mut self.v,
@@ -487,7 +488,8 @@ impl Player {
             self.turn_in_air(push);
             if self.grounded {
                 self.grab_ceil.bar = None;
-                self.hold_to_ground();
+                self.v.y = -t::GRAVITY;
+                self.land(o);
             } else {
                 self.air_actions(o);
             }
@@ -547,7 +549,7 @@ impl Player {
                     + (c.spring.speed * c.spring.speed) / 0.01)
                     .sqrt();
                 let rate = joint_math::calc_rate01(c.spring.angle, -amplitude, amplitude);
-                self.anim.frame = lerp(
+                let frame = lerp(
                     0.5,
                     if c.spring.angle - old_angle > 0. {
                         1.
@@ -556,6 +558,7 @@ impl Player {
                     },
                     rate,
                 ) * 120.;
+                self.anim_rate_change = frame - self.anim.frame;
             }
             let angle = self.grab_ceil.spring.angle;
             let landmark = if angle >= old_angle { 30. } else { -30. };
@@ -594,7 +597,7 @@ impl Player {
         let direction = if c.initial {
             1.
         } else if c.spring.angle.abs() > 10. {
-            c.spring.angle.signum()
+            -c.spring.angle.signum()
         } else {
             -c.spring.speed.signum()
         };
@@ -620,7 +623,8 @@ impl Player {
         self.v += front * if jump { direction * 15. } else { -1. };
         self.grab_ceil.gravity = if jump { 1. } else { 1.2 };
         self.grab_ceil.invalid = if jump { 10 } else { 0 };
-        self.collider.invalidate(self.facing.x.atan2(self.facing.z));
+        self.collider.reset_expand_check(self.facing.x.atan2(self.facing.z));
+        self.catch_collider_at = None;
         self.set_grab_ceil_nerve(
             if jump {
                 GrabNerve::Jump

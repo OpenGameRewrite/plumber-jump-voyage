@@ -2876,7 +2876,11 @@ impl Player {
                 }
                 self.appear_sand_sink();
             } else {
-                self.land(o);
+                if self.mode == Move::GrabCeil {
+                    self.grab_ceil_step(o);
+                } else {
+                    self.land(o);
+                }
             }
         }
     }

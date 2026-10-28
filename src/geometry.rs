@@ -397,6 +397,11 @@ impl TriangleMesh {
                     active: false,
                 });
         }
+        mesh.look_sensors.extend(look_sensors_from_export(&serde_json::Value::Array(
+            root["grab_ceil_bars"].as_array().into_iter().flatten().map(|source| {
+                serde_json::json!({"host": source["host"], "name": "Snap", "type": 12,
+                    "radius": 150., "position": source["position"]})
+            }).collect()), origin));
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
         for source in root["sand_geysers"].as_array().into_iter().flatten() {
             let id = source["id"].as_str().ok_or("geyser id")?;
