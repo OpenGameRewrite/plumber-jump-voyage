@@ -404,6 +404,14 @@ The head follows a nearby sensor the way the original's `PlayerEyeSensorHitHolde
   state's test for its own nerve: the run, the brake and the run after a turn may look, the turn
   and the pivot (`TurnPoint`) may not. The mode follows the nerve chosen in the same step, a step
   before the clip starts (`spin-ground-restart`, `land-down-fall-zl`). The wall push is not ported.
+* **Frame order.** The holder (`attackSensor`) runs in the sensor phase, before the player's own
+  movement: the eye sensor is where the previous frame left it, for the overlap and for the
+  distances compared against the other sensors' positions of this frame, and the keeper then reads
+  the candidate that phase left (`rocket-ground-start`: a flower's `Equip` sensor trailing a
+  running player takes the candidate back and forth with the static `Body`). Static sensors give
+  the same rows as the older "current eye, keeper a frame later" reading. The keeper does not run
+  in the player's very first movement: the first preroll row of every recording has `mode=0`
+  (inferred from those rows; the flag behind it is unresolved).
 * **Columns.** `look_keeper`, `look_sensors` (the holder's candidate and the keeper's target as
   `host/sensor/type`) and `look_target` (the stage position asked for this frame) follow the probe's
   format. `head_q` is the head joint's world rotation after the look-at. `head_pos` (the animated
@@ -1067,7 +1075,8 @@ reversal, small steering, jump/landing, squat braking and rolling/stand-up.
 Code22 slope drive and wall braking are ported but unverified by these recordings.
 Squat side steering on slopes and SpinCap's special ice entry/reaction remain
 outside this recording coverage; the latter entry/reaction is not yet ported.
-ForceRun/water-surface overrides, 2D hold rules and Slip24 remain unresolved here.
+2D hold rules and Slip24 remain unresolved here. ForceRun and the water-surface run are
+ported from the RocketFlower recordings (next section).
 
 The exported infinite TemperatureArea(-3) selects WaitVeryCold through the
 existing area handling; its original36-frame loop shows the end frame for one
@@ -1095,3 +1104,50 @@ Rendered `--shots` now retains the loaded collision export (including its areas)
 and the same per-frame input view as the headless replay. Previously it silently
 ran on the default flat floor, so a stage-relative recorded camera could lose
 Mario. Stage meshes still provide collision rather than stage visual assets.
+
+## RocketFlower equipment, forced run and water-surface run
+
+Four recordings (`rocket-ground-start`, `rocket-water-run`, `rocket-water-jump`,
+`rocket-equipment-expiry`) start at `IceWaterDashExStage` scenario 1 with Cappy thrown at a
+RocketFlower (pickup at row 45), the equipment worn from row 98 (Mario's forced run to the
+water, a jump and the expiry after 240 equipment frames).
+
+* **Source.** `src/movement/rocket_flower.rs` owns the flower and the equipment watcher as an
+  independently ticked source, seeded from `game.rocket_seed.json` (the flower's and watcher's
+  actor state at preroll start; no Mario row is read). Frame order, evidenced by the side files
+  (`game.rocket_flowers.csv`, `game.rocket_watcher.csv`): flower and watcher movement (they read
+  the head and cap of the frame before), Cappy, the sensor phase (cap pickup of a `Wait` flower
+  against the placed `Body`; the `Equip` overlap with Mario's `Body`/`Head`, which requests the
+  equipment), then Mario's movement. The first `Follow` step of a pickup asks for two scene-stop
+  ticks that advance only the watcher's clock (the effect age too), as the logic-counter gap
+  shows. The watcher drops the oldest of three flowers (or ends) when its clock reaches
+  `step % 240 == 239`. Only the upright, unlinked, unit-scale composition is supported;
+  `tools/export-rocket-flowers.py` installs the placement and seed into the stage export (back
+  the export up first) and `tools/rocket_flower.py` is the environment rule's evidence.
+* **Environment rule.** `tools/environment_rule.py` accepts the flower/equipment contacts only
+  when the export names the exact flower, the placement matches the original `InitSensor`
+  records and the rewrite reproduces its pickup, phase, equip request, refresh and expiry frames
+  (`rocket-*`: "accepted exported RocketFlower equipment"). Every other actor contact stays refused.
+* **ForceRun.** `src/movement/force_run.rs` is `PlayerCounterForceRun`: while the watcher holds
+  equipment, `movement` sets the counter to 2 and the speed to 38 before the state choice (the
+  reaction `強制走り開始` starts when it was not positive) and the late update takes it down by
+  one, so 2 is a refresh window and the watcher decides the duration. GroundMove then runs with
+  the forced stick (unit direction, or the turn controller's facing at neutral), the Force turn
+  parameters, no reversing brake and the speed floored at 38; squatting is refused; jumps use
+  `JumpPowerForceRun` 18, `JumpGravityForceRun` 1 and the `JumpDashFast` clip.
+* **Water-surface run.** `src/movement/surface_run.rs` ports the start judge (counter > 0, found
+  surface at distance >= 0 or within 0.001, falling) and the sustain judge (enabled by a positive
+  counter, then counter > 0 or horizontal speed > 20) from the exported `WaterArea`, and the
+  surface response of the Run wrapper (`SwimRunSurface*`: upward velocity toward the surface by
+  the approach rate, clamped to 5, plus the finder's displacement, which is zero for the area
+  finder). The fall judge is suppressed while the start judge holds.
+* **Presentation of the first run row.** The `CatchCap` partial animation outlives the sub
+  animation a forced run ends (`Recorder::upper_outlives_sub`): the main clip's own blend is
+  reported again (`WaitVeryCold` into `Move`), which hiding it behind any sub animation did not.
+* **Results.** The four recordings pass the free replay with 0 failing columns. Lockstep still
+  fails a few columns: the standing spin-cap at rows 46-61 (also with the previous build: the
+  injected state lacks the throw's hidden recoil and the cold-area `AreaAnimWait` choice), and,
+  because the flower follows Mario's head, the look/`head_q`/run-footstep columns that inherit the
+  blend error of the first run rows. Guessed or unverified: camera clipping of the flowers
+  (the exported 16:9 side-plane test, radius 300), the first-movement idle keeper, flowers other
+  than the one exported, equipment while Mario is carried or bound.

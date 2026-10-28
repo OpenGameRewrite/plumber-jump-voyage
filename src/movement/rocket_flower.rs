@@ -353,7 +353,10 @@ mod checks {
         // into the equipment item.
         assert_eq!(player.rocket.pending_stop, 2);
         assert_eq!(
-            (player.rocket.flowers[0].phase, player.rocket.flowers[0].valid),
+            (
+                player.rocket.flowers[0].phase,
+                player.rocket.flowers[0].valid
+            ),
             (2, true)
         );
         player.tick_rocket_flowers(&course);

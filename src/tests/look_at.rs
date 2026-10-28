@@ -4,6 +4,7 @@ pub(super) fn run() {
     the_states_that_may_look_are_the_originals();
     clipping_invalidates_the_holder_until_the_sensor_returns();
     the_holder_keeps_the_nearest_sensor_the_eye_overlaps();
+    the_holder_compares_distances_from_the_eye_of_the_frame_before();
     the_keeper_takes_a_target_in_reach_and_asks_for_it();
     the_keeper_drops_a_target_that_leaves_the_gate_after_forty_frames();
     a_nearer_sensor_replaces_the_target_and_a_state_without_look_ends_it();
@@ -83,17 +84,30 @@ fn the_holder_keeps_the_nearest_sensor_the_eye_overlaps() {
 }
 
 #[cfg_attr(test, test)]
+fn the_holder_compares_distances_from_the_eye_of_the_frame_before() {
+    let sensors = [
+        sensor("a", Vec3::new(0., 80., 100.)),
+        sensor("b", Vec3::new(0., 80., -100.)),
+    ];
+    let mut look = LookAt::default();
+    look.step(&actor_at(Vec3::ZERO), false, &sensors);
+    assert_eq!(look.sensors_cell(&sensors), "candidate=a/Body/12");
+    // The eye moves next to "b", but the sensor phase still sees it where it was: a tie
+    // keeps the candidate. A step later the new position decides.
+    look.step(&actor_at(Vec3::new(0., 0., -300.)), false, &sensors);
+    assert_eq!(look.sensors_cell(&sensors), "candidate=a/Body/12");
+    look.step(&actor_at(Vec3::new(0., 0., -300.)), false, &sensors);
+    assert_eq!(look.sensors_cell(&sensors), "candidate=b/Body/12");
+}
+
+#[cfg_attr(test, test)]
 fn the_keeper_takes_a_target_in_reach_and_asks_for_it() {
     let sensors = [sensor("coin", Vec3::new(0., 90., 300.))];
     let mut look = LookAt::default();
     look.set_head_position(Vec3::new(0., 90., 0.));
     let actor = actor_at(Vec3::ZERO);
-    // The first step records the candidate; the keeper takes it at the next.
-    look.step(&actor, true, &sensors);
-    assert_eq!(
-        look.keeper_cell(),
-        "mode=1;count=-1;suppress=0;headjoint=14;requested=0;ctrlmode=0;accept=1"
-    );
+    // The sensor phase records the candidate and the keeper, running after it in the same
+    // step, takes it.
     look.step(&actor, true, &sensors);
     assert_eq!(
         look.keeper_cell(),
@@ -114,7 +128,6 @@ fn the_keeper_drops_a_target_that_leaves_the_gate_after_forty_frames() {
     let mut look = LookAt::default();
     let actor = actor_at(Vec3::ZERO);
     look.set_head_position(Vec3::new(0., 90., 0.));
-    look.step(&actor, true, &sensors);
     // Taken, then the head moves 1000 cm away: the request goes on without the gate while the
     // counter is at most 39 and stops at the first check after that.
     look.step(&actor, true, &sensors);

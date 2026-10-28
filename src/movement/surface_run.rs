@@ -79,7 +79,10 @@ mod checks {
         assert!(!player.start_surface_run(), "rising");
         player.v.y = -1.;
         player.water_finder.distance = -0.5;
-        assert!(!player.start_surface_run(), "the surface is below the player");
+        assert!(
+            !player.start_surface_run(),
+            "the surface is below the player"
+        );
         player.water_finder.distance = -0.0005;
         assert!(player.start_surface_run(), "the near-zero tolerance");
         player.water_finder.found = false;
@@ -90,7 +93,10 @@ mod checks {
         let mut player = above_water(1.);
         player.v = Vec3::new(30., 0., 0.);
         player.update_surface_run();
-        assert!(!player.surface_run.result, "a fast run alone never enabled it");
+        assert!(
+            !player.surface_run.result,
+            "a fast run alone never enabled it"
+        );
         player.force_run.setup(2, 38.);
         player.update_surface_run();
         assert!(player.surface_run.enabled && player.surface_run.result);
