@@ -713,9 +713,8 @@ log how far the drawn joints are from the traced ones, measured in the frame of 
 plumber-jump-voyage --replay run.input --shots runs/name [--camera game.csv]
 ```
 
-Plays the script in the real game (the game-data build shows the original
-Mario) on the same flat floor (with `--geometry-dir` the stage's look-at sensors are marked by
-yellow rings, though the stage itself is not drawn), one simulation step per update, and saves
+Plays the script in the application (the game-data build shows the original
+Mario), one simulation step per update, and saves
 `rewrite-<frame>.png` for every frame a `shot` line lists, showing the state
 after that frame. The window is 1600x900 (scale factor 1), the size of the
 real game's screenshots. The course HUD is hidden. Time stops during a
@@ -723,8 +722,10 @@ capture so the picture is exact. Mario's outfit follows the saved settings
 (`PJV_SAVE` picks another file; the default is the classic one).
 `PJV_REPLAY_WARMUP` sets the seconds of loading before the script starts.
 Two runs give identical pictures. `--trace` can be given as well. The
-real-game scripts' `stage`, `outfit` and `hud` header lines are accepted and
-ignored.
+`stage` selects the collision export with `--geometry-dir`; `--geometry` selects
+an export directly. Collision follows that export, while the rendered floor and
+scenery remain placeholders. Exported look-at sensors are marked by yellow rings.
+The real-game scripts' `outfit` and `hud` header lines are accepted and ignored.
 
 With `--camera game.csv` the camera of each picture is the real game's for
 that frame: `cam_px/py/pz` (cm, relative to the start, so metres from the
@@ -1122,12 +1123,19 @@ water, a jump and the expiry after 240 equipment frames).
   ticks that advance only the watcher's clock (the effect age too), as the logic-counter gap
   shows. The watcher drops the oldest of three flowers (or ends) when its clock reaches
   `step % 240 == 239`. Only the upright, unlinked, unit-scale composition is supported;
+  the watcher constructs its orientation with `makeQuatFrontUp(headSide,-headUp)` and
+  `lineUp` rotates the three basis vectors by that quaternion before spacing the flowers.
+  The Equip sensor sees that pose on the next source update. Quaternion round-trip and
+  arithmetic order are checked against the executable, including non-unit input.
   `tools/export-rocket-flowers.py` installs the placement and seed into the stage export (back
   the export up first) and `tools/rocket_flower.py` is the environment rule's evidence.
 * **Environment rule.** `tools/environment_rule.py` accepts the flower/equipment contacts only
   when the export names the exact flower, the placement matches the original `InitSensor`
   records and the rewrite reproduces its pickup, phase, equip request, refresh and expiry frames
-  (`rocket-*`: "accepted exported RocketFlower equipment"). Every other actor contact stays refused.
+  (`rocket-*`: "accepted exported RocketFlower equipment"). Evidence also checks raw/effective
+  nerves, generation, sensor float bits, clipping, duplicate samples and actual pickup/equip
+  overlaps. Physical flower contacts must overlap the independently simulated source as well
+  as the observed sensor. Unknown source identities and messages retain the existing refusal.
 * **ForceRun.** `src/movement/force_run.rs` is `PlayerCounterForceRun`: while the watcher holds
   equipment, `movement` sets the counter to 2 and the speed to 38 before the state choice (the
   reaction `強制走り開始` starts when it was not positive) and the late update takes it down by
@@ -1140,14 +1148,32 @@ water, a jump and the expiry after 240 equipment frames).
   counter, then counter > 0 or horizontal speed > 20) from the exported `WaterArea`, and the
   surface response of the Run wrapper (`SwimRunSurface*`: upward velocity toward the surface by
   the approach rate, clamped to 5, plus the finder's displacement, which is zero for the area
-  finder). The fall judge is suppressed while the start judge holds.
+  finder). The fall judge is suppressed while the start judge holds, or while Run's enabled
+  sustain result holds; a cached Run result cannot keep unrelated states afloat.
 * **Presentation of the first run row.** The `CatchCap` partial animation outlives the sub
   animation a forced run ends (`Recorder::upper_outlives_sub`): the main clip's own blend is
   reported again (`WaitVeryCold` into `Move`), which hiding it behind any sub animation did not.
-* **Results.** The four recordings pass the free replay with 0 failing columns. Lockstep still
-  fails a few columns: the standing spin-cap at rows 46-61 (also with the previous build: the
-  injected state lacks the throw's hidden recoil and the cold-area `AreaAnimWait` choice), and,
-  because the flower follows Mario's head, the look/`head_q`/run-footstep columns that inherit the
-  blend error of the first run rows. Guessed or unverified: camera clipping of the flowers
-  (the exported 16:9 side-plane test, radius 300), the first-movement idle keeper, flowers other
-  than the one exported, equipment while Mario is carried or bound.
+* **Lockstep.** Reconstructing a chosen Mario nerve does not advance the independent source
+  clocks or deliver its sensor messages again. Only lockstep restores the preceding observed
+  player head pose; the source phases and sensor centres remain simulated. The water finder
+  is recomputed from the injected position and exported area. Forced ground/air controllers
+  retain their hidden steering history; reconstructing `JumpDashFast` retains gravity 1 and
+  the forced horizontal-speed limit. An ongoing catch retains the clip selected at arrival,
+  even when equipment changes Mario's state.
+* **Results.** All four recordings pass the free replay with 0 failing columns and no excluded
+  frames. Lockstep failing-column counts are 9 ground-start and 12 each water-run, water-jump
+  and equipment-expiry. The physical water entry, forced jump and expiry tail match; remaining
+  failures concern the standing throw's unrecorded recoil at rows 46-55, the cold-area Wait
+  choice at row 55, and the resulting blend, head rotation and water footstep reconstruction.
+  These are residuals, not a lockstep PASS claim.
+* **Coverage and presentation limits.** The flower's radius 300 is from its original
+  `InitClipping.byml`. Applying the existing 16:9 side-plane formula to it is inferred and
+  reproduces this fixture's clip flags; near/far planes and arbitrary camera roll remain
+  unverified. Guess: the first-movement idle keeper gate is inferred from initial samples,
+  without a resolved original flag. Other flowers, carried/bound Mario, capture cancellation,
+  and eventual slowing into swimming or ice damage remain unverified. Rendered replay seeds
+  the same independent source and shows the original Mario with installed assets. It requires
+  the original head joint for equipment following; the ROMless explorer has no such joint.
+  The stage/water and equipped flower models are not drawn, the placeholder floor occludes
+  Mario below its height, and existing run/water effects render oversized overlapping geometry.
+  These captures establish a native application smoke, not visual or audio parity with SMO.
