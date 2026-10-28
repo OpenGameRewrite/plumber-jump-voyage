@@ -1360,7 +1360,11 @@ impl PlayerCollider {
         // direction the move keeps what it asked for, whatever the contacts pushed.
         let last = at;
         let mut moved = last - pose.pos;
-        if !near_zero_vec(self.cut_direction, NEAR_ZERO) {
+        if self.form == Form::GrabCeil {
+            // changeCollisionGrabCeil sets PlayerCollider +0x10e: still gather
+            // contacts, but keep the actor's requested move and reset the saved pose.
+            moved = velocity;
+        } else if !near_zero_vec(self.cut_direction, NEAR_ZERO) {
             let cut = self.cut_direction;
             moved = across(moved, cut);
             let kept = dot(cut, velocity);

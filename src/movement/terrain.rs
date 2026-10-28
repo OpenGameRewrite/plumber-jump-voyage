@@ -193,7 +193,8 @@ impl Player {
             velocity = self.ground_following();
             self.ground_move = Some((Vec2::new(self.v.x, self.v.z), self.pull, velocity));
         }
-        if let Some(force) = self.grab_ceil.snap_force {
+        if let Some(force) = self.grab_ceil.snap_force
+            && !(self.mode == Move::GrabCeil && self.grab_ceil.is_form()) {
             velocity = force;
         }
         let yaw = self.facing.x.atan2(self.facing.z);
@@ -342,6 +343,7 @@ impl Player {
         if collider.ceiling.is_some()
             && self.v.y > 0.
             && !matches!(self.mode, Move::SlopeSlide | Move::Swim)
+            && self.touched.ceiling.as_ref().is_none_or(|c| c.floor != "GrabCeil")
         {
             self.v.y = 0.;
             // A hit head ends the jump's extend window.

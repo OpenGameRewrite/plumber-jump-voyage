@@ -251,6 +251,8 @@ pub fn interp_frames(name: &str, _from: &str) -> f32 {
         // Recorded on the lake floor (`swim-lake-forward`): the stroke's clip hands over to the
         // forward swim over fourteen steps.
         "SwimStandMove" => 14.,
+        "GrabCeilWait" => 15.,
+        "GrabCeilSwing" => 10.,
         "PoleWait" => 8.,
         // Recorded on the pole (`pole-climb`, `pole-top`): the turn round the
         // pole after the slide, and the handstand's start and wait.
@@ -364,6 +366,7 @@ pub fn looping(name: &str) -> bool {
             | "WallCatch"
             | "WallCatchMoveL"
             | "WallCatchMoveR"
+            | "GrabCeilWait"
             | "PoleWait"
             | "PoleClimb"
             | "PoleFall"

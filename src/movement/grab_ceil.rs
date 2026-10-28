@@ -28,7 +28,7 @@ impl GrabCeilBar {
         };
         if let Some(next) = next {
             self.phase = next;
-            self.step = 0;
+            self.step = if next == 0 { 0 } else { 1 };
         } else {
             self.step += 1;
         }
@@ -190,6 +190,7 @@ pub(super) struct GrabCeilControl {
     pub bar: Option<String>,
     pub root_offset: Vec3,
     pub snap_force: Option<Vec3>,
+    sources: String,
 }
 impl GrabCeilControl {
     pub(super) fn is_form(&self) -> bool {
@@ -245,6 +246,17 @@ impl Player {
                 self.grab_ceil.snap_force = Some(force);
             }
         }
+    }
+    pub fn grab_ceil_sources(&self) -> &str { &self.grab_ceil.sources }
+    pub(super) fn sample_grab_ceil_sources(&mut self, scene: &Course) {
+        let Some(mesh) = &scene.mesh else { return };
+        self.grab_ceil.sources = mesh.grab_ceil_bars.iter().map(|b| {
+            let attached = self.attached_grab_ceil_bar() == Some(b.id.as_str());
+            let phase = if b.active && b.phase == 0 && attached { 1 } else if b.active && b.phase == 1 && !attached { 2 } else { b.phase };
+            let step = if phase != b.phase { -1 } else { b.step as i32 };
+            format!("{}/{}/{}/{:08x}/{:08x}/{:08x}/{}", b.id, phase, step,
+                b.centre.x.to_bits(), b.centre.y.to_bits(), b.centre.z.to_bits(), u8::from(b.active))
+        }).collect::<Vec<_>>().join("|");
     }
     pub fn attached_grab_ceil_bar(&self) -> Option<&str> {
         (self.mode == Move::GrabCeil)
@@ -472,8 +484,7 @@ impl Player {
                     turn: t::JUMP_ACCEL_TURN,
                 },
             );
-            self.facing = self.air.turn_facing(self.facing, push);
-            self.pose_tilt = None;
+            self.turn_in_air(push);
             if self.grounded {
                 self.grab_ceil.bar = None;
                 self.hold_to_ground();
@@ -514,7 +525,7 @@ impl Player {
             let c = &mut self.grab_ceil;
             let drive = c
                 .spring
-                .drive(input, nerve == GrabNerve::Swing, c.initial, c.wait);
+                .drive(input, nerve == GrabNerve::Swing, c.wait, c.initial);
             let e = energy(c.spring.angle, c.spring.speed);
             if c.wait {
                 if drive || c.wait_counter > 0 {
@@ -545,6 +556,11 @@ impl Player {
                     },
                     rate,
                 ) * 120.;
+            }
+            let angle = self.grab_ceil.spring.angle;
+            let landmark = if angle >= old_angle { 30. } else { -30. };
+            if (angle + landmark) * (old_angle + landmark) < -0.1 {
+                self.events.push(Fx::GrabCeilSwing { forward: old_angle >= 0. });
             }
             match nerve {
                 GrabNerve::Start
@@ -585,14 +601,25 @@ impl Player {
         let front = c.original_front;
         self.start_clip(if jump { "GrabCeilJump" } else { "Fall" });
         self.interpolation_cleared = true;
-        let root = self.grab_ceil.root_offset;
+        let mut root = self.grab_ceil.root_offset;
+        if jump {
+            let old = self.actor_pose();
+            let local = Vec3::new(pose_math::dot(root, old.side()),
+                pose_math::dot(root, old.up()), pose_math::dot(root, old.front()));
+            let c = &self.grab_ceil;
+            let angle = -direction * 135.;
+            let up = pose_math::normalize(rotate(c.original_front.cross(c.side), c.side, angle));
+            let front = pose_math::normalize(rotate(c.original_front, c.side, angle));
+            self.set_pose(snap::Snap::orientation(front, up));
+            let pose = self.actor_pose();
+            root = pose.side() * local.x + pose.up() * local.y + pose.front() * local.z;
+        }
         self.pos += root * UNIT;
         self.collider_end = None;
         self.v = Vec3::Y * if jump { 20. } else { 3. };
         self.v += front * if jump { direction * 15. } else { -1. };
         self.grab_ceil.gravity = if jump { 1. } else { 1.2 };
         self.grab_ceil.invalid = if jump { 10 } else { 0 };
-        self.grab_ceil.bar = None;
         self.collider.invalidate(self.facing.x.atan2(self.facing.z));
         self.set_grab_ceil_nerve(
             if jump {

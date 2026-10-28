@@ -142,6 +142,7 @@ pub fn collision_cell(p: &Player) -> String {
             .map_or(p.wall, |contact| contact.normal);
         items.push(format!("wn={}", vector(normal)));
     }
+    if !p.grab_ceil_sources().is_empty() { items.push(format!("grabceil={}", p.grab_ceil_sources())); }
     if !p.geyser_sources().is_empty() {
         items.push(format!("geysers={}", p.geyser_sources()));
     }

@@ -979,6 +979,7 @@ pub enum Fx {
     RecoveryDamage,
     RecoveryBegin,
     RecoveryWait,
+    GrabCeilSwing { forward: bool },
 }
 /// Clip the presentation should play: an original animation name, or "Move"
 /// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
@@ -2847,6 +2848,7 @@ impl Player {
             self.touchdown_speed = self.landing_speed;
         }
         self.queue_sand_geyser(scene);
+        self.sample_grab_ceil_sources(scene);
         self.check_death_area(scene);
         self.update_recovery_point(scene);
         self.finish_frame(scene);

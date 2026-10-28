@@ -33,7 +33,7 @@ def main():
     for obj in placement.get('ObjectList', []):
         if (obj['UnitConfigName'] != 'PoleGrabCeil'
                 or obj.get('IsConnectToCollision') is not False
-                or obj.get('IsConnectPose') is not False or obj.get('Links')
+                or obj.get('IsConnectPose') is not False or set(obj.get('Links', {})) - {'ViewGroup'}
                 or any(obj['Rotate'][a] != 0 or obj['Scale'][a] != 1 for a in 'XYZ')):
             continue
         part = next((p for p in geometry['objects'] if p['id'] == obj['Id']), None)
@@ -59,7 +59,7 @@ def main():
     looks[:] = [s for s in looks if s.get('source') != 'stationary_coin_ring']
     for obj in placement.get('ObjectList', []):
         if (obj['UnitConfigName'] == 'CoinRing' and obj.get('MoveType') == 0
-                and not obj.get('Links') and obj.get('IsConnectToCollision') is False
+                and not (set(obj.get('Links', {})) - {'ViewGroup'}) and obj.get('IsConnectToCollision') is False
                 and all(obj['Rotate'][a] == 0 and obj['Scale'][a] == 1 for a in 'XYZ')):
             looks.append(dict(source='stationary_coin_ring', id=obj['Id'], host=obj['UnitConfig']['DisplayName'],
                               name='Body', type=12, radius=140., position=[obj['Translate'][a] for a in 'XYZ']))
