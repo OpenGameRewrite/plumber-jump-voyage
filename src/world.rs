@@ -313,9 +313,8 @@ fn setup(
         Transform::default(),
     ));
     if replay.is_some() {
-        // A rendered replay runs on the same flat floor as the headless one,
-        // bare and dirt-coloured like the plateau the real game's reference
-        // pictures were taken on, so only Mario and his effects draw the eye.
+        // The driver installs the replay collision scene in PostStartup.
+        // Stage visuals still use a plain floor so Mario/effects remain visible.
         *course = crate::replay::flat_floor();
         let [r, g, b] = look::replay_soil();
         // Dry earth: matte, with no sheen of the sky on it.

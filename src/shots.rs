@@ -1,4 +1,4 @@
-//! Rendered replay: the windowed game plays a replay script on the flat floor
+//! Rendered replay: the windowed game plays a replay script in its collision scene
 //! and saves a screenshot of every frame the script lists with `shot`.
 //!
 //! ```text
@@ -11,6 +11,7 @@
 //! the picture is the state after the listed frame. Pictures are written as
 //! `rewrite-<frame>.png`. The camera's smoothing is real-time, so it settles
 //! during the pause; its pitch and distance are the game's defaults.
+use crate::geometry::TriangleMesh;
 use crate::{
     input::{Orders, Settings},
     movement::{Course, ExactFrames, Player, UNIT, look_at::LookSensor},
@@ -23,6 +24,7 @@ use bevy::{
     render::view::screenshot::{Screenshot, save_to_disk},
     time::TimeUpdateStrategy,
 };
+use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
 /// Updates a paused capture waits for the camera to settle (a second and a half).
@@ -45,6 +47,7 @@ pub struct Driver {
     phase: Phase,
     /// Where the recorded stage placed the sensors the head looks at (replay frame, cm).
     look_sensors: Vec<LookSensor>,
+    geometry: Option<Arc<TriangleMesh>>,
 }
 #[derive(PartialEq)]
 enum Phase {
@@ -61,7 +64,7 @@ impl Driver {
         script: &Script,
         camera: CameraTrack,
         dir: PathBuf,
-        look_sensors: Vec<LookSensor>,
+        geometry: Option<Arc<TriangleMesh>>,
     ) -> Result<Self, String> {
         if script.shots.is_empty() {
             return Err("the script has no 'shot <frame>...' line".into());
@@ -82,7 +85,10 @@ impl Driver {
             finished: 0,
             next_shot: 0,
             phase: Phase::Loading,
-            look_sensors,
+            look_sensors: geometry
+                .as_ref()
+                .map_or_else(Vec::new, |m| m.look_sensors.clone()),
+            geometry,
         })
     }
     /// Where the picture of the frame being captured goes.
@@ -137,6 +143,7 @@ fn begin(
     mut course: ResMut<Course>,
 ) {
     course.look_sensors = driver.look_sensors.clone();
+    course.mesh = driver.geometry.clone();
     menu.open = false;
     menu.begun = true;
     orbit.locked = true;
@@ -165,7 +172,12 @@ fn follow_game_camera(
     }
 }
 /// The orders of the step about to run.
-fn feed(mut driver: ResMut<Driver>, mut orders: ResMut<Orders>) {
+fn feed(
+    mut driver: ResMut<Driver>,
+    mut orders: ResMut<Orders>,
+    course: Res<Course>,
+    mut player: Single<&mut Player>,
+) {
     let tick = driver.started;
     driver.started += 1;
     let Some(frame) = tick.checked_sub(driver.preroll) else {
@@ -176,7 +188,7 @@ fn feed(mut driver: ResMut<Driver>, mut orders: ResMut<Orders>) {
         *orders = Orders::default();
         return;
     };
-    let (next, _) = orders_for(
+    let (mut next, _) = orders_for(
         &span,
         &driver.previous,
         driver.camera.yaw_deg(frame),
@@ -184,6 +196,8 @@ fn feed(mut driver: ResMut<Driver>, mut orders: ResMut<Orders>) {
         driver.camera.aim_gain(frame),
         &driver.bindings,
     );
+    next.view = driver.camera.view_rows(frame);
+    crate::replay::update_static_clipping(&mut player, &course, driver.camera.view(frame));
     *orders = next;
     driver.previous = span.buttons;
 }

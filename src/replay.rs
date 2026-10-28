@@ -538,7 +538,7 @@ fn snapshot_with_geometry(
 /// Static InitClipping spheres use FrustumRadar's four side planes. The camera
 /// uses CameraPoseUpdater's original 16:9 aspect. Near/far/group clipping and
 /// arbitrary camera roll remain outside these recorded fixtures' coverage.
-fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<View>) {
+pub(crate) fn update_static_clipping(player: &mut Player, course: &Course, view: Option<View>) {
     let Some(mesh) = &course.mesh else { return };
     let mut clipped = Vec::new();
     let mut invalid = Vec::new();
@@ -752,7 +752,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &bindings,
         );
         orders.view = camera.view_rows(0);
-        update_candle_clipping(&mut player, &course, camera.view(0));
+        update_static_clipping(&mut player, &course, camera.view(0));
         player.step(&orders, &course);
         info.game_frame = i as i64;
         info.frame = i as i64 - preroll as i64;
@@ -820,7 +820,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 );
                 orders.view = camera.view_rows(last);
                 let spin = player.spin_input();
-                update_candle_clipping(&mut player, &course, camera.view(last));
+                update_static_clipping(&mut player, &course, camera.view(last));
                 player.step(&orders, &course);
                 player.set_spin_input(spin);
                 player.events.clear();
@@ -876,7 +876,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 .filter_map(|item| item.strip_prefix("_ZN2al9getRandomEii+0x24="))
                 .filter_map(|hex| u32::from_str_radix(hex, 16).ok()),
         );
-        update_candle_clipping(&mut player, &course, camera.view(frame));
+        update_static_clipping(&mut player, &course, camera.view(frame));
         let axis = course.mesh.as_ref().and_then(|mesh| {
             mesh.snap_move
                 .iter()
@@ -1047,10 +1047,6 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
              has no random choices to replace, so the replay is unchanged"
         );
     }
-    let sensors = geometry
-        .as_ref()
-        .map(|mesh| mesh.look_sensors.clone())
-        .unwrap_or_default();
     if let Some(trace_path) = trace_path {
         let table = Table::load();
         if table.is_none() {
@@ -1072,7 +1068,7 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
                 lockstep: lockstep.as_ref(),
                 table,
                 library,
-                geometry,
+                geometry: geometry.clone(),
             },
         )?;
         if let Some(dir) = std::path::Path::new(trace_path).parent()
@@ -1102,7 +1098,7 @@ pub fn run_cli(args: &[String]) -> Result<Option<crate::shots::Driver>, String> 
     shots_dir
         .map(|dir| {
             let camera = CameraTrack::new(&script, camera.as_ref())?;
-            crate::shots::Driver::new(&script, camera, dir.into(), sensors)
+            crate::shots::Driver::new(&script, camera, dir.into(), geometry)
         })
         .transpose()
 }

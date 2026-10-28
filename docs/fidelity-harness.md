@@ -1090,3 +1090,8 @@ Windowed replay smoke captures are local under orch-bin/ice-smoke, frames90,
 controller/presentation smoke, not a reproduction of IceWalker stage visuals:
 the replay renders a plain floor and placeholder dust; the original ice shading,
 chill-snow atmosphere and stage models are not installed by this port.
+
+Rendered `--shots` now retains the loaded collision export (including its areas)
+and the same per-frame input view as the headless replay. Previously it silently
+ran on the default flat floor, so a stage-relative recorded camera could lose
+Mario. Stage meshes still provide collision rather than stage visual assets.
