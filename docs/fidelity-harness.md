@@ -1085,7 +1085,7 @@ uses the visible camera and the original16:9 side-plane formula for exported
 static clipping spheres; near/far/group clipping and camera roll are unverified.
 This fixture only covers the idle NPC before its minigame starts.
 
-Windowed replay smoke captures are local under orch-bin/ice-smoke, frames90,
+Windowed replay smoke captures are local under orch-bin/ice-smoke-stage-verified, frames90,
 150 and250 of ice-weave. Mario animates, slides and stops visibly. This is a
 controller/presentation smoke, not a reproduction of IceWalker stage visuals:
 the replay renders a plain floor and placeholder dust; the original ice shading,
