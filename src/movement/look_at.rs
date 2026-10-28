@@ -269,10 +269,11 @@ impl LookAt {
             self.take_target(candidate, sensors, head);
         }
         self.ask_joint(sensors, head);
-        // The holder. Which sensors the eye overlaps is decided with the positions of the frame
-        // before (the sensor director sorts them at the end of a frame); `attackSensor` then
-        // compares the distances to the eye with the positions it has now, and the nearest
-        // candidate wins, ties keeping the one already held.
+        // The holder. The eye sensor sits where the previous frame left it, both for which
+        // sensors it overlaps (the sensor director sorts them at the end of a frame) and for
+        // the distances `attackSensor` compares against the other sensors' positions of this
+        // frame (rocket-ground-start: a flower sensor trailing a running player decides it);
+        // the nearest candidate wins, ties keeping the one already held.
         let eye = feet + Vec3::new(0., EYE_HEIGHT, 0.);
         let overlap_from = self.previous_eye.unwrap_or(eye);
         self.previous_eye = Some(eye);
@@ -285,8 +286,8 @@ impl LookAt {
                 continue;
             }
             let nearer = self.candidate.is_none_or(|held| {
-                squared_distance(sensors[held].position, eye)
-                    > squared_distance(sensor.position, eye)
+                squared_distance(sensors[held].position, overlap_from)
+                    > squared_distance(sensor.position, overlap_from)
             });
             if nearer {
                 self.candidate = Some(index);
