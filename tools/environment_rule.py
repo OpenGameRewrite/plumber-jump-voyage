@@ -235,6 +235,7 @@ class Judge:
             if any(max(b[i] for b in bases) - min(b[i] for b in bases) > 0.01 for i in range(3))
         }
         self._geysers = GeyserEvidence(geometry, geysers, rewrite_rows, geyser_seed, geyser_messages)
+        self._grabceil_hosts = {p.get("host") for p in (geometry or {}).get("grab_ceil_bars", [])}
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._scripted = {}
@@ -552,6 +553,10 @@ class Judge:
             host = hosts.get(surface)
             if host is None:
                 return False, f"no {surface} host logged on this frame"
+            if host["host"] in self._grabceil_hosts:
+                if self._grabceil.surface(f, host, self._start):
+                    continue
+                return False, "ceiling bar lacks an independently reproduced fixed source"
             if self._geysers.floor(f, host, self._start):
                 continue
             if host["moving"] == "1" or host["parts_flag"] == "0":

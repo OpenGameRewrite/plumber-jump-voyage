@@ -33,6 +33,8 @@ class Evidence:
         sources = {p['id']: p for p in geometry.get('grab_ceil_bars', [])}
         if not sources or (seed['stage'], seed['scenario']) != (geometry['stage'], geometry['scenario']):
             return
+        if any(a.get('name') == 'PoleGrabCeilNoSnapArea' for a in geometry.get('areas', [])):
+            return
         for p in sources.values():
             part = next(o for o in geometry['objects'] if o['id'] == p['id'])
             if (part.get('static') is not True or part['model'] != 'PoleGrabCeil'
@@ -120,6 +122,14 @@ class Evidence:
                 return
             proved.add((frame, r['actor'], r['k'], r['answer']))
         self.sources, self.tokens, self.frames, self.messages = sources, tokens, frames, proved
+
+    def surface(self, frame, host, start):
+        if not start or not host or host.get('base') is None:
+            return False
+        return any((frame, identity) in self.frames and host['host'] == p['host']
+                   and host['sensor'] == 'Collision' and host['sensor_type'] == '15'
+                   and host['moving'] == '0' and tuple(round(f32(a-b), 6) for a, b in
+                       zip(p['position'], start)) == host['base'] for identity, p in self.sources.items())
 
     def contact(self, frame, c, rows, preroll, start):
         identity = self.tokens.get(c['actor'])

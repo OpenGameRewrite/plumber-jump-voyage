@@ -752,8 +752,10 @@ mod checks {
         assert_eq!(spring.lateral_speed, 1. + -(11. * 0.01 + 0.05));
     }
     fn snap_force_waits_for_the_strict_exit_gate() {
-        let mut player = Player::default();
-        player.mode = Move::GrabCeil;
+        let mut player = Player {
+            mode: Move::GrabCeil,
+            ..default()
+        };
         let force = Vec3::new(0., 40., 2.);
         for (nerve, limit) in [(GrabNerve::Jump, 10), (GrabNerve::Fall, 30)] {
             player.grab_ceil.nerve = nerve;

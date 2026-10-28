@@ -992,3 +992,59 @@ in the run transition at110 and the hot-Wait transitions at303/545, including th
 sub-state counter, interpolation/effect consequences and the re-executed transition's
 moving-ground history. Those hidden-state reconstruction limits do not affect free
 replay. No comparator tolerance or contamination exclusion was added for the capture.
+
+
+### Fixed GrabCeil bars
+
+`tools/export-grab-ceil-bars.py <geometry.json> --romfs <romfs> --phase
+<game.grabceil_bars.csv>` exports upright, unit-scale, unconnected PoleGrabCeil
+placements with their raw KCL and Snap sensor. Back up geometry into its local
+`old/` directory before exporting. It writes `game.grabceil_seed.json` beside the
+independent actor CSV; retain it and `game.grabceil_messages.csv` with every
+private dashboard copy. Mario's existing assets need the four original clips
+GrabCeilStart, GrabCeilWait, GrabCeilSwing and GrabCeilJump. Append clips with
+`convert-outfits.py --add-clip` and export the complete original curves with
+`convert-curves.exe`; rebuilding all outfits can discard previously added clips.
+
+The bar follows Mario's projection along its 380 cm sensor segment, independently
+of Mario's movement state. Its Wait/Grab/GrabEnd lifecycle receives start/end
+messages, and GrabEnd returns to Wait only after step30. Snap attack uses the
+original strict sphere overlap, body projection and distance/direction arithmetic.
+The receive-side ObjSnapForce is retained until updateCollider is eligible to
+consume it. In particular, the entry-frame message survives attachment and can
+replace collision displacement after Jump step10 or after the state ends on
+landing; it does not replace Mario's reported velocity. Clearing this latch every
+frame incorrectly removes the later displacement in all three captures.
+
+GrabCeil's ordered collision finders fit the bar, then its two angular springs
+advance before input/force evaluation. Start/Wait/Swing follow a full static snap
+pose; Swing samples its clip from spring phase through the existing animator's
+pending frame change. Release uses the model's AllRoot offset and the original
+135-degree jump pose, and the air controller preserves the upside-down hemisphere
+while recovering its pose. Upright ledge/pole snap arithmetic remains unchanged.
+The exported upright, unlinked AirOnly SnapMoveArea in this fixture restricts
+input to its front plane; thus side stick in the lateral capture supplies no drive.
+Airborne Land continues its velocity and gravity without restarting its landing
+reaction when it touches the floor again.
+
+The environment rule requires matching stage/scenario, fixed raw-KCL placement,
+independent initial source observations, every phase/step/centre bit pattern and
+replay source diagnostic, stable actor identity and exact message payloads. It
+accepts only the identified Snap12's proved player-sensor overlaps and receive
+answers and the matching fixed Collision part. Missing/changed source data,
+KeyMove or connected bars, Snap13, Cappy and unrelated contacts remain refused.
+`compare-traces.py --self-check`, Rust tests and `--self-check` exercise source,
+spring, latch and evidence rejection boundaries. No tolerance or trace exclusion
+was added for these recordings.
+
+The three bounded GrabCeil recordings pass every comparable free-replay column.
+The swing capture ends during Jump; it verifies no landing. These checks cover
+world-down, fixed upright bars and the recorded initial conditions. Moving parts,
+NoSnap areas, moon tuning, arbitrary gravity and off-plane SnapMoveArea position
+centering are unsupported. The nonzero lateral GrabPose arm-IK branch is not
+implemented: these captures have zero lateral spring, whose requested grab up
+aligns with the actor pose; the existing GrabDynamics block remains disabled for
+GrabCeil. Converted animation joints and AllRoot offsets are compared, but this
+is not evidence for the unrecorded lateral joint branch. No windowed bar smoke
+or full stage presentation fidelity is claimed; the rendered-replay driver still
+uses its plain course.
