@@ -234,7 +234,13 @@ impl Player {
     fn roll_enter(&mut self, nerve: RollNerve) {
         match nerve {
             RollNerve::Start => {
-                // The hop: the start jump power along the ground's normal.
+                // exeStart first reorients the in-plane velocity (0x47b228),
+                // discarding the old normal pull, then adds the hop.
+                self.v = along_vector_normal_h(
+                    self.v,
+                    self.rolling.control.ground_normal,
+                    self.floor_up(),
+                );
                 self.v += self.floor_up() * t::ROLL_START_JUMP;
                 self.grounded = false;
                 self.hop_contact = true;

@@ -358,7 +358,10 @@ impl Player {
                 // The slide and the swim keep their velocity whatever the floor does with the
                 // body; the collider found ground (`rs::isCollidedGround`) whichever way it moves.
                 self.grounded = true;
-                if (self.burning() || self.in_damage_state() || self.in_sand_state())
+                if (self.burning()
+                    || self.in_damage_state()
+                    || self.in_sand_state()
+                    || matches!(self.mode, Move::Roll | Move::RollEnd))
                     && !self.is_on_ground_by(self.v)
                 {
                     self.grounded = false;

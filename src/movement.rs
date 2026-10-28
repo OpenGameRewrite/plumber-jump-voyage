@@ -5356,9 +5356,12 @@ impl Player {
                 }
             }
         }
-        self.events.push(Fx::Land {
-            hard: self.hard_land,
-        });
+        // Rolling::appear already raised its landing reaction.
+        if !matches!(mode, Move::Dive | Move::LongJump) || !rolls {
+            self.events.push(Fx::Land {
+                hard: self.hard_land,
+            });
+        }
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
         // DeadFire disables movement collision; retain the last contact report.
