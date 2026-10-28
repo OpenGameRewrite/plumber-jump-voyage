@@ -873,3 +873,50 @@ exported static Needle entry, retaining the existing host/code and geometry
 identity requirements. It does not infer damage from water or material alone,
 and does not waive physical actor contacts. Self-checks cover the accepted
 Needle and refused Ground/Fire/Poison, missing replay, and actor push cases.
+
+
+### Settled candlestand fire messages
+
+`tools/export-candlestands.py <geometry.json> --romfs <romfs>` adds local
+`candlestands` causes and Body look targets, and marks their existing KCL parts
+static. Back up the geometry in its local `old/` directory first. The exporter
+supports upright, unit-scale, initially lit `LavaWorldCandlestand000` placements
+without attachments, recovery or state/appearance links; visibility-only ViewGroup
+links are permitted. Other placements remain unsupported. Fire is EnemyAttack10,
+r40 at local y200; Body is MapObj12, r80 at y210. Wick is invalid while lit.
+
+This is a settled recorder fixture, not an arbitrary candle state machine:
+`Candlestand::appear` disables clipping until BurnUp180, Fire/Body are validated
+at60, and the recorder waits120 consecutive player Wait updates before teleport.
+Thus the initially lit stage-loaded source is active before placement preroll.
+Extinguishing/relighting and linked candles are outside this fixture. The early
+BurnUp push needs a Simple sensor (11/13/14); none of this candle's sensors has
+that type, so Fire10/Body12 cannot send it even before step120.
+
+Before each movement, the replay checks the preceding absolute player pose's
+3D InitSensor spheres (Foot r40 y40, Body r50 y75, Head r40 y110) against Fire.
+`HitSensorDirector` uses strict squared distance less than squared summed radii,
+without a contact margin. PlayerAttack and PlayerEye do not receive this attack.
+The message honours the damage keeper's prevent byte and enters the existing
+DamageFire pre-movement dispatch; it supplies no fire floor/material code.
+The burn recordings enter DamageFire on frame19, including the first jump step.
+
+The environment judge requires the same stage/scenario export, a static matching
+part, its settled initially lit source and the exact previous-pose overlap.
+Only the exported Fire/Body sensors and known 3D player sensors qualify. The
+`EnemyAttackFire` receive must have the right player/source types and answer;
+its successful receive proves the entire DamageFire episode. The corresponding
+receivePushMsg forward with answer false is harmless. Other messages, true push
+answers, Cappy, Wick, unexported sources and unsupported sensor variants stay
+refused. `compare-traces.py --self-check` exercises the acceptance boundaries.
+
+A candle can be clipped during the fire hop. The replay uses its exported
+placement-centred r300 InitClipping sphere, recorded visible camera position,
+direction and FOV, and FrustumRadar's two vertical-plane tests. Invalidating the
+sensor clears the eye holder's candidate; it returns on a new overlap after
+unclipping. This reproduces candidate absence on frames41?86 in both burn
+captures. This narrow fixture does not implement horizontal/far clipping,
+camera roll, visibility-group state or other actors' clipping. Without a recorded
+camera, those sensors remain active. No full actor-clipping parity is claimed.
+The existing `candle-look` head controller discrepancy at its braking frame61
+remains outside the fire-cause fix.

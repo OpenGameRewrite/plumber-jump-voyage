@@ -515,6 +515,41 @@ impl Trace {
     }
 }
 
+/// Candlestand's InitClipping sphere is r300 at the placement (not at the flame).
+/// FrustumRadar::judgeInArea tests the two vertical planes with the camera's
+/// projection slope. This fixture only models those planes: side/far clipping,
+/// other actor classes and arbitrary camera roll are outside its contract.
+fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<View>) {
+    let Some(mesh) = &course.mesh else { return };
+    let mut clipped = Vec::new();
+    let mut invalid = Vec::new();
+    if let Some(view) = view {
+        let forward = view.forward;
+        let side = forward.cross(Vec3::Y).normalize();
+        let up = side.cross(forward);
+        let slope = (view.fov_deg.to_radians() * 0.5).tan();
+        let radius_limit = (slope * slope + 1.).sqrt() * 300.;
+        for (i, fire) in mesh.candle_fire.iter().enumerate() {
+            let center = mesh.relative_vec(*fire - Vec3::Y * 200.);
+            let delta = center - view.position * 100.;
+            let dot = |a: Vec3, b: Vec3| (a.x * b.x + a.y * b.y) + a.z * b.z;
+            if dot(delta, up).abs() > dot(delta, forward) * slope + radius_limit {
+                clipped.push(i);
+                invalid.extend(
+                    mesh.look_sensors
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(j, sensor)| {
+                            (sensor.stage_position == *fire + Vec3::Y * 10.).then_some(j)
+                        }),
+                );
+            }
+        }
+    }
+    player.set_clipped_candles(clipped);
+    player.look.set_invalid_sensors(invalid);
+}
+
 pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let camera = CameraTrack::new(script, options.camera)?;
     let bindings = Settings::default().bindings;
@@ -593,6 +628,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &bindings,
         );
         orders.view = camera.view_rows(0);
+        update_candle_clipping(&mut player, &course, camera.view(0));
         player.step(&orders, &course);
         info.game_frame = i as i64;
         info.frame = i as i64 - preroll as i64;
@@ -641,6 +677,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 );
                 orders.view = camera.view_rows(last);
                 let spin = player.spin_input();
+                update_candle_clipping(&mut player, &course, camera.view(last));
                 player.step(&orders, &course);
                 player.set_spin_input(spin);
                 player.events.clear();
@@ -696,6 +733,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 .filter_map(|item| item.strip_prefix("_ZN2al9getRandomEii+0x24="))
                 .filter_map(|hex| u32::from_str_radix(hex, 16).ok()),
         );
+        update_candle_clipping(&mut player, &course, camera.view(frame));
         player.step(&orders, &course);
         info.frame = frame as i64;
         info.game_frame = (preroll + frame) as i64;

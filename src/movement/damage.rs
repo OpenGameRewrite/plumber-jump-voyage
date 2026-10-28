@@ -9,6 +9,7 @@ pub(super) struct Damage {
     pub hidden: bool,
     blocked: bool,
     fire_message: bool,
+    clipped_candles: Vec<usize>,
 }
 
 pub(super) fn self_check() {
@@ -22,8 +23,8 @@ mod tests {
     #[cfg_attr(test, test)]
     pub(super) fn candle_spheres_use_strict_hit_and_receive_invalidation() {
         let fire = Vec3::ZERO;
-        assert!(!candle_hits_player(Vec3::new(80., -40., 0.), fire));
-        assert!(candle_hits_player(Vec3::new(79., -40., 0.), fire));
+        assert!(!candle_hits_player(Vec3::new(0., -190., 0.), fire));
+        assert!(candle_hits_player(Vec3::new(0., -189., 0.), fire));
         assert!(candle_hits_player(Vec3::new(89., -75., 0.), fire));
         assert!(!candle_hits_player(Vec3::new(90., -75., 0.), fire));
         let mut p = Player::default();
@@ -104,6 +105,7 @@ impl Default for Damage {
             hidden: false,
             blocked: false,
             fire_message: false,
+            clipped_candles: Vec::new(),
         }
     }
 }
@@ -138,16 +140,18 @@ fn candle_hits_player(feet: Vec3, fire: Vec3) -> bool {
         })
 }
 impl Player {
+    pub fn set_clipped_candles(&mut self, clipped: Vec<usize>) {
+        self.damage.clipped_candles = clipped;
+    }
+
     /// Sensors use the previous actor pose. Receive precedes this movement's
     /// executePreMovementNerveChange, which consumes the request below.
     pub(super) fn receive_candle_fire(&mut self, scene: &Course) {
         if let Some(mesh) = &scene.mesh {
             let feet = mesh.to_game_vec(self.position_cm());
-            if mesh
-                .candle_fire
-                .iter()
-                .any(|&fire| candle_hits_player(feet, fire))
-            {
+            if mesh.candle_fire.iter().enumerate().any(|(i, &fire)| {
+                !self.damage.clipped_candles.contains(&i) && candle_hits_player(feet, fire)
+            }) {
                 self.request_fire_damage();
             }
         }

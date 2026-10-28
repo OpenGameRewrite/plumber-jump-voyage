@@ -648,8 +648,45 @@ def judge_run(game_rows, rewrite_rows, listed, **evidence):
     return Judge(game_rows, rewrite_rows, listed, **evidence).judge()
 
 
+def _check_candlestands():
+    import copy
+    part = dict(id="candle", model="LavaWorldCandlestand000", static=True,
+                translate=[0, -200, 0], rotate=[0, 0, 0], scale=[1, 1, 1])
+    candle = dict(id="candle", host="Candle", is_burn_out=False, settled=True,
+                  fire_position=[0, 0, 0], body_position=[0, 10, 0])
+    mesh = dict(objects=[part], attributes=[], triangles=[], candlestands=[candle])
+    fire = "k=r;w=player;s=Foot:3;o=Fire:10;h=Candle;c=Candlestand;m=al::SensorMsgEnemyAttackFire;r=1"
+    forward = fire.replace("k=r", "k=p").replace("r=1", "r=0")
+    physical = "k=a;w=player;s=Foot:3;o=Body:12;h=Candle;c=Candlestand;m=;r="
+    game = {i: dict(px="-60", py="-40", pz="0", state="Wait/Wait" if i == 0 else "DamageFire/Jump",
+                    collision="ground=1;gcode=Ground", contacts=physical if i == 0 else forward + "|" + fire if i == 1 else "")
+            for i in range(3)}
+    evidence = dict(geometry=mesh, start=[0, 0, 0], preroll={-1: game[0]})
+    listed = {1: ["hit-sensor contact Candle"], 2: ["hit-sensor contact Candle"]}
+    assert not judge_run(game, game, listed, **evidence).refused
+    assert judge_run(game, game, listed).refused
+    assert judge_run(game, {0: {}}, listed, **evidence).refused
+    for key, value in (("settled", False), ("is_burn_out", True), ("fire_position", [1, 0, 0])):
+        unproved = copy.deepcopy(mesh)
+        unproved["candlestands"][0][key] = value
+        assert judge_run(game, game, listed, **dict(evidence, geometry=unproved)).refused
+    for key, value in (("static", False), ("id", "other"), ("model", "Unknown")):
+        unproved = copy.deepcopy(mesh)
+        unproved["objects"][0][key] = value
+        assert judge_run(game, game, listed, **dict(evidence, geometry=unproved)).refused
+    for invalid in (fire.replace("Foot:3", "Foot:2"), fire.replace("w=player", "w=cap"),
+                    fire.replace("h=Candle", "h=Other"), fire.replace("c=Candlestand", "c=Enemy"),
+                    fire.replace("Fire:10", "Wick:12"), fire.replace("EnemyAttackFire", "PushToPlayer"),
+                    fire.replace("k=r", "k=p"), fire.replace("r=1", "r=0")):
+        unproved = {i: dict(row, contacts=invalid if i == 1 else row["contacts"]) for i, row in game.items()}
+        assert judge_run(unproved, game, listed, **evidence).refused
+    tangent = {i: dict(row, px="-80") for i, row in game.items()}
+    assert judge_run(tangent, game, listed, **dict(evidence, preroll={-1: tangent[0]})).refused
+
+
 def self_check():
     """Synthetic runs for every branch of the rule."""
+    _check_candlestands()
 
     def rows(count=6, **overrides):
         out = OrderedDict()

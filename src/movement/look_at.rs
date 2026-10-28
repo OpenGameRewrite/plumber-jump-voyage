@@ -122,6 +122,7 @@ pub struct LookAt {
     /// Where the eye sensor was after the previous step: the overlap of a frame is decided with
     /// the sensor positions of the frame before.
     previous_eye: Option<Vec3>,
+    invalid_sensors: Vec<usize>,
     /// The head joint's position after the previous model calculation (cm), which the keeper
     /// reads when it chooses.
     head: Option<Vec3>,
@@ -147,12 +148,21 @@ impl Default for LookAt {
             active: false,
             joint: HeadLookAt::default(),
             previous_eye: None,
+            invalid_sensors: Vec::new(),
             head: None,
         }
     }
 }
 
 impl LookAt {
+    /// PlayerEyeSensorHitHolder::clear drops a sensor invalidated by actor clipping.
+    pub fn set_invalid_sensors(&mut self, invalid: Vec<usize>) {
+        if self.candidate.is_some_and(|i| invalid.contains(&i)) {
+            self.candidate = None;
+        }
+        self.invalid_sensors = invalid;
+    }
+
     /// The head joint's position (cm, replay frame) after the model's last calculation.
     pub fn set_head_position(&mut self, head: Vec3) {
         self.head = Some(head);
@@ -257,6 +267,9 @@ impl LookAt {
         let overlap_from = self.previous_eye.unwrap_or(eye);
         self.previous_eye = Some(eye);
         for (index, sensor) in sensors.iter().enumerate() {
+            if self.invalid_sensors.contains(&index) {
+                continue;
+            }
             let reach = EYE_RADIUS + sensor.radius;
             if squared_distance(sensor.position, overlap_from) >= reach * reach {
                 continue;

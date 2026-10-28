@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn run() {
     the_states_that_may_look_are_the_originals();
+    clipping_invalidates_the_holder_until_the_sensor_returns();
     the_holder_keeps_the_nearest_sensor_the_eye_overlaps();
     the_keeper_takes_a_target_in_reach_and_asks_for_it();
     the_keeper_drops_a_target_that_leaves_the_gate_after_forty_frames();
@@ -150,4 +151,19 @@ fn a_nearer_sensor_replaces_the_target_and_a_state_without_look_ends_it() {
     look.step(&actor, false, &sensors);
     assert_eq!(look.requested_sensor(), None);
     assert!(look.keeper_cell().starts_with("mode=0;count=-1;"));
+}
+
+#[cfg_attr(test, test)]
+fn clipping_invalidates_the_holder_until_the_sensor_returns() {
+    let sensors = [sensor("candle", Vec3::new(0., 80., 100.))];
+    let mut look = LookAt::default();
+    let actor = actor_at(Vec3::ZERO);
+    look.step(&actor, false, &sensors);
+    assert!(look.candidate.is_some());
+    look.set_invalid_sensors(vec![0]);
+    look.step(&actor, false, &sensors);
+    assert!(look.candidate.is_none());
+    look.set_invalid_sensors(Vec::new());
+    look.step(&actor, false, &sensors);
+    assert_eq!(look.candidate, Some(0));
 }
