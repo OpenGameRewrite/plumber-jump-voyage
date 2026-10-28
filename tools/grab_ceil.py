@@ -46,7 +46,10 @@ class Evidence:
         by_frame = {}
         for r in actors:
             if r['id'] in sources:
-                by_frame.setdefault(int(r['frame']), {})[r['id']] = r
+                sample = by_frame.setdefault(int(r['frame']), {})
+                if r['id'] in sample:
+                    return
+                sample[r['id']] = r
         first, last = min(by_frame), max(by_frame)
         if first >= 0 or seed['frame'] != first or seed['sources'] != list(by_frame[first].values()):
             return
@@ -58,7 +61,7 @@ class Evidence:
             phases[identity], steps[identity] = 0, int(r['step'])
             centres[identity] = [float(r['centre_' + a]) for a in 'xyz']
             systems[identity], generations[identity] = r['system'], r['generation']
-        attached = None
+        attached, identities = None, {}
         for frame in range(first, last + 1):
             sample = by_frame[frame]
             if set(sample) != set(sources):
@@ -96,6 +99,8 @@ class Evidence:
                 if r['actor'] != '0':
                     if r['actor'] in tokens and tokens[r['actor']] != identity:
                         return
+                    if identities.setdefault(identity, r['actor']) != r['actor']:
+                        return
                     tokens[r['actor']] = identity
                 frames[frame, identity] = (phase, centre, systems[identity] == '1')
                 diagnostic.append(f"{identity}/{phase}/{step}/{'/'.join(bits(v) for v in centre)}/{systems[identity]}")
@@ -118,6 +123,8 @@ class Evidence:
             body = feet(rows[frame - 1], start)
             body[1] = f32(body[1] + 75.)
             if (state[0] != 0 or not state[2]
+                    or rows[frame - 1].get('ground') == '1'
+                    or not 0. <= f32(body[0] - sources[identity]['position'][0]) <= 380.
                     or r['force_bits'] != ','.join(bits(v) for v in force(state[1], body))):
                 return
             proved.add((frame, r['actor'], r['k'], r['answer']))
@@ -211,4 +218,8 @@ def self_check():
     assert not evidence(received=[{**messages[0], 'force_bits': '00000000,00000000,00000000'}]).sources
     bad = deepcopy(actors)
     bad[-1]['step'] = '400'
+    assert not evidence(actor_rows=bad).sources
+    assert not evidence(actor_rows=actors + [actors[-1]]).sources
+    bad = deepcopy(actors)
+    bad[-1]['actor'] = '2'
     assert not evidence(actor_rows=bad).sources
