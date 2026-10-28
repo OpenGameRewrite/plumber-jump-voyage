@@ -109,6 +109,7 @@ pub enum Form {
     Mini,
     /// `changeCollisionWallGrab`: the body hanging from a ledge.
     WallGrab,
+    GrabCeil,
     /// `changeCollisionPoleClimb`: the body clinging to a pole.
     Pole,
     /// `changeCollisionSwim`: the swimmer, whose body sphere ignores floors (only the three
@@ -195,6 +196,11 @@ impl Keeper {
                 // feet) and "Head" (105 above).
                 shapes.push(sphere(Vec3::new(0., 55., 0.), None, true));
                 shapes.push(sphere(Vec3::new(0., 105., 0.), None, false));
+            }
+            Form::GrabCeil => {
+                shapes.push(sphere(Vec3::new(0., -75., 0.), Some(30.), false));
+                shapes.push(sphere(Vec3::new(0., -35., 0.), None, true));
+                arrows_at = Vec3::new(0., -140., 0.);
             }
             Form::WallGrab => {
                 // Body and head hang below and out from the wall, and ignore floors.
@@ -1574,7 +1580,7 @@ impl PlayerCollider {
 
     /// `setWallBorderCheckTypeAll`: the hanging forms check the faces' hits too.
     fn form_checks_faces(&self) -> bool {
-        matches!(self.form, Form::WallGrab | Form::Pole)
+        matches!(self.form, Form::WallGrab | Form::Pole | Form::GrabCeil)
     }
 }
 

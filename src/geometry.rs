@@ -118,6 +118,7 @@ pub struct TriangleMesh {
     pub look_sensors: Vec<crate::movement::look_at::LookSensor>,
     /// Settled, initially lit candlestands; positions stay in absolute stage centimetres.
     pub candle_fire: Vec<Vec3>,
+    pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     disabled_parts: Vec<usize>,
     geyser_curves: Option<serde_json::Value>,
@@ -381,6 +382,20 @@ impl TriangleMesh {
                 kcl_index: n[14] as u32,
                 local,
             });
+        }
+        for source in root["grab_ceil_bars"].as_array().into_iter().flatten() {
+            mesh.grab_ceil_bars
+                .push(crate::movement::grab_ceil::GrabCeilBar {
+                    id: source["id"].as_str().ok_or("bar id")?.into(),
+                    position: Vec3::from_array(
+                        floats(source.get("position")).ok_or("bar position")?,
+                    ),
+                    side: Vec3::from_array(floats(source.get("side")).ok_or("bar side")?),
+                    centre: Vec3::ZERO,
+                    phase: 0,
+                    step: 0,
+                    active: false,
+                });
         }
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
         for source in root["sand_geysers"].as_array().into_iter().flatten() {

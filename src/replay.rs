@@ -550,11 +550,19 @@ fn update_candle_clipping(player: &mut Player, course: &Course, view: Option<Vie
     player.look.set_invalid_sensors(invalid);
 }
 
-fn tick_geysers(course: &mut Course) {
+fn tick_geysers(course: &mut Course, player: &Player) {
     if let Some(mesh) = &mut course.mesh
-        && !mesh.geysers.is_empty()
+        && (!mesh.geysers.is_empty() || !mesh.grab_ceil_bars.is_empty())
     {
-        Arc::make_mut(mesh).tick_geysers();
+        let mesh = Arc::make_mut(mesh);
+        mesh.tick_geysers();
+        let feet = mesh.to_game_vec(player.position_cm());
+        for bar in &mut mesh.grab_ceil_bars {
+            bar.tick(
+                feet,
+                player.attached_grab_ceil_bar() == Some(bar.id.as_str()),
+            );
+        }
     }
 }
 
@@ -570,6 +578,40 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     };
     if let Some(mesh) = &mut course.mesh {
         let mesh = Arc::make_mut(mesh);
+        if let Some(seed) = options
+            .camera
+            .or(options.lockstep)
+            .and_then(|g| g.grabceil_seed.as_ref())
+        {
+            if seed["stage"].as_str() != script.stage.as_deref()
+                || seed["scenario"].as_u64() != script.scenario.map(u64::from)
+                || seed["frame"].as_i64() != Some(-(script.preroll_frames() as i64))
+            {
+                return Err("grabceil seed stage/scenario/preroll mismatch".into());
+            }
+            for bar in &mut mesh.grab_ceil_bars {
+                let row = seed["sources"]
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|r| r["id"] == bar.id))
+                    .ok_or("missing bar seed")?;
+                if row["phase"] != "Wait" || row["dead"] != "0" {
+                    return Err("unsupported bar seed".into());
+                }
+                bar.step = row["step"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or("bar step")?;
+                bar.active = row["system"] == "1";
+                let mut centre = [0.; 3];
+                for (i, axis) in ["x", "y", "z"].into_iter().enumerate() {
+                    centre[i] = row[format!("centre_{axis}")]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .ok_or("bar centre")?;
+                }
+                bar.centre = Vec3::from_array(centre);
+            }
+        }
         if let Some(seed) = options
             .camera
             .or(options.lockstep)
@@ -671,7 +713,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         info.game_frame = i as i64;
         info.frame = i as i64 - preroll as i64;
         recorder.record(&info, &mut player);
-        tick_geysers(&mut course);
+        tick_geysers(&mut course, &player);
     }
     recorder.start_rows(script.preroll.is_some());
     let mut rows = Vec::with_capacity(script.frame_count());
@@ -777,7 +819,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         info.frame = frame as i64;
         info.game_frame = (preroll + frame) as i64;
         rows.push(recorder.record(&info, &mut player));
-        tick_geysers(&mut course);
+        tick_geysers(&mut course, &player);
         previous = span.buttons.clone();
     }
     Ok(Trace {

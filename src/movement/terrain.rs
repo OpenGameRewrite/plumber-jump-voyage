@@ -64,6 +64,9 @@ impl Player {
         if self.mode == Move::Pole && self.pole.is_form() {
             return Form::Pole;
         }
+        if self.mode == Move::GrabCeil && self.grab_ceil.is_form() {
+            return Form::GrabCeil;
+        }
         if self.mode == Move::Swim {
             return Form::Swim;
         }
@@ -96,6 +99,7 @@ impl Player {
         self.collider.set_cut_direction(match form {
             Form::WallGrab => self.catch.front(),
             Form::Pole => self.pole.front(),
+            Form::GrabCeil => self.grab_ceil.front(),
             _ => Vec3::ZERO,
         });
     }
@@ -110,7 +114,7 @@ impl Player {
         let mesh = scene.toy_pole_mesh();
         self.prepare_collider();
         let start = to_cm(self.pos);
-        let holding = matches!(self.mode, Move::Ledge | Move::Pole);
+        let holding = matches!(self.mode, Move::Ledge | Move::Pole | Move::GrabCeil);
         if let Some(stood) = self.catch_collider_at.take()
             && holding
         {
@@ -189,11 +193,14 @@ impl Player {
             velocity = self.ground_following();
             self.ground_move = Some((Vec2::new(self.v.x, self.v.z), self.pull, velocity));
         }
+        if let Some(force) = self.grab_ceil.snap_force {
+            velocity = force;
+        }
         let yaw = self.facing.x.atan2(self.facing.z);
         // The ledge and pole holds put the actor on their pose before the
         // collider runs; the collider carries itself from where it stood last
         // step to there.
-        let holding = matches!(self.mode, Move::Ledge | Move::Pole);
+        let holding = matches!(self.mode, Move::Ledge | Move::Pole | Move::GrabCeil);
         if let Some(stood) = self.catch_collider_at.take()
             && holding
         {

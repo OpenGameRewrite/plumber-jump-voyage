@@ -78,6 +78,11 @@ impl Default for Snap {
     }
 }
 impl Snap {
+    /// Full static snap orientation for GrabCeil. Upright consumers retain their
+    /// existing yaw path and its arithmetic.
+    pub(super) fn orientation(front: Vec3, up: Vec3) -> Quat {
+        super::pose_math::quat_up_front(up, front)
+    }
     /// The pose of the point: the point itself, facing along the front.
     fn snap_pose(&self) -> Pose {
         let front = self.front.with_y(0.).try_normalize().unwrap_or(Vec3::Z);

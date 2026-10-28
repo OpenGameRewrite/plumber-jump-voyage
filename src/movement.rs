@@ -248,6 +248,10 @@ mod damage_life;
 mod damage_swim;
 pub mod death;
 mod entrance_camera;
+#[path = "movement/grab_ceil.rs"]
+pub mod grab_ceil;
+#[path = "movement/grab_ceil_find.rs"]
+mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
 mod recovery_dead;
@@ -463,6 +467,8 @@ pub mod clip {
     /// state goes on (the jump state never switches them to the fall clip).
     pub fn held_length(name: &str) -> Option<u32> {
         match name {
+            "GrabCeilStart" => Some(51),
+            "GrabCeilJump" => Some(46),
             "SquatStart" => Some(3),
             "DamageDown" | "NoDamageDown" => Some(92),
             "DamageLand" => Some(78),
@@ -483,6 +489,7 @@ pub mod clip {
     /// Length of the clips that loop (their frame wraps).
     pub fn loop_length(name: &str) -> Option<f32> {
         match name {
+            "GrabCeilWait" => Some(90.),
             "Wait" | "Snooze" => Some(180.),
             "WaitRelax" => Some(1200.),
             "WaitHot" => Some(340.),
@@ -529,7 +536,7 @@ pub mod clip {
             // 23, then 1) before they wrap.
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
-            "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal"
+            "GrabCeilWait" | "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal"
             | "SwimStandWait" | "SwimWalk" => 1.,
             _ => 0.,
         }
@@ -611,6 +618,7 @@ pub enum Move {
     WallJump,
     Ledge,
     Pole,
+    GrabCeil,
     Swim,
     CapBounce,
     CatchJump,
@@ -618,7 +626,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 57] = [
+    pub const ALL: [Move; 58] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -672,6 +680,7 @@ impl Move {
         Self::WallJump,
         Self::Ledge,
         Self::Pole,
+        Self::GrabCeil,
         Self::Swim,
         Self::CapBounce,
         Self::CatchJump,
@@ -720,6 +729,7 @@ impl Move {
             Self::WallSlide => "Wall slide",
             Self::WallJump => "Wall jump",
             Self::Ledge => "Ledge hang",
+            Self::GrabCeil => "Ceiling bar",
             Self::Pole => "Pole climb",
             Self::Swim => "Swim",
             Self::CapBounce => "Cap jump",
@@ -1056,6 +1066,7 @@ pub struct Player {
     life: damage_life::LifeControl,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
     pole: PoleControl,
+    grab_ceil: grab_ceil::GrabCeilControl,
     rolling: RollControl,
     /// Where the last stage collision left the body: the metres of `pos` it was stored as, and
     /// the position in centimetres (start-relative, on the game's single-precision grid) the
@@ -1350,6 +1361,7 @@ impl Default for Player {
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),
+            grab_ceil: grab_ceil::GrabCeilControl::default(),
             rolling: RollControl::default(),
             collider_end: None,
             trans_carry: None,
@@ -2112,7 +2124,8 @@ impl Player {
     /// (the top of the pole, the ledge the climb ends on): that contact is no
     /// landing (only the climb jump's and the pole jump's are).
     fn stands_on_ledge(&self) -> bool {
-        (self.mode == Move::Ledge && self.catch_nerve() != ledge::CatchNerve::Jump)
+        (self.mode == Move::GrabCeil && self.grab_ceil.is_form())
+            || (self.mode == Move::Ledge && self.catch_nerve() != ledge::CatchNerve::Jump)
             || (self.mode == Move::Pole && !self.pole.is_pole_jump())
     }
     /// A sub-nerve was chosen again in this step: the row's `sub_step` is 0.
@@ -2577,6 +2590,9 @@ impl Player {
         if self.mode == Move::Pole {
             return crate::game_names::known(self.pole_nerve().name());
         }
+        if self.mode == Move::GrabCeil {
+            return crate::game_names::known(self.grab_ceil_name());
+        }
         if self.mode == Move::Swim {
             return crate::game_names::known(self.swim.shown_nerve().name());
         }
@@ -2784,6 +2800,7 @@ impl Player {
         self.receive_candle_fire(scene);
         self.receive_sand_geyser();
         self.dispatch_damage(scene);
+        self.receive_grab_ceil_force(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
@@ -2797,6 +2814,7 @@ impl Player {
             self.judge_sand_entry();
             self.judge_wall_push(scene);
             self.judge_fall();
+            self.judge_grab_ceil(scene);
             self.judge_pole_climb(&o, scene);
             self.judge_wall_catch(scene);
             self.judge_wall_keep(scene);
@@ -2960,6 +2978,7 @@ impl Player {
             Move::WallSlide => self.wall_slide(o),
             Move::Ledge => self.wall_catch(o, scene),
             Move::Pole => self.pole_climb(o, scene),
+            Move::GrabCeil => self.grab_ceil_step(o),
             Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
             _ => self.air(o),
@@ -3312,6 +3331,9 @@ impl Player {
             actor,
         };
         let world = crate::skeleton_pose::world_pose(&actor, locals, &mut controls);
+        self.grab_ceil.root_offset =
+            look_joint::translation(&world[crate::skeleton_pose::Joint::AllRoot as usize])
+                - self.position_cm();
         // The next step's nerves read the joint axes this calculation leaves.
         self.model_axes = swim_dive_in::ModelAxes::of(&world);
         world

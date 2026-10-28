@@ -1229,6 +1229,7 @@ impl Cells {
 pub struct TraceFile {
     pub rows: Vec<HashMap<String, String>>,
     pub metadata: serde_json::Value,
+    pub grabceil_seed: Option<serde_json::Value>,
     pub geyser_seed: Option<serde_json::Value>,
 }
 impl TraceFile {
@@ -1250,6 +1251,13 @@ impl TraceFile {
                         .map_err(|e| format!("{}: {e}", seed.display()))?,
                 )
                 .map_err(|e| e.to_string())?,
+            );
+        }
+        let seed = std::path::Path::new(path).with_extension("grabceil_seed.json");
+        if seed.exists() {
+            trace.grabceil_seed = Some(
+                serde_json::from_str(&std::fs::read_to_string(&seed).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?,
             );
         }
         Ok(trace)
@@ -1275,6 +1283,7 @@ impl TraceFile {
             rows,
             metadata: serde_json::Value::Null,
             geyser_seed: None,
+            grabceil_seed: None,
         })
     }
     /// A non-empty cell.
