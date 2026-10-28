@@ -3155,7 +3155,10 @@ impl Player {
         let enabled = look_at::look_enabled(look_label)
             && !self.run_nerve_blocks_look()
             && !self.sub.active
-            && !self.entrance_camera.playing();
+            && !self.entrance_camera.playing()
+            // The keeper is idle in the player's very first movement: every recorded run's
+            // first preroll row reads mode=0 (inferred from the rows, the flag is unresolved).
+            && self.age > 1;
         let actor = self.pose_matrix();
         let sensors = self.rocket_look_sensors(scene.look_sensors(), scene.mesh.as_deref());
         for (i, f) in self.rocket.flowers.iter().enumerate() {

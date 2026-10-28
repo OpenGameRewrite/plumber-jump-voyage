@@ -262,18 +262,13 @@ impl LookAt {
     /// `look_enabled` says of the state.
     pub fn step(&mut self, actor: &Mat34, enabled: bool, sensors: &[LookSensor]) {
         let feet = translation(actor);
-        // The keeper reads the holder as the last frame left it.
         let head = self.head_position(feet);
-        self.active = enabled;
-        if enabled && let Some(candidate) = self.candidate {
-            self.take_target(candidate, sensors, head);
-        }
-        self.ask_joint(sensors, head);
-        // The holder. The eye sensor sits where the previous frame left it, both for which
-        // sensors it overlaps (the sensor director sorts them at the end of a frame) and for
-        // the distances `attackSensor` compares against the other sensors' positions of this
-        // frame (rocket-ground-start: a flower sensor trailing a running player decides it);
-        // the nearest candidate wins, ties keeping the one already held.
+        // The holder (`attackSensor`) runs in the sensor phase, before the player's own movement:
+        // the eye sensor still sits where the previous frame left it, both for which sensors it
+        // overlaps (the sensor director sorts them at the end of a frame) and for the distances
+        // `tryRecordLookAtTarget` compares against the other sensors' positions of this frame.
+        // The nearest candidate wins, ties keeping the one already held. (A flower sensor
+        // trailing a running player shows the order: rocket-ground-start.)
         let eye = feet + Vec3::new(0., EYE_HEIGHT, 0.);
         let overlap_from = self.previous_eye.unwrap_or(eye);
         self.previous_eye = Some(eye);
@@ -293,6 +288,12 @@ impl LookAt {
                 self.candidate = Some(index);
             }
         }
+        // The keeper then reads the candidate the sensor phase of this frame left.
+        self.active = enabled;
+        if enabled && let Some(candidate) = self.candidate {
+            self.take_target(candidate, sensors, head);
+        }
+        self.ask_joint(sensors, head);
     }
 
     /// The probe's `look_keeper` cell.
