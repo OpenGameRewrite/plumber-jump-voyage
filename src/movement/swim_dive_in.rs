@@ -3,9 +3,8 @@
 //! trigger 9), the two inner nerves of `PlayerStateSwim` that `appear` picks for a fast fall
 //! into near water.
 //!
-//! Written from the 1.0.0 executable and checked against `swim-lake-headin` (the head slide).
-//! `SwimDiveIn` is the same nerve with the dive-in constants; no recording reaches it (the
-//! `DiveInWater` clip needs a fall of 15 m), so it is unverified.
+//! Written from the 1.0.0 executable and checked against `swim-lake-headin` and
+//! `swim-highdive` (the actual judge arrow, clip switch and water-entry trigger 9).
 //!
 //! Both nerves play `SwimHeadSlidingIn`, hold the fall speed to `SwimFallInSpeed`, brake the
 //! dive (`rs::moveDiveSwim`), let the stick push across it (`rs::moveDivingJump` with the
@@ -29,6 +28,8 @@ pub(super) struct ModelAxes {
     pub spine_side: Vec3,
     pub root_side: Vec3,
     pub root_up: Vec3,
+    /// Unnormalised JointRoot world matrix, retained for SpinAir pose handover.
+    pub root: super::look_joint::Mat34,
 }
 impl ModelAxes {
     pub(super) fn of(world: &crate::skeleton_pose::Matrices) -> Self {
@@ -42,6 +43,7 @@ impl ModelAxes {
             spine_side: column(Joint::Spine1, 0),
             root_side: column(Joint::JointRoot, 0),
             root_up: column(Joint::JointRoot, 1),
+            root: world[Joint::JointRoot as usize],
         }
     }
 }
@@ -124,7 +126,8 @@ impl Player {
 
     /// `PlayerActionDiveInWater::tryChangeDiveInWaterAnim`, which the jump states call every step:
     /// the fall into deep water plays its own clip (and the water entry then raises trigger 9).
-    /// GUESS for the clip's play: no recording has the clip (the head slide's judge is recorded).
+    /// Original nonlooping clip: length 48. The high-dive capture confirms frame 0 on the
+    /// successful judge step and frame 48 before water entry replaces it; no timer drives it.
     pub(super) fn try_change_dive_in_water_anim(&mut self, scene: &Course) {
         if self.dive_in_water_enabled(scene) {
             self.start_clip("DiveInWater");

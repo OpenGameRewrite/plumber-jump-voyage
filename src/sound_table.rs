@@ -290,6 +290,14 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
             cap: true,
             name: "WaterSurfaceStay",
         }],
+        Fx::CapWaterIn => vec![Cue::Reaction {
+            cap: true,
+            name: "CapEnterWater",
+        }],
+        Fx::CapWaterOut => vec![Cue::Reaction {
+            cap: true,
+            name: "CapLeaveWater",
+        }],
         Fx::Quenched => reaction("FireQuench"),
         // `PlayerStateSwim::tryReactionWaterIn` starts the entry sound itself; the exit and the
         // dive raise hit reactions (the exit's sound is in the reaction table).

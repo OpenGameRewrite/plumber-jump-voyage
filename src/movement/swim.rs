@@ -46,6 +46,9 @@ pub(super) enum SwimNerve {
     HipDropLoop,
     /// Landing on the bottom after the dive.
     HipDropLand,
+    /// The hip drop turns into a surface head slide, then brakes out of it.
+    HipDropHeadSliding,
+    HipDropHeadSlidingEnd,
     /// The jump up from the bottom.
     HipDropJump,
     /// The first steps after a fast fall into the water.
@@ -77,6 +80,8 @@ impl SwimNerve {
             Self::HipDropStart => "Swim/SwimHipDropStart",
             Self::HipDropLoop => "Swim/SwimHipDropLoop",
             Self::HipDropLand => "Swim/SwimHipDropLand",
+            Self::HipDropHeadSliding => "Swim/SwimHipDropHeadSliding",
+            Self::HipDropHeadSlidingEnd => "Swim/SwimHipDropHeadSlidingEnd",
             Self::HipDropJump => "Swim/SwimHipDropJump",
             Self::FallIn => "Swim/SwimFallIn",
             Self::Dive => "Swim/SwimDive",
@@ -121,6 +126,8 @@ pub(super) struct Swim {
     pub damper: i32,
     /// Keeps the surface nerve from letting go (`this+0xfc`).
     pub surface_hold: i32,
+    /// Head slide surface helper counter (`this+0xf8`), separate from surface hold.
+    pub head_slide_surface: i32,
     /// A jump from the surface is refused while this runs (`this+0x100`).
     jump_invalid: i32,
     /// `SwimMove`'s timer of the "moving" clip (`this+0xac`).
@@ -184,6 +191,7 @@ impl Default for Swim {
             surface_at: Vec3::ZERO,
             damper: 0,
             surface_hold: 0,
+            head_slide_surface: 0,
             jump_invalid: 0,
             move_timer: 0,
             start_jump: 0,
@@ -644,6 +652,8 @@ impl Player {
             SwimNerve::HipDropLoop => self.exe_swim_hip_drop_loop(first, o, scene),
             SwimNerve::HipDropLand => self.exe_swim_hip_drop_land(first, o, scene),
             SwimNerve::HipDropJump => self.exe_swim_hip_drop_jump(first, o, scene),
+            SwimNerve::HipDropHeadSliding => self.exe_swim_head_slide(first, o),
+            SwimNerve::HipDropHeadSlidingEnd => self.exe_swim_head_slide_end(first, o),
             SwimNerve::FallIn => self.exe_swim_fall_in(first, o, scene),
             SwimNerve::Dive => self.exe_swim_dive(first, o, scene),
             SwimNerve::HeadIn => self.exe_swim_head_in(first, o, scene),

@@ -307,6 +307,8 @@ mod snap;
 mod sounds;
 #[path = "movement/spin.rs"]
 mod spin;
+#[path = "movement/spin_air_pose.rs"]
+mod spin_air_pose;
 #[path = "movement/spin_cap.rs"]
 mod spin_cap;
 #[path = "movement/squat.rs"]
@@ -527,7 +529,7 @@ pub mod clip {
             "SwimSurfaceNormal" => Some(38.),
             "SwimStandWait" => Some(140.),
             "SwimWalk" => Some(68.),
-            "SwimHeadSlidingIn" => Some(20.),
+            "SwimHeadSlidingIn" | "SwimHeadSliding" => Some(20.),
             _ => None,
         }
     }
@@ -952,6 +954,8 @@ pub enum Fx {
     /// The cap began to skim the water's surface / to rest on it (hit reactions of the cap).
     CapWaterFly,
     CapWaterStay,
+    CapWaterIn,
+    CapWaterOut,
     WallSlide,
     Ledge,
     Pole,
@@ -1045,6 +1049,8 @@ struct ThrowControl {
     /// The up axis the cap is handed with it, when it is not the world's (the swim's cap throw on
     /// a slope: the ground's normal).
     up: Option<Vec3>,
+    /// SpinAir preserves the tilted model root, unwinding its translation over ten steps.
+    model_shift: Option<Vec3>,
 }
 /// A partial animation playing on top of the main clip (`PlayerAnimator::startSubAnim`).
 /// While one plays the main clip's frame is counted by the animator itself
@@ -4722,7 +4728,16 @@ impl Player {
         self.change(Move::Throw, name, move |p| {
             // First step of the state (`updateSpinGroundNerve` and
             // `updateSpinAirNerve`): the actor turns to the throw direction.
-            p.face_throw_direction();
+            p.throwing.model_shift = None;
+            if air
+                && !p.is_collided_ground()
+                && p.model_axes.root_up.y < 0.5
+                && p.model_axes.root_up != Vec3::ZERO
+            {
+                p.start_spin_air_model_pose();
+            } else {
+                p.face_throw_direction();
+            }
             // Both spin starts clear an upper-body animation still attached
             // (`isUpperBodyAnimAttached`, `clearUpperBodyAnim`): a catch's.
             if p.upper_catch.take().is_some() {
@@ -4875,7 +4890,16 @@ impl Player {
         };
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
-        self.facing = self.air.turn_facing(self.facing, push);
+        if let Some(shift) = self.throwing.model_shift {
+            if step < 10 {
+                self.pos -= shift * UNIT;
+            }
+            let pose = self.actor_pose();
+            let target = self.throwing.dir.unwrap_or(self.facing);
+            self.set_pose(pose.slerp_up_front(Vec3::Y, target, 0.1, 0.));
+        } else {
+            self.facing = self.air.turn_facing(self.facing, push);
+        }
         // The actor's cancels (`PlayerActorHakoniwa::exeSpinCap`): while the air throw runs its
         // first 23 steps only the pound may cancel it (`isEnableCancelHipDrop`: once the cap has
         // left its spin attack); a jump press does nothing (recorded: cap-throw-air-jump). From
@@ -4991,6 +5015,8 @@ impl Player {
                 CapEvent::Staying => self.events.push(Fx::CapStay),
                 CapEvent::WaterFly => self.events.push(Fx::CapWaterFly),
                 CapEvent::WaterStay => self.events.push(Fx::CapWaterStay),
+                CapEvent::WaterIn => self.events.push(Fx::CapWaterIn),
+                CapEvent::WaterOut => self.events.push(Fx::CapWaterOut),
                 CapEvent::StayStarted => self.events.push(Fx::CapStayStart),
                 CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),

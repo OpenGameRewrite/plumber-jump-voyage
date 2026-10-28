@@ -261,6 +261,9 @@ pub enum CapEvent {
     WaterFly,
     /// The cap began to rest on the water's surface (the reaction `水面待機`).
     WaterStay,
+    /// Area membership changed with a surface on which to place the splash.
+    WaterIn,
+    WaterOut,
 }
 
 /// What the cap needs to know of the player and the stage each frame.
@@ -929,7 +932,7 @@ impl Cap {
             self.water.stay_effect = false;
         }
         // The splash bookkeeping: the cap that loses the surface forgets it, and a change of the
-        // area it is in is recorded (the splash itself is not ported).
+        // area it is in is recorded. A found surface supplies the effect matrix.
         if self.water.splash_found {
             if finder.found {
                 return;
@@ -939,6 +942,13 @@ impl Cap {
         if self.water.splash_area != in_area {
             self.water.splash_found = finder.found;
             self.water.splash_area = in_area;
+            if finder.found {
+                events.push(if in_area {
+                    CapEvent::WaterIn
+                } else {
+                    CapEvent::WaterOut
+                });
+            }
         }
     }
 

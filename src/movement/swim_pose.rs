@@ -79,6 +79,12 @@ impl SwimPose {
         };
     }
 
+    /// `exeSwimHipDropHeadSliding`: roll into the sideways input, using the actor's side.
+    pub fn head_slide(&mut self, side_dot: f32) {
+        let target = -side_dot.signum() * super::turn_control::ease_in(side_dot.abs()) * 45.;
+        self.roll = lerp_value(self.roll, target, BENT_FRONT_BLEND_RATE);
+    }
+
     /// The cap throw's first step: only the pitch is set (the angle the model's root leans).
     pub fn set_pitch(&mut self, pitch: f32) {
         self.pitch = pitch;

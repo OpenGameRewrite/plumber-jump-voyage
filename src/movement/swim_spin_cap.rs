@@ -27,17 +27,25 @@ const SURFACE_SPIN_CAP_FRAME: u32 = 45;
 impl Player {
     // ---- The actor's decision --------------------------------------------------------------
 
-    /// `PlayerStateSwim::isEnableCapThrowSurface`: swimming at the surface (or on the head
-    /// slide's end, which is not ported).
+    /// `PlayerStateSwim::isEnableCapThrowSurface`: swimming at the surface or on the head
+    /// slide's end.
     fn is_enable_cap_throw_surface(&self) -> bool {
-        self.water_finder.found && self.swim.nerve == SwimNerve::Surface
+        self.water_finder.found
+            && matches!(
+                self.swim.nerve,
+                SwimNerve::Surface | SwimNerve::HipDropHeadSlidingEnd
+            )
     }
 
     /// `PlayerStateSwim::isEnableCapThrow`: under the surface, on the bottom, in the paddle and
     /// after the hip drop's landing has run its first steps.
     fn is_enable_cap_throw(&self) -> bool {
         match self.swim.nerve {
-            SwimNerve::Move | SwimNerve::Paddle | SwimNerve::Land | SwimNerve::Walk => true,
+            SwimNerve::Move
+            | SwimNerve::Paddle
+            | SwimNerve::Land
+            | SwimNerve::Walk
+            | SwimNerve::HipDropHeadSlidingEnd => true,
             SwimNerve::HipDropLand => self.swim.steps as i32 >= k::DIVE_LAND_CANCEL_FRAME,
             _ => false,
         }

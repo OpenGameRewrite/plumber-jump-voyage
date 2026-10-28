@@ -37,7 +37,7 @@ impl Player {
     pub(super) fn exe_swim_hip_drop_start(
         &mut self,
         first: bool,
-        _o: &Orders,
+        o: &Orders,
         scene: &Course,
     ) -> Option<SwimEnd> {
         if first {
@@ -52,8 +52,9 @@ impl Player {
         }
         self.keep_water_surface_height(scene, self.swim.keep_depth);
         self.swim.ground_normal = self.ground_normal_or_up();
-        // (The head slide out of the wind-up is not ported.)
-        if self.anim_done(clip::SWIM_HIP_DROP_START) {
+        if o.throw_pressed {
+            self.set_swim_nerve(SwimNerve::HipDropHeadSliding);
+        } else if self.anim_done(clip::SWIM_HIP_DROP_START) {
             // `al::addVelocityToGravity`: the dive's speed along the gravity.
             self.v = Vec3::new(
                 k::DIVE_START_SPEED * GRAVITY.x + self.v.x,
@@ -102,13 +103,16 @@ impl Player {
             k::DIVE_BRAKE
         };
         self.move_dive_swim(1., 1., step);
-        // Something hit on the way down bounces the dive (the head slide out of the dive,
-        // `isTriggerHeadSliding`, is not ported).
+        // Accepted attack and landing take priority over the head slide input.
         if self.swim.attack.hip_drop_hit || self.swim.attack.hit {
             self.set_swim_nerve(SwimNerve::ReflectDownFall);
             return;
         }
         if self.try_change_hip_drop_land(o) {
+            return;
+        }
+        if o.throw_pressed {
+            self.set_swim_nerve(SwimNerve::HipDropHeadSliding);
             return;
         }
         // The speed down (the speed along the gravity) has been slow for a while.
@@ -395,4 +399,130 @@ fn limit_velocity_h(velocity: Vec3, limit: f32) -> Vec3 {
         }
     }
     Vec3::new(down.x + across.x, down.y + across.y, down.z + across.z)
+}
+
+impl Player {
+    /// Surface helper shared by HeadSliding and End (0x489448). A zero counter
+    /// applies the spring without latching it; only an already positive counter increments.
+    fn head_slide_surface_motion(&mut self) {
+        let finder = self.water_finder;
+        let limit = if self.swim.head_slide_surface > 0 {
+            k::SURFACE_END_DIST
+        } else {
+            k::SURFACE_START_DIST
+        };
+        if !finder.found || finder.distance >= limit {
+            self.swim.head_slide_surface = 0;
+            return;
+        }
+        if self.swim.head_slide_surface > 0 {
+            self.swim.head_slide_surface += 1;
+        }
+        let (vertical, horizontal) = lib::separate_parallel_vertical(GRAVITY, self.v);
+        let speed = pose_math::dot(-GRAVITY, vertical);
+        let speed = (speed * k::SURFACE_MOVE_DAMPER
+            + (finder.distance - k::SURFACE_MOVE_BASE_HEIGHT) * k::SURFACE_MOVE_SPRING)
+            .min(k::RISE_SPEED_MAX);
+        self.v = horizontal + (-GRAVITY) * speed;
+        // Static WaterAreas have zero additive finder displacement. Animated fluid
+        // displacement remains unported; it must not be reconstructed from a trace.
+    }
+
+    /// `al::subVelocityExceptDirectionLimit`: subtract speed across gravity,
+    /// retaining its direction and never reducing it below the supplied minimum.
+    fn brake_head_slide(&mut self, step: f32, minimum: f32) {
+        let (vertical, horizontal) = lib::separate_parallel_vertical(GRAVITY, self.v);
+        let speed = lib::length(horizontal);
+        let horizontal = if speed > minimum {
+            horizontal * ((speed - step).max(minimum) / speed)
+        } else {
+            horizontal
+        };
+        self.v = vertical + horizontal;
+    }
+
+    /// `PlayerStateSwim::exeSwimHipDropHeadSliding` (0x488fd0).
+    pub(super) fn exe_swim_head_slide(&mut self, first: bool, _o: &Orders) -> Option<SwimEnd> {
+        if first {
+            self.swim_anim("SwimHeadSlidingStart");
+            let (vertical, horizontal) = lib::separate_parallel_vertical(GRAVITY, self.v);
+            let (direction, valid) = pose_math::try_normalize_or_zero(horizontal);
+            let direction = if valid {
+                direction
+            } else {
+                self.actor_pose().front()
+            };
+            let vertical = if pose_math::dot(vertical, GRAVITY) > 0. {
+                Vec3::ZERO
+            } else {
+                vertical
+            };
+            self.v = vertical + direction * 15.; // SwimHeadSlidingSpeed; SwimHeadSlidingJump = 0.
+            self.swim.head_slide_surface = 0;
+        }
+        let input = self.swim_stick();
+        self.joints
+            .swim
+            .head_slide(pose_math::dot(self.actor_pose().side(), input));
+        self.head_slide_surface_motion();
+        let mut facing = self.facing;
+        crate::air_move::move_diving_jump(
+            &mut self.v,
+            &mut facing,
+            input,
+            &crate::air_move::DivingJump {
+                accel: 0.,
+                brake: 0.,
+                speed_max: 15.,
+                speed_min: 10.,
+                side_accel: k::HEAD_SLIDING_SIDE_ACCEL,
+                gravity: 0.,
+                fall_max: k::FALL_SPEED_MAX,
+                turn_rate: 0.,
+            },
+        );
+        let (front, valid) =
+            pose_math::try_normalize_or_zero(lib::verticalize_vec(GRAVITY, self.v));
+        let front = if valid {
+            front
+        } else {
+            self.actor_pose().front()
+        };
+        let stored = self.actor_pose().slerp_up_front(
+            -GRAVITY,
+            front,
+            k::SLERP_QUAT_GRAV,
+            t::HILL_POSE_DEGREE_MAX,
+        );
+        self.set_pose(stored);
+        if self.swim.steps >= 15 {
+            self.brake_head_slide((15. - 10.) / 45., 10.);
+        }
+        if self.is_swim_anim("SwimHeadSlidingStart") && self.anim_done(48) {
+            self.swim_anim("SwimHeadSliding");
+        }
+        // The executable's isNearZeroOrLess limit, not a comparator margin.
+        if self.swim_speed_h() - 10. <= 0.001 {
+            self.set_swim_nerve(SwimNerve::HipDropHeadSlidingEnd);
+        }
+        None
+    }
+
+    /// `PlayerStateSwim::exeSwimHipDropHeadSlidingEnd` (0x48965c).
+    pub(super) fn exe_swim_head_slide_end(&mut self, first: bool, o: &Orders) -> Option<SwimEnd> {
+        if first {
+            self.swim_anim("SwimHeadSlidingEnd");
+        }
+        self.head_slide_surface_motion();
+        self.brake_head_slide((10. - 5.) / 30., 5.);
+        self.joints.swim.ease_off();
+        if self.swim.head_slide_surface == 0 && o.jump {
+            self.set_swim_nerve(SwimNerve::Paddle);
+        } else if o.crouch_pressed {
+            self.set_swim_nerve(SwimNerve::HipDropStart);
+        } else if self.swim_speed_h() - 5. <= 0.001 {
+            self.set_swim_nerve(SwimNerve::Move);
+        }
+        None
+    }
 }
