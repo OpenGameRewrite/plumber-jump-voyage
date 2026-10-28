@@ -4895,8 +4895,30 @@ impl Player {
                 self.pos -= shift * UNIT;
             }
             let pose = self.actor_pose();
-            let target = self.throwing.dir.unwrap_or(self.facing);
-            self.set_pose(pose.slerp_up_front(Vec3::Y, target, 0.1, 0.));
+            let ceiling = self.air_turn.update_sky(turn_control::TurnFrame {
+                actor_front: pose.front(),
+                actor_up: pose.up(),
+                stick: if self.air.steered() && push != Vec3::ZERO {
+                    push
+                } else {
+                    self.throwing.dir.unwrap_or(self.facing)
+                },
+                up: Vec3::Y,
+            });
+            let target = self.air_turn.direction;
+            // slerpSkyPoseAir retains the ceiling-side hemisphere until the
+            // front or up faces the requested direction (0x55d040).
+            self.set_pose(
+                if !ceiling || pose_math::dot(pose.front(), target) > 0. || pose.up().y > 0. {
+                    pose.slerp_up_front(Vec3::Y, target, 0.1, 0.)
+                } else {
+                    pose_math::slerp(
+                        pose.calc_quat(),
+                        pose_math::quat_up_front(Vec3::Y, target),
+                        0.1,
+                    )
+                },
+            );
         } else {
             self.facing = self.air.turn_facing(self.facing, push);
         }
@@ -4906,6 +4928,13 @@ impl Player {
         // the 24th step the state falls and every air judge may act (`isEnableCancelAir`).
         let can_pound = self.ground_height >= air_move::tune::HIP_DROP_HEIGHT;
         if !self.winding && o.crouch_pressed && can_pound {
+            // cancelPoseInterpole (0x481c08) ends the tilted handover at once.
+            if self.throwing.model_shift.is_some() && step <= 20 {
+                self.set_pose(pose_math::quat_up_front(
+                    Vec3::Y,
+                    self.throwing.dir.unwrap_or(self.facing),
+                ));
+            }
             self.start_hip_drop();
             return;
         }

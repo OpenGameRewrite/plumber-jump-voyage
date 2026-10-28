@@ -339,6 +339,18 @@ impl TurnControl {
 
     /// One frame of `PlayerActionTurnControl::update`.
     pub fn update(&mut self, frame: TurnFrame) {
+        self.update_frame(frame, false);
+    }
+
+    /// Air control enables the ceiling-side branch (`+0x89`); the returned
+    /// `+0x6a` flag selects slerpSkyPoseAir instead of slerpUpFront.
+    pub fn update_sky(&mut self, frame: TurnFrame) -> bool {
+        let ceiling = dot(frame.actor_up, Vec3::Y) < 0.087_155_744;
+        self.update_frame(frame, ceiling);
+        ceiling
+    }
+
+    fn update_frame(&mut self, frame: TurnFrame, ceiling: bool) {
         let TurnFrame {
             actor_front,
             actor_up,
@@ -368,7 +380,7 @@ impl TurnControl {
         // a forced controller keeps turning and only flags it.
         let mut reverse = false;
         let mut reverse_forced = false;
-        if has_input && !front_invalid && is_opposite_dir(new, front) {
+        if has_input && !front_invalid && !ceiling && is_opposite_dir(new, front) {
             let smooth = skip_tracking || (have_both && stick_turn <= REVERSE_SMOOTH_RATE);
             if smooth {
                 reverse = !self.tuning.forced;
@@ -377,7 +389,7 @@ impl TurnControl {
         }
         self.reverse = reverse;
         self.reverse_forced = reverse_forced;
-        let turning = has_input && !front_invalid && !reverse;
+        let turning = has_input && !front_invalid && !ceiling && !reverse;
         let direction;
         if turning {
             let angle_to_stick = acosf(
@@ -470,15 +482,31 @@ impl TurnControl {
                 self.rate = 0.;
             } else {
                 direction = new;
+                if ceiling {
+                    self.rate = self.fast_limit;
+                }
             }
         } else {
             // No stick: the facing stays (the actor's own, when it cannot be carried onto the
             // floor), the stick's memory is cleared and the turn rate brakes.
-            direction = if front_invalid { actor_front } else { front };
+            direction = if ceiling {
+                self.rate = self.fast_limit;
+                if dot(actor_up, Vec3::Y) < 0. {
+                    -actor_front
+                } else {
+                    actor_front
+                }
+            } else if front_invalid {
+                actor_front
+            } else {
+                front
+            };
             self.last_direction = Vec3::ZERO;
             self.last_axis = Vec3::ZERO;
             self.last_up = Vec3::ZERO;
-            self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
+            if !ceiling {
+                self.rate = brake(self.rate, self.tuning.brake_frames, self.limit);
+            }
         }
         self.direction = direction;
     }
