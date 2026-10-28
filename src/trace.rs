@@ -613,7 +613,9 @@ impl Recorder {
                 cells.empty();
             }
         }
-        let sensors: &[LookSensor] = self.stage.as_ref().map_or(&[], |mesh| &mesh.look_sensors);
+        let static_sensors: &[LookSensor] =
+            self.stage.as_ref().map_or(&[], |mesh| &mesh.look_sensors);
+        let sensors = p.rocket_look_sensors(static_sensors, self.stage.as_deref());
         cells.text(
             &p.look
                 .requested_sensor()
@@ -628,7 +630,7 @@ impl Recorder {
                 }),
         );
         cells.text(&p.look.keeper_cell());
-        cells.text(&p.look.sensors_cell(sensors));
+        cells.text(&p.look.sensors_cell(&sensors));
     }
 
     /// Row of cells (in `COLUMNS` order) for the state after a step. The
@@ -1231,6 +1233,7 @@ pub struct TraceFile {
     pub metadata: serde_json::Value,
     pub grabceil_seed: Option<serde_json::Value>,
     pub geyser_seed: Option<serde_json::Value>,
+    pub rocket_seed: Option<serde_json::Value>,
 }
 impl TraceFile {
     pub fn read(path: &str) -> Result<Self, String> {
@@ -1260,6 +1263,13 @@ impl TraceFile {
                     .map_err(|e| e.to_string())?,
             );
         }
+        let seed = std::path::Path::new(path).with_extension("rocket_seed.json");
+        if seed.exists() {
+            trace.rocket_seed = Some(
+                serde_json::from_str(&std::fs::read_to_string(seed).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
         Ok(trace)
     }
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -1283,6 +1293,7 @@ impl TraceFile {
             rows,
             metadata: serde_json::Value::Null,
             geyser_seed: None,
+            rocket_seed: None,
             grabceil_seed: None,
         })
     }

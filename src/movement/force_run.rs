@@ -44,8 +44,11 @@ impl ForceRun {
 
 impl Player {
     /// The game's `forcerun=<counter>/<speed>` counter text.
-    pub(super) fn force_run_cell(&self) -> String {
-        format!("forcerun={}/{:.6}", self.force_run.counter, self.force_run.speed)
+    pub fn force_run_cell(&self) -> String {
+        format!(
+            "forcerun={}/{:.6}",
+            self.force_run.counter, self.force_run.speed
+        )
     }
 
     /// The counter the player holds (`PlayerCounterForceRun`).
@@ -63,8 +66,7 @@ impl Player {
         if !self.force_run.is_active() {
             self.events.push(Fx::ForceRunStart);
         }
-        self.force_run
-            .setup(EQUIPMENT_FRAMES, EQUIPMENT_SPEED);
+        self.force_run.setup(EQUIPMENT_FRAMES, EQUIPMENT_SPEED);
     }
 
     /// The end of `PlayerActorHakoniwa::movement` (0x41f088).

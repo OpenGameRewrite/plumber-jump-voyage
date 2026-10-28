@@ -248,6 +248,7 @@ mod damage_life;
 mod damage_swim;
 pub mod death;
 mod entrance_camera;
+mod force_run;
 #[path = "movement/grab_ceil.rs"]
 pub mod grab_ceil;
 #[path = "movement/grab_ceil_find.rs"]
@@ -255,11 +256,12 @@ mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
 mod recovery_dead;
+pub mod rocket_flower;
 mod safety;
 pub mod sand_geyser;
-mod force_run;
 mod sand_sink;
 mod stain;
+mod surface_run;
 use damage::Damage;
 use damage_fire::FireControl;
 pub use stain::Soot;
@@ -1072,6 +1074,8 @@ pub struct Player {
     geyser: sand_geyser::GeyserControl,
     /// `PlayerCounterForceRun`: set by RocketFlower equipment.
     force_run: force_run::ForceRun,
+    rocket: rocket_flower::RocketFlowers,
+    surface_run: surface_run::SurfaceRun,
     damage: Damage,
     life: damage_life::LifeControl,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
@@ -1369,6 +1373,8 @@ impl Default for Player {
             sand: sand_sink::SandControl::default(),
             geyser: sand_geyser::GeyserControl::default(),
             force_run: force_run::ForceRun::default(),
+            rocket: default(),
+            surface_run: default(),
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),
@@ -2821,7 +2827,10 @@ impl Player {
         // The game animates first, then the state runs; a state chosen last
         // frame starts now.
         // The cap updates before the player does, within the same frame.
+        self.tick_rocket_flowers(scene);
         self.update_cap(&o, scene);
+        self.rocket_sensor_phase(scene);
+        self.query_equipment_force_run();
         self.cap_sensor_phase(&o);
         self.start_pending_abyss();
         self.check_recovery_area_exit(scene);
@@ -2880,6 +2889,7 @@ impl Player {
         self.sample_grab_ceil_sources(scene);
         self.check_death_area(scene);
         self.update_recovery_point(scene);
+        self.update_force_run_counter();
         self.finish_frame(scene);
         // The camera updates after the actors of the frame.
         self.entrance_camera.update(self.position_cm(), o.recenter);
@@ -2919,7 +2929,9 @@ impl Player {
     /// run angle; the other ground states still use their existing contact test.
     /// The original judge's water-surface-run veto has no consumer in this rewrite yet.
     fn update_ground_lost(&mut self) {
-        let contact = if self.burning() {
+        let contact = if self.start_surface_run() {
+            true
+        } else if self.burning() {
             self.fire_run_angle_contact()
         } else {
             self.grounded
@@ -2937,7 +2949,8 @@ impl Player {
     /// is recorded (walking and running off a terrace); the other ground
     /// states are assumed to ask the same judge.
     fn judge_fall(&mut self) {
-        if self.ground_lost > GROUND_LOST_FRAMES
+        if !(self.start_surface_run() || self.surface_run.result && matches!(self.mode, Move::Walk | Move::Run))
+            && self.ground_lost > GROUND_LOST_FRAMES
             && !self.nerve.deferred
             && (matches!(
                 self.mode,
@@ -2974,7 +2987,13 @@ impl Player {
             });
         }
         match self.mode {
-            Move::Idle | Move::Walk | Move::Run => self.run(o),
+            Move::Idle | Move::Walk | Move::Run => {
+                let running = self.mode != Move::Idle;
+                self.run(o);
+                if running {
+                    self.respond_surface_run(scene);
+                }
+            }
             Move::Skid | Move::Turn => self.brake(o),
             Move::SquatBrake | Move::Crouch | Move::Crawl => self.squat(o),
             Move::GroundSpin => self.ground_spin(o),
@@ -3129,7 +3148,14 @@ impl Player {
             && !self.sub.active
             && !self.entrance_camera.playing();
         let actor = self.pose_matrix();
-        self.look.step(&actor, enabled, scene.look_sensors());
+        let sensors = self.rocket_look_sensors(scene.look_sensors(), scene.mesh.as_deref());
+        for (i, f) in self.rocket.flowers.iter().enumerate() {
+            if !f.valid {
+                self.look
+                    .invalidate_source_sensor(scene.look_sensors().len() + i * 2 + 1);
+            }
+        }
+        self.look.step(&actor, enabled, &sensors);
         self.run_state_frame();
         self.update_joint_controls();
     }
@@ -3146,7 +3172,10 @@ impl Player {
             self.start_slope_slide();
             return true;
         }
-        if o.crouch && !matches!(self.mode, Move::SquatBrake | Move::Crouch | Move::Crawl) {
+        if !self.force_run.is_active()
+            && o.crouch
+            && !matches!(self.mode, Move::SquatBrake | Move::Crouch | Move::Crawl)
+        {
             self.start_squat();
             return true;
         }
@@ -3218,7 +3247,10 @@ impl Player {
         if self.try_force_slope_slide() {
             return;
         }
-        if self.tilt >= STICK_DEADZONE || self.auto_run_skate() {
+        if self.force_run.is_active() || self.tilt >= STICK_DEADZONE || self.auto_run_skate() {
+            if self.force_run.is_active() {
+                self.sub.active = false;
+            }
             // The state's own start-run judge comes before the actor's (jump,
             // crouch, throw): a jump pressed with the stick is taken by the
             // run state's first step (`pole-climb` rows 10-11).
@@ -3379,6 +3411,7 @@ impl Player {
                 - self.position_cm();
         // The next step's nerves read the joint axes this calculation leaves.
         self.model_axes = swim_dive_in::ModelAxes::of(&world);
+        self.rocket.head = Some(world[crate::skeleton_pose::Joint::Head as usize]);
         world
     }
 
@@ -3497,6 +3530,9 @@ impl Player {
         } else {
             (t::NORMAL_MAX, t::ACCEL_FRAMES as i32)
         };
+        self.update_surface_run();
+        self.ground.force_speed = self.force_run.is_active().then_some(self.force_run.speed);
+        self.ground.surface_run = self.surface_run.result;
         let steer = self.ground.update(&SteerInput {
             skate: self.on_ground_skate(),
             velocity: in_plane,
@@ -4019,6 +4055,11 @@ impl Player {
         let forward = self.v.dot(self.facing).abs();
         let power =
             air_move::jump_power(forward, t::NORMAL_MIN, t::NORMAL_MAX, power_min, power_max);
+        let (clip, power, gravity) = if self.force_run.is_active() {
+            ("JumpDashFast", 18., 1.)
+        } else {
+            (clip, power, gravity)
+        };
         let ground_up = self.ground_pose_up_for_jump();
         self.jump_with(mode, clip, power, gravity, move |p| {
             if let Some(horizontal) = p.takeoff_h {

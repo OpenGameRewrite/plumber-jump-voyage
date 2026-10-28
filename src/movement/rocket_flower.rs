@@ -1,0 +1,250 @@
+//! RocketFlower's cap pickup, equipment request and independently ticked watcher.
+//! Only the upright, unlinked flower composition is supported here.
+use super::*;
+
+#[derive(Clone, Debug)]
+pub struct Flower {
+    pub id: String,
+    pub host: String,
+    pub position: Vec3,
+    pub phase: u8,
+    pub step: i32,
+    pub equip: Vec3,
+    pub valid: bool,
+    pub pending: Option<Vec3>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RocketFlowers {
+    pub flowers: Vec<Flower>,
+    pub equipped: Vec<usize>,
+    pub dash: bool,
+    pub step: i32,
+    pub head: Option<look_joint::Mat34>,
+    pub stops: u32,
+    pub pickup: bool,
+    pub equip_request: bool,
+    pub ended: bool,
+}
+
+impl RocketFlowers {
+    fn equip(&mut self, index: usize) {
+        if self.equipped.len() == 3 {
+            let old = self.equipped.remove(0);
+            self.flowers[old].phase = 0;
+            self.flowers[old].step = -1;
+            self.flowers[old].valid = false;
+        }
+        self.equipped.push(index);
+        self.dash = true;
+        self.step = -1;
+        self.flowers[index].phase = 3;
+        self.flowers[index].step = -1;
+        self.equip_request = true;
+    }
+
+    pub fn diagnostic(&self) -> String {
+        let flowers = self
+            .flowers
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}/{}/{}/{:08x}/{:08x}/{:08x}/{}",
+                    f.id,
+                    f.phase,
+                    f.step,
+                    f.equip.x.to_bits(),
+                    f.equip.y.to_bits(),
+                    f.equip.z.to_bits(),
+                    u8::from(f.valid)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        format!(
+            "{}/{}/{}/{}/{}/{}/{};flowers={}",
+            u8::from(self.dash),
+            self.step,
+            self.equipped.len(),
+            u8::from(self.pickup),
+            u8::from(self.equip_request),
+            u8::from(self.ended),
+            self.stops,
+            flowers
+        )
+    }
+}
+
+impl Player {
+    pub fn seed_rocket_flowers(&mut self, seed: &serde_json::Value) -> Result<(), String> {
+        let mut control = RocketFlowers {
+            step: seed["watcher_step"].as_i64().ok_or("rocket watcher seed")? as i32 - 1,
+            ..default()
+        };
+        for item in seed["flowers"].as_array().ok_or("rocket flowers seed")? {
+            let p = item["position"].as_array().ok_or("rocket position")?;
+            if p.len() != 3 {
+                return Err("rocket position size".into());
+            }
+            control.flowers.push(Flower {
+                id: item["id"].as_str().ok_or("rocket id")?.into(),
+                host: item["host"].as_str().ok_or("rocket host")?.into(),
+                position: Vec3::new(
+                    p[0].as_f64().ok_or("rocket x")? as f32,
+                    p[1].as_f64().ok_or("rocket y")? as f32,
+                    p[2].as_f64().ok_or("rocket z")? as f32,
+                ),
+                phase: 0,
+                step: item["step"].as_i64().ok_or("rocket step")? as i32 - 1,
+                equip: Vec3::ZERO,
+                valid: false,
+                pending: None,
+            });
+        }
+        self.rocket = control;
+        Ok(())
+    }
+
+    pub fn rocket_diagnostic(&self) -> Option<String> {
+        (!self.rocket.flowers.is_empty()).then(|| self.rocket.diagnostic())
+    }
+
+    pub fn rocket_look_sensors(
+        &self,
+        static_sensors: &[look_at::LookSensor],
+        scene: Option<&crate::geometry::TriangleMesh>,
+    ) -> Vec<look_at::LookSensor> {
+        let mut sensors = static_sensors.to_vec();
+        for f in &self.rocket.flowers {
+            for (name, kind, at) in [
+                ("Body", 12, f.position + Vec3::Y * 50.),
+                ("Equip", 6, f.equip),
+            ] {
+                sensors.push(look_at::LookSensor {
+                    host: f.host.clone(),
+                    name: name.into(),
+                    kind,
+                    radius: 70.,
+                    position: scene.map_or(at, |m| m.relative_vec(at)),
+                    stage_position: at,
+                });
+            }
+        }
+        sensors
+    }
+
+    pub(super) fn equipment_force_run(&self) -> bool {
+        self.rocket.dash
+    }
+
+    /// Sources run before HackCap and Mario; scene stop advances the watcher's nerve
+    /// clock, while the flower's LiveActor movement remains stopped.
+    pub(super) fn tick_rocket_flowers(&mut self, scene: &Course) {
+        let mut c = std::mem::take(&mut self.rocket);
+        c.pickup = false;
+        c.equip_request = false;
+        c.ended = false;
+        let cap = self
+            .cap
+            .as_ref()
+            .map(|cap| scene.in_water_frame(cap.pos / UNIT));
+        let head = c
+            .head
+            .map(|m| scene.in_water_frame(look_joint::translation(&m)));
+        let mut stop = false;
+        for f in &mut c.flowers {
+            if f.step < 0 {
+                f.step = 0;
+            }
+            if let Some(pending) = f.pending.take() {
+                f.equip = pending;
+            }
+            match f.phase {
+                1 => {
+                    stop |= f.step == 0;
+                    if let Some(cap) = cap {
+                        f.equip = cap + Vec3::Y * 50.;
+                    } else {
+                        f.valid = true;
+                        f.phase = 2;
+                        f.step = -1;
+                    }
+                }
+                2 => {
+                    if let Some(head) = head {
+                        f.equip = head;
+                    }
+                    if f.step >= 20 {
+                        f.phase = 0;
+                        f.step = -1;
+                        f.valid = false;
+                    }
+                }
+                _ => {}
+            }
+            f.step += 1;
+        }
+        if stop {
+            c.stops += 2;
+            c.step += 2;
+        }
+        if c.step < 0 {
+            c.step = 0;
+        }
+        if c.dash
+            && let Some(m) = c.head
+        {
+            let up = Vec3::new(m[0][1], m[1][1], m[2][1]);
+            let side = Vec3::new(m[0][0], m[1][0], m[2][0]);
+            if let Some(head) = head {
+                for (slot, &i) in c.equipped.iter().enumerate() {
+                    c.flowers[i].pending =
+                        Some(head + up * 16. + (-up * 40. - side * 10.) * (slot + 1) as f32);
+                }
+            }
+        }
+        if c.dash && c.step % 240 == 239 {
+            let old = c.equipped.remove(0);
+            c.flowers[old].phase = 0;
+            c.flowers[old].step = -1;
+            c.flowers[old].valid = false;
+            if c.equipped.is_empty() {
+                c.dash = false;
+                c.step = -1;
+                c.ended = true;
+            }
+        }
+        c.step += 1;
+        self.rocket = c;
+    }
+
+    pub(super) fn rocket_sensor_phase(&mut self, scene: &Course) {
+        let mut c = std::mem::take(&mut self.rocket);
+        let feet = scene.in_water_frame(self.position_cm());
+        let cap = self.prev_cap.map(|cap| scene.in_water_frame(cap / UNIT));
+        for i in 0..c.flowers.len() {
+            let f = &mut c.flowers[i];
+            if f.phase == 0
+                && let Some(cap) = cap
+            {
+                // Cap item-get sphere (40), against the placed Body (70).
+                let delta = cap - (f.position + Vec3::Y * 50.);
+                if pose_math::dot(delta, delta) < 110. * 110. {
+                    f.phase = 1;
+                    f.step = -1;
+                    c.pickup = true;
+                }
+            }
+            if f.phase == 2 && f.valid {
+                let hit = [(75., 50.), (110., 40.)].into_iter().any(|(y, r)| {
+                    let delta = feet + Vec3::Y * y - f.equip;
+                    pose_math::dot(delta, delta) < (r + 70.) * (r + 70.)
+                });
+                if hit {
+                    c.equip(i);
+                }
+            }
+        }
+        self.rocket = c;
+    }
+}

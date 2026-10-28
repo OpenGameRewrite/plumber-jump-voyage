@@ -23,7 +23,7 @@ use crate::effect_life::EMPTY_RESOURCE;
 /// (`code_driven`), whoever started it. The turn clip's own entry for
 /// `RunStart` (kept past the clip) does not take it out of the control's hands:
 /// the dust of the next run clip replaces it.
-const RUN_DUST: [&str; 4] = ["Run", "RunStart", "Dash", "DashFast"];
+const RUN_DUST: [&str; 5] = ["Run", "RunStart", "Dash", "DashFast", "DashFastPuddle"];
 
 /// An effect entry: the effect's name and which of its table entries.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -470,10 +470,20 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     if matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
         && matches!(p.anim.name, "Move" | "Brake" | "Turn" | "TurnPoint")
     {
-        wanted.extend(p.run_cycle().effect);
+        wanted.extend(p.run_cycle().effect.map(|effect| {
+            if effect == "DashFast" && p.water_surface_run() {
+                "DashFastPuddle"
+            } else {
+                effect
+            }
+        }));
     } else if let Some(effect) = p.run_start_effect() {
         // The run state's first step started its dust and chose the jump.
-        wanted.push(effect);
+        wanted.push(if effect == "DashFast" && p.water_surface_run() {
+            "DashFastPuddle"
+        } else {
+            effect
+        });
     }
     wanted.extend(p.sand_effect().0);
     if p.roll_effect_on() {

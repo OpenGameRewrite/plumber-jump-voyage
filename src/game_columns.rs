@@ -66,6 +66,7 @@ pub fn counters_cell(p: &Player) -> String {
         format!("clong={}", combo_long_jump(get)),
         format!("capjump={}", get("cap_jump_possible")),
         format!("prejump={}", get("pre_jump")),
+        p.force_run_cell(),
     ];
     items.extend(
         counters
@@ -147,6 +148,9 @@ pub fn collision_cell(p: &Player) -> String {
     }
     if !p.geyser_sources().is_empty() {
         items.push(format!("geysers={}", p.geyser_sources()));
+    }
+    if let Some(source) = p.rocket_diagnostic() {
+        items.push(format!("rocket={source}"));
     }
     items.join(";")
 }

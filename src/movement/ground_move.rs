@@ -118,6 +118,8 @@ pub struct Steer {
 /// velocity along the facing, but both let the slope speed them up and slow them down.
 #[derive(Clone, Debug)]
 pub struct GroundMove {
+    pub force_speed: Option<f32>,
+    pub surface_run: bool,
     ramp: bool,
     drift: bool,
     pub turn: TurnControl,
@@ -141,6 +143,8 @@ impl Default for GroundMove {
     /// The run's control.
     fn default() -> Self {
         Self {
+            force_speed: None,
+            surface_run: false,
             ramp: true,
             drift: true,
             turn: TurnControl::default(),
@@ -338,19 +342,33 @@ impl GroundMove {
             .clamp(0., 1.);
         self.turn
             .set_limit(lerp_value(t::ROUND_LIMIT_DEG_MIN, t::ROUND_LIMIT_DEG, dash));
+        if self.force_speed.is_some() {
+            self.turn.setup_force_run();
+        }
         self.turn.update(TurnFrame {
             actor_front: input.actor_front,
             actor_up: input.actor_up,
             stick: input.stick,
             up,
         });
-        let (stick_dir, has_input) = try_normalize_or_zero(input.stick);
+        let (mut stick_dir, mut has_input) = try_normalize_or_zero(input.stick);
         // The turn control decides the facing, which is also the way the velocity points.
         let wanted = self.turn.direction;
+        let mut stick = input.stick;
+        if self.force_speed.is_some() {
+            if !has_input {
+                stick_dir = wanted;
+            }
+            stick = stick_dir;
+            has_input = true;
+        }
         let wall = input.wall.map_or(Vec3::ZERO, |(normal, _)| normal);
         let wanted_zero = is_near_zero(wanted, NEAR_ZERO_SPEED);
         let along = dot(wanted, heading);
-        let opposed = has_input && !wanted_zero && is_opposite_dir(stick_dir, wanted);
+        let opposed = self.force_speed.is_none()
+            && has_input
+            && !wanted_zero
+            && is_opposite_dir(stick_dir, wanted);
         let no_input = !has_input;
         let braking_request = self.turn.reverse || no_input;
         let into_wall = dot(wall, heading) < WALL_INTO_COS;
@@ -360,8 +378,13 @@ impl GroundMove {
         let mut target = 0.;
         if along >= 0. && !braking_request {
             // Accelerate toward what the stick's tilt allows.
-            let tilt = squared_length(input.stick).sqrt();
-            let top = self.hill_speed() + input.max_speed;
+            let tilt = squared_length(stick).sqrt();
+            let top = self.hill_speed()
+                + if self.surface_run && input.max_speed * 0.99 - measured <= 0.001 {
+                    35.
+                } else {
+                    input.max_speed
+                };
             target = tilt * top + (1. - tilt) * self.min_speed;
             if into_wall && target > input.max_speed {
                 target = input.max_speed;
@@ -398,6 +421,9 @@ impl GroundMove {
         if speed > target {
             let braked = brake(speed, brake_frames, input.max_speed);
             speed = if braked < target { target } else { braked };
+        }
+        if let Some(forced) = self.force_speed {
+            speed = speed.max(forced);
         }
 
         let pull = |velocity: Vec3| {

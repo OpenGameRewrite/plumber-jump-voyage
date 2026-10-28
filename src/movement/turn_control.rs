@@ -178,6 +178,18 @@ pub struct TurnControl {
     pub reverse_forced: bool,
 }
 impl TurnControl {
+    pub fn setup_force_run(&mut self) {
+        self.tuning.forced = true;
+        self.setup(TurnSetup {
+            min_degrees: 0.5,
+            fast_degrees: 45.,
+            accel_frames: 20,
+            accel_frames_fast: 10,
+            brake_frames: 3,
+            limit: 4.,
+            fast_limit: 4.,
+        });
+    }
     /// Skate forces the facing through reversals instead of entering Brake.
     pub fn setup_ice(&mut self) {
         self.tuning.forced = true;

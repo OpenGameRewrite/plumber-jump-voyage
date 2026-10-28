@@ -728,6 +728,15 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         .camera
         .or(options.lockstep)
         .and_then(TraceFile::floor_material);
+    if let Some(seed) = recorded.and_then(|g| g.rocket_seed.as_ref()) {
+        if seed["stage"].as_str() != script.stage.as_deref()
+            || seed["scenario"].as_u64() != script.scenario.map(u64::from)
+            || seed["frame"].as_i64() != Some(-(script.preroll_frames() as i64))
+        {
+            return Err("rocket seed stage/scenario/preroll mismatch".into());
+        }
+        player.seed_rocket_flowers(seed)?;
+    }
     let mut recorder = Recorder::new(
         options.table.clone(),
         options.library.clone(),

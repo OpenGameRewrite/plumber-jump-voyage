@@ -155,6 +155,16 @@ impl Default for LookAt {
 }
 
 impl LookAt {
+    pub fn invalidate_source_sensor(&mut self, index: usize) {
+        self.invalid_sensors.push(index);
+        if self.candidate == Some(index) {
+            self.candidate = None;
+        }
+        if self.target == Some(index) {
+            self.forget_target();
+        }
+    }
+
     /// PlayerEyeSensorHitHolder::clear drops a sensor invalidated by actor clipping.
     pub fn set_invalid_sensors(&mut self, invalid: Vec<usize>) {
         if self.candidate.is_some_and(|i| invalid.contains(&i)) {

@@ -322,6 +322,17 @@ impl Player {
         {
             return;
         }
+        if self.start_surface_run() {
+            if !matches!(self.mode, Move::Walk | Move::Run) {
+                self.pull = GRAVITY_MOVE;
+                self.v.y = -GRAVITY_MOVE;
+                self.go(Move::Run, "Move");
+            }
+            return;
+        }
+        if matches!(self.mode, Move::Walk | Move::Run) && self.surface_run.result {
+            return;
+        }
         if self.actor_name() == "Jump" && !self.out_in_water_judged(scene) {
             return;
         }
