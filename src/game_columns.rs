@@ -142,6 +142,7 @@ pub fn collision_cell(p: &Player) -> String {
             .map_or(p.wall, |contact| contact.normal);
         items.push(format!("wn={}", vector(normal)));
     }
+    if !p.geyser_sources().is_empty() { items.push(format!("geysers={}",p.geyser_sources())); }
     items.join(";")
 }
 /// The floor codes the game's probe tests for by name (`Pole` stands for the whole pole family,

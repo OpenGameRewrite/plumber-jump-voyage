@@ -253,6 +253,7 @@ mod ground;
 mod recovery_dead;
 mod safety;
 mod sand_sink;
+pub mod sand_geyser;
 mod stain;
 use damage::Damage;
 use damage_fire::FireControl;
@@ -593,6 +594,7 @@ pub enum Move {
     SandPivot,
     SandJump,
     SandDead,
+    SandGeyser,
     DamageAir,
     DamageLand,
     DamageDead,
@@ -616,7 +618,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 56] = [
+    pub const ALL: [Move; 57] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -653,6 +655,7 @@ impl Move {
         Self::SandPivot,
         Self::SandJump,
         Self::SandDead,
+        Self::SandGeyser,
         Self::DamageAir,
         Self::DamageLand,
         Self::DamageDead,
@@ -704,6 +707,7 @@ impl Move {
             Self::FireRun => "Fire run",
             Self::FireFall => "Fire fall",
             Self::SandWait | Self::SandRun | Self::SandPivot | Self::SandJump => "Quicksand",
+            Self::SandGeyser => "Sand geyser",
             Self::SandDead
             | Self::FireDead
             | Self::DamageDead
@@ -1044,6 +1048,7 @@ pub struct Player {
     nerve: Nerve,
     fire: FireControl,
     sand: sand_sink::SandControl,
+    geyser: sand_geyser::GeyserControl,
     damage: Damage,
     life: damage_life::LifeControl,
     /// The pole climb in progress (`PlayerStatePoleClimb`).
@@ -1288,6 +1293,7 @@ pub struct Player {
     /// The frame (base matrix, inverse) of the collision part the last collision found ground on,
     /// when the stage's export has it: `rs::waitGround` carries the pose along it.
     ground_frame: Option<([f32; 12], [f32; 12])>,
+    ground_part: Option<usize>,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1337,6 +1343,7 @@ impl Default for Player {
             nerve,
             fire: FireControl::default(),
             sand: sand_sink::SandControl::default(),
+            geyser: sand_geyser::GeyserControl::default(),
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),
@@ -1463,6 +1470,7 @@ impl Default for Player {
             wall_along: wall_along::WallAlong::default(),
             view: None,
             ground_frame: None,
+            ground_part: None,
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -2724,6 +2732,7 @@ impl Player {
             self.restart_after_death(scene);
         }
         self.death.update_judge(self.is_dead());
+        self.follow_geyser_ground(scene);
         self.prev = self.pos;
         self.prev_cap = self.cap.as_ref().map(|c| c.pos);
         if self.hitstop > 0. {
@@ -2767,6 +2776,7 @@ impl Player {
         self.check_recovery_area_exit(scene);
         self.dispatch_sand_death();
         self.receive_candle_fire(scene);
+        self.receive_sand_geyser();
         self.dispatch_damage(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -2812,6 +2822,7 @@ impl Player {
             self.nerve.touchdown = true;
             self.touchdown_speed = self.landing_speed;
         }
+        self.queue_sand_geyser(scene);
         self.check_death_area(scene);
         self.update_recovery_point(scene);
         self.finish_frame(scene);
@@ -2928,6 +2939,7 @@ impl Player {
             Move::SandWait | Move::SandRun | Move::SandPivot | Move::SandJump | Move::SandDead => {
                 self.sand_step(o)
             }
+            Move::SandGeyser => self.sand_geyser_step(scene),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -5137,7 +5149,7 @@ impl Player {
         // DeadFire disables movement collision; retain the last contact report.
         if matches!(
             self.mode,
-            Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel
+            Move::AbyssFall | Move::RecoveryStart | Move::RecoveryTravel | Move::SandGeyser
         ) {
             self.move_without_collision(scene);
             return;

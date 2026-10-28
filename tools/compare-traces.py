@@ -646,6 +646,13 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
                 evidence = dict(geometry=geometry, start=meta.get("start_abs"),
                                 preroll=read_trace(pre)[1] if os.path.isfile(pre) else {},
                                 start_triangle=meta.get("floor_triangle_at_start"))
+                actor_path = os.path.join(os.path.dirname(game_path), "game.geysers.csv")
+                seed_path = os.path.join(os.path.dirname(game_path), "game.geyser_seed.json")
+                if os.path.isfile(actor_path) and os.path.isfile(seed_path):
+                    with open(actor_path, encoding="utf8") as actor_file:
+                        evidence["geysers"] = list(csv.DictReader(actor_file))
+                    with open(seed_path, encoding="utf8") as seed_file:
+                        evidence["geyser_seed"] = json.load(seed_file)
         verdict = judge_run(game, rew, listed, **evidence)
         for f, reasons in listed.items():
             if not reasons:

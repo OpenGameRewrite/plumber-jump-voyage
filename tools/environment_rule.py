@@ -30,6 +30,7 @@ so those names are judged as if physical and the surface hosts cannot be read (n
 import math
 import re
 import struct
+from sand_geyser import Evidence as GeyserEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -210,7 +211,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -232,6 +233,7 @@ class Judge:
             key for key, bases in spans.items()
             if any(max(b[i] for b in bases) - min(b[i] for b in bases) > 0.01 for i in range(3))
         }
+        self._geysers = GeyserEvidence(geometry, geysers, rewrite_rows, geyser_seed)
         self._scripted = {}
         self._candles = []
         self._start = start
@@ -508,6 +510,9 @@ class Judge:
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
                 continue
+            if self._geysers.contact(f, c):
+                v.accept(f, "exported SandGeyser source", "placement-bound source with independently verified phase and reproduced timeline")
+                continue
             if self._candle_contact(f, c, message=c["kind"] in ("r", "p")):
                 v.accept(f, "exported candlestand sensor",
                          "settled initially lit static placement; exact Fire/Body sphere overlap replayed")
@@ -541,6 +546,8 @@ class Judge:
             host = hosts.get(surface)
             if host is None:
                 return False, f"no {surface} host logged on this frame"
+            if self._geysers.floor(f, host):
+                continue
             if host["moving"] == "1" or host["parts_flag"] == "0":
                 return False, f"{surface} host {host['host']} is a moving collision part"
             if (surface, host["host"]) in self._moving_by_position:

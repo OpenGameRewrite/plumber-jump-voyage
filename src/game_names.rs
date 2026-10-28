@@ -79,6 +79,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::SandRun => known("SandSink/Run"),
         Move::SandPivot => known("SandSink/Pivot"),
         Move::SandJump => known("SandSink/Jump"),
+        Move::SandGeyser => known("SandGeyser/SandGeyser"),
         Move::SandDead => known("SandSink/Dead"),
         Move::FireDead => known("DamageFire/Dead"),
         Move::DamageAir => known("Damage/Damage"),
