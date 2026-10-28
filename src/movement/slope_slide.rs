@@ -128,6 +128,9 @@ impl Player {
             self.end_slope_slide(o);
             return;
         }
+        if self.try_force_rolling() {
+            return;
+        }
         // (The ground roll's start is refused on a floor that forces the slide.)
         if o.crouch
             && o.throw_pressed

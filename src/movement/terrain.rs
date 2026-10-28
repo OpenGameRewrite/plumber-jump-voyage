@@ -55,6 +55,29 @@ impl Player {
                 .is_some_and(|c| c.floor == "Skate")
     }
 
+    /// `rs::isOnGroundForceRollingCode` (0x569f48).
+    pub(super) fn on_ground_force_rolling(&self) -> bool {
+        self.is_on_ground_by(self.units_per_frame())
+            && self
+                .touched
+                .floor
+                .as_ref()
+                .is_some_and(|c| c.floor == "Rolling")
+    }
+
+    /// The actor's automatic forced-roll consumer (0x4229d0).
+    pub(super) fn try_force_rolling(&mut self) -> bool {
+        if self.nerve.deferred || !self.on_ground_force_rolling() {
+            return false;
+        }
+        let down = vector_lib::calc_dir_slide(Vec3::NEG_Y, self.collided_ground_normal());
+        if down != Vec3::ZERO {
+            self.facing = down;
+        }
+        self.start_roll(RollStart::Forced);
+        true
+    }
+
     pub(super) fn auto_run_skate(&self) -> bool {
         self.on_ground_skate()
             && vector_lib::length(self.velocity_in_plane(self.collided_ground_normal())) >= 0.5

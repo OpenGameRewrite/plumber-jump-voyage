@@ -153,7 +153,7 @@ impl Player {
             Move::Crouch => self.squat_wait(o),
             _ => self.squat_walk(o),
         }
-        if !self.nerve.deferred && self.try_force_slope_slide() {
+        if !self.nerve.deferred && (self.try_force_slope_slide() || self.try_force_rolling()) {
             return;
         }
         self.squat_judges(o);

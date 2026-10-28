@@ -31,6 +31,8 @@ pub(super) enum RollStart {
     /// Landing from a dive or a long jump while crouching fast (trigger 8):
     /// straight into the rolling loop, free to end at once.
     Landing,
+    /// Action trigger 8 selected by the Rolling floor.
+    Forced,
 }
 
 /// The nerves of the roll state that share `Move::Roll`.
@@ -77,6 +79,8 @@ pub(super) struct RollControl {
     /// The unrolling clip began this step at the rolling clip's frame; the
     /// step's rate update must not advance it again.
     frame_kept: bool,
+    /// ForceRolling judge cached by appear (+0xb0).
+    forced: bool,
 }
 impl Default for RollControl {
     fn default() -> Self {
@@ -92,6 +96,7 @@ impl Default for RollControl {
             effect_on: false,
             effect_called: false,
             frame_kept: false,
+            forced: false,
         }
     }
 }
@@ -156,7 +161,7 @@ impl Player {
         let (nerve, floor_speed, frames, charge, restarts) = match kind {
             RollStart::Normal => (RollNerve::Start, t::ROLL_START, 0, 0, 0),
             RollStart::Boost => (RollNerve::BoostStart, t::ROLL_BOOST, 0, 0, 1),
-            RollStart::Landing => (
+            RollStart::Landing | RollStart::Forced => (
                 RollNerve::Rolling,
                 t::ROLL_START,
                 t::ROLL_FRAMES_MIN,
@@ -173,9 +178,18 @@ impl Player {
             force: 0,
             restarts,
             control: self.slide_control_setup(),
+            forced: self.on_ground_force_rolling(),
             ..RollControl::default()
         };
-        self.raise_speed_along_front(floor_speed);
+        // GUESS: horizontal application of the forced entrance speed; trace still diverges.
+        if kind == RollStart::Forced {
+            self.v = self.units_per_frame();
+            let front = self.facing.with_y(0.).normalize_or_zero();
+            let missing = (floor_speed - self.v.dot(front)).max(0.);
+            self.v += front * missing;
+        } else {
+            self.raise_speed_along_front(floor_speed);
+        }
         self.change(Move::Roll, nerve_clip(nerve), move |p| p.roll_enter(nerve));
     }
     /// Choose another nerve of the running state; its first step is next step.
@@ -297,6 +311,7 @@ impl Player {
             effect_on: self.is_on_ground() && self.anim.name == "Rolling",
             effect_called: false,
             frame_kept: false,
+            forced: self.on_ground_force_rolling(),
         };
         if let Some(clip) = next_clip {
             if self.mode == Move::RollEnd {
@@ -347,7 +362,8 @@ impl Player {
         self.roll_move();
         self.rolling.effect_on = self.is_on_ground();
         self.rolling.effect_called = self.rolling.effect_on;
-        if !o.crouch && self.rolling.frames >= t::ROLL_FRAMES_MIN {
+        // GUESS: forced ground inhibits stand-up; original judge remains to be traced.
+        if !o.crouch && !self.rolling.forced && self.rolling.frames >= t::ROLL_FRAMES_MIN {
             self.roll_stand_up();
             return;
         }
@@ -357,7 +373,7 @@ impl Player {
         }
         if pressed && self.rolling.frames >= t::ROLL_RESTART_INTERVAL {
             self.roll_restart();
-        } else if self.roll_slowed() {
+        } else if !self.rolling.forced && self.roll_slowed() {
             self.roll_to(RollNerve::UnRoll);
         }
     }
