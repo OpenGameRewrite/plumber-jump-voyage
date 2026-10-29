@@ -16,6 +16,7 @@ pub(crate) struct CollisionState {
     touched: Touched,
     ground: Option<Vec3>,
     wall: Vec3,
+    ground_lost: u32,
 }
 use crate::collider::Form;
 use crate::geometry::CollisionCodes;
@@ -60,6 +61,7 @@ impl Player {
             touched: self.touched.clone(),
             ground: self.mesh_ground,
             wall: self.wall,
+            ground_lost: self.ground_lost,
         }
     }
 
@@ -68,6 +70,7 @@ impl Player {
         self.touched = state.touched.clone();
         self.mesh_ground = state.ground;
         self.wall = state.wall;
+        self.ground_lost = state.ground_lost;
     }
 
     /// FloorCode22 comes from the contacted geometry, never its material or

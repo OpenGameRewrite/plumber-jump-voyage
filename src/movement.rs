@@ -2329,6 +2329,11 @@ impl Player {
             self.mesh_ground = Some(*normal);
             self.ground_contact = *steps;
         }
+        if self.rotating_ground && self.collider.floor.is_some() {
+            // The recorded decimal normal loses the bit at the run-angle
+            // boundary. Keep the independently simulated source/KCL normal.
+            self.mesh_ground = Some(self.collider.ground_normal);
+        }
         if let Some(mode) = s.mode {
             self.mode = mode;
             if matches!(
@@ -2431,6 +2436,27 @@ impl Player {
         } else {
             t::GRAVITY
         };
+        if self.rotating_ground && self.grounded {
+            // A snapshot holds original full velocity; the native ground
+            // controller stores horizontal travel separately from its pull.
+            // Preserve the independently simulated run's steering plane,
+            // which predates the collision normal visible in the same row.
+            let travel = if self.mode == Move::Idle && !self.land_nerve() {
+                Some(Vec3::ZERO)
+            } else if matches!(self.mode, Move::Walk | Move::Run) {
+                self.run_up.map(|(_, normal, _)| {
+                    let travel = (s.v + normal * self.pull).with_y(0.);
+                    self.run_up = Some((Vec2::new(travel.x, travel.z), normal, s.v));
+                    travel
+                })
+            } else {
+                None
+            };
+            if let Some(travel) = travel {
+                self.v = travel;
+                self.ground_move = Some((Vec2::new(travel.x, travel.z), self.pull, s.v));
+            }
+        }
         // The trace's velocity includes the floor pull a grounded state applies; the
         // body carries only what is left of it, so a state chosen next (a run
         // pulling harder) starts from zero as it does in free replay.
@@ -2502,6 +2528,12 @@ impl Player {
         self.resume_slope_slide(s);
         self.resume_cap(s);
         for (name, value) in &s.counters {
+            if self.rotating_ground && name == "ground_lost" {
+                // The snapshot infers this from physical contact rows. A
+                // rotating floor can fail the original run-angle judge while
+                // still touching, so retain that independently updated judge.
+                continue;
+            }
             self.set_counter(name, *value);
         }
         // How far the recorded fall had gone is not in the trace; one that is
@@ -3459,7 +3491,10 @@ impl Player {
             // crouch, throw): a jump pressed with the stick is taken by the
             // run state's first step (`pole-climb` rows 10-11).
             // The run state's appearance already pulls the player to the floor.
-            let raw_ground_velocity = self.grounded && self.v.y != 0. && self.v.y != -self.pull;
+            let raw_ground_velocity = self.grounded
+                && self.ground_move.is_none()
+                && self.v.y != 0.
+                && self.v.y != -self.pull;
             self.pull = GRAVITY_MOVE;
             if raw_ground_velocity {
                 // GroundMoveControl::appear sets its pull immediately, even

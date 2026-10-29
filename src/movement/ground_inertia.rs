@@ -72,6 +72,27 @@ pub(super) fn self_check() {
     fall_uses_the_current_ground_velocity();
     a_jump_turn_resets_collision_after_takeoff_setup();
     choosing_pivot_does_not_enable_a_turn_jump();
+    a_rotating_wait_snapshot_does_not_turn_normal_pull_into_travel();
+}
+#[cfg_attr(test, test)]
+fn a_rotating_wait_snapshot_does_not_turn_normal_pull_into_travel() {
+    let mut player = Player {
+        rotating_ground: true,
+        ground_lost: 3,
+        ..Player::default()
+    };
+    let snapshot = Snapshot {
+        mode: Some(Move::Idle),
+        grounded: true,
+        v: Vec3::new(0., -2.4, -1.8),
+        anim: Some(("Wait", 5.)),
+        counters: vec![("ground_lost".into(), 0)],
+        ..Snapshot::default()
+    };
+    player.inject(&snapshot);
+    assert_eq!(player.v, Vec3::ZERO);
+    assert_eq!(player.units_per_frame(), snapshot.v);
+    assert_eq!(player.ground_lost, 3);
 }
 #[cfg_attr(test, test)]
 fn choosing_pivot_does_not_enable_a_turn_jump() {
