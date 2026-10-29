@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn run() {
     a_carry_keeps_the_orientation_for_the_velocity_sweep();
     standing_is_held_by_the_arrows();
+    translating_ground_carries_descent_and_supports_landing();
     upright_fall_needs_to_go_below_the_floor();
     crouched_fall_touches_on_arrival();
     crouched_hop_still_reports_the_floor();
@@ -400,4 +401,74 @@ fn a_carry_keeps_the_orientation_for_the_velocity_sweep() {
         pose.along(&moving).rotation,
         rotation_of(normalize_quat(to))
     );
+}
+
+/// A translating raw KCL top preserves inward carry, outward collision push,
+/// departure asymmetry and landing, without making its Press code a death.
+#[cfg_attr(test, test)]
+fn translating_ground_carries_descent_and_supports_landing() {
+    use crate::geometry::LocalPrism;
+    use crate::movement::key_move_parts::KeyMovePart;
+    use crate::prism::{PartFrame, Prism};
+    let frame = PartFrame::new([1., 0., 0., 0., 0., 1., 0., 1000., 0., 0., 1., 0.]).unwrap();
+    let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+    let prism = |edges| Prism {
+        length: 200.,
+        origin: [-100., 0., -100.],
+        face: [0., 1., 0.],
+        edges,
+        thickness: 300.,
+    };
+    let prisms = [
+        prism([[diagonal, 0., -diagonal], [-1., 0., 0.], [0., 0., 1.]]),
+        prism([[0., 0., -1.], [-diagonal, 0., diagonal], [1., 0., 0.]]),
+    ];
+    let corners = prisms.map(|p| p.world_triangle(&frame).corners.map(Vec3::from_array));
+    let mut mesh = TriangleMesh::from_corners(&corners);
+    mesh.parts.push(frame);
+    mesh.codes[0].floor = "Press".into();
+    mesh.codes[0].floor_index = 19;
+    for (triangle, prism) in mesh.triangles.iter_mut().zip(prisms) {
+        triangle.local = Some(LocalPrism { part: 0, prism });
+    }
+    mesh.key_move_parts.push(KeyMovePart {
+        id: "test".into(),
+        part: 0,
+        keys: [Vec3::Y * 1000., Vec3::Y * 1100.],
+        wait: [1; 2],
+        duration: [20; 2],
+        moving: true,
+        key: 0,
+        step: 0,
+        position: Vec3::Y * 1000.,
+        motion: Vec3::ZERO,
+    });
+    let mut collider = PlayerCollider::default();
+    let mut pos = collider
+        .collide(&mesh, Vec3::Y * 1000., Vec3::NEG_Y * 3., 0.)
+        .pos;
+    let update = |mesh: &mut TriangleMesh, y, delta| {
+        mesh.key_move_parts[0].position.y = y;
+        mesh.key_move_parts[0].motion.y = delta;
+        mesh.update_key_move_collision();
+    };
+    update(&mut mesh, 995., -5.);
+    pos = collider.collide(&mesh, pos, Vec3::NEG_Y * 3., 0.).pos;
+    assert_eq!(pos.y, 995.);
+    assert!(collider.grounded());
+    update(&mut mesh, 1000., 5.);
+    pos = collider.collide(&mesh, pos, Vec3::NEG_Y * 3., 0.).pos;
+    assert_eq!(pos.y, 1000.);
+    assert!(collider.grounded());
+    update(&mut mesh, 1005., 5.);
+    pos = collider.collide(&mesh, pos, Vec3::Y * 17., 0.).pos;
+    assert_eq!(pos.y, 1017.);
+    // Land on the now moving top, then depart with inward normal carry.
+    pos = collider.collide(&mesh, pos, Vec3::NEG_Y * 20., 0.).pos;
+    assert_eq!(pos.y, 1005.);
+    assert!(collider.grounded());
+    update(&mut mesh, 1000., -5.);
+    pos = collider.collide(&mesh, pos, Vec3::Y * 17., 0.).pos;
+    assert_eq!(pos.y, 1017.);
+    assert!(!collider.pressed_ground);
 }

@@ -3093,12 +3093,17 @@ impl Player {
             if self.grounded && self.is_collided_ground() {
                 self.v = self.units_per_frame();
             }
-            self.feedback_ground_inertia(false);
+            if matches!(self.actor_name(), "Wait" | "Run") {
+                self.feedback_ground_inertia(false);
+            }
             self.go(Move::Fall, "Fall");
         }
     }
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
+        if matches!(self.actor_name(), "Wait" | "Run") {
+            self.ground_inertia.request = 1;
+        }
         self.follow_geyser_ground(scene);
         self.update_ground_height(scene);
         if self.mode == Move::Idle && (self.nerve.step == 0 || self.wait.area_clip.is_none()) {
@@ -3365,7 +3370,6 @@ impl Player {
     }
     /// The standing or running state (the original's wait and run nerves).
     fn run(&mut self, o: &Orders, scene: &Course) {
-        self.ground_inertia.request = 1;
         if self.mode == Move::Idle && self.clip() == "SquatEnd" && !self.judge_enable_stand_up() {
             self.stand_up_blocked();
         } else if self.mode == Move::Idle {
@@ -4346,11 +4350,8 @@ impl Player {
     fn ground_jump(&mut self, _o: &Orders) {
         // Wait and Run cancel the explicit contribution before selecting Jump.
         // Squat's long/back jump branches do not call this feedback helper.
-        if matches!(
-            self.mode,
-            Move::Idle | Move::Walk | Move::Run | Move::Skid | Move::Turn
-        ) {
-            self.feedback_ground_inertia(self.mode != Move::Idle);
+        if matches!(self.actor_name(), "Wait" | "Run") {
+            self.feedback_ground_inertia(self.actor_name() == "Run");
         }
         // The actor's jump judge during the ground spin fills the request of
         // the spin jump before any other kind is considered.

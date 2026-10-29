@@ -211,11 +211,19 @@ class Evidence:
         # The only accepted moving top is the exported Press19 pair, submodel0.
         top = {i: t for i, t in enumerate(geometry['triangles'])
                if geometry['objects'][t[13]]['id'] == 'obj167' and t[16] == 0 and t[17] in (2, 3)
-               and t[9:12] == [0, 1, 0] and geometry['attributes'][t[12]]['FloorCode'] == 'Press'}
-        if len(top) != 2:
+               and t[9:12] == [0, 1, 0] and t[15] == 0
+               and geometry['attributes'][t[12]]['FloorCode'] == 'Press'
+               and geometry['attributes'][t[12]]['FloorCodeIndex'] == 19}
+        if len(top) != 2 or {t[k] - obj['translate'][1] for t in top.values() for k in (1, 4, 7)} != {450.}:
+            return
+        raw = geometry['models'][obj['model'] + '#0']['prisms']
+        if any(raw[t[17]][2] != 450. or raw[t[17]][4:7] != [0, 1, 0] for t in top.values()):
             return
         def floats(cell, count, separator=','):
-            values = [struct.unpack('>f', bytes.fromhex(x))[0] for x in cell.split(separator)]
+            tokens = cell.split(separator)
+            if len(tokens) != count or any(len(x) != 8 or any(c not in '0123456789abcdefABCDEF' for c in x) for x in tokens):
+                raise ValueError('invalid rider bits')
+            values = [struct.unpack('>f', bytes.fromhex(x))[0] for x in tokens]
             if len(values) != count or any(not math.isfinite(v) for v in values):
                 raise ValueError('invalid rider floats')
             return values

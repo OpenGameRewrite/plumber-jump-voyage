@@ -27,6 +27,9 @@ impl GroundInertia {
         self.last = Vec3::ZERO;
         self.request = 0;
         let direction = pose_math::try_normalize_or_zero(inertia).0;
+        if direction == Vec3::ZERO {
+            return Vec3::ZERO;
+        }
         let mut strength = 0.7;
         if front_only {
             let front = pose_math::try_normalize_or_zero(front.with_y(0.)).0;

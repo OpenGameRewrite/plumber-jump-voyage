@@ -1463,7 +1463,12 @@ impl PlayerCollider {
         };
         // Inside, positions are the game's own absolute ones.
         let pos = absolute.map_or_else(|| mesh.to_game_vec(pos), |p| p.0);
-        let mut pose = Pose::new(pos + ground_carry, from_yaw, yaw, tilted);
+        let carried_pos = if ground_carry == Vec3::ZERO {
+            pos
+        } else {
+            pos + ground_carry
+        };
+        let mut pose = Pose::new(carried_pos, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);
         self.last_tilt = tilt;
         // `collide` forgets the last frame's push directions and the deepest

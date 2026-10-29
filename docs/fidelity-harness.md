@@ -1356,3 +1356,17 @@ whole-dashboard audit preserves all 136 baseline PASS traces: 134 are byte-ident
 and both near misses differ only by the new, non-comparable source diagnostics.
 A normal toy-course graphical smoke verifies startup/rendering; no dedicated
 crusher-stage rendering parity is claimed.
+
+
+The first moving-floor rider fixture uses the same independently simulated Sand
+KeyMoveMapParts source, obj167. The prior selected ground contact contributes its
+part displacement before both collider sweeps; only a positive normal component
+is removed. This preserves descent and the asymmetric first airborne update.
+PlayerExternalVelocity's saved force/request lasts one qualifying airborne update;
+Wait/Run feedback clears it and transfers its horizontal component at the original
+JumpInertiaRate. These vertical captures have zero explicit last-ground inertia.
+The rule requires the live current/previous ground matrices, exact source delta,
+selected raw Press19 top and supported foot height, plus native collision and force
+diagnostics. A Press-coded top alone cannot trigger crushing. The source never
+reads future observed ground matrices. Horizontal/rotational inertia and moving
+part yaw remain unverified; no rotating source or area-force port is implied.
