@@ -1416,6 +1416,27 @@ impl PlayerCollider {
         tilt: Option<Quat>,
         absolute: Option<(Vec3, Option<Vec3>)>,
     ) -> Outcome {
+        // PlayerCollider::collide (0x4301ac): the previous moving ground
+        // carries the input position before either sweep. Outward normal
+        // motion is supplied by collision; inward motion must follow the part.
+        let ground_carry = self.floor.as_ref().map_or(Vec3::ZERO, |hit| {
+            let Some(local) = mesh.triangles[hit.triangle as usize].local else {
+                return Vec3::ZERO;
+            };
+            let Some(source) = mesh
+                .key_move_parts
+                .iter()
+                .find(|s| s.part == local.part as usize)
+            else {
+                return Vec3::ZERO;
+            };
+            let mut force = source.motion;
+            let outward = dot(force, hit.normal);
+            if outward > 0. {
+                force -= hit.normal * outward;
+            }
+            force
+        });
         self.pressed_ground = false;
         self.pressed_wall = false;
         self.floor = None;
@@ -1436,7 +1457,7 @@ impl PlayerCollider {
         };
         // Inside, positions are the game's own absolute ones.
         let pos = absolute.map_or_else(|| mesh.to_game_vec(pos), |p| p.0);
-        let mut pose = Pose::new(pos, from_yaw, yaw, tilted);
+        let mut pose = Pose::new(pos + ground_carry, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);
         self.last_tilt = tilt;
         // `collide` forgets the last frame's push directions and the deepest
@@ -1449,7 +1470,7 @@ impl PlayerCollider {
         // empty, except for the states that put the actor on a pose by hand.
         // An empty carry is not swept at all; the move's own sweep then also
         // checks the pose it starts from.
-        let begin = self.carry_from.take().map_or(pose.pos, |from| {
+        let begin = self.carry_from.take().map_or(pos, |from| {
             absolute
                 .and_then(|p| p.1)
                 .unwrap_or_else(|| mesh.to_game_vec(from))
