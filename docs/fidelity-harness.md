@@ -1370,3 +1370,10 @@ selected raw Press19 top and supported foot height, plus native collision and fo
 diagnostics. A Press-coded top alone cannot trigger crushing. The source never
 reads future observed ground matrices. Horizontal/rotational inertia and moving
 part yaw remain unverified; no rotating source or area-force port is implied.
+
+Both 500-frame pillar recordings pass free replay with zero failing columns and
+no environment exclusions. Pillar-jump also passes lockstep. Pillar-ride retains
+snapshot residuals at the hidden pivot-to-run transition (frame 409) and an
+equivalent quaternion sign (frame 418); these remain reported. Native screenshots
+also expose the placeholder floor occluding the rider and the absent Sand/pillar
+visuals, so this fixture establishes movement fidelity rather than stage parity.
