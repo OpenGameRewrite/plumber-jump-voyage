@@ -5,6 +5,7 @@ mod air_move;
 mod asset_contract;
 mod cap;
 mod cap_joint;
+mod ceiling_check;
 mod clip_curves;
 mod collider;
 // The original's effects: their data and trigger rules also serve the headless trace.

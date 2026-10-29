@@ -179,7 +179,7 @@ impl Player {
             let normal = self.mesh_ground.unwrap_or(Vec3::Y);
             self.v = Vec3::new(0., -t::GRAVITY * normal.y, 0.);
             self.defer(Move::Crouch, "SquatWait", |_| {});
-        } else if !o.crouch {
+        } else if !o.crouch && self.judge_enable_stand_up() {
             self.stand_up_squat();
         }
     }
@@ -187,7 +187,8 @@ impl Player {
     fn squat_wait(&mut self, o: &Orders) {
         self.v.y = -t::GRAVITY;
         self.wait_pose();
-        if !o.crouch {
+        // A blocked stand-up does not end the crouch: the nerve goes on to the crawl.
+        if !o.crouch && self.judge_enable_stand_up() {
             self.stand_up_squat();
         } else if self.is_move() {
             self.defer(Move::Crawl, "SquatWalk", |p| p.squat.turn.reset());
@@ -198,7 +199,7 @@ impl Player {
     /// chooses the stand-up and then the wait, which chooses the stand-up again
     /// in the next step.
     fn squat_walk(&mut self, o: &Orders) {
-        if !o.crouch {
+        if !o.crouch && self.judge_enable_stand_up() {
             self.stand_up_squat();
         }
         if !self.is_move() {
@@ -228,6 +229,17 @@ impl Player {
         self.pull = GRAVITY_MOVE;
         self.swing_front(turned, SLERP_QUAT_RATE);
     }
+    /// `PlayerJudgeEnableStandUp::judge` (0x459514): the ceiling check lets the body stand, or
+    /// the collider has no ground under it (the check only matters while on the floor).
+    pub(super) fn judge_enable_stand_up(&self) -> bool {
+        self.ceiling.enable_stand_up || !self.is_collided_ground()
+    }
+    /// `exeStandUp` finding the stand-up blocked again: the squat nerve returns to `Brake`
+    /// (its first step restarts the squat clip, `SquatStart`; the original keeps the
+    /// skip-the-start-clip flag its `appear` set, which is not modelled, GUESS).
+    pub(super) fn stand_up_blocked(&mut self) {
+        self.change(Move::SquatBrake, "SquatStart", |p| p.brake_first_step());
+    }
     /// `setNerveStandUpOrKill`: the stand-up clip and the stop come with the
     /// next step; this step still acts.
     fn stand_up_squat(&mut self) {
@@ -249,7 +261,9 @@ impl Player {
             self.start_roll(RollStart::Normal);
             return;
         }
-        if self.pre_input_jump_judges() {
+        // The actor (0x422a8c) takes a buffered jump only when the body may stand: under a low
+        // ceiling the press waits in the buffer until it runs out.
+        if self.pre_input_jump_judges() && self.judge_enable_stand_up() {
             self.pre_jump = 0;
             // Only the braking sub-state allows the long jump, and only while
             // moving forward (`PlayerStateSquat::isEnableLongJump`).

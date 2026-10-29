@@ -915,13 +915,29 @@ pub fn first_strike(
 /// the same prism test the player's own spheres use): the face's index in the
 /// mesh and the touched point on it.
 pub fn sphere_strikes(mesh: &TriangleMesh, center: Vec3, radius: f32) -> Vec<(u32, Vec3)> {
+    sphere_strike_hits(mesh, center, radius)
+        .into_iter()
+        .map(|(i, hit)| (i, hit.position))
+        .collect()
+}
+
+/// [`sphere_strikes`] with the whole answer of each face: the region the centre is in, the depth
+/// and the touched point (replay frame, like the centre).
+pub fn sphere_strike_hits(mesh: &TriangleMesh, center: Vec3, radius: f32) -> Vec<(u32, SphereHit)> {
     let center_game = mesh.to_game_vec(center);
     mesh.candidates(Aabb::around(center, radius))
         .into_iter()
         .filter_map(|i| {
             let t = &mesh.triangles[i as usize];
             let hit = sphere_hit(mesh, t, center_game, radius)?;
-            Some((i, mesh.relative_vec(hit.position)))
+            Some((
+                i,
+                SphereHit {
+                    position: mesh.relative_vec(hit.position),
+                    center,
+                    ..hit
+                },
+            ))
         })
         .collect()
 }

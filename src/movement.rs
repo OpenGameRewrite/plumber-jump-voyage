@@ -7,6 +7,7 @@
 //! names and observed behaviour. No original code is reproduced here.
 use crate::air_move::{self, AirMove, ContinuousJump, ContinuousLongJump};
 use crate::cap::{CapEvent, CapWorld, Launch};
+use crate::ceiling_check::{self, CeilingCheck};
 use crate::collider::PlayerCollider;
 use crate::geometry::{CollisionCodes, TriangleMesh};
 use crate::input::Orders;
@@ -1367,6 +1368,8 @@ pub struct Player {
     /// Static KCL has no sensor receiver; no supported actor raises it yet.
     collision_wall_reflected: bool,
     pub(crate) own_cap_trample: bool,
+    /// `PlayerCeilingCheck` as the last update left it (`PlayerJudgeEnableStandUp` reads it).
+    ceiling: CeilingCheck,
     /// The normal of the mesh floor the collider found this step.
     mesh_ground: Option<Vec3>,
     /// The collision codes of the mesh surfaces the body touched this step.
@@ -1541,6 +1544,7 @@ impl Default for Player {
             collider: PlayerCollider::default(),
             collision_wall_reflected: false,
             own_cap_trample: false,
+            ceiling: CeilingCheck::OPEN,
             mesh_ground: None,
             touched: terrain::Touched::default(),
             key_move_sources: String::new(),
@@ -2872,19 +2876,19 @@ impl Player {
         }
         self.note_frame_start_for_joints();
         self.own_cap_trample = false;
-        let low_ceiling = self.grounded
-            && scene.solids.iter().any(|b| {
-                let bottom = b.center.y - b.half.y;
-                bottom > self.pos.y + 0.2
-                    && bottom < self.pos.y + HEIGHT
-                    && (self.pos.x - b.center.x).abs() < b.half.x + RADIUS
-                    && (self.pos.z - b.center.z).abs() < b.half.z + RADIUS
-            });
+        // `PlayerColliderHakoniwa::updateCeilingCheck` runs from the pose the last step left.
+        self.ceiling = scene.catch_mesh().map_or(CeilingCheck::OPEN, |mesh| {
+            ceiling_check::update(
+                &mesh,
+                self.position_cm(),
+                Vec3::Y,
+                ceiling_check::TALL,
+                ceiling_check::COLLISION_RADIUS_SQUAT,
+                0.,
+                0.,
+            )
+        });
         let mut o = o.clone();
-        if low_ceiling && self.mode != Move::Roll {
-            o.crouch = true;
-            o.jump = false;
-        }
         self.snap_move_axis = scene.mesh.as_ref().and_then(|mesh| {
             mesh.snap_move
                 .iter()
@@ -3322,7 +3326,9 @@ impl Player {
     }
     /// The standing or running state (the original's wait and run nerves).
     fn run(&mut self, o: &Orders) {
-        if self.mode == Move::Idle {
+        if self.mode == Move::Idle && self.clip() == "SquatEnd" && !self.judge_enable_stand_up() {
+            self.stand_up_blocked();
+        } else if self.mode == Move::Idle {
             // Every nerve of the standing state settles the pose first; the
             // judges that leave it (the run, the jump) come after.
             self.wait_pose();
@@ -4447,6 +4453,13 @@ impl Player {
             self.arm_fall_control();
         }
         self.scale_velocity_at_wall();
+        // `PlayerStateJump::exeJump` (0x4725a0): a ceiling the last step collided with, after
+        // the nerve's first step, is reflected (`rs::reflectCeiling` with no bounce keeps only a
+        // downward speed) and ends the extend window and the held-jump flag.
+        if self.mode == Move::Jump && self.frame > 0 && self.touched.ceiling.is_some() {
+            self.v.y = self.v.y.min(0.);
+            self.air.cancel_extend();
+        }
         let steer = air_move::Steering {
             front: t::JUMP_ACCEL_FRONT,
             back: t::JUMP_ACCEL_BACK,

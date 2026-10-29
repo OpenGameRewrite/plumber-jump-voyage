@@ -390,9 +390,11 @@ impl Player {
                 self.hop_contact = true;
             }
         }
+        // (The plain jump keeps its upward speed through the hit: `PlayerStateJump::exeJump`
+        // reflects it from the next step on, see `jump_air`.)
         if collider.ceiling.is_some()
             && self.v.y > 0.
-            && !matches!(self.mode, Move::SlopeSlide | Move::Swim)
+            && !matches!(self.mode, Move::SlopeSlide | Move::Swim | Move::Jump)
             && self
                 .touched
                 .ceiling
