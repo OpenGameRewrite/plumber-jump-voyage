@@ -362,6 +362,11 @@ impl TriangleMesh {
                 return Err(format!("geometry: triangle {i} has {} fields", n.len()));
             }
             let object = n[13] as usize;
+            // A KCL asset can serve rendering queries without being registered as a
+            // collision part. The exporter checks the actor's initialization contract.
+            if root["objects"][object]["collision_enabled"].as_bool() == Some(false) {
+                continue;
+            }
             let local = match (object_part.get(object).copied().flatten(), n.get(17)) {
                 (Some(part), Some(slot)) => {
                     let model = mesh.objects.get(object).map_or("", String::as_str);
