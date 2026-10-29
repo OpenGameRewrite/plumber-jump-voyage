@@ -249,6 +249,7 @@ mod damage_life;
 mod damage_swim;
 pub mod death;
 mod entrance_camera;
+pub mod external_velocity;
 mod force_run;
 #[path = "movement/grab_ceil.rs"]
 pub mod grab_ceil;
@@ -1351,6 +1352,8 @@ pub struct Player {
     ground_frame: Option<([f32; 12], [f32; 12])>,
     ground_part: Option<usize>,
     ground_inertia: ground_inertia::GroundInertia,
+    area_velocity: Vec3,
+    pub area_source: String,
     pub ground_source: String,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
@@ -1548,6 +1551,8 @@ impl Default for Player {
             ground_frame: None,
             ground_part: None,
             ground_inertia: ground_inertia::GroundInertia::default(),
+            area_velocity: Vec3::ZERO,
+            area_source: String::new(),
             ground_source: String::new(),
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
@@ -2884,6 +2889,9 @@ impl Player {
                 .unwrap_or_default();
         }
         self.update_ground_inertia(scene);
+        if advance_sources {
+            self.update_area_velocity(scene);
+        }
         self.death.update_judge(self.is_dead());
         self.prev = self.pos;
         self.prev_cap = self.cap.as_ref().map(|c| c.pos);
@@ -5867,6 +5875,7 @@ pub fn self_check() {
     damage::self_check();
     key_move_parts::self_check();
     ground_inertia::self_check();
+    external_velocity::self_check();
     press::self_check();
     force_run::self_check();
     rocket_flower::self_check();

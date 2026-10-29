@@ -266,6 +266,9 @@ impl Player {
         if self.ground_inertia.last != Vec3::ZERO {
             velocity += self.ground_inertia.last;
         }
+        if self.area_velocity != Vec3::ZERO {
+            velocity += self.area_velocity;
+        }
         // ObjSnapForce is a receive-side latch. Ineligible GrabCeil updates
         // retain it, including the entry message, until updateCollider consumes it.
         if let Some(force) = self.take_grab_ceil_force() {

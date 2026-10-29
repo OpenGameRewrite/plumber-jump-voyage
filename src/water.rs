@@ -232,6 +232,9 @@ pub struct WaterAreas {
 }
 
 impl WaterAreas {
+    pub fn into_areas(self) -> Vec<Area> {
+        self.areas
+    }
     /// The `WaterArea` entries of an export's `areas` table.
     pub fn from_export(table: &serde_json::Value) -> Self {
         Self::from_export_named(table, "WaterArea")

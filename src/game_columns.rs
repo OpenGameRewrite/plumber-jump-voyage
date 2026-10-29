@@ -163,6 +163,9 @@ pub fn collision_cell(p: &Player) -> String {
         let (ground, wall) = p.pressed_flags();
         items.push(format!("pressed={}/{}", u8::from(ground), u8::from(wall)));
     }
+    if !p.area_source.is_empty() {
+        items.push(p.area_source.clone());
+    }
     if let Some(source) = p.rocket_diagnostic() {
         items.push(format!("rocket={source}"));
     }

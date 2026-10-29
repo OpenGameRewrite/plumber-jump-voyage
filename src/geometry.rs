@@ -125,6 +125,7 @@ pub struct TriangleMesh {
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
+    pub force_areas: Vec<crate::movement::external_velocity::ForceArea>,
     pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
     pub pukupuku_look: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
@@ -239,6 +240,7 @@ impl TriangleMesh {
             codes,
             objects,
             thickness: PRISM_THICKNESS,
+            force_areas: crate::movement::external_velocity::ForceArea::from_export(&root["areas"]),
             origin,
             water: crate::water::WaterAreas::from_export(&root["areas"])
                 .with_oceans(&root["ocean_waves"]),

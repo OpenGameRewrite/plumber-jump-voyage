@@ -216,7 +216,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -246,6 +246,16 @@ class Judge:
         self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
         self._puku = PukupukuEvidence(geometry, pukupuku, rewrite_rows, game_rows)
         self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
+        from external_force import Evidence as ForceEvidence
+        self._force = ForceEvidence(geometry, force_areas, press_mario, rewrite_rows, game_rows, preroll or {})
+        force_frames = {int(r['frame']) for r in (force_areas or []) if r.get('kind') == 'call' and int(r['frame']) >= 0}
+        if force_frames:
+            if force_frames <= self._force.frames:
+                for f in self._force.frames:
+                    v.accept(f, "exported obj2386 waterfall force", "exact volume and raw force inputs/output verified; native source independently evaluated on its own trajectory")
+            else:
+                for f in force_frames:
+                    v.refuse(f, "external force lacks independently reproduced obj2386 volume/force evidence")
         self._scripted = {}
         self._candles = []
         self._start = start
