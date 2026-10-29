@@ -226,6 +226,11 @@ pub struct View {
     pub fov_deg: f32,
 }
 impl View {
+    /// The visible, unrolled camera basis, independent of the probe's input-view override.
+    pub(crate) fn rows(self) -> ViewRows {
+        let side = self.forward.cross(Vec3::Y).normalize();
+        [side, side.cross(self.forward), -self.forward]
+    }
     /// Frame `row` of a game trace: `cam_px/py/pz` (cm, relative to the start)
     /// and the view direction the probe derived from the game's own camera
     /// (`cam_real_yaw/pitch`, degrees; pitch below zero looks down), falling
@@ -840,6 +845,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &bindings,
         );
         orders.view = camera.view_rows(0);
+        orders.camera_view = camera.view(0).map(View::rows);
         update_static_clipping(&mut player, &course, camera.view(0));
         player.step(&orders, &course);
         info.game_frame = i as i64;
@@ -913,6 +919,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     &bindings,
                 );
                 orders.view = camera.view_rows(last);
+                orders.camera_view = camera.view(last).map(View::rows);
                 let spin = player.spin_input();
                 update_static_clipping(&mut player, &course, camera.view(last));
                 if !player.rocket.flowers.is_empty() {
@@ -989,6 +996,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             &bindings,
         );
         orders.view = camera.view_rows(frame);
+        orders.camera_view = camera.view(frame).map(View::rows);
         // The game's camera (when the trace records it) is what its sound control hears.
         player.set_camera_position(camera.view(frame).map(|view| view.position * 100.));
         // Scene RNG is external to a player-only replay. Feed raw getU32 results

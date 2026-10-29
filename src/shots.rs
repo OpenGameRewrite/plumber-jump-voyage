@@ -203,6 +203,7 @@ fn feed(
         &driver.bindings,
     );
     next.view = driver.camera.view_rows(frame);
+    next.camera_view = driver.camera.view(frame).map(crate::replay::View::rows);
     crate::replay::update_static_clipping(&mut player, &course, driver.camera.view(frame));
     *orders = next;
     driver.previous = span.buttons;

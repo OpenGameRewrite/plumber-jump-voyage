@@ -1336,6 +1336,7 @@ pub struct Player {
     /// The camera's view rows when the orders carry them: the stick is then laid on the world as
     /// `PlayerInput::calcMoveInput` does (`move_input.rs`).
     view: Option<move_input::ViewRows>,
+    camera_view: Option<move_input::ViewRows>,
     snap_move_axis: Option<Vec3>,
     /// The frame (base matrix, inverse) of the collision part the last collision found ground on,
     /// when the stage's export has it: `rs::waitGround` carries the pose along it.
@@ -1528,6 +1529,7 @@ impl Default for Player {
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
             view: None,
+            camera_view: None,
             snap_move_axis: None,
             ground_frame: None,
             ground_part: None,
@@ -3166,6 +3168,7 @@ impl Player {
         self.stick = stick.normalize_or_zero();
         self.raw_stick = Vec2::new(o.stick.x, -o.stick.y);
         self.view = o.view;
+        self.camera_view = o.camera_view;
         self.wall_along.update(
             self.touched
                 .wall_contact
@@ -3981,13 +3984,19 @@ impl Player {
     fn jump_with(
         &mut self,
         mode: Move,
-        anim: &'static str,
+        anim: impl Into<Option<&'static str>>,
         power: f32,
         gravity: f32,
         then: impl FnOnce(&mut Player) + Send + Sync + 'static,
     ) {
         self.pre_jump = 0;
-        self.change(mode, anim, move |p| {
+        let requested_clip = anim.into();
+        // Only special requests author a clip in appear. The ordinary jump selects its side
+        // in exeJump's first step (0x47268c), before the take-off pose is installed.
+        self.change(mode, requested_clip.unwrap_or("Jump"), move |p| {
+            if requested_clip.is_none() {
+                p.start_clip(p.standard_jump_clip());
+            }
             p.prior_v = p.v;
             // (Read before the take-off sets the vertical speed: the ground-following velocity
             // is told by it.)
@@ -4001,6 +4010,10 @@ impl Player {
             then(p);
             p.arm_air_control(mode, power, gravity);
         });
+        if requested_clip.is_none() {
+            // The first-step work starts an ordinary jump's clip itself.
+            self.nerve.keep_clip();
+        }
     }
     fn leave_ground(&mut self, mode: Move, power: f32, gravity: f32) {
         // The jump nerve's first step resets its water judge (`PlayerJudgeOutInWater`).
@@ -4167,14 +4180,23 @@ impl Player {
     /// (`rs::isPlayerSideFaceToCameraZ`): the first jump then plays the clip
     /// that is not mirrored.
     fn side_faces_camera(&self) -> bool {
-        // rs::isPlayerSideFaceToCameraZ (0x55dc7c): read camera axes and
-        // actor matrix, project the side off camera up, normalize, strict dot<0.
+        // rs::isPlayerSideFaceToCameraZ (0x55dc7c) reads the visible camera through
+        // calcCameraLookDir/calcCameraUpDir, independently of getPlayerViewMtx's input override.
+        // Project the actor matrix's side off camera up, normalize, strict dot<0.
         let view = self
-            .view
+            .camera_view
+            .or(self.view)
             .unwrap_or_else(|| move_input::locked_view(self.camera_yaw.to_degrees()));
         let side = self.actor_pose().side();
         let side = pose_math::try_normalize_or_zero(vector_lib::verticalize_vec(view[1], side)).0;
         pose_math::dot(side, -view[2]) < 0.
+    }
+    fn standard_jump_clip(&self) -> &'static str {
+        if self.side_faces_camera() {
+            "Jump"
+        } else {
+            "JumpReverse"
+        }
     }
     /// The first, second or third jump of the combo. Which one it is, and
     /// what that does to the combo, is decided as the jump state appears (when
@@ -4199,11 +4221,7 @@ impl Player {
             ),
             _ => (
                 Move::Jump,
-                if self.side_faces_camera() {
-                    "Jump"
-                } else {
-                    "JumpReverse"
-                },
+                "Jump",
                 t::JUMP_POWER_MIN,
                 t::JUMP_POWER_MAX,
                 t::JUMP_GRAVITY,
@@ -4219,7 +4237,8 @@ impl Player {
             (clip, power, gravity)
         };
         let ground_up = self.ground_pose_up_for_jump();
-        self.jump_with(mode, clip, power, gravity, move |p| {
+        let requested_clip = (kind != 0 || self.force_run.is_active()).then_some(clip);
+        self.jump_with(mode, requested_clip, power, gravity, move |p| {
             if let Some(horizontal) = p.takeoff_h {
                 p.set_h(horizontal);
             }

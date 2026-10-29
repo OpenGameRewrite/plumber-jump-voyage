@@ -229,6 +229,8 @@ pub struct Orders {
     /// replay of a recorded run with a locked camera. The stick is then laid on the world by
     /// `calcMoveInput`'s own arithmetic.
     pub view: Option<crate::movement::move_input::ViewRows>,
+    /// The visible camera's rows. A probe may override the input view independently.
+    pub camera_view: Option<crate::movement::move_input::ViewRows>,
     pub look: Vec2,
     pub jump: bool,
     pub jump_held: bool,
@@ -420,6 +422,13 @@ pub fn read(
         orders.forward = rotate(Vec2::NEG_Y, camera.yaw);
         orders.stick = stick.clamp_length_max(1.);
         orders.camera_yaw = camera.yaw;
+        let back = Vec3::new(
+            camera.yaw.sin() * camera.pitch.cos(),
+            camera.pitch.sin(),
+            camera.yaw.cos() * camera.pitch.cos(),
+        );
+        let side = Vec3::new(camera.yaw.cos(), 0., -camera.yaw.sin());
+        orders.camera_view = Some([side, back.cross(side), back]);
         orders.look =
             look * settings.sensitivity * Vec2::new(1., if settings.invert { -1. } else { 1. });
         let dt = time.delta_secs().min(0.05);

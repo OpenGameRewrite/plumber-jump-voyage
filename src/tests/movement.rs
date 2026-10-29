@@ -262,7 +262,7 @@ fn variable_jump_height() {
         },
         &floor,
     );
-    assert_eq!(chosen(&held), (Move::Jump, "JumpReverse"));
+    assert_eq!(chosen(&held), (Move::Jump, "Wait"));
     let high = until_ground(
         &mut held,
         Orders {
@@ -281,6 +281,32 @@ fn variable_jump_height() {
     );
     let low = until_ground(&mut tap, Orders::default(), &floor);
     assert!(high > low + 1. && low > 0.8, "held {high} tap {low}");
+}
+
+#[cfg_attr(test, test)]
+fn jump_clip_reads_the_visible_camera_on_its_first_step() {
+    let floor = floor();
+    let mut p = Player::default();
+    let input_view = [Vec3::Z, Vec3::Y, Vec3::NEG_X];
+    p.step(
+        &Orders {
+            jump: true,
+            view: Some(input_view),
+            camera_view: Some(input_view),
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!((p.mode, p.anim.name), (Move::Jump, "Wait"));
+    p.step(
+        &Orders {
+            view: Some(input_view),
+            camera_view: Some([Vec3::NEG_Z, Vec3::Y, Vec3::X]),
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!((p.anim.name, p.anim.frame), ("Jump", 0.));
 }
 
 #[cfg_attr(test, test)]
