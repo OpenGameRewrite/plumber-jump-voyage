@@ -1,6 +1,5 @@
-//! The player's ceiling check: `PlayerCeilingCheck::update` (0x42f494, sources in the
-//! decompilation) and the swept sphere it asks for, `alCollisionUtil::checkStrikeSphereMove`
-//! (0x84d174).
+//! Standing clearance follows `PlayerCeilingCheck::update` (1.0.0, 0x42f494)
+//! and its stepped sphere sweep (0x84d174).
 //!
 //! The check decides whether the standing body fits (`PlayerJudgeEnableStandUp`, 0x459514,
 //! asks it) with a sphere of the squat radius swept upward from the feet. The sweep is not
@@ -130,17 +129,16 @@ fn face_hit(
     if shift.length_squared() < NEAR_ZERO * NEAR_ZERO {
         return FaceAnswer::Skip;
     }
-    let region = if t.edges[0].dot(shift) <= 0. {
-        4
+    let corner = if t.edges[0].dot(shift) <= 0. {
+        1
     } else if t.edges[1].dot(shift) <= 0. {
-        5
+        2
     } else {
-        6
+        0
     };
-    let corner = region % 3;
     let to_corner = t.corners[corner] - strike.position;
     let turning = normal.dot(to_corner.cross(shift));
-    let edge = t.edges[(corner + if turning > 0. { 4 } else { 3 }) % 3];
+    let edge = t.edges[(corner + usize::from(turning > 0.)) % 3];
     let slope = edge.dot(shift);
     if slope.abs() < NEAR_ZERO {
         return FaceAnswer::Skip;

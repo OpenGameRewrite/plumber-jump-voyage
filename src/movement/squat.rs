@@ -27,11 +27,14 @@ pub(super) struct SquatControl {
     /// The crawl's turn controller (`PlayerActionTurnControl`, set up in the
     /// state's constructor).
     turn: TurnControl,
+    /// The appearance decision survives a blocked stand-up returning to Brake.
+    skip_start_clip: bool,
 }
 impl Default for SquatControl {
     fn default() -> Self {
         Self {
             turn: TurnControl::crawl(),
+            skip_start_clip: false,
         }
     }
 }
@@ -102,6 +105,7 @@ impl Player {
     /// roll the squat-start clip is skipped.
     pub(super) fn start_squat(&mut self) {
         let from_roll = self.clip() == "RollingEnd";
+        self.squat.skip_start_clip = from_roll;
         self.change(
             Move::SquatBrake,
             if from_roll { "SquatWait" } else { "SquatStart" },
@@ -226,11 +230,15 @@ impl Player {
     pub(super) fn judge_enable_stand_up(&self) -> bool {
         self.ceiling.enable_stand_up || !self.is_collided_ground()
     }
-    /// `exeStandUp` finding the stand-up blocked again: the squat nerve returns to `Brake`
-    /// (its first step restarts the squat clip, `SquatStart`; the original keeps the
-    /// skip-the-start-clip flag its `appear` set, which is not modelled, GUESS).
+    /// A blocked `exeStandUp` returns to Brake without calling appear again.
+    /// Its first step uses the clip decision saved when the squat began.
     pub(super) fn stand_up_blocked(&mut self) {
-        self.change(Move::SquatBrake, "SquatStart", |p| p.brake_first_step());
+        let clip = if self.squat.skip_start_clip {
+            "SquatWait"
+        } else {
+            "SquatStart"
+        };
+        self.change(Move::SquatBrake, clip, |p| p.brake_first_step());
     }
     /// `setNerveStandUpOrKill`: the stand-up clip and the stop come with the
     /// next step; this step still acts.

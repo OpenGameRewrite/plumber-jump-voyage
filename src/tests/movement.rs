@@ -1599,7 +1599,7 @@ fn burn_and_soot() {
 #[cfg_attr(test, test)]
 fn low_ceiling() {
     let floor = floor();
-    // Low ceilings force a crouch.
+    // The overhead solid stops the jump through ordinary collision.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {
         center: Vec3::new(0., 1.5, 5.),

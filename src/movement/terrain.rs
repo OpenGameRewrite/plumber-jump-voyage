@@ -7,6 +7,16 @@
 //! were touched (their collision codes ride along for the states that will
 //! need them: slope slides, wall jumps, materials).
 use super::*;
+
+/// Collision bookkeeping for replaying a deferred state choice a second time.
+/// It must belong to the same preceding row as the injected actor pose.
+#[derive(Clone)]
+pub(crate) struct CollisionState {
+    collider: PlayerCollider,
+    touched: Touched,
+    ground: Option<Vec3>,
+    wall: Vec3,
+}
 use crate::collider::Form;
 use crate::geometry::CollisionCodes;
 
@@ -44,6 +54,22 @@ pub(super) fn to_cm_exact(metres: Vec3) -> Vec3 {
 }
 
 impl Player {
+    pub(crate) fn collision_state(&self) -> CollisionState {
+        CollisionState {
+            collider: self.collider.clone(),
+            touched: self.touched.clone(),
+            ground: self.mesh_ground,
+            wall: self.wall,
+        }
+    }
+
+    pub(crate) fn restore_collision(&mut self, state: &CollisionState) {
+        self.collider = state.collider.clone();
+        self.touched = state.touched.clone();
+        self.mesh_ground = state.ground;
+        self.wall = state.wall;
+    }
+
     /// FloorCode22 comes from the contacted geometry, never its material or
     /// the probe's lossy gcode label. Slip24 remains unresolved.
     pub(super) fn on_ground_skate(&self) -> bool {
