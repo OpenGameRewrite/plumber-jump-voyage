@@ -95,6 +95,9 @@ fn vector(value: &Value) -> Result<Vec3, String> {
     for (i, item) in array.iter().enumerate() {
         v[i] = item.as_f64().ok_or("puku component")? as f32;
     }
+    if !v.is_finite() {
+        return Err("nonfinite Pukupuku vector".into());
+    }
     Ok(v)
 }
 
@@ -108,6 +111,71 @@ impl Pukupuku {
             return Err("unsupported Pukupuku placement".into());
         }
         let p = &value["rail"];
+        if p.as_array().is_none_or(|p| p.len() != 2) {
+            return Err("Pukupuku rail sections".into());
+        }
+        let animation = &value["animation"];
+        let joints = animation["joints"]
+            .as_array()
+            .filter(|j| j.len() == 3)
+            .ok_or("Pukupuku sensor joints")?;
+        for (joint, name) in joints.iter().zip(["nw4f_root", "AllRoot", "JointRoot"]) {
+            if joint["name"] != name
+                || joint["bind"].as_array().is_none_or(|b| {
+                    b.len() != 10
+                        || b.iter()
+                            .any(|v| v.as_f64().is_none_or(|n| !(n as f32).is_finite()))
+                })
+            {
+                return Err("Pukupuku bind pose".into());
+            }
+        }
+        for name in ["SwimWait", "PressDown"] {
+            let clip = &animation["clips"][name];
+            if clip["length"]
+                .as_f64()
+                .is_none_or(|n| n <= 0. || n.fract() != 0. || n > u32::MAX as f64)
+            {
+                return Err("Pukupuku clip length".into());
+            }
+            for record in clip["records"].as_array().ok_or("Pukupuku clip records")? {
+                if record["quaternion"] != 0 || record["joint"].as_u64().is_none_or(|j| j >= 3) {
+                    return Err("unsupported Pukupuku channel rotation".into());
+                }
+                for channel in record["channels"]
+                    .as_array()
+                    .filter(|c| c.len() == 10)
+                    .ok_or("Pukupuku channels")?
+                {
+                    if let Some(v) = channel.as_f64()
+                        && (v as f32).is_finite()
+                    {
+                        continue;
+                    }
+                    let keys = channel
+                        .as_array()
+                        .filter(|k| !k.is_empty())
+                        .ok_or("Pukupuku channel keys")?;
+                    let mut previous = f64::NEG_INFINITY;
+                    for key in keys {
+                        let k = key
+                            .as_array()
+                            .filter(|k| k.len() == 5)
+                            .ok_or("Pukupuku key coefficients")?;
+                        if k.iter()
+                            .any(|v| v.as_f64().is_none_or(|n| !(n as f32).is_finite()))
+                        {
+                            return Err("nonfinite Pukupuku key".into());
+                        }
+                        let frame = k[0].as_f64().unwrap();
+                        if frame <= previous {
+                            return Err("unordered Pukupuku keys".into());
+                        }
+                        previous = frame;
+                    }
+                }
+            }
+        }
         let curve = |a: usize, b: usize| -> Result<Bezier, String> {
             Ok(Bezier::new([
                 vector(&p[a]["position"])?,
@@ -153,12 +221,17 @@ impl Pukupuku {
             return Err("unsupported Pukupuku initial phase".into());
         }
         self.coord = get("coord")?.parse().map_err(|_| "puku coord")?;
+        if !self.coord.is_finite()
+            || !(0. ..self.rail[0].length + self.rail[1].length).contains(&self.coord)
+        {
+            return Err("Pukupuku initial coordinate".into());
+        }
         let q = get("quat_bits")?
             .split(',')
             .map(|s| u32::from_str_radix(s, 16).map(f32::from_bits))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| "puku quaternion")?;
-        if q.len() != 4 {
+        if q.len() != 4 || q.iter().any(|v| !v.is_finite()) || q.iter().all(|v| *v == 0.) {
             return Err("puku quaternion size".into());
         }
         self.quat = Quat::from_slice(&q);
@@ -178,7 +251,7 @@ impl Pukupuku {
             .map(|s| u32::from_str_radix(s, 16).map(f32::from_bits))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| "puku initial sensor")?;
-        if centre.len() != 3 {
+        if centre.len() != 3 || centre.iter().any(|v| !v.is_finite()) {
             return Err("puku sensor size".into());
         }
         self.body = Vec3::from_slice(&centre);
@@ -234,13 +307,13 @@ impl Pukupuku {
             self.anim_frame = (self.anim_frame + 1)
                 % self.animation["clips"]["SwimWait"]["length"]
                     .as_f64()
-                    .unwrap_or(360.) as u32;
+                    .unwrap() as u32;
         } else {
             self.step += 1;
             if self.phase == 1 {
                 let length = self.animation["clips"]["PressDown"]["length"]
                     .as_f64()
-                    .unwrap_or(0.) as u32;
+                    .unwrap() as u32;
                 self.anim_frame = (self.anim_frame + 1).min(length);
                 if self.anim_frame == length {
                     self.phase = 2;
@@ -397,7 +470,11 @@ mod checks {
             "id":"obj473", "rail_id":"rail15", "move_type":0,"revive":true,
             "rail":[{"position":[0,550,-450],"in":[-600,550,-450],"out":[600,550,-450]},
                 {"position":[0,550,450],"in":[600,550,450],"out":[-600,550,450]}],
-            "animation":{"joints":[],"clips":{"SwimWait":{"length":360},"PressDown":{"length":40}}}
+            "animation":{"joints":[
+                {"name":"nw4f_root","bind":[0,0,0,0,0,0,1,1,1,1]},
+                {"name":"AllRoot","bind":[0,0,0,0,0,0,1,1,1,1]},
+                {"name":"JointRoot","bind":[0,0,0,0,0,0,1,1,1,1]}],
+                "clips":{"SwimWait":{"length":360,"records":[]},"PressDown":{"length":40,"records":[]}}}
         }))
         .unwrap();
         source.first = false;

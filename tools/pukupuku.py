@@ -102,7 +102,10 @@ class Evidence:
         if (placement['id'], placement['rail_id'], placement['move_type'], placement['revive']) != ('obj473', 'rail15', 0, True):
             raise ValueError('unsupported source identity')
         source = Source(placement)
-        samples = {int(r['frame']): r for r in side if r['kind'] == 'sample' and r['id'] == 'obj473'}
+        source_samples = [r for r in side if r['kind'] == 'sample' and r['id'] == 'obj473']
+        samples = {int(r['frame']): r for r in source_samples}
+        if len(samples) != len(source_samples):
+            raise ValueError('duplicate source sample')
         first, last = min(samples), max(samples)
         if first >= 0 or set(samples) != set(range(first, last+1)) or set(rows) != set(range(last+1)):
             raise ValueError('incomplete source coverage')
@@ -144,6 +147,10 @@ class Evidence:
                 index = events.index(answer)
                 event = events[index-1]
                 sequence = events[index-8:index+3]
+                if [(e['kind'],e['message'],e['result']) for e in sequence if e['kind'].startswith('send_')] != [
+                        ('send_before','PlayerObjHipDropReflect',''),('send_after','PlayerObjHipDropReflect','0'),
+                        ('send_before','PlayerObjHipDrop',''),('send_after','PlayerObjHipDrop','1')]:
+                    raise ValueError('ordered send/return evidence')
                 if [(e['kind'],e.get('msg_vt'),e.get('result')) for e in sequence if e['kind'].startswith('receive_')] != [
                         ('receive_before','1de8e48',''),('receive_after','1de8e48','0'),
                         ('receive_before','1d9d628',''),('receive_after','1d9d628','0'),
@@ -188,6 +195,8 @@ class Evidence:
                     or r['pos_bits'] != vector_bits(source.position()) or r['rail_pos_bits'] != r['pos_bits']
                     or r['anim'] != ('SwimWait' if phase == 0 else 'PressDown') or r['anim_frame_bits'] != bits(float(animation))
                     or int(r['step']) != expected_step or r['current_n'] != expected_current
+                    or r['n_vt'] != ['1ca58b8','1ca5db8','1ca5938'][expected_phase]
+                    or r['forward'] != '1' or r['part'] != str(int(source.coord > source.curves[0].length))
                     or r['pending_n'] != ('1ca60c0' if hit else '0')
                     or (r['sensor'],r['type'],r['radius_bits'],r['valid'],r['system']) != ('Body','9',bits(80.),'1','1')):
                 raise ValueError(f'source phase/rail mismatch at {frame}')
@@ -213,7 +222,10 @@ class Evidence:
         if c['who'] != 'player' or c['host_class'] != 'Pukupuku' or c['actor'] != self.actor:
             return False
         if c['kind'] == 'a':
-            return not c['message'] and not c['answer'] and (frame,c['self'],c['other']) in self.overlaps
+            own = {'Foot':'3','Body':'1','Head':'1','Eye':'5','Carry':'2','HipDropKnockDown':'2'}
+            other = {'Body':'9','Attack':'10','AttackRolling':'10','AttackJumpGround':'10','Dash':'10','Kiss':'10'}
+            return (not c['message'] and not c['answer'] and (frame,c['self'],c['other']) in self.overlaps
+                    and own.get(c['self']) == c['self_type'] and other.get(c['other']) == c['other_type'])
         # These fish attacks reached Mario's non-body HipDropKnockDown
         # sensor and were explicitly rejected. No damage/push was applied.
         return (c['kind'] == 'r' and c['self'] == 'HipDropKnockDown' and c['self_type'] == '2'

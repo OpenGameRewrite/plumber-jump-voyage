@@ -67,7 +67,7 @@ def main():
             or [obj['Rotate'][a] for a in 'XYZ'] != [0, -90, 0]
             or [obj['Scale'][a] for a in 'XYZ'] != [1, 1, 1]):
         raise ValueError('Unsupported Pukupuku placement')
-    geometry['pukupuku'] = dict(id='obj473', rail_id='rail15', move_type=0, revive=True,
+    geometry['pukupuku'] = dict(id='obj473', host='プクプク', rail_id='rail15', move_type=0, revive=True,
         position=[obj['Translate'][a] for a in 'XYZ'],
         rail=[dict(position=[p['Translate'][a] for a in 'XYZ'],
                    **{'in': [p['ControlPoints'][0][a] for a in 'XYZ']},

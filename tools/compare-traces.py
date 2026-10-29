@@ -595,7 +595,10 @@ def exported_look_hosts(game_path, geometry_path):
         meta = json.load(f)
     if geometry.get("stage") != meta.get("stage") or geometry.get("scenario") != meta.get("scenario_no"):
         return None
-    return {sensor["host"] for sensor in geometry.get("look_sensors", [])} | {source["host"] for source in geometry.get("rocket_flowers", [])}
+    hosts = {sensor["host"] for sensor in geometry.get("look_sensors", [])} | {source["host"] for source in geometry.get("rocket_flowers", [])}
+    if geometry.get("pukupuku", {}).get("id") == "obj473":
+        hosts.add(geometry["pukupuku"]["host"])
+    return hosts
 
 
 def sensor_host(label):

@@ -1263,6 +1263,50 @@ Press/Dead episode qualify. A static Press floor is not a general exemption.
 Death reload resets the source keeper and executes its initial Wait0 before the
 new player's first sample; no source state is injected from later trace rows.
 
+The cave swimmer fixture is limited to `SeaWorldUtsuboCaveStage` scenario1,
+Pukupuku obj473, MoveType0, closed rail15. `tools/export-pukupuku.py` adds its
+original placement and the `SwimWait`/`PressDown` skeletal curves to the local
+geometry export. Curves come from the user's extracted Pukupuku archive through
+the existing converter's `--curves-only --clip=SwimWait --clip=PressDown` mode;
+neither a recording nor Mario's trajectory is an exporter input. Back up the
+geometry before using the exporter.
+
+The replay reads just the first obj473 sample from `game.pukupuku.csv`: the
+external Wait step1, rail coordinate, quaternion and initial Body centre at the
+start of preroll. The teleport sample is observed again at the first preroll
+update. Subsequent source translation uses the original f32 Bezier coefficients,
+length integration, quantization and inverse-length iteration. The actor turns
+toward the rail, and the original animated JointRoot transforms Body's offset.
+The source never reads later observed transforms, player positions or inputs.
+
+Mario's Foot/EnemyBody sphere overlap sends ObjHipDropReflect (rejected), then
+ObjHipDrop (accepted), requests PoundHit and sets attack trigger3. The existing
+`updateNerveDownFall` consumes it before landing and selects ReflectDownFall.
+Its first update starts the70-frame SwimTrample clip and the11-speed rise; the
+swim gravity then ends it on falling. The source enters Trample on the accepted
+message, stops the rail, plays PressDown and enters Revive on animation end.
+The recorded interval covers Revive's waiting phase only. Capture, revive
+completion, other placements/MoveTypes and floor-trigger1 are unsupported.
+
+The rule checks every source phase/rail/animation sample against an independent
+implementation and the native diagnostic, plus complete ordered send/receive
+evidence, actual sensor identities/radii, the rejected Reflect, accepted
+ObjHipDrop and trigger consequence. Later PlayerDisregard Eye/self queries are
+non-physical; inactive sensor overlaps need per-frame evidence, and the fish's
+attacks on HipDropKnockDown must be explicitly rejected. Other enemies and
+accepted damage/push messages remain refused. Known dynamic Body look sensors
+participate in the ordinary look-column comparison.
+
+This fixture retains absolute stage f32 translation and carry through the
+collider: converting a height near world zero through a much larger relative
+start loses meaningful low bits. Older fixtures retain their established
+coordinate contract. In lockstep only, the observed Mario swim nerve/step and
+water finder are restored, while source state remains independently simulated.
+The previous look target is matched against the previous simulated Body centre.
+Rendered replay also seeds and advances the source, but has no Pukupuku model
+or cave/water rendering. It verifies Mario's presentation only; source transform
+ULP residuals and stage/effect visual limits are reported with the run results.
+
 The entry fall selects `RestartArea`'s linked `PlayerRestartInfo`, which the restart
 exporter now preserves. The replay uses the recorded external scene selection
 (X/Z or an explicit restart id) to choose that exported placement, then resolves

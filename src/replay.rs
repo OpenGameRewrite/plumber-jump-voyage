@@ -677,6 +677,25 @@ pub(crate) fn seed_rocket_flowers(
     Ok(())
 }
 
+pub(crate) fn seed_pukupuku(
+    mesh: &mut TriangleMesh,
+    script: &Script,
+    recorded: Option<&TraceFile>,
+) -> Result<(), String> {
+    if let Some(source) = &mut mesh.pukupuku {
+        let row = recorded
+            .and_then(|g| g.puku_seed.as_ref())
+            .ok_or("missing Pukupuku initial source sample")?;
+        if row.get("frame").and_then(|s| s.parse::<i64>().ok())
+            != Some(-(script.preroll_frames() as i64))
+        {
+            return Err("puku preroll mismatch".into());
+        }
+        source.seed(row)?;
+    }
+    Ok(())
+}
+
 pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let camera = CameraTrack::new(script, options.camera)?;
     let bindings = Settings::default().bindings;
@@ -750,19 +769,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         } else {
             mesh.geysers.clear();
         }
-        if let Some(source) = &mut mesh.pukupuku {
-            let row = options
-                .camera
-                .or(options.lockstep)
-                .and_then(|g| g.puku_seed.as_ref())
-                .ok_or("missing Pukupuku initial source sample")?;
-            if row.get("frame").and_then(|s| s.parse::<i64>().ok())
-                != Some(-(script.preroll_frames() as i64))
-            {
-                return Err("puku preroll mismatch".into());
-            }
-            source.seed(row)?;
-        }
+        seed_pukupuku(mesh, script, options.camera.or(options.lockstep))?;
         if !mesh.key_move_parts.is_empty() {
             let game = options
                 .camera

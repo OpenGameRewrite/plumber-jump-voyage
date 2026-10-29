@@ -65,7 +65,7 @@ impl Driver {
         script: &Script,
         camera: CameraTrack,
         dir: PathBuf,
-        geometry: Option<Arc<TriangleMesh>>,
+        mut geometry: Option<Arc<TriangleMesh>>,
         recorded: Option<&crate::trace::TraceFile>,
     ) -> Result<Self, String> {
         if script.shots.is_empty() {
@@ -76,6 +76,9 @@ impl Driver {
         shots.dedup();
         let mut player = Player::default();
         crate::replay::seed_rocket_flowers(&mut player, script, recorded)?;
+        if let Some(mesh) = &mut geometry {
+            crate::replay::seed_pukupuku(Arc::make_mut(mesh), script, recorded)?;
+        }
         Ok(Self {
             frames: script.frames().cloned().collect(),
             camera,
@@ -122,7 +125,21 @@ pub fn install(app: &mut App, driver: Driver) {
             follow_game_camera.before(bevy::transform::TransformSystems::Propagate),
         )
         .add_systems(FixedPreUpdate, feed)
-        .add_systems(FixedPostUpdate, |mut d: ResMut<Driver>| d.finished += 1)
+        .add_systems(
+            FixedPostUpdate,
+            |mut d: ResMut<Driver>, mut course: ResMut<Course>, player: Single<&Player>| {
+                if let Some(mesh) = &mut course.mesh
+                    && mesh.pukupuku.is_some()
+                {
+                    Arc::make_mut(mesh)
+                        .pukupuku
+                        .as_mut()
+                        .unwrap()
+                        .tick(player.puku_hit);
+                }
+                d.finished += 1;
+            },
+        )
         .add_systems(Update, (capture, mark_look_sensors));
 }
 
@@ -154,6 +171,9 @@ fn begin(
     orbit.locked = true;
     **player = Player::spawn_facing(Vec3::ZERO, driver.start_yaw_deg);
     player.rocket = driver.initial_rocket.clone();
+    if course.mesh.as_ref().is_some_and(|m| m.pukupuku.is_some()) {
+        player.prepare_recorded_teleport();
+    }
     driver.phase = Phase::Loading;
     time.pause();
 }
@@ -186,6 +206,14 @@ fn feed(
 ) {
     let tick = driver.started;
     driver.started += 1;
+    if course.mesh.as_ref().is_some_and(|m| m.pukupuku.is_some()) {
+        player.set_camera_position(
+            driver
+                .camera
+                .view(tick.saturating_sub(driver.preroll))
+                .map(|v| v.position * 100.),
+        );
+    }
     let Some(frame) = tick.checked_sub(driver.preroll) else {
         *orders = Orders::default();
         return;
