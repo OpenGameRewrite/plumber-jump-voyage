@@ -2983,6 +2983,12 @@ impl Player {
             self.nerve.touchdown = true;
             self.touchdown_speed = self.landing_speed;
         }
+        // Fall can keep touching a steep face for several frames. Its landing
+        // judge accepts a usable floor even without a new collision edge.
+        if self.mode == Move::Fall && was_grounded && self.fire_run_angle_contact() {
+            self.nerve.touchdown = true;
+            self.touchdown_speed = self.v.y;
+        }
         self.queue_sand_geyser(scene);
         self.sample_grab_ceil_sources(scene);
         self.check_death_area(scene);
@@ -3062,6 +3068,9 @@ impl Player {
                     | Move::GroundSpin
             ) || self.mode == Move::Throw && !self.throwing.in_air)
         {
+            if self.grounded && self.is_collided_ground() {
+                self.v = self.units_per_frame();
+            }
             self.go(Move::Fall, "Fall");
         }
     }
@@ -4041,6 +4050,13 @@ impl Player {
     /// A state flown by the air control that no take-off armed (a fall, or a
     /// recorded state being replayed): set it up from the velocity it has.
     fn arm_fall_control(&mut self) {
+        if self.is_collided_ground() {
+            // AirMove::setup projects initial horizontal inertia off the
+            // contact normal before removing its vertical component (0x4148d0).
+            let vertical = self.v.y;
+            self.v = vector_lib::verticalize_vec(self.collided_ground_normal(), self.v);
+            self.v.y = vertical;
+        }
         let mut takeoff = fall_takeoff(self.v.y);
         if self.fall_after_ledge.is_some() {
             takeoff.input_lock = ledge::LET_GO_INPUT_LOCK;
@@ -4164,6 +4180,7 @@ impl Player {
     /// what that does to the combo, is decided as the jump state appears (when
     /// the jump is chosen); the take-off follows with its first step.
     fn start_standard_jump(&mut self) {
+        let from_swim = self.mode == Move::Swim;
         self.pre_jump = 0;
         let kind = self.pick_jump_kind();
         let (mode, clip, power_min, power_max, gravity) = match kind {
@@ -4212,7 +4229,7 @@ impl Player {
             }
             // exeJump chooses the ordinary clip on its first step, after the
             // take-off pose has been installed, rather than in appear.
-            if mode == Move::Jump && !p.force_run.is_active() {
+            if mode == Move::Jump && !p.force_run.is_active() && !from_swim {
                 p.anim.name = if p.side_faces_camera() {
                     "Jump"
                 } else {
@@ -4464,7 +4481,7 @@ impl Player {
     /// the velocity, then the actor looks for what the air allows next (the
     /// ground pound, a throw), which is why the frame's gravity is already in.
     fn jump_air(&mut self, o: &Orders) {
-        if self.air_for != Some(self.mode) {
+        if self.air_for != Some(self.mode) || self.mode == Move::Fall && self.frame == 0 {
             self.arm_fall_control();
         }
         self.scale_velocity_at_wall();
@@ -5342,6 +5359,13 @@ impl Player {
 
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders) {
+        if self.mode == Move::Fall && !self.is_just_land() {
+            // A continuing floor contact enters Wait directly; only a fresh
+            // landing chooses the Land child (PlayerStateWait::appear).
+            self.jump_air(o);
+            self.go(Move::Idle, "Wait");
+            return;
+        }
         if self.mode == Move::WallSlide {
             self.leave_wall_slide();
         }

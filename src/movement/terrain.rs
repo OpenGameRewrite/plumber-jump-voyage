@@ -367,6 +367,7 @@ impl Player {
             if self.in_sand_state()
                 || self.in_damage_state()
                 || self.in_wall_push_frame()
+                || self.mode == Move::Fall && was_grounded
                 || matches!(
                     self.mode,
                     Move::SlopeSlide

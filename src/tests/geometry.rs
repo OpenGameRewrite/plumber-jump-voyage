@@ -9,7 +9,7 @@ pub(super) fn run() {
 
 #[cfg_attr(test, test)]
 fn unregistered_kcl_does_not_support_the_player() {
-    let text = r#"{"attributes":[],"objects":[{"model":"VisualWater","collision_enabled":false}],
+    let text = r#"{"attributes":[{}],"objects":[{"model":"VisualWater","collision_enabled":false}],
         "triangles":[[0,0,0,0,0,100,100,0,0,0,1,0,0,0,1,0]]}"#;
     let mesh = TriangleMesh::from_json(text, Vec3::ZERO).unwrap();
     assert_eq!(mesh.floor_below(10., 10., 50., 0.3), None);

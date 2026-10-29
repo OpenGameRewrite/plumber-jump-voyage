@@ -81,7 +81,7 @@ pub(super) fn run() {
     slope_slide();
     burn_and_soot();
     quicksand();
-    low_ceiling();
+    blocked_squat_stays_crouched();
     wall_collision_and_stress();
 }
 
@@ -1597,9 +1597,10 @@ fn burn_and_soot() {
 }
 
 #[cfg_attr(test, test)]
-fn low_ceiling() {
+fn blocked_squat_stays_crouched() {
     let floor = floor();
-    // The overhead solid stops the jump through ordinary collision.
+    // Stand clearance gates leaving an existing squat; it does not fabricate
+    // a crouch button press for a standing player inside an overlapping roof.
     let mut tunnel = floor.clone();
     tunnel.solids.push(Solid {
         center: Vec3::new(0., 1.5, 5.),
@@ -1608,7 +1609,11 @@ fn low_ceiling() {
         moving: false,
         floor_code: "Ground",
     });
-    let mut p = Player::default();
+    let mut p = Player {
+        mode: Move::Crouch,
+        ..default()
+    };
+    p.anim.name = "SquatWait";
     frames(
         &mut p,
         Orders {
@@ -1618,7 +1623,8 @@ fn low_ceiling() {
         &tunnel,
         2,
     );
-    assert!(p.grounded && p.pos.y == 0.);
+    assert_eq!(p.mode, Move::Crouch);
+    assert!(p.grounded && p.pre_jump == 0);
 }
 
 #[cfg_attr(test, test)]

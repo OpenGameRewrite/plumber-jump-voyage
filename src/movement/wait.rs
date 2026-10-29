@@ -83,7 +83,10 @@ pub(super) struct WaitControl {
 
 impl Player {
     pub(super) fn land_nerve(&self) -> bool {
-        matches!(self.clip(), "Land" | "LandTurn" | "LandRolling" | "LandJump3")
+        matches!(
+            self.clip(),
+            "Land" | "LandTurn" | "LandRolling" | "LandJump3"
+        ) && self.ground_normal_or_up() != Vec3::Y
     }
 
     /// `PlayerStateWait::exeLand` / `rs::landGroundPoseAndSnap` (0x5658c4):

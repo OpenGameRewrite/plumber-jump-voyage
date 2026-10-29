@@ -261,10 +261,13 @@ impl Player {
             self.start_roll(RollStart::Normal);
             return;
         }
-        // The actor (0x422a8c) takes a buffered jump only when the body may stand: under a low
-        // ceiling the press waits in the buffer until it runs out.
-        if self.pre_input_jump_judges() && self.judge_enable_stand_up() {
+        // exeSquat resets an accepted pre-input before testing standing
+        // clearance (0x422c40); a blocked press is consumed without jumping.
+        if self.pre_input_jump_judges() {
             self.pre_jump = 0;
+            if !self.judge_enable_stand_up() {
+                return;
+            }
             // Only the braking sub-state allows the long jump, and only while
             // moving forward (`PlayerStateSquat::isEnableLongJump`).
             if self.mode == Move::SquatBrake && self.v.dot(self.facing) > 0. {
