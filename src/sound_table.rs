@@ -274,6 +274,10 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
             cap: true,
             name: "Trample",
         }],
+        Fx::CapTrampleHit => vec![Cue::Reaction {
+            cap: false,
+            name: "踏みつけヒット[反射]",
+        }],
         Fx::CapStayStart => vec![Cue::Reaction {
             cap: true,
             name: "StayStart",

@@ -92,10 +92,18 @@ const TRAMPLE_FRAMES: u32 = 15;
 /// own sensor must not exceed these.
 const TRAMPLE_MAX_VERTICAL: f32 = 70.;
 const TRAMPLE_MAX_HORIZONTAL: f32 = 200.;
-/// The cap's `Trample` hit sensor (`PlayerFunction::initCapModelActor`): a
-/// sphere of 300 around local (0,20,0), from initCapModelActor 0x446678.
+/// The cap's `Trample` hit sensor (`PlayerFunction::initCapModelActor` 0x446678): a sphere of
+/// 300 around local (0,20,0), turned with the cap's pose. The swimmer's foot message is tested
+/// against exactly this.
 const TRAMPLE_SENSOR_RADIUS: f32 = 300.;
 const TRAMPLE_SENSOR_Y: f32 = 20.;
+/// The grounded jump (the `TrampleReturn` recordings) is tested against a point 20 centimetres
+/// *below* the cap instead. That direction is a reading of the cap-bounce recordings, not of
+/// the code: the run is first trampled in the frame the foot comes within the vertical limit of
+/// such a point, while one above the cap would be reached some frames earlier or not at all
+/// (GUESS: the recorded jump belongs to the receiver's touch-jump branch, whose own geometry
+/// is not ported).
+const GROUNDED_TRAMPLE_SENSOR_Y: f32 = -20.;
 /// The player's foot sensor (`PlayerActorHakoniwa/InitSensor`: `Foot`).
 pub const FOOT_SENSOR_RADIUS: f32 = 40.;
 pub const FOOT_SENSOR_Y: f32 = 40.;
@@ -163,9 +171,14 @@ pub enum CapNerve {
     /// The spin-move throw (`exeThrowSpiral`): the cap circles the player on a widening spiral.
     ThrowSpiral,
     ThrowStay,
-    /// The player stood on the hovering cap (`HackCap::exeTrample`, which the
-    /// recordings name `TrampleReturn`): it stays put for a short while, then
-    /// goes back.
+    /// The player stood on the hovering cap by touch jump (`HackCap::exeTrample` under the
+    /// nerve the recordings name `TrampleReturn`): it stays put for a short while, then goes
+    /// back.
+    TrampleReturn,
+    /// The player's foot sensor trampled the cap (`rs::sendMsgPlayerCapTrample`, `HackCap::
+    /// receiveMsg` 0x407e30): the same `exeTrample` under its own nerve, `Trample`. It ends
+    /// like the other one here; the original lets it chain back into `ThrowStay` for a second
+    /// player, which these single-player scenarios never exercise (GUESS: not modelled).
     Trample,
     Return,
 }
@@ -179,7 +192,8 @@ impl CapNerve {
             "ThrowRollingBrake" => Self::ThrowRollingBrake,
             "ThrowSpiral" => Self::ThrowSpiral,
             "ThrowStay" => Self::ThrowStay,
-            "TrampleReturn" => Self::Trample,
+            "TrampleReturn" => Self::TrampleReturn,
+            "Trample" => Self::Trample,
             "Return" => Self::Return,
             _ => return None,
         })
@@ -193,7 +207,8 @@ impl CapNerve {
             Self::ThrowRollingBrake => "ThrowRollingBrake",
             Self::ThrowSpiral => "ThrowSpiral",
             Self::ThrowStay => "ThrowStay",
-            Self::Trample => "TrampleReturn",
+            Self::TrampleReturn => "TrampleReturn",
+            Self::Trample => "Trample",
             Self::Return => "Return",
         }
     }
@@ -361,9 +376,9 @@ pub struct Cap {
     /// throw), and whether the cap rests on it (the rolling nerves read that contact).
     floor_y: f32,
     floor_contact: bool,
-    /// The player trampled the cap in this frame's sensor phase: the trample
-    /// nerve is entered when the cap next updates (`al::setNerve`).
-    trampled: bool,
+    /// The player trampled the cap in this frame's sensor phase: the nerve the cap took is
+    /// entered when it next updates (`al::setNerve`).
+    trampled: Option<CapNerve>,
     /// `Stay状態開始` was raised (once per throw, while the button is held).
     stay_reaction_done: bool,
     /// Cappy's collider (`PlayerColliderHackCap`), against a triangle mesh.
@@ -452,7 +467,7 @@ impl Cap {
             capcatch: launch.continuous,
             floor_y: player.y / UNIT,
             floor_contact: false,
-            trampled: false,
+            trampled: None,
             stay_reaction_done: false,
             collider: PlayerCollider::for_cap(),
             wall_memory: Vec3::ZERO,
@@ -507,11 +522,26 @@ impl Cap {
     /// vertically and 200 horizontally; the cap then stands still and returns
     /// (the nerve is entered when it next updates). `jump_possible` is
     /// `PlayerCapActionHistory`'s flag: one cap jump per time on the ground.
-    pub fn take_trample(&mut self, foot: Vec3, hold: bool, jump_possible: bool) -> bool {
-        if self.nerve != CapNerve::ThrowStay || self.trampled || !hold || !jump_possible {
+    ///
+    /// `nerve` is the trample nerve the cap goes into: [`CapNerve::Trample`] for the foot
+    /// sensor's message (the swimmer's), [`CapNerve::TrampleReturn`] for the grounded jump
+    /// the recordings show (reached through the touch-jump branch of the receiver; the
+    /// rewrite still runs it through this sensor test, GUESS).
+    pub fn take_trample(
+        &mut self,
+        foot: Vec3,
+        hold: bool,
+        jump_possible: bool,
+        nerve: CapNerve,
+    ) -> bool {
+        if self.nerve != CapNerve::ThrowStay || self.trampled.is_some() || !hold || !jump_possible {
             return false;
         }
-        let sensor = self.spot + self.pose.world_axis(Vec3::Y * TRAMPLE_SENSOR_Y);
+        let sensor = if nerve == CapNerve::Trample {
+            self.spot + self.pose.world_axis(Vec3::Y * TRAMPLE_SENSOR_Y)
+        } else {
+            self.spot + Vec3::Y * GROUNDED_TRAMPLE_SENSOR_Y
+        };
         let between = foot - sensor;
         let reach = (TRAMPLE_SENSOR_RADIUS + FOOT_SENSOR_RADIUS).powi(2);
         let above = between.try_normalize().map_or(0., |dir| dir.y);
@@ -522,7 +552,7 @@ impl Cap {
         {
             return false;
         }
-        self.trampled = true;
+        self.trampled = Some(nerve);
         true
     }
     /// The clip the throw's flight plays.
@@ -602,8 +632,8 @@ impl Cap {
             (CapNerve::ThrowSpiral, step) => ("FlyingWaitSpiral", step - 1),
             (CapNerve::ThrowStay, 0) => (self.flight_clip(), 0),
             (CapNerve::ThrowStay, step) => (stay(self.left), step - 1),
-            (CapNerve::Trample, 0) => (stay(self.left), 0),
-            (CapNerve::Trample, step) => ("Trample", step - 1),
+            (CapNerve::Trample | CapNerve::TrampleReturn, 0) => (stay(self.left), 0),
+            (CapNerve::Trample | CapNerve::TrampleReturn, step) => ("Trample", step - 1),
             (CapNerve::Return, 0) => (stay(self.left), 0),
             (CapNerve::Return, step) => (flying(self.kind, self.air, self.left), step - 1),
         };
@@ -635,8 +665,8 @@ impl Cap {
         if let Some(rolling) = self.rolling.as_mut() {
             rolling.called = false;
         }
-        if std::mem::take(&mut self.trampled) {
-            self.nerve = CapNerve::Trample;
+        if let Some(nerve) = self.trampled.take() {
+            self.nerve = nerve;
             self.step = 0;
             self.phase = CapPhase::Stay;
         }
@@ -647,7 +677,7 @@ impl Cap {
             CapNerve::ThrowRollingBrake => self.throw_rolling_brake(),
             CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT),
             CapNerve::ThrowStay => self.throw_stay(world, &mut events),
-            CapNerve::Trample => self.trample(&mut events),
+            CapNerve::Trample | CapNerve::TrampleReturn => self.trample(&mut events),
             CapNerve::Return => self.go_back(head, world, &mut events),
         };
         self.step += 1;
@@ -909,7 +939,7 @@ impl Cap {
         // (The throw nerves, and the return; not the trample.)
         let enabled = !self.water.splash_area
             && !self.water.submerged
-            && !matches!(self.nerve, CapNerve::Trample);
+            && !matches!(self.nerve, CapNerve::Trample | CapNerve::TrampleReturn);
         if enabled && let Some(skim) = self.surface_skim(&finder) {
             if skim {
                 if !self.water.fly_effect {
@@ -1175,7 +1205,7 @@ fn phase_of(nerve: CapNerve) -> CapPhase {
         | CapNerve::ThrowRolling
         | CapNerve::ThrowRollingBrake
         | CapNerve::ThrowSpiral => CapPhase::Out,
-        CapNerve::ThrowStay | CapNerve::Trample => CapPhase::Stay,
+        CapNerve::ThrowStay | CapNerve::Trample | CapNerve::TrampleReturn => CapPhase::Stay,
         CapNerve::Return => CapPhase::Return,
     }
 }

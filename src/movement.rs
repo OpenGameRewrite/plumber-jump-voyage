@@ -952,6 +952,9 @@ pub enum Fx {
     Catch,
     /// The cap was trampled: its first step in the trample nerve.
     CapBounce,
+    /// The foot sensor's trample message was accepted by the cap
+    /// (`PlayerActorHakoniwa::attackSensor`): the hit reaction the foot raises.
+    CapTrampleHit,
     /// The stay began while the button is held: the reaction it raises.
     CapStayStart,
     /// Equipment started a forced run (the reaction `強制走り開始`).
@@ -5214,18 +5217,27 @@ impl Player {
             return;
         };
         let foot = self.pos / UNIT + Vec3::Y * crate::cap::FOOT_SENSOR_Y;
-        if !cap.take_trample(foot, o.throw_held, self.cap_jump_possible) {
+        let swimming = self.mode == Move::Swim;
+        let nerve = if swimming {
+            crate::cap::CapNerve::Trample
+        } else {
+            crate::cap::CapNerve::TrampleReturn
+        };
+        if !cap.take_trample(foot, o.throw_held, self.cap_jump_possible, nerve) {
             return;
         }
-        self.cap_jump_possible = false;
-        if self.mode == Move::Swim {
-            // attackSensor 0x427f34 sets both flags after the cap accepts
-            // PlayerCapTrample. The swimmer consumes them in its own update.
+        if swimming {
+            // `attackSensor` 0x427f34: the accepted PlayerCapTrample raises the foot's hit
+            // reaction and sets attack triggers 1 and 2 together. The swimmer reads them in its
+            // own update (`exeSwimMove` and `exeSwimPaddle` test 2 only). The recordings keep
+            // the cap-jump counter set through the bounce, so it is not spent here.
             self.swim.attack.hit = true;
             self.swim.attack.trample = true;
             self.own_cap_trample = true;
+            self.events.push(Fx::CapTrampleHit);
             return;
         }
+        self.cap_jump_possible = false;
         self.trample_jump();
         // The nerve was named before this frame's update, which runs its
         // first step now: no frame passes in the chosen state.
@@ -5246,7 +5258,10 @@ impl Player {
     /// the air.
     fn can_trample(&self) -> bool {
         if self.mode == Move::Swim {
-            return !matches!(self.swim.nerve, swim::SwimNerve::HipDropHeadSliding | swim::SwimNerve::HipDropHeadSlidingEnd);
+            return !matches!(
+                self.swim.nerve,
+                swim::SwimNerve::HipDropHeadSliding | swim::SwimNerve::HipDropHeadSlidingEnd
+            );
         }
         !matches!(
             self.mode,
@@ -5732,4 +5747,3 @@ pub fn self_check() {
     rocket_flower::self_check();
     surface_run::self_check();
 }
-

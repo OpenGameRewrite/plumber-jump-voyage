@@ -301,7 +301,7 @@ fn the_return_after_a_trample_leaves_along_the_cap_pose() {
         cap.update(&world);
     }
     let foot = cap.pos / UNIT + Vec3::Y * 30.;
-    assert!(cap.take_trample(foot, true, true));
+    assert!(cap.take_trample(foot, true, true, crate::cap::CapNerve::TrampleReturn));
     while cap.state_name() != "Return" {
         cap.update(&world);
     }
