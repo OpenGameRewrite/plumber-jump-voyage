@@ -3168,7 +3168,11 @@ impl Player {
                 // waitGround has already applied this step's ground normal.
                 // units_per_frame may still hold the previous collision's
                 // reporting cache, which is stale on a rotating support.
-                self.v = self.ground_following();
+                self.v = if self.rotating_ground {
+                    self.ground_following()
+                } else {
+                    self.units_per_frame()
+                };
             }
             if matches!(self.actor_name(), "Wait" | "Run") {
                 self.feedback_ground_inertia(false);

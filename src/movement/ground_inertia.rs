@@ -125,20 +125,25 @@ fn a_jump_turn_resets_collision_after_takeoff_setup() {
 }
 #[cfg_attr(test, test)]
 fn fall_uses_the_current_ground_velocity() {
-    let mut player = Player {
-        grounded: true,
-        mesh_ground: Some(Vec3::new(0., 0.6, 0.8)),
-        ground_move: Some((Vec2::ZERO, t::GRAVITY, Vec3::NEG_Y * t::GRAVITY)),
-        ground_lost: GROUND_LOST_FRAMES + 1,
-        ..Player::default()
-    };
-    player.v = Vec3::NEG_Y * t::GRAVITY;
-    player.judge_fall();
-    assert_eq!(player.mode, Move::Fall);
-    assert_eq!(
-        player.v,
-        Vec3::new(0., -0.6 * t::GRAVITY, -0.8 * t::GRAVITY)
-    );
+    for rotating in [false, true] {
+        let mut player = Player {
+            grounded: true,
+            mesh_ground: Some(Vec3::new(0., 0.6, 0.8)),
+            ground_move: Some((Vec2::ZERO, t::GRAVITY, Vec3::NEG_Y * t::GRAVITY)),
+            rotating_ground: rotating,
+            ground_lost: GROUND_LOST_FRAMES + 1,
+            ..Player::default()
+        };
+        player.v = Vec3::NEG_Y * t::GRAVITY;
+        player.judge_fall();
+        assert_eq!(player.mode, Move::Fall);
+        let expected = if rotating {
+            Vec3::new(0., -0.6 * t::GRAVITY, -0.8 * t::GRAVITY)
+        } else {
+            Vec3::NEG_Y * t::GRAVITY
+        };
+        assert_eq!(player.v, expected);
+    }
 }
 #[cfg_attr(test, test)]
 fn saved_force_lasts_one_airborne_update() {
