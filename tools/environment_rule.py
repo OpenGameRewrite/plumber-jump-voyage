@@ -34,6 +34,7 @@ from sand_geyser import Evidence as GeyserEvidence
 from key_move_parts import Evidence as PressEvidence
 from grab_ceil import Evidence as GrabCeilEvidence
 from rocket_flower import Evidence as RocketEvidence
+from coin_chameleon import Evidence as CoinChameleonEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -214,7 +215,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -241,6 +242,7 @@ class Judge:
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
+        self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
         self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
         self._scripted = {}
         self._candles = []
@@ -528,6 +530,11 @@ class Judge:
             if self._geysers.contact(f, c, self.rows, self.preroll, self._start):
                 v.accept(f, "exported SandGeyser source", "placement-bound source with independently verified phase and reproduced timeline")
                 continue
+            if self._coins.contact(f, c):
+                v.accept(f, "exported CoinChameleon overlap",
+                         "placement-bound coin whose recorded answers are the look-at query only; "
+                         "no reveal, collect or hip-drop message was accepted")
+                continue
             if self._candle_contact(f, c, message=c["kind"] in ("r", "p")):
                 v.accept(f, "exported candlestand sensor",
                          "settled initially lit static placement; exact Fire/Body sphere overlap replayed")
@@ -732,6 +739,8 @@ def self_check():
     check_grabceil()
     from rocket_flower import self_check as check_rocket
     check_rocket()
+    from coin_chameleon import self_check as check_coins
+    check_coins()
     _check_candlestands()
 
     def rows(count=6, **overrides):
