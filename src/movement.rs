@@ -255,6 +255,7 @@ pub mod grab_ceil;
 mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
+pub mod key_move_parts;
 mod recovery_dead;
 pub mod rocket_flower;
 mod safety;
@@ -1359,6 +1360,7 @@ pub struct Player {
     mesh_ground: Option<Vec3>,
     /// The collision codes of the mesh surfaces the body touched this step.
     pub touched: terrain::Touched,
+    pub key_move_sources: String,
     /// The main clip looped back to its start in this step, as the game's triggers see it: a
     /// clip whose counter shows its length for a row before it wraps starts its loop in that
     /// row.
@@ -1527,6 +1529,7 @@ impl Default for Player {
             collider: PlayerCollider::default(),
             mesh_ground: None,
             touched: terrain::Touched::default(),
+            key_move_sources: String::new(),
             clip_wrapped: false,
             counter_wrapped: false,
             pose_seen: None,
@@ -2811,6 +2814,19 @@ impl Player {
     fn step_with_sources(&mut self, o: &Orders, scene: &Course, advance_sources: bool) {
         if self.death.restart_pending {
             self.restart_after_death(scene);
+        }
+        if advance_sources {
+            self.key_move_sources = scene
+                .mesh
+                .as_ref()
+                .map(|m| {
+                    m.key_move_parts
+                        .iter()
+                        .map(|p| p.diagnostic())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+                .unwrap_or_default();
         }
         self.death.update_judge(self.is_dead());
         self.prev = self.pos;
@@ -5664,6 +5680,7 @@ pub fn self_check() {
     hip_spring::self_check();
     look_at::self_check();
     damage::self_check();
+    key_move_parts::self_check();
     force_run::self_check();
     rocket_flower::self_check();
     surface_run::self_check();

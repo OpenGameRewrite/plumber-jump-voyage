@@ -609,10 +609,16 @@ pub(crate) fn update_static_clipping(player: &mut Player, course: &Course, view:
 
 fn tick_geysers(course: &mut Course, player: &Player) {
     if let Some(mesh) = &mut course.mesh
-        && (!mesh.geysers.is_empty() || !mesh.grab_ceil_bars.is_empty())
+        && (!mesh.geysers.is_empty()
+            || !mesh.grab_ceil_bars.is_empty()
+            || !mesh.key_move_parts.is_empty())
     {
         let mesh = Arc::make_mut(mesh);
         mesh.tick_geysers();
+        for part in &mut mesh.key_move_parts {
+            part.tick();
+        }
+        mesh.update_key_move_collision();
         let feet = mesh.to_game_vec(player.position_cm());
         for bar in &mut mesh.grab_ceil_bars {
             bar.tick(
@@ -727,6 +733,26 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             }
         } else {
             mesh.geysers.clear();
+        }
+        if !mesh.key_move_parts.is_empty() {
+            let game = options
+                .camera
+                .or(options.lockstep)
+                .ok_or("key parts require independent initial source evidence")?;
+            for part in &mut mesh.key_move_parts {
+                let row = game
+                    .press_seed
+                    .iter()
+                    .find(|r| r.get("id") == Some(&part.id))
+                    .ok_or("missing key-move seed")?;
+                if row.get("frame").and_then(|s| s.parse::<i64>().ok())
+                    != Some(-(script.preroll_frames() as i64))
+                {
+                    return Err("part preroll mismatch".into());
+                }
+                part.seed(row)?;
+            }
+            mesh.update_key_move_collision();
         }
     }
     let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
@@ -913,6 +939,13 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     return Err("scene reload requires exported restart_points and recorded spawn_abs/restart_point_id".into());
                 }
                 let previous_clip = player.anim.name;
+                if let Some(mesh) = &mut course.mesh {
+                    let mesh = Arc::make_mut(mesh);
+                    for part in &mut mesh.key_move_parts {
+                        part.reset();
+                    }
+                    mesh.update_key_move_collision();
+                }
                 player.restart_after_death(&course);
                 recorder = Recorder::new(
                     options.table.clone(),

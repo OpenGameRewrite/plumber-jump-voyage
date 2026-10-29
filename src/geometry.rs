@@ -123,6 +123,7 @@ pub struct TriangleMesh {
     pub candle_fire: Vec<Vec3>,
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
+    pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     disabled_parts: Vec<usize>,
     geyser_curves: Option<serde_json::Value>,
 }
@@ -479,7 +480,67 @@ impl TriangleMesh {
                     animation_started: false,
                 });
         }
+        for source in root["key_move_parts"].as_array().into_iter().flatten() {
+            let id = source["id"].as_str().ok_or("key part id")?;
+            let object = root["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|o| o["id"] == id)
+                .ok_or("key part object")?;
+            let part = object_part[object].ok_or("key part raw KCL")? as usize;
+            let keys = &source["keys"];
+            let position = |i: usize| {
+                floats(keys[i].get("position"))
+                    .map(Vec3::from_array)
+                    .ok_or("key position")
+            };
+            let time = |i: usize, name: &str| {
+                keys[i][name]
+                    .as_u64()
+                    .filter(|&n| n > 0)
+                    .map(|n| n as u32)
+                    .ok_or("key duration")
+            };
+            mesh.key_move_parts
+                .push(crate::movement::key_move_parts::KeyMovePart {
+                    id: id.into(),
+                    part,
+                    keys: [position(0)?, position(1)?],
+                    wait: [time(0, "WaitTime")?, time(1, "WaitTime")?],
+                    duration: [time(0, "SpeedByTime")?, time(1, "SpeedByTime")?],
+                    moving: false,
+                    key: 0,
+                    step: 0,
+                    position: position(0)?,
+                });
+        }
         Ok(mesh)
+    }
+
+    pub fn update_key_move_collision(&mut self) {
+        for source in &self.key_move_parts {
+            let mut base = self.parts[source.part].base;
+            base[3] = source.position.x;
+            base[7] = source.position.y;
+            base[11] = source.position.z;
+            self.parts[source.part] = PartFrame::new(base).expect("upright key-move matrix");
+        }
+        for i in 0..self.triangles.len() {
+            let Some(local) = self.triangles[i].local else {
+                continue;
+            };
+            if self
+                .key_move_parts
+                .iter()
+                .any(|s| s.part == local.part as usize)
+            {
+                let world = local.prism.world_triangle(&self.parts[local.part as usize]);
+                self.triangles[i].corners = world.corners.map(|c| self.relative_point(c));
+                self.triangles[i].normal = Vec3::from_array(world.normal);
+                self.triangles[i].edges = world.edges.map(Vec3::from_array);
+            }
+        }
     }
 
     /// Sources update after Mario at the sample boundary. Vertical motion keeps the X/Z cell index valid.

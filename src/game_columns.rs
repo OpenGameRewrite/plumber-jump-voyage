@@ -149,6 +149,9 @@ pub fn collision_cell(p: &Player) -> String {
     if !p.geyser_sources().is_empty() {
         items.push(format!("geysers={}", p.geyser_sources()));
     }
+    if !p.key_move_sources.is_empty() {
+        items.push(format!("keyparts={}", p.key_move_sources));
+    }
     if let Some(source) = p.rocket_diagnostic() {
         items.push(format!("rocket={source}"));
     }
