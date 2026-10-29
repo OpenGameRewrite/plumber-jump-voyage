@@ -86,7 +86,26 @@ impl KeyMovePart {
             .map(|s| u32::from_str_radix(s, 16).map(f32::from_bits))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| "part position bits")?;
-        self.position = Vec3::from_slice(&components);
+        if components.len() != 3 || components.iter().any(|v| !v.is_finite()) {
+            return Err("part position".into());
+        }
+        let a = self.keys[self.key];
+        let b = self.keys[1 - self.key];
+        self.position = if self.moving && self.step > 0 {
+            a + (b - a) * ((self.step - 1) as f32 / self.duration[self.key] as f32)
+        } else {
+            a
+        };
+        if self.position != Vec3::from_slice(&components) {
+            return Err("part seed translation does not match phase".into());
+        }
+        let initial = self.keys[0]
+            .to_array()
+            .map(|v| format!("{:08x}", v.to_bits()))
+            .join(",");
+        if get("init_bits")? != initial {
+            return Err("part seed placement mismatch".into());
+        }
         Ok(())
     }
     pub fn diagnostic(&self) -> String {

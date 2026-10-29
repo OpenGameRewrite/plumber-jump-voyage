@@ -3,8 +3,46 @@ use serde_json::Value;
 
 pub(super) fn run() {
     a_lone_floor_arrow_pushes_along_the_ground_normal();
+    opposing_moving_and_static_fixes_leave_a_squeeze_residual();
     the_exes_result_computation_agrees_bit_for_bit();
     the_exes_arrow_ring_agrees_bit_for_bit();
+}
+
+#[cfg_attr(test, test)]
+fn opposing_moving_and_static_fixes_leave_a_squeeze_residual() {
+    let ceiling = ContactFacts {
+        motion: Some(Vec3::ZERO),
+        shape: ShapeFacts::Sphere {
+            support: None,
+            support_axis: Vec3::Y,
+            ignore_ground: false,
+            ignore_ceiling: false,
+        },
+        hit: Hit::Sphere(SphereHit {
+            motion: Some(Vec3::ZERO),
+            depth: 3.,
+            location: Location::Face,
+            position: Vec3::Y * 150.,
+            center: Vec3::Y * 98.,
+        }),
+        normal: Vec3::NEG_Y,
+        triangle: 1,
+    };
+    let solve = |results: &[ContactFacts]| {
+        PlayerCollider::default().solve_results(
+            results,
+            &[],
+            Vec3::ZERO,
+            BorderCheck::NoFace,
+            &mut |_, _| false,
+        )
+    };
+    let alone = solve(&[ceiling]);
+    assert_eq!(alone.fix, Vec3::NEG_Y * 3.);
+    assert_eq!(alone.residual, Vec3::ZERO);
+    let opposed = solve(&[ceiling, arrow_result(27., 20.)]);
+    assert_eq!(opposed.fix, Vec3::Y * 4.);
+    assert_eq!(opposed.residual, Vec3::Y * 6.);
 }
 
 fn arrow_result(depth: f32, margin: f32) -> ContactFacts {

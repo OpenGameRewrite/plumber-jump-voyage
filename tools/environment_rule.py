@@ -31,6 +31,7 @@ import math
 import re
 import struct
 from sand_geyser import Evidence as GeyserEvidence
+from key_move_parts import Evidence as PressEvidence
 from grab_ceil import Evidence as GrabCeilEvidence
 from rocket_flower import Evidence as RocketEvidence
 from collections import OrderedDict
@@ -213,7 +214,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -240,6 +241,7 @@ class Judge:
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
+        self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
         self._scripted = {}
         self._candles = []
         self._start = start
@@ -256,6 +258,7 @@ class Judge:
                     self._candles.append(candle)
         if geometry and start is not None and v.geometry_replay:
             self._classify_damage(geometry, start, preroll or {}, start_triangle or {})
+        self._scripted.update({f: "exported KeyMoveMapParts squeeze with independently reproduced source phase" for f in self._press.episodes})
 
     def _classify_damage(self, geometry, start, preroll, start_triangle):
         """Prove an episode's entry, never infer it from its scenario name or its outcome.
@@ -562,6 +565,8 @@ class Judge:
                 if self._grabceil.surface(f, host, self._start):
                     continue
                 return False, "ceiling bar lacks an independently reproduced fixed source"
+            if self._press.surface(f, surface, host):
+                continue
             if self._geysers.floor(f, host, self._start):
                 continue
             if host["moving"] == "1" or host["parts_flag"] == "0":

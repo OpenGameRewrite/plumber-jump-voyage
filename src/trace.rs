@@ -372,9 +372,13 @@ impl Recorder {
     /// poses, as long as the Wait entry of the interpolation table; the capture converter names
     /// it after the last sampled clip (before loading). Keep that diagnostic label without
     /// blending the dead actor.
-    pub fn scene_started(&mut self, previous_clip: &'static str) {
+    pub fn scene_stale_clip(&self) -> &'static str {
+        self.stale_clip
+    }
+
+    pub fn scene_started(&mut self, previous_stale: &'static str, previous_clip: &'static str) {
         self.main_clip = "Wait";
-        self.stale_clip = previous_clip;
+        self.stale_clip = previous_stale;
         self.restart = Some((
             previous_clip,
             0,
@@ -940,7 +944,9 @@ impl Recorder {
         // the state applies it, and its first step then counts 1 (the keeper applied it and
         // counted the step in the same update).
         let chosen_late = p.nerve_chosen_late() && !p.death.abyss_pending_for_trace();
-        if chosen_late {
+        if p.mode == Move::Dead && p.crushed() {
+            cells.empty();
+        } else if chosen_late {
             cells.int(-1);
         } else if std::mem::take(&mut self.chosen_late) {
             self.sub_steps = 1;
@@ -1104,8 +1110,21 @@ impl Recorder {
         // A sub animation of another clip just ended: the main clip restarts
         // blending in over `RESTART_BLEND_FRAMES` from the clip it followed.
         if self.main_clip != p.anim.name {
-            self.restart = None;
-            self.stale_clip = self.main_clip;
+            if let Some((from, 0, _)) = self.restart {
+                // A new scene's Wait can immediately select its area animation.
+                // The probe keeps the prior interpolation label when the clip
+                // name survived the reload, without blending the old skeleton.
+                let from = if from == p.anim.name && !self.stale_clip.is_empty() {
+                    self.stale_clip
+                } else {
+                    from
+                };
+                self.restart = Some((from, 0, interp_frames(p.anim.name, from) as u32));
+                self.stale_clip = from;
+            } else {
+                self.restart = None;
+                self.stale_clip = self.main_clip;
+            }
             self.main_clip = p.anim.name;
         }
         // The animation that played over the main clip: the model's sub

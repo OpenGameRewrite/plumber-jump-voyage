@@ -30,6 +30,15 @@ def main():
             restart = point(linked, 'checkpoint')
             restart['checkpoint_id'] = flag['Id']
             points.append(restart)
+    # RestartArea's PlayerRestartInfo replaces the entry point while the
+    # opening fall crosses the area. Keep the link identity with its placement.
+    for area in placement.get('AreaList', []):
+        if area['UnitConfigName'] != 'RestartArea':
+            continue
+        for linked in area.get('Links', {}).get('PlayerRestartInfo', []):
+            restart = point(linked, 'restart_area')
+            restart['area_id'] = area['Id']
+            points.append(restart)
     geometry['restart_points'] = points
     args.geometry.write_text(json.dumps(geometry, separators=(',', ':')), encoding='utf8')
     print(f'{args.geometry}: {len(points)} restart placements')

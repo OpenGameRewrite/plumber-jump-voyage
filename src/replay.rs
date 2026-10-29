@@ -771,6 +771,22 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     .zip(position)
                     .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
         });
+        // The scene may have selected RestartArea's linked PlayerStartObj
+        // during entry, before the recording teleported Mario. Like checkpoint
+        // selection, this saved selection belongs to the scene, not Press.
+        let point = if selected_id.is_none() {
+            mesh.restart_points
+                .iter()
+                .find(|p| {
+                    p["kind"] == "restart_area"
+                        && spawn
+                            .zip(p["position"].as_array())
+                            .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
+                })
+                .or(point)
+        } else {
+            point
+        };
         if let Some(point) = point {
             let p = point["position"]
                 .as_array()
@@ -939,6 +955,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     return Err("scene reload requires exported restart_points and recorded spawn_abs/restart_point_id".into());
                 }
                 let previous_clip = player.anim.name;
+                let previous_stale = recorder.scene_stale_clip();
                 if let Some(mesh) = &mut course.mesh {
                     let mesh = Arc::make_mut(mesh);
                     for part in &mut mesh.key_move_parts {
@@ -954,7 +971,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     floor.clone(),
                 )
                 .with_stage(options.geometry.clone());
-                recorder.scene_started(previous_clip);
+                recorder.scene_started(previous_stale, previous_clip);
             }
         }
         let (mut orders, mut info) = orders_for(

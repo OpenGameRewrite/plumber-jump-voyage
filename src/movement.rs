@@ -2071,6 +2071,9 @@ impl Player {
     /// The frame of the model's action when a sub animation is playing the
     /// main clip too.
     pub fn model_frame(&self) -> Option<f32> {
+        if self.crushed() {
+            return Some(self.press.frozen_frame);
+        }
         (self.sub.active && self.sub.name == self.anim.name).then_some(self.sub.frame)
     }
     /// The cap's surface effects as they run (skimming, resting).
@@ -2691,7 +2694,10 @@ impl Player {
     fn advance_clips(&mut self) {
         self.clip_wrapped = false;
         self.counter_wrapped = false;
-        if self.is_dead() && self.death.kind == death::Kind::Press && self.frame > 0 {
+        if self.is_dead()
+            && self.death.kind == death::Kind::Press
+            && (self.frame > 0 || self.mode == Move::Dead)
+        {
             self.anim.frame = self.press.frozen_frame;
             return;
         }
@@ -5704,6 +5710,7 @@ pub fn self_check() {
     look_at::self_check();
     damage::self_check();
     key_move_parts::self_check();
+    press::self_check();
     force_run::self_check();
     rocket_flower::self_check();
     surface_run::self_check();

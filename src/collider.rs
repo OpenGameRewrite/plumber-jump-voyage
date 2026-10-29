@@ -501,46 +501,14 @@ fn sphere_hit(
     // `CollisionMultiShape::callbackFromServer`: the centre and the radius are carried into the
     // part's frame, the depth and the touched point back out.
     let center_local = transform_point(&frame.inverse, center.to_array());
-    let moving = mesh
-        .key_move_parts
-        .iter()
-        .find(|s| s.part == local.part as usize && s.motion != Vec3::ZERO);
-    let mut sampled = center_local;
-    let mut reaction = None;
-    let (depth, region) = if let Some(source) = moving {
-        // CollisionParts::checkStrikeSphereForPlayer (0x848f80) sweeps the
-        // sphere from the previous inverse frame into the current one. A hit
-        // carries only the source motion still remaining at that sample.
-        let start = Vec3::from_array(center_local) + source.motion;
-        let end = Vec3::from_array(center_local);
-        let mut sweep = Sweep::new(start, end, (radius * 0.9).min(35.), radius, radius);
-        loop {
-            sampled = sweep.pos().to_array();
-            if let Some(hit) =
-                local
-                    .prism
-                    .sphere_test(sampled, radius * frame.inverse_scale, frame.inverse_scale)
-            {
-                let normal = t.normal;
-                let remaining = source.motion * (1. - sweep.current);
-                reaction = Some(normal * dot(normal, remaining));
-                break hit;
-            }
-            sweep.advance();
-            if sweep.finished() {
-                return None;
-            }
-        }
-    } else {
-        local.prism.sphere_test(
-            center_local,
-            radius * frame.inverse_scale,
-            frame.inverse_scale,
-        )?
-    };
-    let position = local.prism.sphere_hit_position(sampled, region);
+    let (depth, region) = local.prism.sphere_test(
+        center_local,
+        radius * frame.inverse_scale,
+        frame.inverse_scale,
+    )?;
+    let position = local.prism.sphere_hit_position(center_local, region);
     Some(SphereHit {
-        motion: reaction,
+        motion: None,
         depth: frame.world_per_local() * depth,
         location: match region {
             1 => Location::Face,
@@ -978,7 +946,7 @@ struct Results {
 /// `CollisionMultiShape::check`: every shape of the keeper against the
 /// triangles near it. An arrow whose depth is under its margin only supports
 /// (its own list); everything else is a collision.
-fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Results {
+fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: Vec3) -> Results {
     let mut results = Results::default();
     for (index, shape) in keeper.shapes.iter().enumerate() {
         match shape {
@@ -987,6 +955,13 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
                 let world_rel = mesh.relative_vec(world);
                 for i in mesh.cell_triangles(Aabb::around(world_rel, radius)) {
                     let t = &mesh.triangles[i as usize];
+                    if t.local.is_some_and(|p| {
+                        mesh.key_move_parts
+                            .iter()
+                            .any(|s| s.part == p.part as usize && s.motion != Vec3::ZERO)
+                    }) {
+                        continue;
+                    }
                     let Some(hit) = sphere_hit(mesh, t, world, radius) else {
                         continue;
                     };
@@ -996,6 +971,64 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32) -> Resul
                             triangle: i,
                             hit: Hit::Sphere(hit),
                         });
+                    }
+                }
+                // Hakoniwa enables correct moving-parts checks: callbackFromParts
+                // visits every source interpolation sample, even after a hit.
+                for source in mesh
+                    .key_move_parts
+                    .iter()
+                    .filter(|s| s.motion != Vec3::ZERO)
+                {
+                    let frame = &mesh.parts[source.part];
+                    let now = Vec3::from_array(transform_point(&frame.inverse, world.to_array()));
+                    let mut sweep = Sweep::new(
+                        now + source.motion,
+                        now,
+                        (radius * 0.9).min(35.),
+                        radius,
+                        radius,
+                    );
+                    while !sweep.finished() {
+                        let sampled = sweep.pos().to_array();
+                        let remaining = source.motion * (1. - sweep.current);
+                        for (i, t) in mesh.triangles.iter().enumerate() {
+                            let Some(local) = t.local.filter(|p| p.part as usize == source.part)
+                            else {
+                                continue;
+                            };
+                            // callbackFromServer skips moving faces the relative move leaves.
+                            if sweep.current < 1. && dot(t.normal, motion - source.motion) > 0. {
+                                continue;
+                            }
+                            let Some((depth, region)) = local.prism.sphere_test(
+                                sampled,
+                                radius * frame.inverse_scale,
+                                frame.inverse_scale,
+                            ) else {
+                                continue;
+                            };
+                            let position = local.prism.sphere_hit_position(sampled, region);
+                            let hit = SphereHit {
+                                depth: frame.world_per_local() * depth,
+                                location: match region {
+                                    1 => Location::Face,
+                                    2..=4 => Location::Edge(region - 1),
+                                    _ => Location::Corner(region - 4),
+                                },
+                                position: Vec3::from_array(transform_point(&frame.base, position)),
+                                center: Vec3::from_array(transform_point(&frame.base, sampled)),
+                                motion: Some(t.normal * dot(t.normal, remaining)),
+                            };
+                            if results.collide.len() < MAX_RESULTS {
+                                results.collide.push(ShapeResult {
+                                    shape: index,
+                                    triangle: i as u32,
+                                    hit: Hit::Sphere(hit),
+                                });
+                            }
+                        }
+                        sweep.advance();
                     }
                 }
             }
@@ -1137,6 +1170,7 @@ pub struct PlayerCollider {
     has_ground_normal: bool,
     has_ground_position: bool,
     best: [f32; 3],
+    best_reactions: [Vec3; 3],
     /// `onCutCollideAffectDir`: the collision's push along this direction (the
     /// hanging body's, into the wall) is dropped; what the move itself had
     /// along it stays. Zero when off.
@@ -1224,6 +1258,7 @@ impl PlayerCollider {
             has_ground_normal: false,
             has_ground_position: false,
             best: [NO_CONTACT; 3],
+            best_reactions: [Vec3::ZERO; 3],
             cut_direction: Vec3::ZERO,
             carry_from: None,
             fix_reaction: Vec3::ZERO,
@@ -1290,6 +1325,7 @@ impl PlayerCollider {
         self.wall = None;
         self.ceiling = None;
         self.best = [NO_CONTACT; 3];
+        self.best_reactions = [Vec3::ZERO; 3];
         self.carry_from = None;
         self.last_yaw = Some(yaw);
         self.last_tilt = None;
@@ -1354,6 +1390,7 @@ impl PlayerCollider {
         self.wall = None;
         self.ceiling = None;
         self.best = [NO_CONTACT; 3];
+        self.best_reactions = [Vec3::ZERO; 3];
         let from_yaw = self.last_yaw.unwrap_or(yaw);
         let orientation = |yaw: f32, tilt: Option<Quat>| tilt.unwrap_or(Quat::from_rotation_y(yaw));
         let tilted = if tilt.is_some() || self.last_tilt.is_some() {
@@ -1443,6 +1480,44 @@ impl PlayerCollider {
         // position and the move would have put it, measured from where the collider stood
         // (the offsets are small, so no rounding at the stage's magnitude enters).
         self.fix_reaction = (last - begin) - ((pose.pos - begin) + velocity);
+        // collide's final Press-code/moving-reaction validation (0x43042c).
+        // A generic unresolved squeeze alone cannot survive as a pressed flag.
+        if self.pressed_ground {
+            let chosen = [&self.floor, &self.ceiling]
+                .into_iter()
+                .enumerate()
+                .find_map(|(i, c)| {
+                    c.as_ref()
+                        .filter(|c| mesh.codes_of(c.triangle).floor == "Press")
+                        .map(|c| (if i == 0 { 0 } else { 2 }, c.normal))
+                });
+            if let Some((slot, normal)) = chosen {
+                let along = dot(self.best_reactions[slot], normal);
+                self.pressed_ground = along >= 0. || near_zero(along, NEAR_ZERO);
+                if self.pressed_ground {
+                    self.press_normal = if slot == 0 {
+                        self.ground_normal
+                    } else {
+                        normal
+                    };
+                    self.pressed_wall = false;
+                }
+            } else {
+                self.pressed_ground = false;
+            }
+        }
+        if self.pressed_wall {
+            self.pressed_wall = self.wall.as_ref().is_some_and(|c| {
+                mesh.codes_of(c.triangle).floor == "Press" && {
+                    let along = dot(self.best_reactions[1], c.normal);
+                    along >= 0. || near_zero(along, NEAR_ZERO)
+                }
+            });
+            if self.pressed_wall {
+                self.press_normal = self.wall.as_ref().unwrap().normal;
+                self.pressed_ground = false;
+            }
+        }
         // The contacts' points go back to the replay's frame for the caller.
         for contact in [&mut self.floor, &mut self.wall, &mut self.ceiling]
             .into_iter()
@@ -1577,6 +1652,7 @@ impl PlayerCollider {
                 &self.keeper,
                 &pose.along(sweep),
                 sweep.shape_scale(self.shape_scale),
+                sweep.remaining(),
             );
             if !results.collide.is_empty() {
                 return true;

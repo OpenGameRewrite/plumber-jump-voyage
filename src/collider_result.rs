@@ -624,6 +624,7 @@ impl PlayerCollider {
         };
         if self.best[slot] < depth {
             self.best[slot] = depth;
+            self.best_reactions[slot] = result.motion.unwrap_or(Vec3::ZERO);
             *contact = Some(Contact {
                 normal: result.normal,
                 position,

@@ -56,6 +56,15 @@ impl Player {
     }
     pub(super) fn press_step(&mut self) {
         self.anim.rate = 0.;
+        if self.anim.name == "Move" {
+            self.cycle.rate = 0.;
+            self.cycle.phase = self.press.frozen_frame;
+            self.cycle.shown = if self.frame == 0 {
+                self.anim.frame
+            } else {
+                self.press.frozen_frame
+            };
+        }
         let rate = (self.frame as f32 / 10.).clamp(0., 1.);
         self.press.scale = Vec3::ONE + (Vec3::new(1., 0.1, 1.) - Vec3::ONE) * rate;
         let position = self.press.start + (self.press.target - self.press.start) * rate;
@@ -67,6 +76,9 @@ impl Player {
             self.nerve.choose_silently(true);
         }
     }
+    pub fn crushed(&self) -> bool {
+        self.death.kind == death::Kind::Press
+    }
     pub fn press_scale(&self) -> Vec3 {
         if self.death.kind == death::Kind::Press {
             self.press.scale
@@ -77,4 +89,42 @@ impl Player {
     pub fn pressed_flags(&self) -> (bool, bool) {
         (self.collider.pressed_ground, self.collider.pressed_wall)
     }
+}
+
+pub(super) fn self_check() {
+    ground_crush_freezes_clip_and_finishes_after_sixty();
+}
+
+#[cfg_attr(test, test)]
+fn ground_crush_freezes_clip_and_finishes_after_sixty() {
+    let scene = Course::default();
+    let mut p = Player::default();
+    p.touched.floor = Some(CollisionCodes {
+        floor: "Press".into(),
+        ..default()
+    });
+    assert!(
+        !p.dispatch_press(&scene),
+        "a floor code alone is not a crush"
+    );
+    p.collider.pressed_ground = true;
+    p.collider.press_normal = Vec3::NEG_Y;
+    let clip = p.anim.name;
+    for _ in 0..61 {
+        p.step(&Orders::default(), &scene);
+    }
+    assert_eq!(p.mode, Move::Press);
+    assert_eq!(p.frame, 61);
+    assert!(p.is_dead());
+    assert_eq!(p.anim.name, clip);
+    assert_eq!(p.anim.rate, 0.);
+    assert_eq!(p.press.scale.y, 0.100000024);
+    p.step(&Orders::default(), &scene);
+    assert_eq!(p.mode, Move::Dead);
+    assert_eq!(p.death.kind, death::Kind::Press);
+    assert_eq!((p.death.kind.start(), p.death.kind.wait()), (40, 96));
+    assert_eq!(
+        p.events.iter().filter(|f| matches!(f, Fx::Crushed)).count(),
+        1
+    );
 }

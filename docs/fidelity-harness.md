@@ -1235,3 +1235,46 @@ A native forced-slope replay was visually inspected at frames92 and110 (local
 rolling effects render. Stage surfaces remain placeholder visuals, with
 oversized/overlapping effect particles and an empty-mesh warning; this smoke
 does not establish stage, lighting or effects fidelity to the game.
+
+
+Press replays use only the exported `SandWorldPressExStage` scenario1 pillars
+obj165/obj167. `tools/key_move_parts.py` adds their validated two-key vertical
+Loop placements from the local raw placement sidecar and RomFS display identities.
+`game.press_parts.csv` supplies the initial external nerve/key/step; translation
+is derived from that phase and checked against the exact float bits. The source
+then runs independently. Wait and Move execute their duration step as well as
+step0, giving two*(WaitTime+1+SpeedByTime+1) updates per loop. No period is fitted.
+
+`CollisionMultiShape::callbackFromParts` sweeps moving KCL through every source
+sample (`validateCorrectMovePartsCheck`, 1.0.0 0x436524). Its relative-motion face
+filter is disabled on the final source sample (0x3f6e00). `calcResultVec` keeps
+static and moving extrema separately, averages against the preceding collision
+round, then splits the unresolved depenetration along/across gravity. Its Press
+escape arrow and the final contact-code/moving-reaction validation determine the
+pressed bytes. Ceiling contact alone does not trigger death. The next player
+update consumes those flags, freezes the current animation, raises CrushDeath,
+squashes over10 steps and finishes Press after step60 into the existing Dead path.
+Ground crush is implemented; wall-crush state posing remains unsupported.
+
+The environment rule independently checks every source sample (including
+preroll), exact transforms, phase/key/step, raw KCL identity, and reproduced source
+and collider diagnostics. Only matching placement-bound contacts and the proved
+Press/Dead episode qualify. A static Press floor is not a general exemption.
+Death reload resets the source keeper and executes its initial Wait0 before the
+new player's first sample; no source state is injected from later trace rows.
+
+The entry fall selects `RestartArea`'s linked `PlayerRestartInfo`, which the restart
+exporter now preserves. The replay uses the recorded external scene selection
+(X/Z or an explicit restart id) to choose that exported placement, then resolves
+its first movement against raw KCL. The64 Ice-to-Sand material rows after respawn
+come from the entry's Sand faces of the same static Ground000 model; the crusher
+corridor's faces use Ice (material indices35 and10 respectively, both Ground8).
+They pass the existing static-material rule, without a new material waiver.
+
+The native renderer applies the Press actor scale to the skeleton. The replay
+also preserves the frozen model pose separately from the first Press animator
+counter and retains the original area-animation interpolation length on reload.
+The sound extractor can add the original crush reaction and its missing resources
+without replacing installed clips. Stage/pillar rendering and a dedicated graphical
+crusher fixture are separate presentation work; trace acceptance does not establish
+visual parity for the stage.

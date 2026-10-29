@@ -6,6 +6,7 @@ raises with this one table, and the game looks them up by the same English
 names (see src/reactions.rs).
 """
 MARIO_REACTIONS = {
+    "\u5727\u6b7b": "CrushDeath",
     "泡復帰ダメージ": "BubbleDamage",
     "泡復帰開始": "BubbleStart",
     '着地': 'Land',
