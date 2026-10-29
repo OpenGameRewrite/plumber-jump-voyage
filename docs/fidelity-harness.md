@@ -1278,3 +1278,14 @@ The sound extractor can add the original crush reaction and its missing resource
 without replacing installed clips. Stage/pillar rendering and a dedicated graphical
 crusher fixture are separate presentation work; trace acceptance does not establish
 visual parity for the stage.
+
+
+Wave9 verification: all four Press/near-miss recordings pass free and lockstep
+with zero failing columns and no excluded frames. The death runs retain a small
+post-reload hand-pose residual (up to1.676cm, within the existing bone tolerance);
+maximum player-position differences are0.00055cm free and0.000245cm lockstep.
+No comparator tolerances or pinned simulation hash were changed. The private
+whole-dashboard audit preserves all136 baseline PASS traces:134 are byte-identical,
+and both near misses differ only by the new, non-comparable source diagnostics.
+A normal toy-course graphical smoke verifies startup/rendering; no dedicated
+crusher-stage rendering parity is claimed.

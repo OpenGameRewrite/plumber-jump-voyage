@@ -585,7 +585,11 @@ class Judge:
             if not static:
                 v.refuse(f, f"{label}: {why_not}")
                 return False
-            v.accept(f, label, "static map geometry replayed with --geometry; the surface host is a static collision part")
+            if any(self._press.surface(f, surface, self._hosts.get(f, {}).get(surface, {})) for surface in surfaces):
+                v.accept(f, "exported KeyMoveMapParts " + label,
+                         "placement-bound moving raw KCL with independently verified phase and reproduced collider flags")
+            else:
+                v.accept(f, label, "static map geometry replayed with --geometry; the surface host is a static collision part")
         else:
             v.accept(f, label, "map geometry replayed with --geometry; the surface hosts are not in this probe log (older build) "
                                "and were not verified here")
@@ -721,6 +725,8 @@ def _check_candlestands():
 def self_check():
     """Synthetic runs for every branch of the rule."""
     from sand_geyser import self_check as check_geysers
+    from key_move_parts import self_check as check_key_parts
+    check_key_parts()
     check_geysers()
     from grab_ceil import self_check as check_grabceil
     check_grabceil()

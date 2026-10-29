@@ -8,8 +8,7 @@
 //! other side of a face. The functions run against the executable's own in a local interpreter
 //! (`PJV_COLLIDER_CASES`, see `tests/collider_result.rs`).
 //!
-//! Left out: the moving parts' separate accumulators and
-//! the per-class `HitInfo` arrays (`collectHitInfoArray`), and the disk shape.
+//! Left out: the per-class `HitInfo` arrays (`collectHitInfoArray`) and the disk shape.
 use super::*;
 use crate::movement::console_libm::cosf;
 
@@ -297,7 +296,7 @@ fn average_with_previous(fix: Vec3, now: u32, previous: Vec3, before: u32) -> Ve
 }
 
 impl PlayerCollider {
-    /// `PlayerCollider::calcResultVec`, for static geometry: the single fix vector that
+    /// `PlayerCollider::calcResultVec`: the single fix vector that
     /// resolves the results of one pose, and the bookkeeping of the deepest contacts.
     /// `supports` are the arrows that only support. `behind` answers
     /// `rs::calcExistCollisionBorder` (a face right behind a point), `previous` is what the
