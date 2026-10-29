@@ -55,6 +55,7 @@ pub(super) fn run() {
     idle_sequence();
     run_speed();
     variable_jump_height();
+    jump_clip_reads_the_visible_camera_on_its_first_step();
     chained_jumps();
     brake_and_sideflip();
     crouch_jumps();

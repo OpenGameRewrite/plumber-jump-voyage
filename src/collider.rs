@@ -1561,6 +1561,9 @@ impl PlayerCollider {
         step: f32,
         skip_start: bool,
     ) -> bool {
+        if std::env::var_os("PJV_MC_DIAG").is_some() {
+            eprintln!("MC {}", serde_json::json!({"start":at.to_array(),"target":target.to_array(),"radius":*radius,"radius_to":radius_to,"step":step,"intended":intended.to_array(),"skip":skip_start}));
+        }
         let mut sweep = Sweep::new(*at, target, step, *radius, radius_to);
         if skip_start {
             sweep.advance();
@@ -1582,6 +1585,9 @@ impl PlayerCollider {
             let mut remain = sweep.remaining();
             let (fix, unaveraged) =
                 self.calc_result_vec(mesh, &pose.along(&sweep), &results, previous);
+            if std::env::var_os("PJV_MC_DIAG").is_some() {
+                eprintln!("MCRESULT {}",serde_json::json!({"fix":fix.to_array(),"total":unaveraged.to_array(),"previous":previous.to_array(),"at":at.to_array(),"remain":remain.to_array()}));
+            }
             *at += fix;
             // A hit on the last pose: nothing is left to sweep.
             if sweep.current >= 1. {
@@ -1661,6 +1667,7 @@ impl PlayerCollider {
     ) -> bool {
         loop {
             if sweep.finished() {
+                if std::env::var_os("PJV_MC_DIAG").is_some() { eprintln!("MCFIND {}",serde_json::json!({"hit":false,"start":sweep.start.to_array(),"motion":sweep.motion.to_array(),"current":sweep.current,"previous":sweep.previous,"step":sweep.step})); }
                 return false;
             }
             *results = check(
@@ -1671,6 +1678,7 @@ impl PlayerCollider {
                 sweep.remaining(),
             );
             if !results.collide.is_empty() {
+                if std::env::var_os("PJV_MC_DIAG").is_some() { eprintln!("MCFIND {}",serde_json::json!({"hit":true,"start":sweep.start.to_array(),"motion":sweep.motion.to_array(),"current":sweep.current,"previous":sweep.previous,"step":sweep.step})); }
                 return true;
             }
             sweep.advance();
@@ -1688,9 +1696,26 @@ impl PlayerCollider {
         let collide = self.contact_facts(mesh, pose, &results.collide);
         let support = self.contact_facts(mesh, pose, &results.support);
         let border = self.border_check();
+        let diag = std::env::var_os("PJV_MC_DIAG").is_some();
+        let serialize = |r: &result::ContactFacts| {
+            let mut value = serde_json::json!({"n":r.normal.to_array()});
+            match (r.shape, r.hit) {
+                (result::ShapeFacts::Arrow { index, margin, direction }, Hit::Arrow(hit)) => {
+                    value["k"]="a".into(); value["index"]=index.into(); value["margin"]=margin.into(); value["dir"]=serde_json::json!(direction.to_array()); value["depth"]=hit.depth.into(); value["pos"]=serde_json::json!(hit.position.to_array());
+                }
+                (result::ShapeFacts::Sphere { support, support_axis, ignore_ground, .. }, Hit::Sphere(hit)) => {
+                    value["k"]="s".into(); value["support"]=serde_json::json!(support); value["axis"]=serde_json::json!(support_axis.to_array()); value["ign"]=ignore_ground.into(); value["depth"]=hit.depth.into(); value["pos"]=serde_json::json!(hit.position.to_array()); value["center"]=serde_json::json!(hit.center.to_array()); value["loc"]=match hit.location { Location::Face=>1, Location::Edge(i)=>i+1, Location::Corner(i)=>i+4 }.into();
+                }
+                _=>unreachable!(),
+            }
+            value
+        };
+        let mut case = if diag { serde_json::json!({"results":collide.iter().map(serialize).collect::<Vec<_>>(),"support":support.iter().map(serialize).collect::<Vec<_>>(),"prev":previous.to_array(),"best":self.best,"old":self.push_directions,"floor":self.floor.as_ref().map(|c|[c.position.to_array(),c.normal.to_array()]),"slots":self.arrow_slots.map(|s|s.map(|(d,m,p,n)|serde_json::json!([d,m,p.to_array(),n.to_array()]))),"border":match border {result::BorderCheck::Off=>0,result::BorderCheck::NoFace=>1,result::BorderCheck::All=>2}}) } else { serde_json::Value::Null };
+        let mut border_seq=Vec::new();
         let solved = self.solve_results(&collide, &support, previous, border, &mut |at, normal| {
-            border_behind_game(mesh, at, normal)
+            let answer=border_behind_game(mesh, at, normal); if diag {border_seq.push(answer)} answer
         });
+        if diag { case["border_seq"]=serde_json::json!(border_seq); case["port_fix"]=serde_json::json!(solved.fix.to_array()); case["port_total"]=serde_json::json!(solved.total.to_array());eprintln!("CASE {case}"); }
         let fix = self.resolve_press(mesh, pose, &solved);
         (fix, solved.total)
     }
