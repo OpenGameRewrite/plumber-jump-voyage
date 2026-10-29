@@ -4180,7 +4180,6 @@ impl Player {
     /// what that does to the combo, is decided as the jump state appears (when
     /// the jump is chosen); the take-off follows with its first step.
     fn start_standard_jump(&mut self) {
-        let from_swim = self.mode == Move::Swim;
         self.pre_jump = 0;
         let kind = self.pick_jump_kind();
         let (mode, clip, power_min, power_max, gravity) = match kind {
@@ -4223,15 +4222,6 @@ impl Player {
         self.jump_with(mode, clip, power, gravity, move |p| {
             if let Some(horizontal) = p.takeoff_h {
                 p.set_h(horizontal);
-            }
-            // exeJump chooses the ordinary clip on its first step, before
-            // installing the take-off pose (0x4726ac precedes slerpUp).
-            if mode == Move::Jump && !p.force_run.is_active() && !from_swim {
-                p.anim.name = if p.side_faces_camera() {
-                    "Jump"
-                } else {
-                    "JumpReverse"
-                };
             }
             if let Some(up) = ground_up {
                 p.slerp_pose_up(up, 1., 180.);
