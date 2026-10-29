@@ -975,6 +975,10 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                         mesh.key_move_parts
                             .iter()
                             .any(|s| s.part == p.part as usize && s.motion != Vec3::ZERO)
+                            || mesh
+                                .rotate_parts
+                                .iter()
+                                .any(|s| s.part == p.part as usize && s.executions > 0)
                     }) {
                         continue;
                     }
@@ -991,30 +995,37 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                 }
                 // Hakoniwa enables correct moving-parts checks: callbackFromParts
                 // visits every source interpolation sample, even after a hit.
-                for source in mesh
+                for (part, source_motion, previous_inverse) in mesh
                     .key_move_parts
                     .iter()
                     .filter(|s| s.motion != Vec3::ZERO)
+                    .map(|s| (s.part, s.motion, None))
+                    .chain(
+                        mesh.rotate_parts
+                            .iter()
+                            .filter(|s| s.executions > 0)
+                            .map(|s| (s.part, s.force_at(world), Some(&s.previous.inverse))),
+                    )
                 {
-                    let frame = &mesh.parts[source.part];
+                    let frame = &mesh.parts[part];
                     let now = Vec3::from_array(transform_point(&frame.inverse, world.to_array()));
-                    let mut sweep = Sweep::new(
-                        now + source.motion,
-                        now,
-                        (radius * 0.9).min(35.),
-                        radius,
-                        radius,
-                    );
+                    let before = previous_inverse.map_or(now + source_motion, |m| {
+                        Vec3::from_array(transform_point(m, world.to_array()))
+                    });
+                    // GUESS: rotation uses the same local linear sphere sweep.
+                    // Intermediate rotational sampling in callbackFromParts
+                    // still needs decoding; jump/contact-loss residuals remain.
+                    let mut sweep =
+                        Sweep::new(before, now, (radius * 0.9).min(35.), radius, radius);
                     while !sweep.finished() {
                         let sampled = sweep.pos().to_array();
-                        let remaining = source.motion * (1. - sweep.current);
+                        let remaining = source_motion * (1. - sweep.current);
                         for (i, t) in mesh.triangles.iter().enumerate() {
-                            let Some(local) = t.local.filter(|p| p.part as usize == source.part)
-                            else {
+                            let Some(local) = t.local.filter(|p| p.part as usize == part) else {
                                 continue;
                             };
                             // callbackFromServer skips moving faces the relative move leaves.
-                            if sweep.current < 1. && dot(t.normal, motion - source.motion) > 0. {
+                            if sweep.current < 1. && dot(t.normal, motion - source_motion) > 0. {
                                 continue;
                             }
                             let Some((depth, region)) = local.prism.sphere_test(
@@ -1396,24 +1407,31 @@ impl PlayerCollider {
             let Some(local) = mesh.triangles[hit.triangle as usize].local else {
                 return Vec3::ZERO;
             };
-            let Some(source) = mesh
+            let mut force = if let Some(source) = mesh
                 .key_move_parts
                 .iter()
                 .find(|s| s.part == local.part as usize)
-            else {
+            {
+                if source.motion == Vec3::ZERO {
+                    return Vec3::ZERO;
+                }
+                let frame = &mesh.parts[source.part];
+                let mut previous = frame.base;
+                previous[3] -= source.motion.x;
+                previous[7] -= source.motion.y;
+                previous[11] -= source.motion.z;
+                let inverse = crate::prism::invert(&previous).expect("key-move previous matrix");
+                let local = transform_point(&inverse, point.to_array());
+                Vec3::from_array(transform_point(&frame.base, local)) - point
+            } else if let Some(source) = mesh
+                .rotate_parts
+                .iter()
+                .find(|s| s.part == local.part as usize)
+            {
+                source.force_at(point)
+            } else {
                 return Vec3::ZERO;
             };
-            if source.motion == Vec3::ZERO {
-                return Vec3::ZERO;
-            }
-            let frame = &mesh.parts[source.part];
-            let mut previous = frame.base;
-            previous[3] -= source.motion.x;
-            previous[7] -= source.motion.y;
-            previous[11] -= source.motion.z;
-            let inverse = crate::prism::invert(&previous).expect("key-move previous matrix");
-            let local = transform_point(&inverse, point.to_array());
-            let mut force = Vec3::from_array(transform_point(&frame.base, local)) - point;
             let outward = dot(force, hit.normal);
             if outward > 0. {
                 force -= hit.normal * outward;

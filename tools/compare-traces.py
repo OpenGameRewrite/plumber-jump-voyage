@@ -660,7 +660,7 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
                             evidence["geyser_messages"] = list(csv.DictReader(message_file))
                     with open(seed_path, encoding="utf8") as seed_file:
                         evidence["geyser_seed"] = json.load(seed_file)
-                for key, suffix in (("force_areas", "force_areas.csv"), ("pukupuku", "pukupuku.csv"), ("press_parts", "press_parts.csv"), ("press_mario", "press_mario.csv"), ("grabceil_bars", "grabceil_bars.csv"), ("grabceil_messages", "grabceil_messages.csv"), ("rocket_flowers", "rocket_flowers.csv"), ("rocket_watcher", "rocket_watcher.csv"), ("ceiling_check", "ceiling_check.csv")):
+                for key, suffix in (("rotors", "rotors.csv"), ("rotor_messages", "rotor_messages.csv"), ("rolling", "rolling.csv"), ("force_areas", "force_areas.csv"), ("pukupuku", "pukupuku.csv"), ("press_parts", "press_parts.csv"), ("press_mario", "press_mario.csv"), ("grabceil_bars", "grabceil_bars.csv"), ("grabceil_messages", "grabceil_messages.csv"), ("rocket_flowers", "rocket_flowers.csv"), ("rocket_watcher", "rocket_watcher.csv"), ("ceiling_check", "ceiling_check.csv")):
                     side = os.path.join(os.path.dirname(game_path), "game." + suffix)
                     if os.path.isfile(side):
                         with open(side, encoding="utf8") as source:

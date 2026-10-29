@@ -290,7 +290,7 @@ impl Player {
         // Migrate the cave fixture to original absolute translation storage.
         // Older fixtures retain their established coordinate contract while
         // their own numerical residuals are investigated separately.
-        let absolute = mesh.pukupuku.as_ref().map(|_| {
+        let absolute = (mesh.pukupuku.is_some() || !mesh.rotate_parts.is_empty()).then(|| {
             let at = self
                 .stage_translation
                 .filter(|(p, _)| *p == self.pos)
@@ -341,7 +341,7 @@ impl Player {
         }
         let collider = &self.collider;
         self.ground_source.clear();
-        if !mesh.key_move_parts.is_empty() {
+        if !mesh.key_move_parts.is_empty() || !mesh.rotate_parts.is_empty() {
             let hex = |v: &[f32]| {
                 v.iter()
                     .map(|x| format!("{:08x}", x.to_bits()))
@@ -373,6 +373,22 @@ impl Player {
                     hex(&base),
                     hex(&previous),
                     hex(&source.motion.to_array())
+                ));
+            }
+            if let Some(hit) = &collider.floor
+                && let Some(local) = mesh.triangles[hit.triangle as usize].local
+                && let Some(source) = mesh
+                    .rotate_parts
+                    .iter()
+                    .find(|s| s.part == local.part as usize)
+            {
+                self.ground_source.push_str(&format!(
+                    ";groundpart={}/{};groundmatrix={};groundprevious={};grounddelta={}",
+                    source.id,
+                    hit.triangle,
+                    hex(&mesh.parts[source.part].base),
+                    hex(&source.previous.base),
+                    hex(&[0., 0., 0.])
                 ));
             }
         }

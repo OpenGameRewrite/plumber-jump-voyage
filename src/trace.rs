@@ -1307,37 +1307,39 @@ impl TraceFile {
                     .map_err(|e| e.to_string())?,
             );
         }
-        let side = std::path::Path::new(path).with_extension("press_parts.csv");
-        if side.exists() {
-            let text = std::fs::read_to_string(side).map_err(|e| e.to_string())?;
-            let mut lines = text.lines();
-            let header: Vec<_> = lines.next().ok_or("part CSV header")?.split(',').collect();
-            let mut first = None;
-            for line in lines {
-                let mut quoted = false;
-                let mut cell = String::new();
-                let mut cells = Vec::new();
-                for c in line.chars() {
-                    if c == '"' {
-                        quoted = !quoted;
-                    } else if c == ',' && !quoted {
-                        cells.push(std::mem::take(&mut cell));
-                    } else {
-                        cell.push(c);
+        for extension in ["press_parts.csv", "rotors.csv"] {
+            let side = std::path::Path::new(path).with_extension(extension);
+            if side.exists() {
+                let text = std::fs::read_to_string(side).map_err(|e| e.to_string())?;
+                let mut lines = text.lines();
+                let header: Vec<_> = lines.next().ok_or("part CSV header")?.split(',').collect();
+                let mut first = None;
+                for line in lines {
+                    let mut quoted = false;
+                    let mut cell = String::new();
+                    let mut cells = Vec::new();
+                    for c in line.chars() {
+                        if c == '"' {
+                            quoted = !quoted;
+                        } else if c == ',' && !quoted {
+                            cells.push(std::mem::take(&mut cell));
+                        } else {
+                            cell.push(c);
+                        }
                     }
+                    cells.push(cell);
+                    let row: HashMap<String, String> = header
+                        .iter()
+                        .zip(cells)
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect();
+                    let frame = row.get("frame").ok_or("part frame")?.clone();
+                    if first.as_ref().is_some_and(|f| f != &frame) {
+                        break;
+                    }
+                    first = Some(frame);
+                    trace.press_seed.push(row);
                 }
-                cells.push(cell);
-                let row: HashMap<String, String> = header
-                    .iter()
-                    .zip(cells)
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect();
-                let frame = row.get("frame").ok_or("part frame")?.clone();
-                if first.as_ref().is_some_and(|f| f != &frame) {
-                    break;
-                }
-                first = Some(frame);
-                trace.press_seed.push(row);
             }
         }
         let side = std::path::Path::new(path).with_extension("pukupuku.csv");

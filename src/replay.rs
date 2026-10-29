@@ -617,7 +617,8 @@ fn tick_geysers(course: &mut Course, player: &Player) {
         && (mesh.pukupuku.is_some()
             || !mesh.geysers.is_empty()
             || !mesh.grab_ceil_bars.is_empty()
-            || !mesh.key_move_parts.is_empty())
+            || !mesh.key_move_parts.is_empty()
+            || !mesh.rotate_parts.is_empty())
     {
         let mesh = Arc::make_mut(mesh);
         if let Some(source) = &mut mesh.pukupuku {
@@ -628,6 +629,9 @@ fn tick_geysers(course: &mut Course, player: &Player) {
         }
         mesh.tick_geysers();
         for part in &mut mesh.key_move_parts {
+            part.tick();
+        }
+        for part in &mut mesh.rotate_parts {
             part.tick();
         }
         mesh.update_key_move_collision();
@@ -685,7 +689,16 @@ pub(crate) fn seed_key_move_parts(
     script: &Script,
     recorded: Option<&TraceFile>,
 ) -> Result<(), String> {
-    if !mesh.key_move_parts.is_empty() {
+    let ids = recorded
+        .map(|g| {
+            g.press_seed
+                .iter()
+                .filter_map(|r| r.get("id").cloned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    mesh.disable_unseeded_parts(&ids);
+    if !mesh.key_move_parts.is_empty() || !mesh.rotate_parts.is_empty() {
         let game = recorded.ok_or("key parts require independent initial source evidence")?;
         for part in &mut mesh.key_move_parts {
             let row = game
@@ -697,6 +710,19 @@ pub(crate) fn seed_key_move_parts(
                 != Some(-(script.preroll_frames() as i64))
             {
                 return Err("part preroll mismatch".into());
+            }
+            part.seed(row)?;
+        }
+        for part in &mut mesh.rotate_parts {
+            let row = game
+                .press_seed
+                .iter()
+                .find(|r| r.get("id") == Some(&part.id))
+                .ok_or("missing rotor seed")?;
+            if row.get("frame").and_then(|s| s.parse::<i64>().ok())
+                != Some(-(script.preroll_frames() as i64))
+            {
+                return Err("rotor preroll mismatch".into());
             }
             part.seed(row)?;
         }
@@ -1113,7 +1139,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             && course
                 .mesh
                 .as_ref()
-                .is_some_and(|m| !m.key_move_parts.is_empty())
+                .is_some_and(|m| !m.key_move_parts.is_empty() || !m.rotate_parts.is_empty())
         {
             previous_moving_scene = Some(course.clone());
         }

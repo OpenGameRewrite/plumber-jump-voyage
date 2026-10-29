@@ -216,7 +216,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -246,6 +246,9 @@ class Judge:
         self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
         self._puku = PukupukuEvidence(geometry, pukupuku, rewrite_rows, game_rows)
         self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
+        from rotate_parts import Evidence as RotorEvidence
+        self._rotor = RotorEvidence(geometry, rotors, rotor_messages, press_mario, rolling, rewrite_rows, game_rows, preroll or {}, start)
+        self._rotor_hosts = {'森のワールドホーム回転パーツ000'} if rotors else set()
         from external_force import Evidence as ForceEvidence
         self._force = ForceEvidence(geometry, force_areas, press_mario, rewrite_rows, game_rows, preroll or {})
         force_frames = {int(r['frame']) for r in (force_areas or []) if r.get('kind') == 'call' and int(r['frame']) >= 0}
@@ -589,6 +592,10 @@ class Judge:
                 return False, "ceiling bar lacks an independently reproduced fixed source"
             if self._press.surface(f, surface, host):
                 continue
+            if host['host'] in self._rotor_hosts:
+                if self._rotor.surface(f,surface,host):
+                    continue
+                return False, "rotor lacks independently reproduced obj5515 phase/identity evidence"
             if self._geysers.floor(f, host, self._start):
                 continue
             if host["moving"] == "1" or host["parts_flag"] == "0":
@@ -607,7 +614,9 @@ class Judge:
             if not static:
                 v.refuse(f, f"{label}: {why_not}")
                 return False
-            if any(self._press.surface(f, surface, self._hosts.get(f, {}).get(surface, {})) for surface in surfaces):
+            if any(self._rotor.surface(f,surface,self._hosts.get(f,{}).get(surface,{})) for surface in surfaces):
+                v.accept(f, "exported obj5515 " + label, "independent local-X source, exact current/previous collision matrices and registered raw KCL identity")
+            elif any(self._press.surface(f, surface, self._hosts.get(f, {}).get(surface, {})) for surface in surfaces):
                 v.accept(f, "exported KeyMoveMapParts " + label,
                          "placement-bound moving raw KCL with independently verified phase and reproduced collider flags")
             else:
@@ -625,6 +634,9 @@ class Judge:
             return
         if self._press.riding(f):
             v.accept(f, "exported obj167 moving top", "independent key phase, live current/previous matrices and raw top support reproduce the floor displacement")
+            return
+        if self._rotor.riding(f):
+            v.accept(f, "exported obj5515 floor", "verified rotating source and raw support identity")
             return
         landing = prev is not None and not prev.get("floor_y") and bool(row and row.get("floor_y"))
         if landing:
@@ -670,6 +682,9 @@ class Judge:
             return
         if self._press.riding(f):
             v.accept(f, "exported obj167 ground carry", "selected raw top and independent matrix displacement carry the supported player")
+            return
+        if self._rotor.riding(f):
+            v.accept(f, "exported obj5515 carry", "verified rotating source and raw support identity")
             return
         flags = self._flags(f)
         tilt = self._normal_off_vertical(f)

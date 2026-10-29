@@ -126,9 +126,11 @@ pub struct TriangleMesh {
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     pub force_areas: Vec<crate::movement::external_velocity::ForceArea>,
+    pub rotate_parts: Vec<crate::movement::rotate_parts::RotatePart>,
     pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
     pub pukupuku_look: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
+    inactive_source_parts: Vec<usize>,
     geyser_curves: Option<serde_json::Value>,
 }
 
@@ -196,6 +198,26 @@ fn contains_xz(t: &MeshTriangle, x: f32, z: f32) -> bool {
 }
 
 impl TriangleMesh {
+    /// A source whose phase was not recorded is not frozen into static KCL.
+    /// Older captures at other sites can still use this stage's static map.
+    pub fn disable_unseeded_parts(&mut self, ids: &[String]) {
+        self.key_move_parts.retain(|s| {
+            if ids.contains(&s.id) {
+                true
+            } else {
+                self.inactive_source_parts.push(s.part);
+                false
+            }
+        });
+        self.rotate_parts.retain(|s| {
+            if ids.contains(&s.id) {
+                true
+            } else {
+                self.inactive_source_parts.push(s.part);
+                false
+            }
+        });
+    }
     /// Builds the mesh from the export's JSON text. `origin` is the replay's
     /// start point in game units; every corner is stored relative to it.
     pub fn from_json(text: &str, origin: Vec3) -> Result<Self, String> {
@@ -541,6 +563,35 @@ impl TriangleMesh {
                     motion: Vec3::ZERO,
                 });
         }
+        for source in root["rotate_parts"].as_array().into_iter().flatten() {
+            let id = source["id"].as_str().ok_or("rotor id")?;
+            let object = root["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|o| o["id"] == id)
+                .ok_or("rotor object")?;
+            if source["axis"] != 0
+                || source["class"] != "RotateMapParts"
+                || floats(root["objects"][object].get("rotate")) != Some([0.; 3])
+                || floats(root["objects"][object].get("scale")) != Some([1.; 3])
+            {
+                return Err("unsupported rotor placement".into());
+            }
+            let part = object_part[object].ok_or("rotor raw KCL")? as usize;
+            mesh.rotate_parts
+                .push(crate::movement::rotate_parts::RotatePart {
+                    id: id.into(),
+                    part,
+                    position: Vec3::from_array(
+                        floats(root["objects"][object].get("translate")).ok_or("rotor position")?,
+                    ),
+                    speed: source["speed"].as_f64().ok_or("rotor speed")? as f32,
+                    executions: 0,
+                    quat: bevy::prelude::Quat::IDENTITY,
+                    previous: mesh.parts[part].clone(),
+                });
+        }
         mesh.moving_triangles = mesh
             .triangles
             .iter()
@@ -551,7 +602,7 @@ impl TriangleMesh {
                         mesh.key_move_parts.iter().any(|s| {
                             s.part == p.part as usize
                                 && (s.keys[0].x != s.keys[1].x || s.keys[0].z != s.keys[1].z)
-                        })
+                        }) || mesh.rotate_parts.iter().any(|s| s.part == p.part as usize)
                     })
                     .map(|_| i as u32)
             })
@@ -567,6 +618,9 @@ impl TriangleMesh {
             base[11] = source.position.z;
             self.parts[source.part] = PartFrame::new(base).expect("upright key-move matrix");
         }
+        for source in &self.rotate_parts {
+            self.parts[source.part] = source.frame();
+        }
         for i in 0..self.triangles.len() {
             let Some(local) = self.triangles[i].local else {
                 continue;
@@ -575,6 +629,10 @@ impl TriangleMesh {
                 .key_move_parts
                 .iter()
                 .any(|s| s.part == local.part as usize)
+                || self
+                    .rotate_parts
+                    .iter()
+                    .any(|s| s.part == local.part as usize)
             {
                 let world = local.prism.world_triangle(&self.parts[local.part as usize]);
                 self.triangles[i].corners = world.corners.map(|c| self.relative_point(c));
@@ -764,9 +822,10 @@ impl TriangleMesh {
         // static cells cannot locate a horizontally translated placement.
         found.extend_from_slice(&self.moving_triangles);
         found.retain(|&i| {
-            self.triangles[i as usize]
-                .local
-                .is_none_or(|p| !self.disabled_parts.contains(&(p.part as usize)))
+            self.triangles[i as usize].local.is_none_or(|p| {
+                !self.disabled_parts.contains(&(p.part as usize))
+                    && !self.inactive_source_parts.contains(&(p.part as usize))
+            })
         });
         found.sort_unstable();
         found.dedup();

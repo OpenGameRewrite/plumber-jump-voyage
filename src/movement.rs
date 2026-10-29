@@ -263,6 +263,7 @@ mod press;
 pub mod pukupuku;
 mod recovery_dead;
 pub mod rocket_flower;
+pub mod rotate_parts;
 mod safety;
 pub mod sand_geyser;
 mod sand_sink;
@@ -1389,6 +1390,7 @@ pub struct Player {
     /// The collision codes of the mesh surfaces the body touched this step.
     pub touched: terrain::Touched,
     pub key_move_sources: String,
+    pub rotate_sources: String,
     press: press::Press,
     /// The main clip looped back to its start in this step, as the game's triggers see it: a
     /// clip whose counter shows its length for a row before it wraps starts its loop in that
@@ -1571,6 +1573,7 @@ impl Default for Player {
             mesh_ground: None,
             touched: terrain::Touched::default(),
             key_move_sources: String::new(),
+            rotate_sources: String::new(),
             press: press::Press::default(),
             clip_wrapped: false,
             counter_wrapped: false,
@@ -2887,6 +2890,25 @@ impl Player {
                         .join("|")
                 })
                 .unwrap_or_default();
+            self.rotate_sources = scene
+                .mesh
+                .as_ref()
+                .map(|m| {
+                    m.rotate_parts
+                        .iter()
+                        .map(|p| p.diagnostic())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+                .unwrap_or_default();
+        }
+        if let Some(mesh) = &scene.mesh
+            && let Some(source) = mesh
+                .rotate_parts
+                .iter()
+                .find(|s| Some(s.part) == self.ground_part)
+        {
+            self.ground_frame = Some((mesh.parts[source.part].base, source.previous.inverse));
         }
         self.update_ground_inertia(scene);
         if advance_sources {
@@ -5876,6 +5898,7 @@ pub fn self_check() {
     key_move_parts::self_check();
     ground_inertia::self_check();
     external_velocity::self_check();
+    rotate_parts::self_check();
     press::self_check();
     force_run::self_check();
     rocket_flower::self_check();
