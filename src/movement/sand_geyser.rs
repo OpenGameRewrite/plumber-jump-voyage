@@ -99,30 +99,34 @@ pub(super) struct GeyserControl {
     pub sources: String,
 }
 impl Player {
-    pub(super) fn follow_geyser_ground(&mut self, scene: &Course) {
+    /// Returns whether the geyser's carry already gave `PlayerStateWait::control` its platform
+    /// power for this frame.
+    pub(super) fn follow_geyser_ground(&mut self, scene: &Course) -> bool {
         if !self.grounded || self.mode == Move::SandGeyser {
-            return;
+            return false;
         }
         let (Some(mesh), Some(part), Some((_, inverse))) =
             (&scene.mesh, self.ground_part, self.ground_frame)
         else {
-            return;
+            return false;
         };
         let Some(source) = mesh.geysers.iter().find(|s| s.part == part) else {
-            return;
+            return false;
         };
         // UpLoop validates/resets the Top collision: its previous matrix becomes its current
         // matrix, so the first update must not carry the UpStart animation back to rest.
         if source.phase == 2 && source.step == 1 {
-            return;
+            return false;
         }
         let local = crate::prism::transform_point(&inverse, mesh.to_game(self.position_cm()));
         let end = mesh.relative_point(crate::prism::transform_point(&mesh.parts[part].base, local));
-        if self.mode == Move::Idle {
+        let gave_wait_power = self.mode == Move::Idle;
+        if gave_wait_power {
             self.wait_platform_control(end - self.position_cm());
         }
         self.pos = end * UNIT;
         self.collider_end = Some((self.pos, end));
+        gave_wait_power
     }
 
     pub fn geyser_sources(&self) -> &str {

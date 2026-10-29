@@ -506,6 +506,7 @@ pub mod clip {
             "Wait" | "Snooze" => Some(180.),
             "WaitRelax" => Some(1200.),
             "WaitHot" => Some(340.),
+            "WaitCold" => Some(410.),
             "WaitVeryCold" => Some(36.),
             "DamageWait" => Some(120.),
             "FireRun" => Some(60.),
@@ -551,7 +552,7 @@ pub mod clip {
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
             "GrabCeilWait" | "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal"
-            | "SwimStandWait" | "SwimWalk" | "WaitVeryCold" => 1.,
+            | "SwimStandWait" | "SwimWalk" | "WaitCold" | "WaitVeryCold" => 1.,
             _ => 0.,
         }
     }
@@ -2654,6 +2655,9 @@ impl Player {
     ) {
         self.mode = mode;
         self.frame = 0;
+        if mode == Move::Idle {
+            self.wait_state_appears_on_platform();
+        }
         self.nerve.choose(true, clip, work);
     }
     /// The next sub-state of the running nerve, started on the next step like a
@@ -3185,7 +3189,10 @@ impl Player {
         if matches!(self.actor_name(), "Wait" | "Run") {
             self.ground_inertia.request = 1;
         }
-        self.follow_geyser_ground(scene);
+        let geyser_gave_wait_power = self.follow_geyser_ground(scene);
+        if self.mode == Move::Idle && !geyser_gave_wait_power {
+            self.wait_state_platform_control();
+        }
         self.update_ground_height(scene);
         if self.mode == Move::Idle && (self.nerve.step == 0 || self.wait.area_clip.is_none()) {
             self.wait.area_clip = scene.mesh.as_ref().and_then(|m| {

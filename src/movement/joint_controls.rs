@@ -157,19 +157,32 @@ impl Player {
     /// `rs::startCenterJointControl(param, actor, collision, vector, front_free)`: an impulse of
     /// `vector` along the ground the player stands on. With `front_free` (the landing of the
     /// standing state) the part of the vector along the actor's front is dropped, so that a
-    /// landing only sways the body sideways.
+    /// landing only sways the body sideways. On the frame of a landing the motion of a moving
+    /// ground under the actor (`rs::calcMovePowerGround`, negated) is added; with `front_free`
+    /// its part against the front is cancelled first.
     fn start_center_joint_control(&mut self, vector: Vec3, front_free: bool) {
         let up = self.ground_normal_or_up();
         let mut vector = vector;
+        let mut ground_move = if self.is_collided_ground() {
+            -self.ground_inertia.jump_force
+        } else {
+            Vec3::ZERO
+        };
         if front_free {
             let (actor_up, front) = self.pose_axes();
             let (along, found) = try_normalize_or_zero(along_vector_normal_h(front, actor_up, up));
             if found {
                 vector = verticalize_vec(along, vector);
+                ground_move = swim_move::limit_vector_opposite_dir(
+                    ground_move,
+                    along,
+                    vector_lib::length(ground_move),
+                );
             }
         }
-        // (Ground that moves under the player adds its motion on the landing frame and limits
-        // the vector against the front; the collision this rewrite replays is static.)
+        if self.is_just_land() {
+            vector += ground_move;
+        }
         self.joints.center.impulse = true;
         self.joints.center.impulse_vector = verticalize_vec(up, vector);
     }
@@ -210,11 +223,40 @@ impl Player {
         }
     }
 
+    /// `PlayerStateWait::control` for a platform that moves under the standing player: the
+    /// power is `rs::calcMovePowerGround` at the actor (zero without ground contact), the same
+    /// sample the jump inertia takes before the frame's movement.
+    pub(super) fn wait_state_platform_control(&mut self) {
+        self.wait_platform_control(self.wait_platform_power());
+    }
+
+    /// `PlayerStateWait::appear` records the platform power it starts with (0x48cdb0) and clears
+    /// the follow-up counter, so that standing up on a moving platform raises no impulse.
+    pub(super) fn wait_state_appears_on_platform(&mut self) {
+        self.joints.wait_platform_power =
+            self.local_wait_platform_power(self.wait_platform_power());
+        self.joints.wait_platform_counter = 0;
+    }
+
+    /// `rs::calcMovePowerGround` at the actor, zero without ground contact.
+    fn wait_platform_power(&self) -> Vec3 {
+        if self.is_collided_ground() {
+            self.ground_inertia.jump_force
+        } else {
+            Vec3::ZERO
+        }
+    }
+
+    /// The power in the actor's own axes without its part along gravity.
+    fn local_wait_platform_power(&self, power: Vec3) -> Vec3 {
+        let inverse = self.actor_pose().calc_quat().inverse();
+        verticalize_vec(Vec3::NEG_Y, pose_math::rotate_by_quat(power, inverse))
+    }
+
     /// PlayerStateWait::control (0x48cfc0): a sudden change in the ground's motion
     /// adds a bounded follow-up impulse to the centre dynamics.
     pub(super) fn wait_platform_control(&mut self, power: Vec3) {
-        let inverse = self.actor_pose().calc_quat().inverse();
-        let local = verticalize_vec(Vec3::NEG_Y, pose_math::rotate_by_quat(power, inverse));
+        let local = self.local_wait_platform_power(power);
         let change = local - self.joints.wait_platform_power;
         self.joints.wait_platform_power = local;
         if vector_lib::length(change) < 3. {
