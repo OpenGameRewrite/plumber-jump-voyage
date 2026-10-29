@@ -1337,6 +1337,8 @@ pub struct Player {
     ground_move: Option<(Vec2, f32, Vec3)>,
     /// EActionTrigger 3, consumed by syncSensorAndCollision after the nerve.
     collision_expand_pending: bool,
+    /// Snapshot injection already owns the legacy run-entry reconstruction.
+    snapshot_injected: bool,
     /// The pose when it is tilted off the vertical (a run up a slope); it
     /// belongs to the facing it was made for.
     pose_tilt: Option<PoseTilt>,
@@ -1548,6 +1550,7 @@ impl Default for Player {
             run_up: None,
             ground_move: None,
             collision_expand_pending: false,
+            snapshot_injected: false,
             pose_tilt: None,
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
@@ -2310,6 +2313,7 @@ impl Player {
         }
         self.nerve.clear();
         self.pos = s.pos;
+        self.snapshot_injected = true;
         self.stage_translation = None;
         self.stage_carry = None;
         self.prev = s.pos;
@@ -3086,6 +3090,7 @@ impl Player {
         self.update_recovery_point(scene);
         self.update_force_run_counter();
         self.finish_frame(scene);
+        self.snapshot_injected = false;
         // The camera updates after the actors of the frame.
         self.entrance_camera.update(self.position_cm(), o.recenter);
     }
@@ -3492,6 +3497,7 @@ impl Player {
             // run state's first step (`pole-climb` rows 10-11).
             // The run state's appearance already pulls the player to the floor.
             let raw_ground_velocity = self.grounded
+                && !self.snapshot_injected
                 && self.ground_move.is_none()
                 && self.v.y != 0.
                 && self.v.y != -self.pull;
