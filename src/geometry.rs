@@ -125,6 +125,7 @@ pub struct TriangleMesh {
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
+    pub pukupuku_look: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
     geyser_curves: Option<serde_json::Value>,
 }
@@ -453,10 +454,19 @@ impl TriangleMesh {
         ));
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
         if let Some(source) = root.get("pukupuku") {
-            if root["stage"] != "SeaWorldUtsuboCaveStage" || root["scenario"] != 1 {
+            if root["stage"] != "SeaWorldUtsuboCaveStage"
+                || root["scenario"] != 1
+                || source["id"] != "obj473"
+            {
                 return Err("unsupported Pukupuku stage/scenario".into());
             }
             mesh.pukupuku = Some(crate::movement::pukupuku::Pukupuku::load(source)?);
+            if let Some(other) = root.get("pukupuku_look") {
+                if other["id"] != "obj476" {
+                    return Err("unsupported Pukupuku look companion".into());
+                }
+                mesh.pukupuku_look = Some(crate::movement::pukupuku::Pukupuku::load(other)?);
+            }
         }
         for source in root["sand_geysers"].as_array().into_iter().flatten() {
             let id = source["id"].as_str().ok_or("geyser id")?;

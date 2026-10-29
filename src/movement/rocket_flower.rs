@@ -147,6 +147,16 @@ impl Player {
                 position: mesh.relative_vec(source.body),
                 stage_position: source.body,
             });
+            if let Some(source) = &mesh.pukupuku_look {
+                sensors.push(look_at::LookSensor {
+                    host: "プクプク".into(),
+                    name: "Body".into(),
+                    kind: 9,
+                    radius: 80.,
+                    position: mesh.relative_vec(source.body),
+                    stage_position: source.body,
+                });
+            }
         }
         for f in &self.rocket.flowers {
             for (name, kind, at) in [

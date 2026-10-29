@@ -1271,6 +1271,11 @@ the existing converter's `--curves-only --clip=SwimWait --clip=PressDown` mode;
 neither a recording nor Mario's trajectory is an exporter input. Back up the
 geometry before using the exporter.
 
+The same export includes obj476/rail17 as a look-only companion: Mario's eye
+holder selects it late in the contact run. It uses the same independent rail
+calculation and its own initial source sample. It cannot receive the ported
+physical attack, and the environment rule grants it no physical exception.
+
 The replay reads just the first obj473 sample from `game.pukupuku.csv`: the
 external Wait step1, rail coordinate, quaternion and initial Body centre at the
 start of preroll. The teleport sample is observed again at the first preroll

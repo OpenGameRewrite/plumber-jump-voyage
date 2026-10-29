@@ -73,6 +73,7 @@ impl Bezier {
 
 #[derive(Clone, Debug)]
 pub struct Pukupuku {
+    pub id: String,
     rail: [Bezier; 2],
     animation: Value,
     pub coord: f32,
@@ -103,8 +104,8 @@ fn vector(value: &Value) -> Result<Vec3, String> {
 
 impl Pukupuku {
     pub fn load(value: &Value) -> Result<Self, String> {
-        if value["id"] != "obj473"
-            || value["rail_id"] != "rail15"
+        if !((value["id"] == "obj473" && value["rail_id"] == "rail15")
+            || (value["id"] == "obj476" && value["rail_id"] == "rail17"))
             || value["move_type"] != 0
             || value["revive"] != true
         {
@@ -185,6 +186,7 @@ impl Pukupuku {
             ]))
         };
         Ok(Self {
+            id: value["id"].as_str().unwrap().into(),
             rail: [curve(0, 1)?, curve(1, 0)?],
             animation: value["animation"].clone(),
             coord: 0.,
@@ -204,7 +206,7 @@ impl Pukupuku {
                 .map(String::as_str)
                 .ok_or_else(|| format!("puku seed {k}"))
         };
-        if get("id")? != "obj473"
+        if get("id")? != self.id
             || get("n_vt")? != "1ca58b8"
             || get("step")? != "1"
             || get("move_type")? != "0"

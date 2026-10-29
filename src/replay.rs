@@ -623,6 +623,9 @@ fn tick_geysers(course: &mut Course, player: &Player) {
         if let Some(source) = &mut mesh.pukupuku {
             source.tick(player.puku_hit);
         }
+        if let Some(source) = &mut mesh.pukupuku_look {
+            source.tick(false);
+        }
         mesh.tick_geysers();
         for part in &mut mesh.key_move_parts {
             part.tick();
@@ -682,9 +685,12 @@ pub(crate) fn seed_pukupuku(
     script: &Script,
     recorded: Option<&TraceFile>,
 ) -> Result<(), String> {
-    if let Some(source) = &mut mesh.pukupuku {
+    for source in [&mut mesh.pukupuku, &mut mesh.pukupuku_look]
+        .into_iter()
+        .flatten()
+    {
         let row = recorded
-            .and_then(|g| g.puku_seed.as_ref())
+            .and_then(|g| g.puku_seed.iter().find(|r| r.get("id") == Some(&source.id)))
             .ok_or("missing Pukupuku initial source sample")?;
         if row.get("frame").and_then(|s| s.parse::<i64>().ok())
             != Some(-(script.preroll_frames() as i64))

@@ -1270,7 +1270,7 @@ pub struct TraceFile {
     pub geyser_seed: Option<serde_json::Value>,
     pub rocket_seed: Option<serde_json::Value>,
     pub press_seed: Vec<HashMap<String, String>>,
-    pub puku_seed: Option<HashMap<String, String>>,
+    pub puku_seed: Vec<HashMap<String, String>>,
 }
 impl TraceFile {
     pub fn read(path: &str) -> Result<Self, String> {
@@ -1367,10 +1367,12 @@ impl TraceFile {
                     .map(|(k, v)| (k.to_string(), v))
                     .collect();
                 if row.get("kind").map(String::as_str) == Some("sample")
-                    && row.get("id").map(String::as_str) == Some("obj473")
+                    && matches!(row.get("id").map(String::as_str), Some("obj473" | "obj476"))
                 {
-                    trace.puku_seed = Some(row);
-                    break;
+                    trace.puku_seed.push(row);
+                    if trace.puku_seed.len() == 2 {
+                        break;
+                    }
                 }
             }
         }
@@ -1399,7 +1401,7 @@ impl TraceFile {
             geyser_seed: None,
             rocket_seed: None,
             press_seed: Vec::new(),
-            puku_seed: None,
+            puku_seed: Vec::new(),
             grabceil_seed: None,
         })
     }

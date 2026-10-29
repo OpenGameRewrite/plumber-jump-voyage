@@ -136,6 +136,9 @@ pub fn install(app: &mut App, driver: Driver) {
                         .as_mut()
                         .unwrap()
                         .tick(player.puku_hit);
+                    if let Some(source) = &mut Arc::make_mut(mesh).pukupuku_look {
+                        source.tick(false);
+                    }
                 }
                 d.finished += 1;
             },
