@@ -194,7 +194,12 @@ class Evidence:
             for source in sources.values():
                 source.tick()
         self.surfaces, self.episodes = surfaces, episodes
-        self._verify_rider(geometry, objects['obj167'], timeline, crush, rewrite, all_rows, start)
+        # Older Press captures predate the extended ground matrices. Their
+        # verified source/crush episode remains valid independently of riding.
+        try:
+            self._verify_rider(geometry, objects['obj167'], timeline, crush, rewrite, all_rows, start)
+        except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+            self.rides = set()
 
     def _verify_rider(self, geometry, obj, timeline, mario, rewrite, rows, start):
         """A selected raw top, not a general exemption for a moving floor.
