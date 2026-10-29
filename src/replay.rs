@@ -680,6 +680,31 @@ pub(crate) fn seed_rocket_flowers(
     Ok(())
 }
 
+pub(crate) fn seed_key_move_parts(
+    mesh: &mut TriangleMesh,
+    script: &Script,
+    recorded: Option<&TraceFile>,
+) -> Result<(), String> {
+    if !mesh.key_move_parts.is_empty() {
+        let game = recorded.ok_or("key parts require independent initial source evidence")?;
+        for part in &mut mesh.key_move_parts {
+            let row = game
+                .press_seed
+                .iter()
+                .find(|r| r.get("id") == Some(&part.id))
+                .ok_or("missing key-move seed")?;
+            if row.get("frame").and_then(|s| s.parse::<i64>().ok())
+                != Some(-(script.preroll_frames() as i64))
+            {
+                return Err("part preroll mismatch".into());
+            }
+            part.seed(row)?;
+        }
+        mesh.update_key_move_collision();
+    }
+    Ok(())
+}
+
 pub(crate) fn seed_pukupuku(
     mesh: &mut TriangleMesh,
     script: &Script,
@@ -776,26 +801,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             mesh.geysers.clear();
         }
         seed_pukupuku(mesh, script, options.camera.or(options.lockstep))?;
-        if !mesh.key_move_parts.is_empty() {
-            let game = options
-                .camera
-                .or(options.lockstep)
-                .ok_or("key parts require independent initial source evidence")?;
-            for part in &mut mesh.key_move_parts {
-                let row = game
-                    .press_seed
-                    .iter()
-                    .find(|r| r.get("id") == Some(&part.id))
-                    .ok_or("missing key-move seed")?;
-                if row.get("frame").and_then(|s| s.parse::<i64>().ok())
-                    != Some(-(script.preroll_frames() as i64))
-                {
-                    return Err("part preroll mismatch".into());
-                }
-                part.seed(row)?;
-            }
-            mesh.update_key_move_collision();
-        }
+        seed_key_move_parts(mesh, script, options.camera.or(options.lockstep))?;
     }
     let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
     player.prepare_recorded_teleport();

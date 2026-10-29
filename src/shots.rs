@@ -78,6 +78,7 @@ impl Driver {
         crate::replay::seed_rocket_flowers(&mut player, script, recorded)?;
         if let Some(mesh) = &mut geometry {
             crate::replay::seed_pukupuku(Arc::make_mut(mesh), script, recorded)?;
+            crate::replay::seed_key_move_parts(Arc::make_mut(mesh), script, recorded)?;
         }
         Ok(Self {
             frames: script.frames().cloned().collect(),
@@ -140,6 +141,15 @@ pub fn install(app: &mut App, driver: Driver) {
                         source.tick(false);
                     }
                 }
+                if let Some(mesh) = &mut course.mesh
+                    && !mesh.key_move_parts.is_empty()
+                {
+                    let mesh = Arc::make_mut(mesh);
+                    for source in &mut mesh.key_move_parts {
+                        source.tick();
+                    }
+                    mesh.update_key_move_collision();
+                }
                 d.finished += 1;
             },
         )
@@ -174,7 +184,11 @@ fn begin(
     orbit.locked = true;
     **player = Player::spawn_facing(Vec3::ZERO, driver.start_yaw_deg);
     player.rocket = driver.initial_rocket.clone();
-    if course.mesh.as_ref().is_some_and(|m| m.pukupuku.is_some()) {
+    if course
+        .mesh
+        .as_ref()
+        .is_some_and(|m| m.pukupuku.is_some() || !m.key_move_parts.is_empty())
+    {
         player.prepare_recorded_teleport();
     }
     driver.phase = Phase::Loading;
