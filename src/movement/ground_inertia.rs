@@ -6,6 +6,8 @@ pub(super) struct GroundInertia {
     pub request: u32,
     pub saved: Vec3,
     pub last: Vec3,
+    /// calcJumpInertia samples the actor, independently of the saved contact.
+    pub jump_force: Vec3,
 }
 impl GroundInertia {
     fn update(&mut self, grounded: bool, force: Vec3) {
@@ -42,6 +44,13 @@ impl GroundInertia {
 }
 impl Player {
     pub(super) fn update_ground_inertia(&mut self, scene: &Course) {
+        self.ground_inertia.jump_force = scene.mesh.as_ref().map_or(Vec3::ZERO, |mesh| {
+            let at = self
+                .stage_translation
+                .filter(|(p, _)| *p == self.pos)
+                .map_or_else(|| mesh.to_game_vec(self.position_cm()), |(_, at)| at);
+            self.collider.moving_ground_displacement_at(mesh, at)
+        });
         let force = scene
             .mesh
             .as_ref()

@@ -4,6 +4,7 @@ pub(super) fn run() {
     a_carry_keeps_the_orientation_for_the_velocity_sweep();
     standing_is_held_by_the_arrows();
     translating_ground_carries_descent_and_supports_landing();
+    rotational_jump_displacement_uses_the_actor_point_without_normal_projection();
     upright_fall_needs_to_go_below_the_floor();
     crouched_fall_touches_on_arrival();
     crouched_hop_still_reports_the_floor();
@@ -471,4 +472,50 @@ fn translating_ground_carries_descent_and_supports_landing() {
     pos = collider.collide(&mesh, pos, Vec3::Y * 17., 0.).pos;
     assert_eq!(pos.y, 1017.);
     assert!(!collider.pressed_ground);
+}
+
+#[cfg_attr(test, test)]
+fn rotational_jump_displacement_uses_the_actor_point_without_normal_projection() {
+    use crate::geometry::LocalPrism;
+    use crate::movement::rotate_parts::RotatePart;
+    use crate::prism::{PartFrame, Prism};
+    let previous = PartFrame::new([1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.]).unwrap();
+    let mut mesh = flat();
+    mesh.parts.push(previous.clone());
+    mesh.triangles[0].local = Some(LocalPrism {
+        part: 0,
+        prism: Prism {
+            length: 1.,
+            origin: [0.; 3],
+            face: [0., 1., 0.],
+            edges: [[0.; 3]; 3],
+            thickness: 1.,
+        },
+    });
+    mesh.rotate_parts.push(RotatePart {
+        id: "test".into(),
+        part: 0,
+        position: Vec3::ZERO,
+        speed: 50.,
+        executions: 1,
+        quat: Quat::from_xyzw(1., 0., 0., 0.),
+        previous,
+    });
+    let mut collider = PlayerCollider::default();
+    collider.floor = Some(Contact {
+        normal: Vec3::NEG_Y,
+        position: Vec3::ZERO,
+        triangle: 0,
+        location: Location::Face,
+    });
+    let actor = Vec3::new(0., 100., 25.);
+    assert_eq!(collider.moving_ground_force(&mesh), Vec3::ZERO);
+    assert_eq!(
+        collider.moving_ground_displacement_at(&mesh, actor),
+        Vec3::new(0., -200., -50.)
+    );
+    assert_eq!(
+        collider.moving_ground_force_at(&mesh, actor),
+        Vec3::new(0., 0., -50.)
+    );
 }

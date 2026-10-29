@@ -4127,7 +4127,7 @@ impl Player {
         // velocity's one-frame departure request. It uses the moving ground
         // at takeoff, scaled by JumpInertiaRate and forward agreement.
         if self.collider.floor.is_some() {
-            let force = self.ground_inertia.saved.with_y(0.);
+            let force = self.ground_inertia.jump_force.with_y(0.);
             if force != Vec3::ZERO {
                 let (direction, _) = pose_math::try_normalize_or_zero(force);
                 let launch = if self.speed_h() < t::NORMAL_MIN {

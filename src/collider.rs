@@ -1474,18 +1474,30 @@ impl PlayerCollider {
         self.fix_reaction
     }
 
-    /// `calcForceMovePowerExceptNormal`: currently supplied by reproduced
-    /// translating collision parts. Rotating sources are not implemented.
+    /// `calcForceMovePowerExceptNormal` at the ground contact point.
     pub fn moving_ground_force(&self, mesh: &TriangleMesh) -> Vec3 {
         self.moving_ground_force_at(mesh, self.ground_position())
     }
 
     pub fn moving_ground_force_at(&self, mesh: &TriangleMesh, point: Vec3) -> Vec3 {
+        let mut force = self.moving_ground_displacement_at(mesh, point);
+        if let Some(hit) = &self.floor {
+            let outward = dot(force, hit.normal);
+            if outward > 0. {
+                force -= hit.normal * outward;
+            }
+        }
+        force
+    }
+
+    /// `rs::calcMovePowerGround` (0x568644): raw part displacement at the
+    /// caller's point. Jump inertia removes gravity, not the contact normal.
+    pub fn moving_ground_displacement_at(&self, mesh: &TriangleMesh, point: Vec3) -> Vec3 {
         self.floor.as_ref().map_or(Vec3::ZERO, |hit| {
             let Some(local) = mesh.triangles[hit.triangle as usize].local else {
                 return Vec3::ZERO;
             };
-            let mut force = if let Some(source) = mesh
+            if let Some(source) = mesh
                 .key_move_parts
                 .iter()
                 .find(|s| s.part == local.part as usize)
@@ -1509,12 +1521,7 @@ impl PlayerCollider {
                 source.force_at(point)
             } else {
                 return Vec3::ZERO;
-            };
-            let outward = dot(force, hit.normal);
-            if outward > 0. {
-                force -= hit.normal * outward;
             }
-            force
         })
     }
 
