@@ -122,6 +122,9 @@ pub fn collision_cell(p: &Player) -> String {
     if p.touched.active {
         items.insert(2, format!("ceiling={}", p.touched.ceiling.is_some() as i32));
     }
+    if p.own_cap_trample {
+        items.push("captrample=1".into());
+    }
     if let Some(n) = p.floor_normal() {
         items.push(format!("gn={}", vector(n)));
         if let Some(codes) = &p.touched.floor {

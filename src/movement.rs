@@ -555,7 +555,6 @@ pub mod clip {
     pub const SWIM_LAND: u32 = 45;
     pub const SWIM_HIP_DROP_START: u32 = 30;
     pub const SWIM_SPIN_CAP_START: u32 = 50;
-    /// (Not recorded: a stand-in for the converted model's length.)
     pub const SWIM_TRAMPLE: u32 = 24;
     pub const SWIM_HIP_DROP_LAND: u32 = 74;
     pub const LAND: u32 = 26;
@@ -1364,6 +1363,7 @@ pub struct Player {
     /// CollisionTrigger9: accepted PlayerRollingWallHitMove, not a squeeze.
     /// Static KCL has no sensor receiver; no supported actor raises it yet.
     collision_wall_reflected: bool,
+    pub(crate) own_cap_trample: bool,
     /// The normal of the mesh floor the collider found this step.
     mesh_ground: Option<Vec3>,
     /// The collision codes of the mesh surfaces the body touched this step.
@@ -1537,6 +1537,7 @@ impl Default for Player {
             hop_contact: false,
             collider: PlayerCollider::default(),
             collision_wall_reflected: false,
+            own_cap_trample: false,
             mesh_ground: None,
             touched: terrain::Touched::default(),
             key_move_sources: String::new(),
@@ -2867,6 +2868,7 @@ impl Player {
             return;
         }
         self.note_frame_start_for_joints();
+        self.own_cap_trample = false;
         let low_ceiling = self.grounded
             && scene.solids.iter().any(|b| {
                 let bottom = b.center.y - b.half.y;
@@ -5216,6 +5218,14 @@ impl Player {
             return;
         }
         self.cap_jump_possible = false;
+        if self.mode == Move::Swim {
+            // attackSensor 0x427f34 sets both flags after the cap accepts
+            // PlayerCapTrample. The swimmer consumes them in its own update.
+            self.swim.attack.hit = true;
+            self.swim.attack.trample = true;
+            self.own_cap_trample = true;
+            return;
+        }
         self.trample_jump();
         // The nerve was named before this frame's update, which runs its
         // first step now: no frame passes in the chosen state.
@@ -5231,14 +5241,16 @@ impl Player {
         self.sensor_restart
     }
     /// The states the player's foot can trample the cap in
-    /// (`PlayerActorHakoniwa::attackSensor`): not while swimming, on a pole,
+    /// (`PlayerActorHakoniwa::attackSensor`): not on a pole,
     /// grabbing a ledge or ceiling, rolling, pounding, or spinning the cap in
     /// the air.
     fn can_trample(&self) -> bool {
+        if self.mode == Move::Swim {
+            return !matches!(self.swim.nerve, swim::SwimNerve::HipDropHeadSliding | swim::SwimNerve::HipDropHeadSlidingEnd);
+        }
         !matches!(
             self.mode,
-            Move::Swim
-                | Move::Pole
+            Move::Pole
                 | Move::Ledge
                 | Move::GroundPound
                 | Move::PoundLand
@@ -5720,3 +5732,4 @@ pub fn self_check() {
     rocket_flower::self_check();
     surface_run::self_check();
 }
+

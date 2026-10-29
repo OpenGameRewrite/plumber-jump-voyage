@@ -1,11 +1,8 @@
-//! Stomping on something in the water: `SwimTrample` (the hop after the swimmer's body hit an
-//! enemy from above) and `SwimReflectDownFall` (the dive that hit something on its way down).
+//! Own-cap and attack bounces in the water: SwimTrample and SwimReflectDownFall.
 //!
-//! Written from the 1.0.0 executable; no recording reaches them (the rewrite has no enemies, so
-//! nothing ever raises the attack-sensor triggers), so they are UNVERIFIED. The triggers are
-//! `PlayerTrigger`'s attack-sensor flags that the player's sensors set when they touch another
-//! actor (`PlayerActorHakoniwa::attackSensor`): 1 (any attack hit), 2 (trampled something) and
-//! 3 (the hip drop attack hit). A host raises them with [`Player::receive_swim_attack`].
+//! Attack trigger 2 specifically follows accepted PlayerCapTrample/CapTouchJump;
+//! attackSensor sets trigger 1 with it. Move/Paddle require 2, while Land/Walk
+//! also accept 1. ReflectDownFall consumes 1/3 and remains unrecorded.
 use super::swim::{SwimEnd, SwimNerve};
 use super::swim_const as k;
 use super::*;
@@ -17,7 +14,7 @@ const GRAVITY: Vec3 = Vec3::NEG_Y;
 pub struct SwimAttack {
     /// 1: the swimmer's attack hit something.
     pub hit: bool,
-    /// 2: the swimmer trampled something.
+    /// 2: the own cap accepted a trample/touch jump.
     pub trample: bool,
     /// 3: the hip drop's attack hit something.
     pub hip_drop_hit: bool,

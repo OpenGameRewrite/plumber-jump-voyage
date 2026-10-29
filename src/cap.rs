@@ -93,14 +93,9 @@ const TRAMPLE_FRAMES: u32 = 15;
 const TRAMPLE_MAX_VERTICAL: f32 = 70.;
 const TRAMPLE_MAX_HORIZONTAL: f32 = 200.;
 /// The cap's `Trample` hit sensor (`PlayerFunction::initCapModelActor`): a
-/// sphere of 300 around a point 20 centimetres off the cap along its up axis.
-/// The offset's direction is a reading of the recordings, not of the code: the
-/// cap-bounce run is first trampled in the frame the player's foot comes within
-/// the vertical limit of a sensor 20 below the cap, while a sensor above the
-/// cap would have been reached some frames earlier or not at all. The cap's
-/// pose is not simulated, so the offset is taken downward here.
+/// sphere of 300 around local (0,20,0), from initCapModelActor 0x446678.
 const TRAMPLE_SENSOR_RADIUS: f32 = 300.;
-const TRAMPLE_SENSOR_Y: f32 = -20.;
+const TRAMPLE_SENSOR_Y: f32 = 20.;
 /// The player's foot sensor (`PlayerActorHakoniwa/InitSensor`: `Foot`).
 pub const FOOT_SENSOR_RADIUS: f32 = 40.;
 pub const FOOT_SENSOR_Y: f32 = 40.;
@@ -516,7 +511,7 @@ impl Cap {
         if self.nerve != CapNerve::ThrowStay || self.trampled || !hold || !jump_possible {
             return false;
         }
-        let sensor = self.spot + Vec3::Y * TRAMPLE_SENSOR_Y;
+        let sensor = self.spot + self.pose.world_axis(Vec3::Y * TRAMPLE_SENSOR_Y);
         let between = foot - sensor;
         let reach = (TRAMPLE_SENSOR_RADIUS + FOOT_SENSOR_RADIUS).powi(2);
         let above = between.try_normalize().map_or(0., |dir| dir.y);
