@@ -613,6 +613,9 @@ class Judge:
         if self._geysers.floor(f, self._hosts.get(f, {}).get("ground"), self._start):
             v.accept(f, "exported geyser Top floor", "raw KCL follows verified source phase and original joint animation")
             return
+        if self._press.riding(f):
+            v.accept(f, "exported obj167 moving top", "independent key phase, live current/previous matrices and raw top support reproduce the floor displacement")
+            return
         landing = prev is not None and not prev.get("floor_y") and bool(row and row.get("floor_y"))
         if landing:
             if v.typed:
@@ -654,6 +657,9 @@ class Judge:
                     return
         if self._geysers.carries(f, self._hosts.get(f, {}).get("ground"), self._start, self.rows, GROUND_RESIDUAL):
             v.accept(f, "exported geyser platform carry", "verified Top matrix motion carries the grounded player")
+            return
+        if self._press.riding(f):
+            v.accept(f, "exported obj167 ground carry", "selected raw top and independent matrix displacement carry the supported player")
             return
         flags = self._flags(f)
         tilt = self._normal_off_vertical(f)

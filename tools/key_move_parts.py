@@ -4,6 +4,7 @@ The raw placement sidecar comes from the user's local stage extraction. No Mario
 trace is an input to the exporter or the source timeline.
 """
 import json
+import math
 import struct
 from pathlib import Path
 
@@ -83,11 +84,11 @@ class Evidence:
     they never supply the source's movement or the rewrite's Press transition.
     """
     def __init__(self, geometry, actors, mario, rewrite, rows, preroll, start):
-        self.surfaces, self.episodes = set(), set()
+        self.surfaces, self.episodes, self.rides = set(), set(), set()
         try:
             self._verify(geometry, actors, mario, rewrite, rows, preroll, start)
         except (KeyError, TypeError, ValueError, IndexError, StopIteration, OverflowError, ZeroDivisionError):
-            self.surfaces, self.episodes = set(), set()
+            self.surfaces, self.episodes, self.rides = set(), set(), set()
 
     def _verify(self, geometry, actors, mario, rewrite, rows, preroll, start):
         if not geometry or (geometry.get('stage'), geometry.get('scenario')) != ('SandWorldPressExStage', 1) or not actors or not mario or not start:
@@ -121,6 +122,7 @@ class Evidence:
         if len(crush) != len(mario) or set(crush) != set(range(first, last + 1)):
             return
         generations, surfaces, episodes = {}, set(), set()
+        timeline = {}
         cause = False
         for frame in range(first, last + 1):
             samples = by_frame.get(frame, [])
@@ -169,6 +171,7 @@ class Evidence:
                             and host['sensor'] == 'Collision' and host['sensor_type'] == '15'
                             and host['base'] == tuple(round(f32(x-s), 6) for x,s in zip(source.position, start))):
                         surfaces.add((frame, surface, host['host'], host['base']))
+            timeline[frame] = {identity: list(source.position) for identity, source in sources.items()}
             m = crush[frame]
             if any(m[k] not in ('0', '1') for k in ('flag_a0', 'flag_a1', 'pressed', 'pressed_ground', 'pressed_wall')):
                 return
@@ -191,6 +194,102 @@ class Evidence:
             for source in sources.values():
                 source.tick()
         self.surfaces, self.episodes = surfaces, episodes
+        self._verify_rider(geometry, objects['obj167'], timeline, crush, rewrite, all_rows, start)
+
+    def _verify_rider(self, geometry, obj, timeline, mario, rewrite, rows, start):
+        """A selected raw top, not a general exemption for a moving floor.
+
+        Side matrices validate evidence only. Native movement uses its own source.
+        Signed zero is equivalent in matrix comparisons; no distance margin is used.
+        """
+        from environment_rule import parse_hit_hosts, key_values
+        if min(timeline) != -30:
+            return
+        source0 = key_values(rewrite.get(0, {}).get('collision', '')).get('keyparts', '')
+        if not any(d.startswith('obj167/Move/1/35/') for d in source0.split('|')):
+            return
+        # The only accepted moving top is the exported Press19 pair, submodel0.
+        top = {i: t for i, t in enumerate(geometry['triangles'])
+               if geometry['objects'][t[13]]['id'] == 'obj167' and t[16] == 0 and t[17] in (2, 3)
+               and t[9:12] == [0, 1, 0] and geometry['attributes'][t[12]]['FloorCode'] == 'Press'}
+        if len(top) != 2:
+            return
+        def floats(cell, count, separator=','):
+            values = [struct.unpack('>f', bytes.fromhex(x))[0] for x in cell.split(separator)]
+            if len(values) != count or any(not math.isfinite(v) for v in values):
+                raise ValueError('invalid rider floats')
+            return values
+        def matrix(position):
+            x, y, z = position
+            return [1., 0., 0., x, 0., 1., 0., y, 0., 0., 1., z]
+        def vector(row, name):
+            result = floats(row[name + '_bits'], 3)
+            if result != [float(row[name + '_' + a]) for a in 'xyz']:
+                raise ValueError('rider bit/decimal mismatch')
+            return result
+        rides, pointers = set(), set()
+        for f, positions in timeline.items():
+            row, side = rows[f], mario[f]
+            position = positions['obj167']
+            previous = timeline.get(f - 1, positions)['obj167']
+            delta = [f32(a-b) for a,b in zip(position, previous)]
+            diag = key_values(rewrite.get(f, {}).get('collision', ''))
+            if any(side[k] != '0' for k in ('pressed', 'pressed_ground', 'pressed_wall', 'gate_true')):
+                return
+            # These captures have no area/message force; require the raw fields
+            # rather than treating an unimplemented force as harmless.
+            for name in ('last_ground_inertia', 'external_velocity', 'area_velocity', 'total_velocity'):
+                if vector(side, name) != [0., 0., 0.]:
+                    return
+            saved = vector(side, 'saved_ground_force')
+            if f >= 0 and (diag.get('inertiarequest') != side['inertia_request']
+                           or floats(diag['savedground'], 3, '/') != saved
+                           or floats(diag['lastinertia'], 3, '/') != [0., 0., 0.]):
+                return
+            hosts = parse_hit_hosts(row.get('hit_hosts'))
+            host = hosts.get('ground')
+            if not side['ground_part']:
+                if host or any(side[k] for k in ('ground_matrix_bits', 'ground_previous_matrix_bits', 'ground_origin_delta_bits', 'ground_moving')):
+                    return
+                continue
+            pointers.add(side['ground_part'])
+            if ((f >= 0 and (not host or not self.surface(f, 'ground', host))) or side['ground_moving'] != '0'
+                    or floats(side['ground_matrix_bits'], 12) != matrix(position)
+                    or floats(side['ground_previous_matrix_bits'], 12) != matrix(previous)
+                    or vector(side, 'ground_origin_delta') != delta):
+                return
+            for name in ('ground_matrix', 'ground_previous_matrix'):
+                if floats(side[name + '_bits'], 12) != [float(side[name + '_' + a]) for a in 'abcdefghijkl']:
+                    return
+            height = f32(f32(position[1] + 450.) - start[1])
+            if float(row['floor_y']) != height or key_values(row['collision']).get('gn') != '0.000000/1.000000/0.000000':
+                return
+            if row['ground'] == '1' and float(row['py']) != height:
+                return
+            # The observed selected ground point lies on this raw top. The
+            # native diagnostic additionally identifies the tested KCL prism.
+            x, z = float(row['px']) + start[0], float(row['pz']) + start[2]
+            local_x, local_z = x-position[0], z-position[2]
+            inside = False
+            for t in top.values():
+                corners = [(t[k]-obj['translate'][0], t[k+2]-obj['translate'][2]) for k in (0,3,6)]
+                sides = [(b[0]-a[0])*(local_z-a[1])-(b[1]-a[1])*(local_x-a[0]) for a,b in zip(corners,corners[1:]+corners[:1])]
+                inside |= all(v >= 0 for v in sides) or all(v <= 0 for v in sides)
+            if not inside:
+                return
+            if f >= 0:
+                identity, triangle = diag['groundpart'].split('/')
+                if (identity != 'obj167' or int(triangle) not in top
+                        or floats(diag['groundmatrix'], 12, '/') != matrix(position)
+                        or floats(diag['groundprevious'], 12, '/') != matrix(previous)
+                        or floats(diag['grounddelta'], 3, '/') != delta):
+                    return
+                rides.add(f)
+        if len(pointers) == 1:
+            self.rides = rides
+
+    def riding(self, frame):
+        return frame in self.rides
 
     def surface(self, frame, surface, host):
         return (frame, surface, host['host'], host['base']) in self.surfaces

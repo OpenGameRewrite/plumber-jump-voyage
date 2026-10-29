@@ -343,7 +343,7 @@ impl Player {
                 v.iter()
                     .map(|x| format!("{:08x}", x.to_bits()))
                     .collect::<Vec<_>>()
-                    .join(",")
+                    .join("/")
             };
             self.ground_source = format!(
                 "inertiarequest={};savedground={};lastinertia={}",
