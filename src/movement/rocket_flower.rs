@@ -136,6 +136,18 @@ impl Player {
         scene: Option<&crate::geometry::TriangleMesh>,
     ) -> Vec<look_at::LookSensor> {
         let mut sensors = static_sensors.to_vec();
+        if let Some(mesh) = scene
+            && let Some(source) = &mesh.pukupuku
+        {
+            sensors.push(look_at::LookSensor {
+                host: "プクプク".into(),
+                name: "Body".into(),
+                kind: 9,
+                radius: 80.,
+                position: mesh.relative_vec(source.body),
+                stage_position: source.body,
+            });
+        }
         for f in &self.rocket.flowers {
             for (name, kind, at) in [
                 ("Body", 12, f.position + Vec3::Y * 50.),

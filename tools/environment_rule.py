@@ -35,6 +35,7 @@ from key_move_parts import Evidence as PressEvidence
 from grab_ceil import Evidence as GrabCeilEvidence
 from rocket_flower import Evidence as RocketEvidence
 from coin_chameleon import Evidence as CoinChameleonEvidence
+from pukupuku import Evidence as PukupukuEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -215,7 +216,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -243,6 +244,7 @@ class Judge:
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
         self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
+        self._puku = PukupukuEvidence(geometry, pukupuku, rewrite_rows, game_rows)
         self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
         self._scripted = {}
         self._candles = []
@@ -538,6 +540,9 @@ class Judge:
             if self._candle_contact(f, c, message=c["kind"] in ("r", "p")):
                 v.accept(f, "exported candlestand sensor",
                          "settled initially lit static placement; exact Fire/Body sphere overlap replayed")
+                continue
+            if self._puku.contact(f, c):
+                v.accept(f, "exported obj473 Pukupuku", "independent rail/reaction phase, ordered rejected Reflect then accepted ObjHipDrop, or proven non-physical sensor overlap")
                 continue
             if c["kind"] in ("r", "p"):
                 message = c["message"]

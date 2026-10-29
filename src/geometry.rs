@@ -124,6 +124,7 @@ pub struct TriangleMesh {
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
+    pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
     geyser_curves: Option<serde_json::Value>,
 }
@@ -451,6 +452,12 @@ impl TriangleMesh {
             origin,
         ));
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
+        if let Some(source) = root.get("pukupuku") {
+            if root["stage"] != "SeaWorldUtsuboCaveStage" || root["scenario"] != 1 {
+                return Err("unsupported Pukupuku stage/scenario".into());
+            }
+            mesh.pukupuku = Some(crate::movement::pukupuku::Pukupuku::load(source)?);
+        }
         for source in root["sand_geysers"].as_array().into_iter().flatten() {
             let id = source["id"].as_str().ok_or("geyser id")?;
             let object = root["objects"]

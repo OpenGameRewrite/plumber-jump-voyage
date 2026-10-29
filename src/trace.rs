@@ -1270,6 +1270,7 @@ pub struct TraceFile {
     pub geyser_seed: Option<serde_json::Value>,
     pub rocket_seed: Option<serde_json::Value>,
     pub press_seed: Vec<HashMap<String, String>>,
+    pub puku_seed: Option<HashMap<String, String>>,
 }
 impl TraceFile {
     pub fn read(path: &str) -> Result<Self, String> {
@@ -1339,6 +1340,40 @@ impl TraceFile {
                 trace.press_seed.push(row);
             }
         }
+        let side = std::path::Path::new(path).with_extension("pukupuku.csv");
+        if side.exists() {
+            let text = std::fs::read_to_string(side).map_err(|e| e.to_string())?;
+            let mut lines = text.lines();
+            let header: Vec<_> = lines.next().ok_or("puku CSV header")?.split(',').collect();
+            // Keep the initial source sample only. Subsequent transforms and
+            // events remain verification evidence outside the simulation.
+            for line in lines {
+                let mut quoted = false;
+                let mut cell = String::new();
+                let mut cells = Vec::new();
+                for c in line.chars() {
+                    if c == '"' {
+                        quoted = !quoted;
+                    } else if c == ',' && !quoted {
+                        cells.push(std::mem::take(&mut cell));
+                    } else {
+                        cell.push(c);
+                    }
+                }
+                cells.push(cell);
+                let row: HashMap<String, String> = header
+                    .iter()
+                    .zip(cells)
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect();
+                if row.get("kind").map(String::as_str) == Some("sample")
+                    && row.get("id").map(String::as_str) == Some("obj473")
+                {
+                    trace.puku_seed = Some(row);
+                    break;
+                }
+            }
+        }
         Ok(trace)
     }
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -1364,6 +1399,7 @@ impl TraceFile {
             geyser_seed: None,
             rocket_seed: None,
             press_seed: Vec::new(),
+            puku_seed: None,
             grabceil_seed: None,
         })
     }

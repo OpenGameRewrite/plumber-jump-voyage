@@ -176,6 +176,15 @@ impl LookAt {
         self.invalid_sensors = invalid;
     }
 
+    /// PlayerDisregard clears the eye holder's candidate; the joint keeper
+    /// retains its existing target until its own distance/lifetime rule ends it.
+    pub fn disregard_candidate(&mut self, index: usize) {
+        self.invalid_sensors.push(index);
+        if self.candidate == Some(index) {
+            self.candidate = None;
+        }
+    }
+
     /// The head joint's position (cm, replay frame) after the model's last calculation.
     pub fn set_head_position(&mut self, head: Vec3) {
         self.head = Some(head);

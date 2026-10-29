@@ -258,6 +258,7 @@ mod grab_ceil_find;
 mod ground;
 pub mod key_move_parts;
 mod press;
+pub mod pukupuku;
 mod recovery_dead;
 pub mod rocket_flower;
 mod safety;
@@ -956,6 +957,8 @@ pub enum Fx {
     /// The foot sensor's trample message was accepted by the cap
     /// (`PlayerActorHakoniwa::attackSensor`): the hit reaction the foot raises.
     CapTrampleHit,
+    /// Pukupuku accepted ObjHipDrop and requested the attacker's hit reaction.
+    PoundHit,
     /// The stay began while the button is held: the reaction it raises.
     CapStayStart,
     /// Equipment started a forced run (the reaction `強制走り開始`).
@@ -1090,6 +1093,8 @@ pub struct Player {
     fire: FireControl,
     sand: sand_sink::SandControl,
     geyser: sand_geyser::GeyserControl,
+    pub puku_hit: bool,
+    pub puku_source: String,
     /// `PlayerCounterForceRun`: set by RocketFlower equipment.
     force_run: force_run::ForceRun,
     pub rocket: rocket_flower::RocketFlowers,
@@ -1400,6 +1405,8 @@ impl Default for Player {
             fire: FireControl::default(),
             sand: sand_sink::SandControl::default(),
             geyser: sand_geyser::GeyserControl::default(),
+            puku_hit: false,
+            puku_source: String::new(),
             force_run: force_run::ForceRun::default(),
             rocket: default(),
             surface_run: default(),
@@ -2931,6 +2938,7 @@ impl Player {
         }
         self.query_equipment_force_run();
         self.cap_sensor_phase(&o);
+        self.puku_sensor_phase(scene);
         self.start_pending_abyss();
         self.check_recovery_area_exit(scene);
         self.dispatch_sand_death();
@@ -3262,6 +3270,14 @@ impl Player {
             && self.age > 1;
         let actor = self.pose_matrix();
         let sensors = self.rocket_look_sensors(scene.look_sensors(), scene.mesh.as_deref());
+        if scene
+            .mesh
+            .as_ref()
+            .and_then(|m| m.pukupuku.as_ref())
+            .is_some_and(|s| s.phase != 0)
+        {
+            self.look.disregard_candidate(scene.look_sensors().len());
+        }
         for (i, f) in self.rocket.flowers.iter().enumerate() {
             if f.clipped {
                 self.look

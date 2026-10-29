@@ -149,6 +149,9 @@ pub fn collision_cell(p: &Player) -> String {
     if !p.grab_ceil_sources().is_empty() {
         items.push(format!("grabceil={}", p.grab_ceil_sources()));
     }
+    if !p.puku_source.is_empty() {
+        items.push(format!("puku={}", p.puku_source));
+    }
     if !p.geyser_sources().is_empty() {
         items.push(format!("geysers={}", p.geyser_sources()));
     }

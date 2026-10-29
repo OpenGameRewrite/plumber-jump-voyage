@@ -2,7 +2,7 @@
 //!
 //! Attack trigger 2 specifically follows accepted PlayerCapTrample/CapTouchJump;
 //! attackSensor sets trigger 1 with it. Move/Paddle require 2, while Land/Walk
-//! also accept 1. ReflectDownFall consumes 1/3 and remains unrecorded.
+//! also accept 1. ReflectDownFall consumes 1/3 (obj473's underwater hip drop).
 use super::swim::{SwimEnd, SwimNerve};
 use super::swim_const as k;
 use super::*;
@@ -142,7 +142,9 @@ impl Player {
                 return None;
             }
         }
-        if self.anim_done(clip::SWIM_TRAMPLE) || self.v.y < 0. {
+        // SwimTrample's original nonlooping clip has70 frames. The ordinary
+        // trample has already fallen at24; the11-speed reflected dive has not.
+        if self.anim_done(70) || self.v.y < 0. {
             self.set_swim_nerve(SwimNerve::Move);
         }
         None

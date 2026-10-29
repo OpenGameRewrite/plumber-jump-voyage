@@ -201,6 +201,7 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
             "GrabCeilSwingBack"
         })],
         Fx::Crushed => reaction("CrushDeath"),
+        Fx::PoundHit => reaction("PoundHit"),
         Fx::Abyss => vec![Cue::Play("FallDown"), Cue::Play("vDeadFallDown")],
         Fx::RecoveryDamage => reaction("BubbleDamage"),
         Fx::RecoveryBegin => reaction("BubbleStart"),

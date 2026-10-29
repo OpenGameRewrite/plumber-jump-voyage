@@ -614,11 +614,15 @@ pub(crate) fn update_static_clipping(player: &mut Player, course: &Course, view:
 
 fn tick_geysers(course: &mut Course, player: &Player) {
     if let Some(mesh) = &mut course.mesh
-        && (!mesh.geysers.is_empty()
+        && (mesh.pukupuku.is_some()
+            || !mesh.geysers.is_empty()
             || !mesh.grab_ceil_bars.is_empty()
             || !mesh.key_move_parts.is_empty())
     {
         let mesh = Arc::make_mut(mesh);
+        if let Some(source) = &mut mesh.pukupuku {
+            source.tick(player.puku_hit);
+        }
         mesh.tick_geysers();
         for part in &mut mesh.key_move_parts {
             part.tick();
@@ -739,6 +743,19 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         } else {
             mesh.geysers.clear();
         }
+        if let Some(source) = &mut mesh.pukupuku {
+            let row = options
+                .camera
+                .or(options.lockstep)
+                .and_then(|g| g.puku_seed.as_ref())
+                .ok_or("missing Pukupuku initial source sample")?;
+            if row.get("frame").and_then(|s| s.parse::<i64>().ok())
+                != Some(-(script.preroll_frames() as i64))
+            {
+                return Err("puku preroll mismatch".into());
+            }
+            source.seed(row)?;
+        }
         if !mesh.key_move_parts.is_empty() {
             let game = options
                 .camera
@@ -846,6 +863,9 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         );
         orders.view = camera.view_rows(0);
         orders.camera_view = camera.view(0).map(View::rows);
+        if course.mesh.as_ref().is_some_and(|m| m.pukupuku.is_some()) {
+            player.set_camera_position(camera.view(0).map(|view| view.position * 100.));
+        }
         update_static_clipping(&mut player, &course, camera.view(0));
         player.step(&orders, &course);
         info.game_frame = i as i64;
@@ -1034,7 +1054,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         if !course
             .mesh
             .as_ref()
-            .is_none_or(|mesh| mesh.grab_ceil_bars.is_empty())
+            .is_none_or(|mesh| mesh.grab_ceil_bars.is_empty() && mesh.pukupuku.is_none())
         {
             recorder = recorder.with_stage(course.mesh.clone());
         }
