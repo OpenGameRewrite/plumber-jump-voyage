@@ -1316,15 +1316,20 @@ ULP residuals and stage/effect visual limits are reported with the run results.
 
 Final Pukupuku verification: all four recordings pass free and lockstep with
 zero failing columns and no excluded environment frames, including the dynamic
-fish look columns. The largest player-position component residual is0.000092 cm
-free and0.000271 cm lockstep. Independently simulated obj473 rail coordinates
+fish look columns. The largest player-position component residual is 0.000092 cm
+free and 0.000271 cm lockstep. Independently simulated obj473 rail coordinates
 and positions match every recorded sample exactly; its animated Body centre
-has up to0.000167326 cm arithmetic residual and its quaternion is not bit exact.
+has up to 0.000167326 cm arithmetic residual and its quaternion is not bit exact.
 These residuals are unresolved arithmetic differences, not fitted corrections.
 Corrupting all future fish samples leaves every free trace byte-identical; only
 the two initial source samples enter the simulation. Seventeen malformed source
-evidence variants are refused. Rendered frames50/51/94 show Mario and the hit
+evidence variants are refused. Rendered frames 50/51/94 show Mario and the hit
 effect; the absent fish, cave and water visuals prevent a stage-parity claim.
+The full dashboard improves from 142 PASS / 8 FAIL / 3 REFUSED to
+146 PASS / 5 FAIL / 2 REFUSED. Both pillar runs remain refused. All 142
+baseline-PASS rewrite traces are byte-identical across 46,489 frames; the
+compared-column audit finds no changed cells or lost comparison coverage.
+The pinned original simulation hash is unchanged.
 
 The entry fall selects `RestartArea`'s linked `PlayerRestartInfo`, which the restart
 exporter now preserves. The replay uses the recorded external scene selection
