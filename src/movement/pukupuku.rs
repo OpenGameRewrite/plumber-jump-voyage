@@ -200,6 +200,9 @@ impl Pukupuku {
     pub fn accepts_hip_drop(&self, foot: Vec3) -> bool {
         self.phase == 0 && pose_math::squared_length(foot - self.body) < (40. + 80.) * (40. + 80.)
     }
+    pub fn preceding_body(&self) -> Vec3 {
+        self.previous_body
+    }
     pub fn tick(&mut self, hit: bool) {
         // The teleport sample precedes the first preroll movement; the source
         // snapshot is observed again when that first player update completes.
@@ -223,7 +226,7 @@ impl Pukupuku {
             let degrees = (self.step as f32 / 60.).clamp(0., 1.) * 5.;
             self.quat = pose_math::turn_quat(
                 self.quat,
-                pose_math::quat_to_axes(self.quat)[2],
+                pose_math::rotate_by_quat(Vec3::Z, self.quat),
                 direction,
                 degrees * pose_math::DEGREES_TO_RADIANS,
             );
@@ -386,5 +389,31 @@ mod checks {
         assert_eq!(c.length, 1397.2412);
         assert_eq!(c.position(c.parameter(0.)), Vec3::new(0., 550., -450.));
         assert_eq!(c.position(c.parameter(c.length)), Vec3::new(0., 550., 450.));
+    }
+
+    #[test]
+    fn accepted_hip_drop_stops_the_rail_until_revive() {
+        let mut source = Pukupuku::load(&serde_json::json!({
+            "id":"obj473", "rail_id":"rail15", "move_type":0,"revive":true,
+            "rail":[{"position":[0,550,-450],"in":[-600,550,-450],"out":[600,550,-450]},
+                {"position":[0,550,450],"in":[600,550,450],"out":[-600,550,450]}],
+            "animation":{"joints":[],"clips":{"SwimWait":{"length":360},"PressDown":{"length":40}}}
+        }))
+        .unwrap();
+        source.first = false;
+        source.body = Vec3::ZERO;
+        assert!(source.accepts_hip_drop(Vec3::Y * 119.));
+        assert!(!source.accepts_hip_drop(Vec3::Y * 120.));
+        source.tick(true);
+        assert_eq!((source.phase, source.step, source.anim_frame), (1, 1, 0));
+        assert!(!source.accepts_hip_drop(Vec3::ZERO));
+        for _ in 0..39 {
+            source.tick(false);
+        }
+        assert_eq!((source.phase, source.step, source.anim_frame), (1, 40, 39));
+        source.tick(false);
+        assert_eq!((source.phase, source.step, source.anim_frame), (2, 0, 40));
+        source.tick(false);
+        assert_eq!((source.phase, source.step, source.coord), (2, 1, 0.));
     }
 }

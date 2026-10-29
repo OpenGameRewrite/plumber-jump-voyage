@@ -35,24 +35,37 @@ impl Player {
     }
 
     /// The position the game holds for the actor (`al::getTrans`), in the stage's coordinates.
-    fn trans_in_stage(&self, scene: &Course) -> Vec3 {
-        scene.in_water_frame(self.position_cm())
+    pub(super) fn trans_in_stage(&self, scene: &Course) -> Vec3 {
+        self.stage_translation
+            .filter(|(p, _)| *p == self.pos)
+            .map_or_else(|| scene.in_water_frame(self.position_cm()), |(_, at)| at)
     }
 
     /// `al::setTrans(actor, trans + delta)` with the single-precision addition done at the
     /// stage's coordinates, as the game does.
     pub(super) fn move_trans(&mut self, scene: &Course, delta: Vec3) {
         let relative = self.position_cm();
+        let absolute = self.trans_in_stage(scene);
         // The collider stood where the actor was; it follows the hand-made move first.
         self.trans_carry.get_or_insert(relative);
         let moved = match &scene.mesh {
             Some(mesh) => {
-                let at = mesh.to_game_vec(relative);
+                let at = absolute;
+                if mesh.pukupuku.is_some() {
+                    self.stage_carry.get_or_insert(at);
+                    self.stage_translation = Some((
+                        self.pos,
+                        Vec3::new(at.x + delta.x, at.y + delta.y, at.z + delta.z),
+                    ));
+                }
                 mesh.relative_vec(Vec3::new(at.x + delta.x, at.y + delta.y, at.z + delta.z))
             }
             None => relative + delta,
         };
         self.pos = moved * UNIT;
+        if let Some((_, at)) = self.stage_translation {
+            self.stage_translation = Some((self.pos, at));
+        }
         self.collider_end = Some((self.pos, moved));
     }
 

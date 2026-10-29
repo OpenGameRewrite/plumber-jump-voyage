@@ -649,7 +649,14 @@ fn tick_geysers(course: &mut Course, player: &Player) {
 /// Start the player's look-at from a recorded row. The keeper's target is found among the
 /// stage's sensors and the independently ticked RocketFlower sensors the player owns.
 fn restore_look(player: &mut Player, hint: &LookHint, course: &Course) {
-    let sensors = player.rocket_look_sensors(course.look_sensors(), course.mesh.as_deref());
+    let mut sensors = player.rocket_look_sensors(course.look_sensors(), course.mesh.as_deref());
+    if let Some(mesh) = &course.mesh
+        && let Some(source) = &mesh.pukupuku
+    {
+        let sensor = &mut sensors[course.look_sensors().len()];
+        sensor.stage_position = source.preceding_body();
+        sensor.position = mesh.relative_vec(sensor.stage_position);
+    }
     player.look.restore(hint, &sensors);
 }
 
@@ -901,7 +908,21 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     && game
                         .cell(last - 1, "state")
                         .is_some_and(|state| state.starts_with("GrabCeil/"));
-            if grab_ceil_transition {
+            let puku_swim_snapshot = course.mesh.as_ref().is_some_and(|m| m.pukupuku.is_some())
+                && game
+                    .cell(last, "state")
+                    .is_some_and(|s| s.starts_with("Swim/"));
+            if puku_swim_snapshot {
+                player.inject(&snapshot_with_geometry(game, last, &course));
+                player.restore_swim_nerve(
+                    game.cell(last, "state").unwrap(),
+                    game.number(last, "sub_step").unwrap_or(0.).max(0.) as u32,
+                );
+                player.update_water_finder(&course);
+                if let Some(hint) = game.look_hint(last) {
+                    restore_look(&mut player, &hint, &course);
+                }
+            } else if grab_ceil_transition {
                 player.inject_grab_ceil(&snapshot_with_geometry(game, last, &course));
                 if let Some(hint) = game.look_hint(last) {
                     restore_look(&mut player, &hint, &course);

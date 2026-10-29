@@ -854,3 +854,23 @@ impl Player {
         None
     }
 }
+
+impl Player {
+    /// Restore the observable swim keeper for lockstep. Hidden stroke/turn
+    /// history remains independently simulated; this is never used by free replay.
+    pub fn restore_swim_nerve(&mut self, name: &str, step: u32) {
+        let nerve = match name {
+            "Swim/SwimMove" => SwimNerve::Move,
+            "Swim/SwimLand" => SwimNerve::Land,
+            "Swim/SwimWalk" => SwimNerve::Walk,
+            "Swim/SwimPaddle" => SwimNerve::Paddle,
+            "Swim/SwimHipDropStart" => SwimNerve::HipDropStart,
+            "Swim/SwimHipDropLoop" => SwimNerve::HipDropLoop,
+            "Swim/SwimReflectDownFall" => SwimNerve::ReflectDownFall,
+            _ => return,
+        };
+        self.swim.nerve = nerve;
+        self.swim.steps = step;
+        self.swim.chosen_after_update = None;
+    }
+}

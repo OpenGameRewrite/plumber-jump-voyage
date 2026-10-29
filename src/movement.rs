@@ -1095,6 +1095,8 @@ pub struct Player {
     geyser: sand_geyser::GeyserControl,
     pub puku_hit: bool,
     pub puku_source: String,
+    stage_translation: Option<(Vec3, Vec3)>,
+    stage_carry: Option<Vec3>,
     /// `PlayerCounterForceRun`: set by RocketFlower equipment.
     force_run: force_run::ForceRun,
     pub rocket: rocket_flower::RocketFlowers,
@@ -1407,6 +1409,8 @@ impl Default for Player {
             geyser: sand_geyser::GeyserControl::default(),
             puku_hit: false,
             puku_source: String::new(),
+            stage_translation: None,
+            stage_carry: None,
             force_run: force_run::ForceRun::default(),
             rocket: default(),
             surface_run: default(),
@@ -2288,6 +2292,8 @@ impl Player {
         }
         self.nerve.clear();
         self.pos = s.pos;
+        self.stage_translation = None;
+        self.stage_carry = None;
         self.prev = s.pos;
         self.v = s.v;
         if s.mode == Some(Move::SandGeyser) {

@@ -1241,6 +1241,7 @@ fn across(v: Vec3, axis: Vec3) -> Vec3 {
 /// What a collide call found.
 #[derive(Clone, Debug, Default)]
 pub struct Outcome {
+    pub stage_pos: Vec3,
     /// Where the feet end up (cm, replay frame).
     pub pos: Vec3,
     /// A shape was in collision somewhere along the move (the position may
@@ -1400,6 +1401,21 @@ impl PlayerCollider {
         yaw: f32,
         tilt: Option<Quat>,
     ) -> Outcome {
+        self.collide_stage(mesh, pos, velocity, yaw, tilt, None)
+    }
+
+    /// Keep the actor's original absolute f32 translation across an update.
+    /// A replay-relative f32 cannot represent a small world height accurately
+    /// when its start was hundreds of centimetres higher.
+    pub fn collide_stage(
+        &mut self,
+        mesh: &TriangleMesh,
+        pos: Vec3,
+        velocity: Vec3,
+        yaw: f32,
+        tilt: Option<Quat>,
+        absolute: Option<(Vec3, Option<Vec3>)>,
+    ) -> Outcome {
         self.pressed_ground = false;
         self.pressed_wall = false;
         self.floor = None;
@@ -1419,7 +1435,7 @@ impl PlayerCollider {
             None
         };
         // Inside, positions are the game's own absolute ones.
-        let pos = mesh.to_game_vec(pos);
+        let pos = absolute.map_or_else(|| mesh.to_game_vec(pos), |p| p.0);
         let mut pose = Pose::new(pos, from_yaw, yaw, tilted);
         self.last_yaw = Some(yaw);
         self.last_tilt = tilt;
@@ -1433,10 +1449,11 @@ impl PlayerCollider {
         // empty, except for the states that put the actor on a pose by hand.
         // An empty carry is not swept at all; the move's own sweep then also
         // checks the pose it starts from.
-        let begin = self
-            .carry_from
-            .take()
-            .map_or(pose.pos, |from| mesh.to_game_vec(from));
+        let begin = self.carry_from.take().map_or(pose.pos, |from| {
+            absolute
+                .and_then(|p| p.1)
+                .unwrap_or_else(|| mesh.to_game_vec(from))
+        });
         let mut at = begin;
         let carry = pose.pos - begin;
         // The bounding radius now, and the one the collider last had: when either the position
@@ -1542,6 +1559,7 @@ impl PlayerCollider {
             contact.position = mesh.relative_vec(contact.position);
         }
         Outcome {
+            stage_pos: at,
             pos: mesh.relative_vec(at),
             collided,
         }

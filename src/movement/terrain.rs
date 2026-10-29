@@ -281,9 +281,24 @@ impl Player {
         if let Some(stood) = self.trans_carry.take() {
             self.collider.carry_from(stood);
         }
-        let outcome =
-            self.collider
-                .collide_tilted(mesh, start, velocity, yaw, self.pose_read_back());
+        // Migrate the cave fixture to original absolute translation storage.
+        // Older fixtures retain their established coordinate contract while
+        // their own numerical residuals are investigated separately.
+        let absolute = mesh.pukupuku.as_ref().map(|_| {
+            let at = self
+                .stage_translation
+                .filter(|(p, _)| *p == self.pos)
+                .map_or_else(|| mesh.to_game_vec(start), |(_, at)| at);
+            (at, self.stage_carry.take())
+        });
+        let outcome = self.collider.collide_stage(
+            mesh,
+            start,
+            velocity,
+            yaw,
+            self.pose_read_back(),
+            absolute,
+        );
         if holding {
             self.catch_collider_at = Some(outcome.pos);
         }
@@ -314,6 +329,9 @@ impl Player {
             // magnitude, 4.9e-4 cm steps), not the metres arithmetic of the controller.
             self.pos = outcome.pos * UNIT;
             self.collider_end = Some((self.pos, outcome.pos));
+            if absolute.is_some() {
+                self.stage_translation = Some((self.pos, outcome.stage_pos));
+            }
         }
         let collider = &self.collider;
         self.touched = Touched {
