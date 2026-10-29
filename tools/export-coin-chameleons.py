@@ -24,6 +24,12 @@ def main():
     files = outfits.archive(args.romfs / 'StageData' / (stage + 'Map.szs'))
     placement = outfits.byml(files[stage + 'Map.byml'])[geometry['scenario'] - 1]
     coins = []
+    sensors = geometry.setdefault('look_sensors', [])
+    sensors[:] = [s for s in sensors if s.get('source') != 'coin_chameleon']
+    archive = outfits.archive(args.romfs / 'ObjectData' / 'CoinChameleon.szs')
+    body = next(s for s in outfits.byml(archive['InitSensor.byml']) if s['Name'] == 'Body')
+    if body.get('Joint') or body['Type'] != 'MapObj':
+        raise ValueError('CoinChameleon Body sensor schema changed')
     for obj in placement.get('ObjectList', []):
         if obj['UnitConfigName'] != 'CoinChameleon':
             continue
@@ -33,6 +39,11 @@ def main():
                           display_offset=[offset.get(a, 0.) for a in 'XYZ'],
                           rotate=[obj['Rotate'][a] for a in 'XYZ'],
                           links=bool(obj.get('Links'))))
+        if not obj.get('Links'):
+            # The Body sensor follows the actor origin, after tryAddDisplayOffset.
+            sensors.append(dict(source='coin_chameleon', id=obj['Id'], host='CoinChameleon',
+                                name='Body', type=12, radius=body['Radius'],
+                                position=[obj['Translate'][a] + offset.get(a, 0.) for a in 'XYZ']))
     geometry['coin_chameleons'] = coins
     args.geometry.write_text(json.dumps(geometry, separators=(',', ':')), encoding='utf-8')
     print(f"{args.geometry}: {len(coins)} CoinChameleon placements")

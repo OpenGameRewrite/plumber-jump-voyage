@@ -82,6 +82,32 @@ pub(super) struct WaitControl {
 }
 
 impl Player {
+    pub(super) fn land_nerve(&self) -> bool {
+        matches!(self.clip(), "Land" | "LandTurn" | "LandRolling" | "LandJump3")
+    }
+
+    /// `PlayerStateWait::exeLand` / `rs::landGroundPoseAndSnap` (0x5658c4):
+    /// align the body to the support before resolving movement, then add the
+    /// distance to its plane to this step's ground pull, capped at FallSpeedMax.
+    pub(super) fn land_ground(&mut self, scene: &Course) {
+        let normal = self.ground_normal_or_up();
+        if self.frame == 0 {
+            self.slerp_pose_up(normal, 1., t::WAIT_POSE_DEGREE_MAX);
+        }
+        let snap = if self.frame == 0 && self.is_collided_ground() {
+            let at = scene.in_water_frame(self.position_cm());
+            pose_math::dot(at - self.collider.ground_position(), normal).clamp(0., t::FALL_MAX)
+        } else {
+            0.
+        };
+        self.swim_wait_ground(
+            t::GRAVITY + snap,
+            t::FALL_MAX,
+            t::SLERP_QUAT_RATE_WAIT,
+            t::WAIT_POSE_DEGREE_MAX,
+        );
+    }
+
     /// A standing clip starts: that is the first step of its sub-nerve.
     pub(super) fn restart_wait_steps(&mut self, clip: &str) {
         if WaitStage::of_clip(clip).is_some() {

@@ -3023,16 +3023,14 @@ impl Player {
     }
     /// `PlayerJudgeSpeedCheckFall::update`, once a step before the nerve runs
     /// (it reads the contact the last step ended with): the steps without
-    /// ground under the player count up to five. Fire uses the original speed-dependent
-    /// run angle; the other ground states still use their existing contact test.
+    /// usable ground under the player count up to five. A contact must also
+    /// satisfy the original speed-dependent standing angle (0x45b2cc).
     /// A successful water-surface start judge vetoes the lost-ground counter.
     fn update_ground_lost(&mut self) {
         let contact = if self.start_surface_run() {
             true
-        } else if self.burning() {
-            self.fire_run_angle_contact()
         } else {
-            self.grounded
+            self.fire_run_angle_contact()
         };
         self.ground_lost = if contact {
             0
@@ -3088,7 +3086,7 @@ impl Player {
         match self.mode {
             Move::Idle | Move::Walk | Move::Run => {
                 let running = self.mode != Move::Idle;
-                self.run(o);
+                self.run(o, scene);
                 if running {
                     self.respond_surface_run(scene);
                 }
@@ -3325,13 +3323,17 @@ impl Player {
         }
     }
     /// The standing or running state (the original's wait and run nerves).
-    fn run(&mut self, o: &Orders) {
+    fn run(&mut self, o: &Orders, scene: &Course) {
         if self.mode == Move::Idle && self.clip() == "SquatEnd" && !self.judge_enable_stand_up() {
             self.stand_up_blocked();
         } else if self.mode == Move::Idle {
             // Every nerve of the standing state settles the pose first; the
             // judges that leave it (the run, the jump) come after.
-            self.wait_pose();
+            if self.land_nerve() {
+                self.land_ground(scene);
+            } else {
+                self.wait_pose();
+            }
             self.stand(o);
         } else if self.run_nerve == RunNerve::WallPush {
             self.wall_push_step(o);
@@ -3374,6 +3376,10 @@ impl Player {
         }
         self.run_frames = 0;
         let step = self.count_wait_step();
+        if self.land_nerve() {
+            self.wait_nerve(step);
+            return;
+        }
         if !self.grounded && self.standing_clip_playing() {
             self.wait_nerve(step);
             self.v.y = (self.v.y - t::GRAVITY).max(-t::FALL_MAX);
@@ -4204,6 +4210,15 @@ impl Player {
             if let Some(up) = ground_up {
                 p.slerp_pose_up(up, 1., 180.);
             }
+            // exeJump chooses the ordinary clip on its first step, after the
+            // take-off pose has been installed, rather than in appear.
+            if mode == Move::Jump && !p.force_run.is_active() {
+                p.anim.name = if p.side_faces_camera() {
+                    "Jump"
+                } else {
+                    "JumpReverse"
+                };
+            }
         });
     }
     /// `PlayerStateJump::appear` keeps the ground pose's up (`PlayerJointControlKeeper::
@@ -4459,6 +4474,7 @@ impl Player {
         if self.mode == Move::Jump && self.frame > 0 && self.touched.ceiling.is_some() {
             self.v.y = self.v.y.min(0.);
             self.air.cancel_extend();
+            self.combo_kept = false;
         }
         let steer = air_move::Steering {
             front: t::JUMP_ACCEL_FRONT,

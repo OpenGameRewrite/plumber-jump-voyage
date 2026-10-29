@@ -98,21 +98,6 @@ impl Player {
         self.v.with_y(0.)
     }
 
-    /// `rs::slerpUpFront`: the body swings a share of the way round to face
-    /// `to`, the short way.
-    pub(super) fn swing_front(&mut self, to: Vec3, share: f32) {
-        let Some(to) = to.with_y(0.).try_normalize() else {
-            return;
-        };
-        let angle = self.facing.angle_between(to);
-        let turn = if self.facing.cross(to).y < 0. {
-            -angle
-        } else {
-            angle
-        };
-        self.facing = Quat::from_rotation_y(turn * share) * self.facing;
-    }
-
     /// `PlayerStateSquat::appear`: the nerve starts in `Brake`. Coming out of a
     /// roll the squat-start clip is skipped.
     pub(super) fn start_squat(&mut self) {
@@ -199,6 +184,7 @@ impl Player {
     /// chooses the stand-up and then the wait, which chooses the stand-up again
     /// in the next step.
     fn squat_walk(&mut self, o: &Orders) {
+        let up = self.mesh_ground.unwrap_or(Vec3::Y);
         if !o.crouch && self.judge_enable_stand_up() {
             self.stand_up_squat();
         }
@@ -208,13 +194,13 @@ impl Player {
             self.defer(Move::Crouch, "SquatWait", |_| {});
             return;
         }
-        let stick = self.ground_stick();
+        let stick = self.plane_stick(up);
         let (actor_up, actor_front) = self.pose_axes();
         self.squat.turn.update(TurnFrame {
             actor_front,
             actor_up,
             stick,
-            up: Vec3::Y,
+            up,
         });
         let turned = self.squat.turn.direction;
         // Against the facing the crawl goes the stick's way at once while the
@@ -224,10 +210,16 @@ impl Player {
         } else {
             turned
         };
-        self.set_h(heading * t::SQUAT_WALK);
+        let velocity = heading * t::SQUAT_WALK;
+        self.set_h(velocity);
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
-        self.swing_front(turned, SLERP_QUAT_RATE);
+        self.run_up = Some((
+            Vec2::new(self.v.x, self.v.z),
+            up,
+            velocity - up * GRAVITY_MOVE,
+        ));
+        self.steer_pose(up, turned);
     }
     /// `PlayerJudgeEnableStandUp::judge` (0x459514): the ceiling check lets the body stand, or
     /// the collider has no ground under it (the check only matters while on the floor).

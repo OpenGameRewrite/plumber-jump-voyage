@@ -1138,7 +1138,7 @@ impl Recorder {
         // The main slot's own blend is not reported while a sub animation of
         // another clip plays over it.
         let own_blend_shown = self.upper_outlives_sub && p.model_sub().is_none();
-        if sub_now.is_some_and(|name| name != p.anim.name) && !own_blend_shown {
+        if p.model_sub().is_some_and(|(name, _)| name != p.anim.name) && !own_blend_shown {
             interp.clear();
         }
         if let Some(ended) = self.sub_clip
