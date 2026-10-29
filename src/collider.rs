@@ -295,9 +295,13 @@ fn ring_arrow_start(index: usize, offset: Vec3) -> Vec3 {
 /// the sphere spanning the far end of the old sphere and the far end of the shape along the line
 /// between their centres.
 fn enclosing_radius(shapes: &[Shape]) -> f32 {
+    enclosing_sphere(shapes).1
+}
+
+fn enclosing_sphere(shapes: &[Shape]) -> (Vec3, f32) {
     let mut shapes = shapes.iter().map(Shape::bounding);
     let Some((mut center, mut radius)) = shapes.next() else {
-        return 0.;
+        return (Vec3::ZERO, 0.);
     };
     for (other, other_radius) in shapes {
         let offset = other - center;
@@ -317,7 +321,7 @@ fn enclosing_radius(shapes: &[Shape]) -> f32 {
         center = far_old + span * 0.5;
         radius = ((span.x * span.x + span.y * span.y) + span.z * span.z).sqrt() * 0.5;
     }
-    radius
+    (center, radius)
 }
 
 /// The body's pose: where its feet are and which way it faces (a rotation
@@ -452,6 +456,7 @@ pub enum Location {
 
 #[derive(Clone, Copy, Debug)]
 pub struct SphereHit {
+    pub motion: Option<Vec3>,
     /// How far the centre must move along the face normal to just touch.
     pub depth: f32,
     pub location: Location,
@@ -486,6 +491,7 @@ fn sphere_hit(
         // A world-space triangle lives in the replay's frame.
         let hit = sphere_hit_world(t, mesh.relative_vec(center), radius, mesh.thickness)?;
         return Some(SphereHit {
+            motion: None,
             position: mesh.to_game_vec(hit.position),
             center,
             ..hit
@@ -495,13 +501,46 @@ fn sphere_hit(
     // `CollisionMultiShape::callbackFromServer`: the centre and the radius are carried into the
     // part's frame, the depth and the touched point back out.
     let center_local = transform_point(&frame.inverse, center.to_array());
-    let (depth, region) = local.prism.sphere_test(
-        center_local,
-        radius * frame.inverse_scale,
-        frame.inverse_scale,
-    )?;
-    let position = local.prism.sphere_hit_position(center_local, region);
+    let moving = mesh
+        .key_move_parts
+        .iter()
+        .find(|s| s.part == local.part as usize && s.motion != Vec3::ZERO);
+    let mut sampled = center_local;
+    let mut reaction = None;
+    let (depth, region) = if let Some(source) = moving {
+        // CollisionParts::checkStrikeSphereForPlayer (0x848f80) sweeps the
+        // sphere from the previous inverse frame into the current one. A hit
+        // carries only the source motion still remaining at that sample.
+        let start = Vec3::from_array(center_local) + source.motion;
+        let end = Vec3::from_array(center_local);
+        let mut sweep = Sweep::new(start, end, (radius * 0.9).min(35.), radius, radius);
+        loop {
+            sampled = sweep.pos().to_array();
+            if let Some(hit) =
+                local
+                    .prism
+                    .sphere_test(sampled, radius * frame.inverse_scale, frame.inverse_scale)
+            {
+                let normal = t.normal;
+                let remaining = source.motion * (1. - sweep.current);
+                reaction = Some(normal * dot(normal, remaining));
+                break hit;
+            }
+            sweep.advance();
+            if sweep.finished() {
+                return None;
+            }
+        }
+    } else {
+        local.prism.sphere_test(
+            center_local,
+            radius * frame.inverse_scale,
+            frame.inverse_scale,
+        )?
+    };
+    let position = local.prism.sphere_hit_position(sampled, region);
     Some(SphereHit {
+        motion: reaction,
         depth: frame.world_per_local() * depth,
         location: match region {
             1 => Location::Face,
@@ -562,6 +601,7 @@ fn sphere_hit_world(
             return None;
         }
         return Some(SphereHit {
+            motion: None,
             depth: face_depth,
             location: Location::Face,
             position: projected,
@@ -611,6 +651,7 @@ fn sphere_hit_world(
         };
         let position = projected - edge_normal * edge_normal.dot(projected - on_plane);
         return Some(SphereHit {
+            motion: None,
             depth,
             location: Location::Edge(leading.index() as u8 + 1),
             position,
@@ -637,6 +678,7 @@ fn sphere_hit_world(
         return None;
     }
     Some(SphereHit {
+        motion: None,
         depth,
         location: Location::Corner(corner as u8 + 1),
         position: t.corners[corner],
@@ -1080,6 +1122,9 @@ pub struct Contact {
 /// The collider's persistent state and the contacts of its last frame.
 #[derive(Clone, Debug)]
 pub struct PlayerCollider {
+    pub pressed_ground: bool,
+    pub pressed_wall: bool,
+    pub press_normal: Vec3,
     pub form: Form,
     keeper: Keeper,
     pub floor: Option<Contact>,
@@ -1166,6 +1211,9 @@ impl PlayerCollider {
     fn with_keeper(form: Form, keeper: Keeper) -> Self {
         let last_radius = keeper.bounding_radius;
         Self {
+            pressed_ground: false,
+            pressed_wall: false,
+            press_normal: Vec3::ZERO,
             form,
             keeper,
             floor: None,
@@ -1300,6 +1348,8 @@ impl PlayerCollider {
         yaw: f32,
         tilt: Option<Quat>,
     ) -> Outcome {
+        self.pressed_ground = false;
+        self.pressed_wall = false;
         self.floor = None;
         self.wall = None;
         self.ceiling = None;
@@ -1549,7 +1599,56 @@ impl PlayerCollider {
         let solved = self.solve_results(&collide, &support, previous, border, &mut |at, normal| {
             border_behind_game(mesh, at, normal)
         });
-        (solved.fix, solved.total)
+        let fix = self.resolve_press(mesh, pose, &solved);
+        (fix, solved.total)
+    }
+
+    /// The final calcResultVec residual split and Press face escape test
+    /// (1.0.0 0x431750..0x431b50). Flags accumulate across collision rounds.
+    fn resolve_press(&mut self, mesh: &TriangleMesh, pose: &Pose, solved: &result::Solved) -> Vec3 {
+        let parallel = GRAVITY * dot(GRAVITY, solved.residual);
+        let vertical = solved.residual - parallel;
+        let ground = !near_zero_vec(parallel, NEAR_ZERO);
+        let wall = !near_zero_vec(vertical, NEAR_ZERO);
+        if !ground && !wall {
+            return solved.fix;
+        }
+        let press = |c: &Option<Contact>| {
+            c.as_ref()
+                .filter(|c| mesh.codes_of(c.triangle).floor == "Press")
+                .cloned()
+        };
+        let mut chosen = if ground {
+            press(&self.floor)
+                .map(|_| (self.ground_position, self.ground_normal))
+                .or_else(|| press(&self.ceiling).map(|c| (c.position, c.normal)))
+        } else {
+            None
+        };
+        if wall
+            && let Some(c) = press(&self.wall)
+            && (chosen.is_none()
+                || squared_length(vertical).sqrt() > squared_length(parallel).sqrt())
+        {
+            chosen = Some((c.position, c.normal));
+        }
+        if let Some((at, normal)) = chosen {
+            let (centre, _) = enclosing_sphere(&self.keeper.shapes);
+            let centre = pose.pos + pose.rotate(centre + Vec3::Y * 35.);
+            let across = result::verticalize(normal, centre - at);
+            let (direction, usable) = try_normalize_or_zero(across);
+            if usable {
+                let push = direction * (50. - squared_length(across).sqrt()).max(0.);
+                let start = centre + push + normal;
+                if arrow_strikes_game(mesh, start, normal * -200., FaceFilter::Any).is_empty() {
+                    return solved.fix + push * 0.05;
+                }
+            }
+            self.press_normal = normal;
+        }
+        self.pressed_ground |= ground;
+        self.pressed_wall |= wall;
+        solved.fix
     }
 
     /// The keeper's list of collided shapes as `calcResultVec` reads it.
@@ -1582,6 +1681,10 @@ impl PlayerCollider {
                         margin,
                         direction: pose.rotate(vector),
                     },
+                },
+                motion: match r.hit {
+                    Hit::Sphere(hit) => hit.motion,
+                    Hit::Arrow(_) => None,
                 },
                 hit: r.hit,
                 normal: mesh.triangles[r.triangle as usize].normal,

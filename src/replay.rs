@@ -943,6 +943,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     let mesh = Arc::make_mut(mesh);
                     for part in &mut mesh.key_move_parts {
                         part.reset();
+                        part.tick();
                     }
                     mesh.update_key_move_collision();
                 }

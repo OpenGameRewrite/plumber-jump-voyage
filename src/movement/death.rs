@@ -5,6 +5,7 @@ use super::*;
 pub enum Kind {
     #[default]
     Damage,
+    Press,
     Abyss,
     Sand,
     AbyssWithCapMessage,
@@ -12,13 +13,14 @@ pub enum Kind {
 impl Kind {
     pub fn start(self) -> i32 {
         match self {
+            Self::Press => 40,
             Self::Damage | Self::Sand | Self::Abyss => 30,
             Self::AbyssWithCapMessage => 90,
         }
     }
     pub fn wait(self) -> u32 {
         match self {
-            Self::Damage | Self::Sand => 96,
+            Self::Damage | Self::Sand | Self::Press => 96,
             Self::Abyss | Self::AbyssWithCapMessage => 30,
         }
     }

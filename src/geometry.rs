@@ -513,6 +513,7 @@ impl TriangleMesh {
                     key: 0,
                     step: 0,
                     position: position(0)?,
+                    motion: Vec3::ZERO,
                 });
         }
         Ok(mesh)

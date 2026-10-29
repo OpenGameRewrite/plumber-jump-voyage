@@ -9,6 +9,7 @@ pub(super) fn run() {
 
 fn arrow_result(depth: f32, margin: f32) -> ContactFacts {
     ContactFacts {
+        motion: None,
         shape: ShapeFacts::Arrow {
             index: 0,
             margin,
@@ -56,6 +57,7 @@ fn facts_of(case: &Value) -> ContactFacts {
     let normal = v3(&case["n"]);
     if case["k"] == "a" {
         ContactFacts {
+            motion: None,
             shape: ShapeFacts::Arrow {
                 index: case["index"].as_u64().unwrap() as usize,
                 margin: num(&case["margin"]),
@@ -72,6 +74,7 @@ fn facts_of(case: &Value) -> ContactFacts {
     } else {
         let loc = case["loc"].as_u64().unwrap() as u8;
         ContactFacts {
+            motion: None,
             shape: ShapeFacts::Sphere {
                 support: case["support"].as_f64().map(|r| r as f32),
                 support_axis: case.get("axis").map_or(Vec3::Y, v3),
@@ -79,6 +82,7 @@ fn facts_of(case: &Value) -> ContactFacts {
                 ignore_ceiling: false,
             },
             hit: Hit::Sphere(SphereHit {
+                motion: None,
                 depth: num(&case["depth"]),
                 location: match loc {
                     1 => Location::Face,

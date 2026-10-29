@@ -13,16 +13,20 @@ pub struct KeyMovePart {
     pub key: usize,
     pub step: u32,
     pub position: Vec3,
+    pub motion: Vec3,
 }
 impl KeyMovePart {
     /// KeyMoveMapParts::exeWait/exeMove: the duration step executes too; the
     /// new nerve is pending at step zero until the next source update.
     pub fn tick(&mut self) {
+        self.motion = Vec3::ZERO;
         if self.moving {
             let rate = (self.step as f32 / self.duration[self.key] as f32).clamp(0., 1.);
             let a = self.keys[self.key];
             let b = self.keys[1 - self.key];
+            let previous = self.position;
             self.position = a + (b - a) * rate;
+            self.motion = self.position - previous;
             if self.step >= self.duration[self.key] {
                 self.key = 1 - self.key;
                 self.moving = false;
@@ -41,6 +45,7 @@ impl KeyMovePart {
         self.moving = false;
         self.step = 0;
         self.position = self.keys[0];
+        self.motion = Vec3::ZERO;
     }
     /// Only the independently observed initial source state is an input to replay.
     pub fn seed(&mut self, row: &HashMap<String, String>) -> Result<(), String> {
@@ -114,6 +119,7 @@ fn inclusive_nerve_steps_and_rebuild() {
         key: 0,
         step: 0,
         position: Vec3::Y * 1050.,
+        motion: Vec3::ZERO,
     };
     let mut frames = 0;
     loop {

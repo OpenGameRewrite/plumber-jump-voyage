@@ -8,8 +8,7 @@
 //! other side of a face. The functions run against the executable's own in a local interpreter
 //! (`PJV_COLLIDER_CASES`, see `tests/collider_result.rs`).
 //!
-//! Left out: the squeeze test of the `Press` collision code (it only changes the fix for faces
-//! with that code and sets the two press bytes), the moving parts' separate accumulators and
+//! Left out: the moving parts' separate accumulators and
 //! the per-class `HitInfo` arrays (`collectHitInfoArray`), and the disk shape.
 use super::*;
 use crate::movement::console_libm::cosf;
@@ -42,6 +41,7 @@ pub(super) enum ShapeFacts {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ContactFacts {
     pub shape: ShapeFacts,
+    pub motion: Option<Vec3>,
     pub hit: Hit,
     /// The struck face's normal.
     pub normal: Vec3,
@@ -68,6 +68,7 @@ pub(super) struct Solved {
     pub total: Vec3,
     /// The flag word's low bits: 1 floor face, 2 wall face, 4 ceiling face, 0x40 arrow on floor.
     pub flags: u32,
+    pub residual: Vec3,
 }
 
 // Fixed in the player's collider: `+0x10d`, the byte that lets floor faces push the spheres, is
@@ -90,7 +91,7 @@ pub(super) fn near_zero(value: f32, limit: f32) -> bool {
     value.abs() < limit
 }
 /// `al::verticalizeVec(out, vertical, vec)`.
-fn verticalize(vertical: Vec3, vec: Vec3) -> Vec3 {
+pub(super) fn verticalize(vertical: Vec3, vec: Vec3) -> Vec3 {
     let along = dot(vertical, vec);
     Vec3::new(
         vec.x - vertical.x * along,
@@ -177,8 +178,33 @@ struct Fixes {
     high: Vec3,
     /// Which ways the contributions pushed, as the `PUSH_*` bits.
     directions: u32,
+    moving_low: Vec3,
+    moving_high: Vec3,
 }
 impl Fixes {
+    fn add_contact(&mut self, fix: Vec3, normal: Vec3, motion: Option<Vec3>) {
+        let Some(motion) = motion else {
+            self.add(fix, normal);
+            return;
+        };
+        let (direction, usable) = try_normalize_or_zero(fix);
+        let along = dot(direction, motion);
+        let adjusted = usable && along < 0.;
+        let fix = if adjusted {
+            direction * (squared_length(fix).sqrt() + along).max(0.)
+        } else {
+            fix
+        };
+        for contribution in [Some(fix), (!adjusted).then_some(motion)]
+            .into_iter()
+            .flatten()
+        {
+            for axis in 0..3 {
+                self.moving_low[axis] = lesser(self.moving_low[axis], contribution[axis]);
+                self.moving_high[axis] = greater(self.moving_high[axis], contribution[axis]);
+            }
+        }
+    }
     /// A contribution `fix`; `normal` stands in for its direction when it is too short to
     /// have one (`0x4338f0`).
     fn add(&mut self, fix: Vec3, normal: Vec3) {
@@ -315,12 +341,43 @@ impl PlayerCollider {
             }
         }
         let total = fixes.low + fixes.high;
-        let fix = average_with_previous(total, fixes.directions, previous, before);
+        let low = fixes.low.min(fixes.moving_low);
+        let high = fixes.high.max(fixes.moving_high);
+        let mut combined = low + high;
+        for (axis, (positive, negative)) in [
+            (PUSH_POS_X, PUSH_NEG_X),
+            (PUSH_POS_Y, PUSH_NEG_Y),
+            (PUSH_POS_Z, PUSH_NEG_Z),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if combined[axis] > 0. && fixes.directions & negative != 0
+                || combined[axis] < 0. && fixes.directions & positive != 0
+            {
+                combined[axis] = total[axis];
+            }
+        }
+        let fix = average_with_previous(combined, fixes.directions, previous, before);
+        // 0x431644..0x431734: unresolved opposing contributions, after the
+        // previous round's averaging. This is a depenetration split, not clearance.
+        let width = high - low;
+        let mut residual = Vec3::ZERO;
+        for axis in 0..3 {
+            if !near_zero(width[axis], NEAR_ZERO) && fix[axis].abs() < width[axis] {
+                residual[axis] = if fix[axis] > 0. {
+                    width[axis] - fix[axis]
+                } else {
+                    -(fix[axis] + width[axis])
+                };
+            }
+        }
         self.push_directions = fixes.directions;
         Solved {
             fix,
             total,
             flags: flags.bits(),
+            residual,
         }
     }
 
@@ -409,7 +466,7 @@ impl PlayerCollider {
         let push = ((direction.x * -depth) * ground.x - (direction.y * depth) * ground.y)
             - (direction.z * depth) * ground.z;
         let fix = Vec3::new(ground.x * push, ground.y * push, ground.z * push);
-        fixes.add(fix, ground);
+        fixes.add_contact(fix, ground, result.motion);
         self.record(
             Class::Floor,
             hit.depth,
@@ -485,7 +542,7 @@ impl PlayerCollider {
                         return;
                     }
                     // A sideways push is no contact to remember.
-                    fixes.add(side, direction);
+                    fixes.add_contact(side, direction, result.motion);
                     return;
                 }
             }
@@ -522,7 +579,7 @@ impl PlayerCollider {
                 }
             }
         };
-        fixes.add(fix, normal);
+        fixes.add_contact(fix, normal, result.motion);
         self.record(class, hit.depth, result, hit.position, hit.location);
     }
 

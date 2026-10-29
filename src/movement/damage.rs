@@ -172,9 +172,12 @@ impl Player {
 
     /// checkDamageFromCollision / executePreMovementNerveChange. Press needs the
     /// separate pressed-collision flags and opposing geometry; a floor code alone
-    /// never supplies that cause. Its eventual dispatch belongs before ordinary damage.
+    /// never supplies that cause. Press dispatch precedes ordinary damage.
     pub(super) fn dispatch_damage(&mut self, scene: &Course) {
         if self.is_dead() || self.recovering() {
+            return;
+        }
+        if self.dispatch_press(scene) {
             return;
         }
         let code =

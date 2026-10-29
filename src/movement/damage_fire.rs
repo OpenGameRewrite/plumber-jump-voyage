@@ -88,6 +88,7 @@ impl Player {
                 | Move::RecoveryFall
                 | Move::DamageAir
                 | Move::DamageLand
+                | Move::Press
                 | Move::DamageDead
                 | Move::DamageSwim
                 | Move::DamageSurface

@@ -151,6 +151,8 @@ pub fn collision_cell(p: &Player) -> String {
     }
     if !p.key_move_sources.is_empty() {
         items.push(format!("keyparts={}", p.key_move_sources));
+        let (ground, wall) = p.pressed_flags();
+        items.push(format!("pressed={}/{}", u8::from(ground), u8::from(wall)));
     }
     if let Some(source) = p.rocket_diagnostic() {
         items.push(format!("rocket={source}"));

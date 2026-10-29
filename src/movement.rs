@@ -256,6 +256,7 @@ mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
 pub mod key_move_parts;
+mod press;
 mod recovery_dead;
 pub mod rocket_flower;
 mod safety;
@@ -610,6 +611,7 @@ pub enum Move {
     SandJump,
     SandDead,
     SandGeyser,
+    Press,
     DamageAir,
     DamageLand,
     DamageDead,
@@ -634,7 +636,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 58] = [
+    pub const ALL: [Move; 59] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -672,6 +674,7 @@ impl Move {
         Self::SandJump,
         Self::SandDead,
         Self::SandGeyser,
+        Self::Press,
         Self::DamageAir,
         Self::DamageLand,
         Self::DamageDead,
@@ -725,7 +728,8 @@ impl Move {
             Self::FireFall => "Fire fall",
             Self::SandWait | Self::SandRun | Self::SandPivot | Self::SandJump => "Quicksand",
             Self::SandGeyser => "Sand geyser",
-            Self::SandDead
+            Self::Press
+            | Self::SandDead
             | Self::FireDead
             | Self::DamageDead
             | Self::DamageSwimDead
@@ -902,6 +906,7 @@ pub enum Throw {
 #[derive(Clone, Copy, Debug, PartialEq, Message)]
 pub enum Fx {
     Jump(Move),
+    Crushed,
     Land {
         hard: bool,
     },
@@ -1361,6 +1366,7 @@ pub struct Player {
     /// The collision codes of the mesh surfaces the body touched this step.
     pub touched: terrain::Touched,
     pub key_move_sources: String,
+    press: press::Press,
     /// The main clip looped back to its start in this step, as the game's triggers see it: a
     /// clip whose counter shows its length for a row before it wraps starts its loop in that
     /// row.
@@ -1530,6 +1536,7 @@ impl Default for Player {
             mesh_ground: None,
             touched: terrain::Touched::default(),
             key_move_sources: String::new(),
+            press: press::Press::default(),
             clip_wrapped: false,
             counter_wrapped: false,
             pose_seen: None,
@@ -1972,6 +1979,7 @@ impl Player {
                     | Move::FireRun
                     | Move::FireFall
                     | Move::FireDead
+                    | Move::Press
                     | Move::Dead
             )
             && (self.v.y == 0. || self.v.y == -self.pull)
@@ -2242,6 +2250,7 @@ impl Player {
                 !matches!(
                     m,
                     Move::FireDead
+                        | Move::Press
                         | Move::Dead
                         | Move::AbyssFall
                         | Move::DamageDead
@@ -2276,7 +2285,11 @@ impl Player {
             self.mode = mode;
             if matches!(
                 mode,
-                Move::AbyssFall | Move::DamageDead | Move::DamageSwimDead | Move::SandDead
+                Move::AbyssFall
+                    | Move::DamageDead
+                    | Move::DamageSwimDead
+                    | Move::SandDead
+                    | Move::Press
             ) {
                 // The recorded state is the death-area fall: the actor is dead (health 0).
                 self.damage.hp = 0;
@@ -2678,6 +2691,10 @@ impl Player {
     fn advance_clips(&mut self) {
         self.clip_wrapped = false;
         self.counter_wrapped = false;
+        if self.is_dead() && self.death.kind == death::Kind::Press && self.frame > 0 {
+            self.anim.frame = self.press.frozen_frame;
+            return;
+        }
         if self.anim.name == "Move" {
             // The dive's landing clip covers the legs for a while; the run's
             // pose does not move under it.
@@ -3081,6 +3098,7 @@ impl Player {
                 self.sand_step(o)
             }
             Move::SandGeyser => self.sand_geyser_step(scene),
+            Move::Press => self.press_step(),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -3451,7 +3469,12 @@ impl Player {
     /// the position (cm, replay frame), the third column being the front the head looks along.
     pub fn pose_matrix(&self) -> look_joint::Mat34 {
         let pose = self.actor_pose();
-        let (side, up, front) = (pose.side(), pose.up(), pose.front());
+        let scale = self.press_scale();
+        let (side, up, front) = (
+            pose.side() * scale.x,
+            pose.up() * scale.y,
+            pose.front() * scale.z,
+        );
         let feet = self.pos / UNIT;
         [
             [side.x, up.x, front.x, feet.x],
