@@ -286,28 +286,35 @@ fn variable_jump_height() {
 
 #[cfg_attr(test, test)]
 fn jump_clip_reads_the_visible_camera_on_its_first_step() {
+    // The side clip is chosen from the visible camera of the jump nerve's first step, not from
+    // the camera that saw the button press and not from the input view.
     let floor = floor();
-    let mut p = Player::default();
-    let input_view = [Vec3::Z, Vec3::Y, Vec3::NEG_X];
-    p.step(
-        &Orders {
-            jump: true,
-            view: Some(input_view),
-            camera_view: Some(input_view),
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.mode, p.anim.name), (Move::Jump, "Wait"));
-    p.step(
-        &Orders {
-            view: Some(input_view),
-            camera_view: Some([Vec3::NEG_Z, Vec3::Y, Vec3::X]),
-            ..default()
-        },
-        &floor,
-    );
-    assert_eq!((p.anim.name, p.anim.frame), ("Jump", 0.));
+    let behind_x = [Vec3::Z, Vec3::Y, Vec3::NEG_X];
+    let ahead_x = [Vec3::NEG_Z, Vec3::Y, Vec3::X];
+    let clip_after = |at_press, at_first_step| {
+        let mut p = Player::default();
+        p.step(
+            &Orders {
+                jump: true,
+                view: Some(at_press),
+                camera_view: Some(at_press),
+                ..default()
+            },
+            &floor,
+        );
+        assert_eq!((p.mode, p.anim.name), (Move::Jump, "Wait"));
+        p.step(
+            &Orders {
+                view: Some(at_press),
+                camera_view: Some(at_first_step),
+                ..default()
+            },
+            &floor,
+        );
+        (p.anim.name, p.anim.frame)
+    };
+    assert_eq!(clip_after(behind_x, ahead_x), ("JumpReverse", 0.));
+    assert_eq!(clip_after(ahead_x, behind_x), ("Jump", 0.));
 }
 
 #[cfg_attr(test, test)]
@@ -329,6 +336,8 @@ fn chained_jumps() {
             }),
             &floor,
         );
+        // The ordinary jump starts its clip in the nerve's first step.
+        p.step(&fwd(Orders::default()), &floor);
         let name = if p.phase_clip() == "JumpReverse" {
             "Jump"
         } else {

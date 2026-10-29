@@ -4243,9 +4243,7 @@ impl Player {
                 p.set_h(horizontal);
             }
             if let Some(up) = ground_up {
-                if std::env::var_os("PJV_POSE_DIAG").is_some() { eprintln!("TAKEOFF {}",serde_json::json!({"stored":p.pose_quat().map(|q|q.to_array()),"up":up.to_array()})); }
                 p.slerp_pose_up(up, 1., 180.);
-                if std::env::var_os("PJV_POSE_DIAG").is_some() { eprintln!("POSEUP {}",serde_json::json!({"stored":p.pose_quat().map(|q|q.to_array())})); }
             }
         });
     }
@@ -4287,7 +4285,6 @@ impl Player {
             up: Vec3::Y,
         });
         let turned = self.air_turn.direction;
-        if self.mode==Move::Jump && self.frame==0 && std::env::var_os("PJV_POSE_DIAG").is_some() {eprintln!("AIRDIRECTION {}",serde_json::json!({"front":actor_front.to_array(),"up":actor_up.to_array(),"turned":turned.to_array()}));}
         match self.pose_quat() {
             Some(stored) => {
                 let relaxed = plane::ActorPose::new(stored).slerp_up_front(
