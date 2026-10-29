@@ -4481,7 +4481,9 @@ impl Player {
     /// the velocity, then the actor looks for what the air allows next (the
     /// ground pound, a throw), which is why the frame's gravity is already in.
     fn jump_air(&mut self, o: &Orders) {
-        if self.air_for != Some(self.mode) || self.mode == Move::Fall && self.frame == 0 {
+        if self.air_for != Some(self.mode)
+            || self.mode == Move::Fall && self.frame == 0 && self.is_collided_ground()
+        {
             self.arm_fall_control();
         }
         self.scale_velocity_at_wall();
