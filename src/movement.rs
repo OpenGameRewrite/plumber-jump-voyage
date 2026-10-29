@@ -4224,17 +4224,17 @@ impl Player {
             if let Some(horizontal) = p.takeoff_h {
                 p.set_h(horizontal);
             }
-            if let Some(up) = ground_up {
-                p.slerp_pose_up(up, 1., 180.);
-            }
-            // exeJump chooses the ordinary clip on its first step, after the
-            // take-off pose has been installed, rather than in appear.
+            // exeJump chooses the ordinary clip on its first step, before
+            // installing the take-off pose (0x4726ac precedes slerpUp).
             if mode == Move::Jump && !p.force_run.is_active() && !from_swim {
                 p.anim.name = if p.side_faces_camera() {
                     "Jump"
                 } else {
                     "JumpReverse"
                 };
+            }
+            if let Some(up) = ground_up {
+                p.slerp_pose_up(up, 1., 180.);
             }
         });
     }
