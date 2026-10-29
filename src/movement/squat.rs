@@ -145,6 +145,7 @@ impl Player {
         if !self.nerve.deferred && (self.try_force_slope_slide() || self.try_force_rolling()) {
             return;
         }
+        self.ground_inertia.request = 1;
         self.squat_judges(o);
     }
     /// `exeBrake`: slide on the momentum until it is spent.

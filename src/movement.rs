@@ -256,6 +256,7 @@ pub mod grab_ceil;
 mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
+mod ground_inertia;
 pub mod key_move_parts;
 mod press;
 pub mod pukupuku;
@@ -1349,6 +1350,8 @@ pub struct Player {
     /// when the stage's export has it: `rs::waitGround` carries the pose along it.
     ground_frame: Option<([f32; 12], [f32; 12])>,
     ground_part: Option<usize>,
+    ground_inertia: ground_inertia::GroundInertia,
+    pub ground_source: String,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
     /// The spin throw's own ground control, which steers once the spin's
@@ -1544,6 +1547,8 @@ impl Default for Player {
             snap_move_axis: None,
             ground_frame: None,
             ground_part: None,
+            ground_inertia: ground_inertia::GroundInertia::default(),
+            ground_source: String::new(),
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
             pivot: PivotTurn::default(),
@@ -2878,6 +2883,7 @@ impl Player {
                 })
                 .unwrap_or_default();
         }
+        self.update_ground_inertia(scene);
         self.death.update_judge(self.is_dead());
         self.prev = self.pos;
         self.prev_cap = self.cap.as_ref().map(|c| c.pos);
@@ -3087,6 +3093,7 @@ impl Player {
             if self.grounded && self.is_collided_ground() {
                 self.v = self.units_per_frame();
             }
+            self.feedback_ground_inertia(false);
             self.go(Move::Fall, "Fall");
         }
     }
@@ -3358,6 +3365,7 @@ impl Player {
     }
     /// The standing or running state (the original's wait and run nerves).
     fn run(&mut self, o: &Orders, scene: &Course) {
+        self.ground_inertia.request = 1;
         if self.mode == Move::Idle && self.clip() == "SquatEnd" && !self.judge_enable_stand_up() {
             self.stand_up_blocked();
         } else if self.mode == Move::Idle {
@@ -4336,6 +4344,14 @@ impl Player {
         vector_lib::verticalize_vec(Vec3::NEG_Y, on_plane).with_y(0.)
     }
     fn ground_jump(&mut self, _o: &Orders) {
+        // Wait and Run cancel the explicit contribution before selecting Jump.
+        // Squat's long/back jump branches do not call this feedback helper.
+        if matches!(
+            self.mode,
+            Move::Idle | Move::Walk | Move::Run | Move::Skid | Move::Turn
+        ) {
+            self.feedback_ground_inertia(self.mode != Move::Idle);
+        }
         // The actor's jump judge during the ground spin fills the request of
         // the spin jump before any other kind is considered.
         if self.mode == Move::GroundSpin {
@@ -5828,6 +5844,7 @@ pub fn self_check() {
     look_at::self_check();
     damage::self_check();
     key_move_parts::self_check();
+    ground_inertia::self_check();
     press::self_check();
     force_run::self_check();
     rocket_flower::self_check();

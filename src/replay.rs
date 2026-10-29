@@ -898,6 +898,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let mut previous: Vec<&str> = Vec::new();
     let spans: Vec<&Span> = script.frames().collect();
     let mut collision_history = std::collections::VecDeque::new();
+    let mut previous_moving_scene = None;
     for (frame, span) in spans.iter().copied().enumerate() {
         if let Some(game) = options.lockstep
             && frame > 0
@@ -979,7 +980,10 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 if !player.rocket.flowers.is_empty() {
                     player.update_water_finder(&course);
                 }
-                player.repeat_step_for_lockstep(&orders, &course);
+                player.repeat_step_for_lockstep(
+                    &orders,
+                    previous_moving_scene.as_ref().unwrap_or(&course),
+                );
                 player.set_spin_input(spin);
                 player.events.clear();
             }
@@ -1098,6 +1102,14 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             if collision_history.len() > 2 {
                 collision_history.pop_front();
             }
+        }
+        if options.lockstep.is_some()
+            && course
+                .mesh
+                .as_ref()
+                .is_some_and(|m| !m.key_move_parts.is_empty())
+        {
+            previous_moving_scene = Some(course.clone());
         }
         tick_geysers(&mut course, &player);
         previous = span.buttons.clone();

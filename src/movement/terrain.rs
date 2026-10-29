@@ -263,6 +263,9 @@ impl Player {
             velocity = self.ground_following();
             self.ground_move = Some((Vec2::new(self.v.x, self.v.z), self.pull, velocity));
         }
+        if self.ground_inertia.last != Vec3::ZERO {
+            velocity += self.ground_inertia.last;
+        }
         // ObjSnapForce is a receive-side latch. Ineligible GrabCeil updates
         // retain it, including the entry message, until updateCollider consumes it.
         if let Some(force) = self.take_grab_ceil_force() {
@@ -334,6 +337,42 @@ impl Player {
             }
         }
         let collider = &self.collider;
+        self.ground_source.clear();
+        if !mesh.key_move_parts.is_empty() {
+            let hex = |v: &[f32]| {
+                v.iter()
+                    .map(|x| format!("{:08x}", x.to_bits()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            self.ground_source = format!(
+                "inertiarequest={};savedground={};lastinertia={}",
+                self.ground_inertia.request,
+                hex(&self.ground_inertia.saved.to_array()),
+                hex(&self.ground_inertia.last.to_array())
+            );
+            if let Some(hit) = &collider.floor
+                && let Some(local) = mesh.triangles[hit.triangle as usize].local
+                && let Some(source) = mesh
+                    .key_move_parts
+                    .iter()
+                    .find(|s| s.part == local.part as usize)
+            {
+                let base = mesh.parts[source.part].base;
+                let mut previous = base;
+                previous[3] -= source.motion.x;
+                previous[7] -= source.motion.y;
+                previous[11] -= source.motion.z;
+                self.ground_source.push_str(&format!(
+                    ";groundpart={}/{};groundmatrix={};groundprevious={};grounddelta={}",
+                    source.id,
+                    hit.triangle,
+                    hex(&base),
+                    hex(&previous),
+                    hex(&source.motion.to_array())
+                ));
+            }
+        }
         self.touched = Touched {
             active: true,
             floor: collider

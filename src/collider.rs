@@ -1385,6 +1385,29 @@ impl PlayerCollider {
         self.fix_reaction
     }
 
+    /// `calcForceMovePowerExceptNormal`: currently supplied by reproduced
+    /// translating collision parts. Rotating sources are not implemented.
+    pub fn moving_ground_force(&self, mesh: &TriangleMesh) -> Vec3 {
+        self.floor.as_ref().map_or(Vec3::ZERO, |hit| {
+            let Some(local) = mesh.triangles[hit.triangle as usize].local else {
+                return Vec3::ZERO;
+            };
+            let Some(source) = mesh
+                .key_move_parts
+                .iter()
+                .find(|s| s.part == local.part as usize)
+            else {
+                return Vec3::ZERO;
+            };
+            let mut force = source.motion;
+            let outward = dot(force, hit.normal);
+            if outward > 0. {
+                force -= hit.normal * outward;
+            }
+            force
+        })
+    }
+
     /// `PlayerCollider::collide`: moves the feet from `pos` by `velocity`,
     /// both cm, facing `yaw` radians about the up axis (0 faces +z).
     pub fn collide(&mut self, mesh: &TriangleMesh, pos: Vec3, velocity: Vec3, yaw: f32) -> Outcome {
@@ -1419,24 +1442,7 @@ impl PlayerCollider {
         // PlayerCollider::collide (0x4301ac): the previous moving ground
         // carries the input position before either sweep. Outward normal
         // motion is supplied by collision; inward motion must follow the part.
-        let ground_carry = self.floor.as_ref().map_or(Vec3::ZERO, |hit| {
-            let Some(local) = mesh.triangles[hit.triangle as usize].local else {
-                return Vec3::ZERO;
-            };
-            let Some(source) = mesh
-                .key_move_parts
-                .iter()
-                .find(|s| s.part == local.part as usize)
-            else {
-                return Vec3::ZERO;
-            };
-            let mut force = source.motion;
-            let outward = dot(force, hit.normal);
-            if outward > 0. {
-                force -= hit.normal * outward;
-            }
-            force
-        });
+        let ground_carry = self.moving_ground_force(mesh);
         self.pressed_ground = false;
         self.pressed_wall = false;
         self.floor = None;
