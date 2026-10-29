@@ -1291,7 +1291,9 @@ Its first update starts the70-frame SwimTrample clip and the11-speed rise; the
 swim gravity then ends it on falling. The source enters Trample on the accepted
 message, stops the rail, plays PressDown and enters Revive on animation end.
 The recorded interval covers Revive's waiting phase only. Capture, revive
-completion, other placements/MoveTypes and floor-trigger1 are unsupported.
+completion, other physical placements/MoveTypes and floor-trigger1 are unsupported.
+The companion obj476/rail17 supplies only a second independently seeded and
+advanced Body look sensor; it never receives the physical-contact exemption.
 
 The rule checks every source phase/rail/animation sample against an independent
 implementation and the native diagnostic, plus complete ordered send/receive
@@ -1311,6 +1313,18 @@ The previous look target is matched against the previous simulated Body centre.
 Rendered replay also seeds and advances the source, but has no Pukupuku model
 or cave/water rendering. It verifies Mario's presentation only; source transform
 ULP residuals and stage/effect visual limits are reported with the run results.
+
+Final Pukupuku verification: all four recordings pass free and lockstep with
+zero failing columns and no excluded environment frames, including the dynamic
+fish look columns. The largest player-position component residual is0.000092 cm
+free and0.000271 cm lockstep. Independently simulated obj473 rail coordinates
+and positions match every recorded sample exactly; its animated Body centre
+has up to0.000167326 cm arithmetic residual and its quaternion is not bit exact.
+These residuals are unresolved arithmetic differences, not fitted corrections.
+Corrupting all future fish samples leaves every free trace byte-identical; only
+the two initial source samples enter the simulation. Seventeen malformed source
+evidence variants are refused. Rendered frames50/51/94 show Mario and the hit
+effect; the absent fish, cave and water visuals prevent a stage-parity claim.
 
 The entry fall selects `RestartArea`'s linked `PlayerRestartInfo`, which the restart
 exporter now preserves. The replay uses the recorded external scene selection
