@@ -656,6 +656,8 @@ fn sphere_hit_world(
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArrowHit {
+    /// The moving part's remaining displacement projected on the face normal.
+    pub motion: Option<Vec3>,
     /// The length of the arrow beyond the surface.
     pub depth: f32,
     /// Where it crosses the surface (stage coordinates).
@@ -743,6 +745,7 @@ fn arrow_result(
     let at_local = [0, 1, 2].map(|i| start_local[i] + fraction * vector_local[i]);
     let depth = (1. - fraction) * length;
     ArrowHit {
+        motion: None,
         depth,
         position: Vec3::from_array(transform_point(&frame.base, at_local)),
         distance: length - depth,
@@ -779,6 +782,7 @@ fn arrow_hit_world(t: &MeshTriangle, start: Vec3, vector: Vec3) -> Option<ArrowH
     let length = vector.length();
     let depth = (1. - fraction) * length;
     Some(ArrowHit {
+        motion: None,
         depth,
         position: start + vector * fraction,
         distance: length - depth,
@@ -1012,20 +1016,28 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                     let before = previous_inverse.map_or(now + source_motion, |m| {
                         Vec3::from_array(transform_point(m, world.to_array()))
                     });
-                    // GUESS: rotation uses the same local linear sphere sweep.
-                    // Intermediate rotational sampling in callbackFromParts
-                    // still needs decoding; jump/contact-loss residuals remain.
+                    // callbackFromParts (0x3f6b74..0x3f6e54) interpolates the
+                    // previous/current inverse-transformed bounding centre,
+                    // including for rotation. The hit uses the current local
+                    // shape minus the interpolator's remaining vector.
                     let mut sweep =
-                        Sweep::new(before, now, (radius * 0.9).min(35.), radius, radius);
+                        Sweep::new(before, now, (radius * 0.99).min(35.), radius, radius);
+                    let relative = motion
+                        + Vec3::from_array(rotate_vector(&frame.base, (now - before).to_array()));
                     while !sweep.finished() {
-                        let sampled = sweep.pos().to_array();
-                        let remaining = source_motion * (1. - sweep.current);
+                        let offset = -sweep.remaining();
+                        let sampled = (now + offset).to_array();
+                        let remaining =
+                            Vec3::from_array(rotate_vector(&frame.base, offset.to_array()));
                         for (i, t) in mesh.triangles.iter().enumerate() {
                             let Some(local) = t.local.filter(|p| p.part as usize == part) else {
                                 continue;
                             };
                             // callbackFromServer skips moving faces the relative move leaves.
-                            if sweep.current < 1. && dot(t.normal, motion - source_motion) > 0. {
+                            if sweep.current < 1.
+                                && !near_zero_vec(relative, NEAR_ZERO)
+                                && dot(t.normal, relative) > 0.
+                            {
                                 continue;
                             }
                             let Some((depth, region)) = local.prism.sphere_test(
@@ -1078,6 +1090,13 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                 };
                 for i in mesh.candidates(area) {
                     let t = &mesh.triangles[i as usize];
+                    if t.local.is_some_and(|p| {
+                        mesh.rotate_parts
+                            .iter()
+                            .any(|s| s.part == p.part as usize && s.executions > 0)
+                    }) {
+                        continue;
+                    }
                     let Some(hit) = arrow_hit(mesh, t, from, vec) else {
                         continue;
                     };
@@ -1092,6 +1111,65 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                         }
                     } else if results.support.len() < MAX_SUPPORT_RESULTS {
                         results.support.push(result);
+                    }
+                }
+                // Moving arrows use the same bounding-centre interpolation as
+                // spheres (callbackFromParts), retaining the current arrow vector.
+                // callbackFromServer rejects outward relative motion until the
+                // final sample. A takeoff must not retain the starting support.
+                for source in mesh.rotate_parts.iter().filter(|s| s.executions > 0) {
+                    let frame = &mesh.parts[source.part];
+                    let centre = from + vec * 0.5;
+                    let radius = vec.length() * 0.5;
+                    let before = Vec3::from_array(transform_point(
+                        &source.previous.inverse,
+                        centre.to_array(),
+                    ));
+                    let now = Vec3::from_array(transform_point(&frame.inverse, centre.to_array()));
+                    let start_local =
+                        Vec3::from_array(transform_point(&frame.inverse, from.to_array()));
+                    let vector_local = rotate_vector(&frame.inverse, vec.to_array());
+                    let relative = motion
+                        + Vec3::from_array(rotate_vector(&frame.base, (now - before).to_array()));
+                    let mut sweep =
+                        Sweep::new(before, now, (radius * 0.99).min(35.), radius, radius);
+                    while !sweep.finished() {
+                        let offset = -sweep.remaining();
+                        let remaining =
+                            Vec3::from_array(rotate_vector(&frame.base, offset.to_array()));
+                        let sampled = (start_local + offset).to_array();
+                        for (i, t) in mesh.triangles.iter().enumerate() {
+                            let Some(local) = t.local.filter(|p| p.part as usize == source.part)
+                            else {
+                                continue;
+                            };
+                            if sweep.current < 1.
+                                && !near_zero_vec(relative, NEAR_ZERO)
+                                && dot(t.normal, relative) > 0.
+                            {
+                                continue;
+                            }
+                            let Some(fraction) = local.prism.arrow_test(sampled, vector_local)
+                            else {
+                                continue;
+                            };
+                            let mut hit =
+                                arrow_result(frame, sampled, vector_local, fraction, vec.length());
+                            hit.motion = Some(t.normal * dot(t.normal, remaining));
+                            let result = ShapeResult {
+                                shape: index,
+                                triangle: i as u32,
+                                hit: Hit::Arrow(hit),
+                            };
+                            if hit.depth >= *margin {
+                                if results.collide.len() < MAX_RESULTS {
+                                    results.collide.push(result);
+                                }
+                            } else if results.support.len() < MAX_SUPPORT_RESULTS {
+                                results.support.push(result);
+                            }
+                        }
+                        sweep.advance();
                     }
                 }
             }
@@ -1859,7 +1937,7 @@ impl PlayerCollider {
                 },
                 motion: match r.hit {
                     Hit::Sphere(hit) => hit.motion,
-                    Hit::Arrow(_) => None,
+                    Hit::Arrow(hit) => hit.motion,
                 },
                 hit: r.hit,
                 normal: mesh.triangles[r.triangle as usize].normal,

@@ -54,6 +54,7 @@ fn arrow_result(depth: f32, margin: f32) -> ContactFacts {
             direction: Vec3::new(0., -60., 0.),
         },
         hit: Hit::Arrow(ArrowHit {
+            motion: None,
             depth,
             position: Vec3::ZERO,
             distance: 60. - depth,
@@ -102,6 +103,7 @@ fn facts_of(case: &Value) -> ContactFacts {
                 direction: v3(&case["dir"]),
             },
             hit: Hit::Arrow(ArrowHit {
+                motion: None,
                 depth: num(&case["depth"]),
                 position: v3(&case["pos"]),
                 distance: 0.,

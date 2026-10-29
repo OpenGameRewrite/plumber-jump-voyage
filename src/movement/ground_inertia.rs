@@ -60,6 +60,24 @@ impl Player {
 
 pub(super) fn self_check() {
     saved_force_lasts_one_airborne_update();
+    fall_uses_the_current_ground_velocity();
+}
+#[cfg_attr(test, test)]
+fn fall_uses_the_current_ground_velocity() {
+    let mut player = Player {
+        grounded: true,
+        mesh_ground: Some(Vec3::new(0., 0.6, 0.8)),
+        ground_move: Some((Vec2::ZERO, t::GRAVITY, Vec3::NEG_Y * t::GRAVITY)),
+        ground_lost: GROUND_LOST_FRAMES + 1,
+        ..Player::default()
+    };
+    player.v = Vec3::NEG_Y * t::GRAVITY;
+    player.judge_fall();
+    assert_eq!(player.mode, Move::Fall);
+    assert_eq!(
+        player.v,
+        Vec3::new(0., -0.6 * t::GRAVITY, -0.8 * t::GRAVITY)
+    );
 }
 #[cfg_attr(test, test)]
 fn saved_force_lasts_one_airborne_update() {

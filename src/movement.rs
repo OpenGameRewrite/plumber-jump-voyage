@@ -3121,7 +3121,10 @@ impl Player {
             ) || self.mode == Move::Throw && !self.throwing.in_air)
         {
             if self.grounded && self.is_collided_ground() {
-                self.v = self.units_per_frame();
+                // waitGround has already applied this step's ground normal.
+                // units_per_frame may still hold the previous collision's
+                // reporting cache, which is stale on a rotating support.
+                self.v = self.ground_following();
             }
             if matches!(self.actor_name(), "Wait" | "Run") {
                 self.feedback_ground_inertia(false);
