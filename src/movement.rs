@@ -1335,6 +1335,8 @@ pub struct Player {
     /// it was made from, then the velocity): the game's `getVelocity` after the step, laid on
     /// the normal the nerve saw, not the one the collision found since.
     ground_move: Option<(Vec2, f32, Vec3)>,
+    /// EActionTrigger 3, consumed by syncSensorAndCollision after the nerve.
+    collision_expand_pending: bool,
     /// The pose when it is tilted off the vertical (a run up a slope); it
     /// belongs to the facing it was made for.
     pose_tilt: Option<PoseTilt>,
@@ -1544,6 +1546,7 @@ impl Default for Player {
             run_start_effect: None,
             run_up: None,
             ground_move: None,
+            collision_expand_pending: false,
             pose_tilt: None,
             forward: Vec3::ZERO,
             wall_along: wall_along::WallAlong::default(),
@@ -3494,6 +3497,15 @@ impl Player {
             Some((h, from, _)) if h == Vec2::new(self.v.x, self.v.z) => {
                 along_vector_normal_h(plane::lift(self.v, from), from, up)
             }
+            None if self.ground_move.is_some_and(|(h, pull, _)| {
+                h == Vec2::new(self.v.x, self.v.z) && pull == self.pull
+            }) =>
+            {
+                // The run control's first update (0x418390) reads the actual
+                // actor velocity. Its pull can still use the previous floor
+                // normal when the support rotated since the run was chosen.
+                along_vector_normal_h(self.ground_move.unwrap().2, up, up)
+            }
             _ => along_vector_normal_h(plane::lift(self.v, up), up, up),
         }
     }
@@ -4331,9 +4343,19 @@ impl Player {
                 p.set_h(horizontal);
             }
             if let Some(up) = ground_up {
-                p.slerp_pose_up(up, 1., 180.);
+                p.turn_pose_up_for_jump(up);
             }
         });
+    }
+    fn turn_pose_up_for_jump(&mut self, up: Vec3) {
+        // PlayerStateJump::exeJump (0x472790): a large first-step pose
+        // correction requests resetCollisionExpandCheck, consumed only after
+        // air-control setup has read the takeoff contact and its inertia.
+        let limit = pose_math::cosf(20. * pose_math::DEGREES_TO_RADIANS);
+        if pose_math::dot(up, self.pose_axes().0) <= limit {
+            self.collision_expand_pending = true;
+        }
+        self.slerp_pose_up(up, 1., 180.);
     }
     /// `PlayerStateJump::appear` keeps the ground pose's up (`PlayerJointControlKeeper::
     /// calcGroundPoseUp`) when the previous step ended the run or the standing state's body

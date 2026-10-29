@@ -501,13 +501,15 @@ fn rotational_jump_displacement_uses_the_actor_point_without_normal_projection()
         quat: Quat::from_xyzw(1., 0., 0., 0.),
         previous,
     });
-    let mut collider = PlayerCollider::default();
-    collider.floor = Some(Contact {
-        normal: Vec3::NEG_Y,
-        position: Vec3::ZERO,
-        triangle: 0,
-        location: Location::Face,
-    });
+    let collider = PlayerCollider {
+        floor: Some(Contact {
+            normal: Vec3::NEG_Y,
+            position: Vec3::ZERO,
+            triangle: 0,
+            location: Location::Face,
+        }),
+        ..PlayerCollider::default()
+    };
     let actor = Vec3::new(0., 100., 25.);
     assert_eq!(collider.moving_ground_force(&mesh), Vec3::ZERO);
     assert_eq!(

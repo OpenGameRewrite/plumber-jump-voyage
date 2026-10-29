@@ -170,6 +170,11 @@ impl Player {
             Form::GrabCeil => self.grab_ceil.front(),
             _ => Vec3::ZERO,
         });
+        if self.collision_expand_pending {
+            self.collision_expand_pending = false;
+            self.collider
+                .reset_expand_check(self.facing.x.atan2(self.facing.z));
+        }
     }
 
     /// The toy course's poles (the box solids are resolved by the demo's own

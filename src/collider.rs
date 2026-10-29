@@ -1520,7 +1520,7 @@ impl PlayerCollider {
             {
                 source.force_at(point)
             } else {
-                return Vec3::ZERO;
+                Vec3::ZERO
             }
         })
     }

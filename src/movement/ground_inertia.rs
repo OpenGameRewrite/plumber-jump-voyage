@@ -70,6 +70,24 @@ impl Player {
 pub(super) fn self_check() {
     saved_force_lasts_one_airborne_update();
     fall_uses_the_current_ground_velocity();
+    a_jump_turn_resets_collision_after_takeoff_setup();
+}
+#[cfg_attr(test, test)]
+fn a_jump_turn_resets_collision_after_takeoff_setup() {
+    let mut player = Player::default();
+    player.set_pose(Quat::from_rotation_x(30_f32.to_radians()));
+    player.collider.floor = Some(crate::collider::Contact {
+        normal: Vec3::Y,
+        position: Vec3::ZERO,
+        triangle: 0,
+        location: crate::collider::Location::Face,
+    });
+    player.turn_pose_up_for_jump(Vec3::Y);
+    assert!(player.collider.grounded());
+    assert!(player.collision_expand_pending);
+    player.collide_mesh(&crate::geometry::TriangleMesh::from_corners(&[]), false);
+    assert!(!player.collider.grounded());
+    assert!(!player.collision_expand_pending);
 }
 #[cfg_attr(test, test)]
 fn fall_uses_the_current_ground_velocity() {
