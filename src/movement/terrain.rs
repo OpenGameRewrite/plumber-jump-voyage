@@ -414,14 +414,6 @@ impl Player {
                 if into > 0. && !self.keeps_velocity_at_walls() && !self.run_follows_floor() {
                     self.v += normal * into;
                 }
-                if self.mode == Move::Roll && into > 12. {
-                    // Rolling into a wall knocks the roll back out.
-                    self.facing = (self.facing - self.wall * 2. * self.facing.dot(self.wall))
-                        .normalize_or(self.wall);
-                    self.set_h(self.facing * 6.);
-                    self.set(Move::RollEnd);
-                    self.play("RollingStandUp");
-                }
             }
         }
     }
@@ -433,7 +425,15 @@ impl Player {
         self.burning()
             || self.in_damage_state()
             || self.in_wall_push_frame()
-            || matches!(self.mode, Move::WallSlide | Move::SlopeSlide | Move::Swim)
+            || matches!(
+                self.mode,
+                Move::WallSlide
+                    | Move::SlopeSlide
+                    | Move::Swim
+                    | Move::Roll
+                    | Move::RollEnd
+                    | Move::RollJump
+            )
             || self.wall_keep_applies()
     }
 }

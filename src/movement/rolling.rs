@@ -81,6 +81,7 @@ pub(super) struct RollControl {
     frame_kept: bool,
     /// ForceRolling judge cached by appear (+0xb0).
     forced: bool,
+    end_squat: bool,
 }
 impl Default for RollControl {
     fn default() -> Self {
@@ -97,6 +98,7 @@ impl Default for RollControl {
             effect_called: false,
             frame_kept: false,
             forced: false,
+            end_squat: false,
         }
     }
 }
@@ -122,6 +124,63 @@ fn nerve_clip(nerve: RollNerve) -> &'static str {
 }
 
 impl Player {
+    /// PlayerJudgeWallHitDownRolling::judge (0x45cb2c). Every rolling child
+    /// uses this judge; being airborne bypasses only the ground-height tests.
+    fn rolling_wall_hit_down(&self) -> bool {
+        let Some(wall) = &self.collider.wall else {
+            return false;
+        };
+        if self
+            .touched
+            .wall
+            .as_ref()
+            .is_some_and(|c| c.wall == "NoAction")
+        {
+            return false;
+        }
+        if self.collision_wall_reflected {
+            return false;
+        }
+        let (normal, valid) =
+            pose_math::try_normalize_or_zero(vector_lib::verticalize_vec(Vec3::NEG_Y, wall.normal));
+        if !valid {
+            return false;
+        }
+        let pose = self.actor_pose();
+        let (front, valid) = pose_math::try_normalize_or_zero(along_vector_normal_h(
+            pose.front(),
+            pose.up(),
+            Vec3::Y,
+        ));
+        if !valid || vector_lib::calc_angle_degree(normal, -front) > 55. {
+            return false;
+        }
+        let Some(ground) = &self.collider.floor else {
+            return true;
+        };
+        // This branch follows the executable; wave10 records airborne contact only.
+        let height = pose_math::dot(ground.position - wall.position, Vec3::NEG_Y);
+        height - 25. > 0.001 && vector_lib::calc_angle_degree(ground.normal, wall.normal) > 30.
+    }
+
+    /// Actor exeRolling (0x42391c), after the water/attachment judges.
+    pub(super) fn judge_rolling_wall_hit_down(&mut self) {
+        if !matches!(self.mode, Move::Roll | Move::RollEnd | Move::RollJump) {
+            return;
+        }
+        if !self.rolling_wall_hit_down() {
+            if std::mem::take(&mut self.rolling.end_squat) {
+                self.start_squat();
+            }
+            return;
+        }
+        // ActionTrigger10 also makes isOnNoDamageDown true: this reaction does
+        // not consume HP. DamageLife::appear supplies the ordinary knockback.
+        self.appear_damage_life(false, false);
+        self.life.no_down = true;
+        self.nerve.choose_silently(true);
+    }
+
     /// The roll's dust effect is wanted (for the effect tables).
     pub fn roll_effect_on(&self) -> bool {
         matches!(self.mode, Move::Roll | Move::RollEnd | Move::RollJump) && self.rolling.effect_on
@@ -332,6 +391,7 @@ impl Player {
             frame_kept: false,
             // Cache belongs to appear, not the floor under each injected row.
             forced: self.rolling.forced,
+            end_squat: false,
         };
         if let Some(clip) = next_clip {
             if self.mode == Move::RollEnd {
@@ -433,7 +493,7 @@ impl Player {
             self.roll_stand_up();
         } else if slide.length() <= t::ROLL_END_BRAKE_END_SPEED {
             self.rolling.effect_on = false;
-            self.start_squat();
+            self.rolling.end_squat = true;
         }
     }
     /// `exeLand`: the landing pose after the roll's jump.

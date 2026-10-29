@@ -1361,6 +1361,9 @@ pub struct Player {
     hop_contact: bool,
     /// The real game's player collider, used when the course is a triangle mesh.
     collider: PlayerCollider,
+    /// CollisionTrigger9: accepted PlayerRollingWallHitMove, not a squeeze.
+    /// Static KCL has no sensor receiver; no supported actor raises it yet.
+    collision_wall_reflected: bool,
     /// The normal of the mesh floor the collider found this step.
     mesh_ground: Option<Vec3>,
     /// The collision codes of the mesh surfaces the body touched this step.
@@ -1533,6 +1536,7 @@ impl Default for Player {
             sounds: SeCtrl::default(),
             hop_contact: false,
             collider: PlayerCollider::default(),
+            collision_wall_reflected: false,
             mesh_ground: None,
             touched: terrain::Touched::default(),
             key_move_sources: String::new(),
@@ -2941,6 +2945,7 @@ impl Player {
             self.judge_wall_catch(scene);
             self.judge_wall_keep(scene);
             self.judge_in_water(scene);
+            self.judge_rolling_wall_hit_down();
         }
         self.update_sand_affect(scene);
         let moved = self.v;
