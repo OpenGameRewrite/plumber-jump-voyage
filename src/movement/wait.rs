@@ -95,7 +95,10 @@ impl Player {
     pub(super) fn land_ground(&mut self, scene: &Course) {
         let normal = self.ground_normal_or_up();
         if self.frame == 0 {
+            let before = self.pose_axes().0;
             self.slerp_pose_up(normal, 1., t::WAIT_POSE_DEGREE_MAX);
+            // landGroundPoseAndSnap (0x56599c) tests the actual clamped turn.
+            self.request_collision_reset_after_turn(before, self.pose_axes().0);
         }
         let snap = if self.frame == 0 && self.is_collided_ground() {
             let at = scene.in_water_frame(self.position_cm());

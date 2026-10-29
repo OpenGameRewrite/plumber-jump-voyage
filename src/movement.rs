@@ -343,7 +343,7 @@ mod terrain;
 #[path = "movement/turn_control.rs"]
 pub(crate) mod turn_control;
 #[path = "movement/vector_lib.rs"]
-mod vector_lib;
+pub(crate) mod vector_lib;
 #[path = "movement/wait.rs"]
 mod wait;
 #[path = "movement/wall_air.rs"]
@@ -1354,6 +1354,7 @@ pub struct Player {
     /// when the stage's export has it: `rs::waitGround` carries the pose along it.
     ground_frame: Option<([f32; 12], [f32; 12])>,
     ground_part: Option<usize>,
+    rotating_ground: bool,
     ground_inertia: ground_inertia::GroundInertia,
     area_velocity: Vec3,
     pub area_source: String,
@@ -1555,6 +1556,7 @@ impl Default for Player {
             snap_move_axis: None,
             ground_frame: None,
             ground_part: None,
+            rotating_ground: false,
             ground_inertia: ground_inertia::GroundInertia::default(),
             area_velocity: Vec3::ZERO,
             area_source: String::new(),
@@ -2905,12 +2907,14 @@ impl Player {
                 })
                 .unwrap_or_default();
         }
+        self.rotating_ground = false;
         if let Some(mesh) = &scene.mesh
             && let Some(source) = mesh
                 .rotate_parts
                 .iter()
                 .find(|s| Some(s.part) == self.ground_part)
         {
+            self.rotating_ground = true;
             self.ground_frame = Some((mesh.parts[source.part].base, source.previous.inverse));
         }
         self.update_ground_inertia(scene);
@@ -3436,6 +3440,12 @@ impl Player {
     /// Standing: the stick starts the run (the start-run judge), which is a
     /// new nerve, chosen now and moving from its first step.
     fn stand(&mut self, o: &Orders) {
+        if self.rotating_ground && self.wait.steps == 0 && self.grounded && self.clip() == "Wait" {
+            // exeWait calls waitGround before its actor judges (0x48e0e8).
+            // On entry from Land its remaining normal pull is raw velocity,
+            // which reboundVelocityFromCollision cancels; it is not run speed.
+            self.set_h(Vec3::ZERO);
+        }
         // (The forced slope slide comes before the state's own start-run judge.)
         if self.try_force_slope_slide() || self.try_force_rolling() {
             return;
@@ -3449,7 +3459,14 @@ impl Player {
             // crouch, throw): a jump pressed with the stick is taken by the
             // run state's first step (`pole-climb` rows 10-11).
             // The run state's appearance already pulls the player to the floor.
+            let raw_ground_velocity = self.grounded && self.v.y != 0. && self.v.y != -self.pull;
             self.pull = GRAVITY_MOVE;
+            if raw_ground_velocity {
+                // GroundMoveControl::appear sets its pull immediately, even
+                // when Wait/Land left full actor velocity in the controller.
+                self.run_appear(false);
+                self.v.y = 0.;
+            }
             self.go(Move::Walk, "Move");
             return;
         }
@@ -3497,9 +3514,10 @@ impl Player {
             Some((h, from, _)) if h == Vec2::new(self.v.x, self.v.z) => {
                 along_vector_normal_h(plane::lift(self.v, from), from, up)
             }
-            None if self.ground_move.is_some_and(|(h, pull, _)| {
-                h == Vec2::new(self.v.x, self.v.z) && pull == self.pull
-            }) =>
+            None if self.rotating_ground
+                && self.ground_move.is_some_and(|(h, pull, _)| {
+                    h == Vec2::new(self.v.x, self.v.z) && pull == self.pull
+                }) =>
             {
                 // The run control's first update (0x418390) reads the actual
                 // actor velocity. Its pull can still use the previous floor
@@ -4351,11 +4369,14 @@ impl Player {
         // PlayerStateJump::exeJump (0x472790): a large first-step pose
         // correction requests resetCollisionExpandCheck, consumed only after
         // air-control setup has read the takeoff contact and its inertia.
+        self.request_collision_reset_after_turn(self.pose_axes().0, up);
+        self.slerp_pose_up(up, 1., 180.);
+    }
+    fn request_collision_reset_after_turn(&mut self, before: Vec3, after: Vec3) {
         let limit = pose_math::cosf(20. * pose_math::DEGREES_TO_RADIANS);
-        if pose_math::dot(up, self.pose_axes().0) <= limit {
+        if pose_math::dot(before, after) <= limit {
             self.collision_expand_pending = true;
         }
-        self.slerp_pose_up(up, 1., 180.);
     }
     /// `PlayerStateJump::appear` keeps the ground pose's up (`PlayerJointControlKeeper::
     /// calcGroundPoseUp`) when the previous step ended the run or the standing state's body
@@ -4449,7 +4470,11 @@ impl Player {
             );
             return;
         }
-        if matches!(self.mode, Move::Skid | Move::Turn)
+        let pivot_without_turn_jump =
+            self.mode == Move::Turn && self.clip() == "TurnPoint" && self.quick_turn == 0;
+        // tryTurnJump (0x47ed24) requires the quick-turn counter in Pivot.
+        // Naming Pivot in this run update does not by itself enable JumpTurn.
+        if matches!(self.mode, Move::Skid | Move::Turn) && !pivot_without_turn_jump
             || self.quick_turn > 0 && self.after_turn > 0
         {
             self.side_somersault();
@@ -5509,6 +5534,13 @@ impl Player {
             return;
         }
         self.v = before;
+        if self.mode == Move::Fall && self.air_for != Some(Move::Fall) {
+            // Fall's first execution still sets up its air control when the
+            // preceding collision already found ground (0x46b3ec..0x46b4a0).
+            // The original actor retains its incoming vertical velocity.
+            self.v.y = self.touchdown_speed;
+            self.arm_fall_control();
+        }
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
         let air_step_ran = self.mode.uses_air_control() && self.air_for == Some(self.mode);
@@ -5521,6 +5553,9 @@ impl Player {
             };
             let push = self.push();
             self.air.update(&mut v, push, o.jump_held, &steer);
+            if self.actor_name() == "Jump" {
+                self.air.limit_landing_speed(&mut v);
+            }
             self.set_h(v);
             self.facing = self.air.turn_facing(self.facing, push);
         }
@@ -5665,6 +5700,19 @@ impl Player {
                     // (The triple jump's landing gives the body no sway.)
                     if anim != "LandJump3" {
                         self.wait_state_appears_after_landing(arrival);
+                    }
+                    // Wait::appear (0x48c824) sets the arrival's horizontal
+                    // velocity along the new floor before adding Gravity.
+                    // Keep its horizontal part in the ground-state storage;
+                    // ground_following supplies the normal pull.
+                    let up = self.ground_normal_or_up();
+                    if up != Vec3::Y {
+                        // The slope Land path keeps full velocity until its
+                        // snap step. Flat Land retains its existing stop.
+                        let along = along_vector_normal_h(arrival, Vec3::Y, up);
+                        self.set_h(along);
+                        self.v.y = 0.;
+                        self.pull = t::GRAVITY;
                     }
                     self.change(Move::Idle, anim, |p| {
                         if p.grounded {

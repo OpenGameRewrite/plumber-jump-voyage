@@ -71,6 +71,19 @@ pub(super) fn self_check() {
     saved_force_lasts_one_airborne_update();
     fall_uses_the_current_ground_velocity();
     a_jump_turn_resets_collision_after_takeoff_setup();
+    choosing_pivot_does_not_enable_a_turn_jump();
+}
+#[cfg_attr(test, test)]
+fn choosing_pivot_does_not_enable_a_turn_jump() {
+    let mut player = Player {
+        mode: Move::Turn,
+        grounded: true,
+        ..Player::default()
+    };
+    player.nerve.actor = "Run";
+    player.nerve.queue("TurnPoint", |_| {});
+    player.ground_jump(&Orders::default());
+    assert_eq!(player.mode, Move::Jump);
 }
 #[cfg_attr(test, test)]
 fn a_jump_turn_resets_collision_after_takeoff_setup() {

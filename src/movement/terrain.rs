@@ -172,8 +172,10 @@ impl Player {
         });
         if self.collision_expand_pending {
             self.collision_expand_pending = false;
-            self.collider
-                .reset_expand_check(self.facing.x.atan2(self.facing.z));
+            self.collider.reset_expand_check_tilted(
+                self.facing.x.atan2(self.facing.z),
+                self.pose_read_back(),
+            );
         }
     }
 

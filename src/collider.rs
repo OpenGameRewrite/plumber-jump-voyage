@@ -1458,6 +1458,12 @@ impl PlayerCollider {
         self.set_shape_scale(own);
     }
 
+    /// onInvalidate stores the actor's full current pose, including tilt.
+    pub fn reset_expand_check_tilted(&mut self, yaw: f32, tilt: Option<Quat>) {
+        self.reset_expand_check(yaw);
+        self.last_tilt = tilt;
+    }
+
     /// `PlayerCollider::setCollisionShapeScale`: the radius the collider last had can only
     /// shrink to the one the old scale gave.
     fn set_shape_scale(&mut self, scale: f32) {

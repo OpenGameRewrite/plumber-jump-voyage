@@ -216,6 +216,12 @@ impl AirMove {
     pub fn steered(&self) -> bool {
         self.steered
     }
+    /// PlayerStateJump::exeJump (0x472a1c): once grounded, limit the whole
+    /// horizontal vector, in addition to the airborne per-axis limits.
+    pub fn limit_landing_speed(&self, velocity: &mut Vec3) {
+        let horizontal = crate::movement::vector_lib::limit_length(flat(*velocity), self.speed_cap);
+        *velocity = horizontal.with_y(velocity.y);
+    }
     /// Start a jump from velocity `v`: the horizontal part keeps its direction
     /// (or follows `front` when still), the vertical part becomes the power.
     pub fn setup(&mut self, v: &mut Vec3, front: Vec3, t: &Takeoff) {

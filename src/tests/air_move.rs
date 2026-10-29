@@ -7,6 +7,18 @@ pub(super) fn run() {
     stick_pushes_along_the_travel();
     backflip_and_long_jump_arithmetic();
     combo_counts_and_expires();
+    landing_caps_the_horizontal_vector_after_per_axis_air_control();
+}
+
+#[cfg_attr(test, test)]
+fn landing_caps_the_horizontal_vector_after_per_axis_air_control() {
+    let air = AirMove {
+        speed_cap: 5.,
+        ..AirMove::default()
+    };
+    let mut velocity = Vec3::new(4.5, -10., 6.);
+    air.limit_landing_speed(&mut velocity);
+    assert_eq!(velocity, Vec3::new(3., -10., 4.));
 }
 
 fn takeoff(extend: u32) -> Takeoff {
