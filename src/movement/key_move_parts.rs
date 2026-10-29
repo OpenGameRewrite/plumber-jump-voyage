@@ -70,7 +70,12 @@ impl KeyMovePart {
             _ => return Err("part phase".into()),
         };
         self.key = get("key_idx")?.parse().map_err(|_| "part key")?;
-        self.step = get("step")?.parse().map_err(|_| "part step")?;
+        // A freshly installed nerve is pending at -1 before its first update.
+        let step: i32 = get("step")?.parse().map_err(|_| "part step")?;
+        if step < -1 {
+            return Err("part step".into());
+        }
+        self.step = step.max(0) as u32;
         if self.key >= 2
             || self.step
                 > if self.moving {

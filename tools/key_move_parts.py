@@ -18,10 +18,12 @@ def bits(x):
 
 
 def export(geometry, raw, hosts):
-    if (geometry['stage'], geometry['scenario']) != ('SandWorldPressExStage', 1) or (raw['stage'], raw['scenario']) != (geometry['stage'], geometry['scenario']):
-        raise ValueError('Press stage/scenario mismatch')
+    identities = {('SandWorldPressExStage', 1): ('obj165', 'obj167'),
+                  ('SandWorldHomeStage', 1): ('obj28',)}
+    if (geometry['stage'], geometry['scenario']) not in identities or (raw['stage'], raw['scenario']) != (geometry['stage'], geometry['scenario']):
+        raise ValueError('key-move stage/scenario mismatch')
     sources = []
-    for identity in ('obj165', 'obj167'):
+    for identity in identities[(geometry['stage'], geometry['scenario'])]:
         part = next(p for p in raw['parts'] if p['id'] == identity)
         obj = next(o for o in geometry['objects'] if o['id'] == identity)
         if part['class'] != 'KeyMoveMapParts' or part['model'] != obj['model'] or len(part['key_chain']) != 2:
@@ -31,15 +33,19 @@ def export(geometry, raw, hosts):
             if (key.get('MoveType', 0) != 0 or key.get('InterpolateType', 0) != 0
                     or any(key.get(k) for k in ('IsFloorTouchStart', 'IsHipDropStart', 'IsStopKill', 'IsPlaySign', 'DelayTime'))
                     or any(key['Rotate'][a] != 0 or key['Scale'][a] != 1 for a in 'XYZ')
-                    or any(not isinstance(key[k], int) or key[k] <= 0 for k in ('WaitTime', 'SpeedByTime'))):
+                    or not isinstance(key['WaitTime'], int) or key['WaitTime'] <= 0):
                 raise ValueError('unsupported key-move placement')
+            duration = key['SpeedByTime']
+            if duration == -1 and key.get('Speed', 0) > 0:
+                other = part['key_chain'][1 - len(keys)]
+                distance = math.sqrt(sum((other['Translate'][a] - key['Translate'][a]) ** 2 for a in 'XYZ'))
+                duration = int(distance / key['Speed'])
+            if not isinstance(duration, int) or duration <= 0:
+                raise ValueError('unsupported key duration')
             keys.append(dict(position=[key['Translate'][a] for a in 'XYZ'],
-                             WaitTime=key['WaitTime'], SpeedByTime=key['SpeedByTime']))
+                             WaitTime=key['WaitTime'], SpeedByTime=duration))
         if obj['translate'] != keys[0]['position'] or obj['static'] is not False:
             raise ValueError('key-move raw collision pose')
-        # A vertical source keeps the collision mesh's X/Z broadphase cells valid.
-        if any(keys[0]['position'][i] != keys[1]['position'][i] for i in (0, 2)):
-            raise ValueError('only vertical keys are implemented')
         sources.append(dict(id=identity, model=obj['model'], host=hosts[identity], keys=keys, **{'class': part['class']}))
     geometry['key_move_parts'] = sources
 
@@ -60,6 +66,8 @@ class Source:
         self.position = [struct.unpack('>f', bytes.fromhex(s))[0] for s in row['pos_bits'].split(',')]
 
     def tick(self):
+        if self.step == -1:
+            self.step = 0
         key = self.p['keys'][self.key]
         if self.moving:
             self.move_time = key['SpeedByTime']
@@ -91,24 +99,31 @@ class Evidence:
             self.surfaces, self.episodes, self.rides = set(), set(), set()
 
     def _verify(self, geometry, actors, mario, rewrite, rows, preroll, start):
-        if not geometry or (geometry.get('stage'), geometry.get('scenario')) != ('SandWorldPressExStage', 1) or not actors or not mario or not start:
+        if not geometry or not actors or not mario or not start:
+            return
+        lift = (geometry.get('stage'), geometry.get('scenario')) == ('SandWorldHomeStage', 1)
+        if not lift and (geometry.get('stage'), geometry.get('scenario')) != ('SandWorldPressExStage', 1):
             return
         from environment_rule import parse_hit_hosts, key_values
         placements = geometry.get('key_move_parts', [])
-        if {p['id'] for p in placements} != {'obj165', 'obj167'} or len(placements) != 2:
+        if {p['id'] for p in placements} != ({'obj28'} if lift else {'obj165', 'obj167'}) or len(placements) != (1 if lift else 2):
             return
         sources = {p['id']: Source(p) for p in placements}
         objects = {p['id']: next(o for o in geometry['objects'] if o['id'] == p['id']) for p in placements}
         for p in placements:
             obj = objects[p['id']]
-            if (obj['model'] != 'SandWorldPressExKeyMoveParts000' or p['model'] != obj['model'] or p.get('class') != 'KeyMoveMapParts'
+            if (obj['model'] != ('SandWorldHomeLift000' if lift else 'SandWorldPressExKeyMoveParts000') or p['model'] != obj['model'] or p.get('class') != 'KeyMoveMapParts'
                     or obj['static'] is not False or obj['translate'] != p['keys'][0]['position']
                     or obj['rotate'] != [0, 0, 0] or obj['scale'] != [1, 1, 1]
                     or len(p['keys']) != 2 or not geometry['models'][obj['model'] + '#0']['prisms']):
                 return
             triangles = [t for t in geometry['triangles'] if geometry['objects'][t[13]]['id'] == p['id']]
             press = [t for t in triangles if geometry['attributes'][t[12]]['FloorCode'] == 'Press']
-            if len(triangles) != 12 or len(press) != 4 or any(abs(t[10]) != 1 for t in press):
+            if lift:
+                if (len(triangles) != 14 or press or obj['translate'] != [50., -700., -19450.]
+                        or p['keys'] != [dict(position=[50., -700., z], WaitTime=80, SpeedByTime=180) for z in (-19450., -17650.)]):
+                    return
+            elif len(triangles) != 12 or len(press) != 4 or any(abs(t[10]) != 1 for t in press):
                 return
         by_frame = {}
         for r in actors:
@@ -126,7 +141,7 @@ class Evidence:
         cause = False
         for frame in range(first, last + 1):
             samples = by_frame.get(frame, [])
-            if {r['id'] for r in samples} != set(sources) or len(samples) != 2:
+            if {r['id'] for r in samples} != set(sources) or len(samples) != len(sources):
                 return
             row = all_rows.get(frame, {})
             previous = all_rows.get(frame - 1, {})
@@ -156,7 +171,7 @@ class Evidence:
                         or r['phase'] != ('Move' if source.moving else 'Wait') or int(r['step']) != source.step
                         or int(r['key_idx']) != source.key
                         or r['n_vt'] != ('1defac8' if source.moving else '1defa48')
-                        or int(r['wait_time']) != p['keys'][source.key]['WaitTime']
+                        or int(r['wait_time']) != (30 if source.step == -1 else p['keys'][source.key]['WaitTime'])
                         or int(r['move_time']) != source.move_time
                         or r['init_bits'] != ','.join(bits(x) for x in obj['translate'])
                         or r['pos_bits'] != ','.join(bits(x) for x in source.position)
@@ -167,7 +182,7 @@ class Evidence:
                     if source.diagnostic() not in diag:
                         return
                 for surface, host in parse_hit_hosts(row.get('hit_hosts')).items():
-                    if (host['host'] == obj.get('display_name', '砂のワールドプレスExキームーブパーツ000')
+                    if (host['host'] == (p['host'] if lift else obj.get('display_name', '砂のワールドプレスExキームーブパーツ000'))
                             and host['sensor'] == 'Collision' and host['sensor_type'] == '15'
                             and host['base'] == tuple(round(f32(x-s), 6) for x,s in zip(source.position, start))):
                         surfaces.add((frame, surface, host['host'], host['base']))
@@ -197,7 +212,7 @@ class Evidence:
         # Older Press captures predate the extended ground matrices. Their
         # verified source/crush episode remains valid independently of riding.
         try:
-            self._verify_rider(geometry, objects['obj167'], timeline, crush, rewrite, all_rows, start)
+            self._verify_rider(geometry, objects['obj28' if lift else 'obj167'], timeline, crush, rewrite, all_rows, start)
         except (KeyError, TypeError, ValueError, IndexError, OverflowError):
             self.rides = set()
 
@@ -210,19 +225,22 @@ class Evidence:
         from environment_rule import parse_hit_hosts, key_values
         if min(timeline) != -30:
             return
+        lift = obj['id'] == 'obj28'
+        identity = obj['id']
         source0 = key_values(rewrite.get(0, {}).get('collision', '')).get('keyparts', '')
-        if not any(d.startswith('obj167/Move/1/35/') for d in source0.split('|')):
+        if not any(d.startswith('obj28/Wait/0/30/' if lift else 'obj167/Move/1/35/') for d in source0.split('|')):
             return
         # The only accepted moving top is the exported Press19 pair, submodel0.
         top = {i: t for i, t in enumerate(geometry['triangles'])
-               if geometry['objects'][t[13]]['id'] == 'obj167' and t[16] == 0 and t[17] in (2, 3)
+               if geometry['objects'][t[13]]['id'] == identity and t[16] == 0 and t[17] in (2, 3)
                and t[9:12] == [0, 1, 0] and t[15] == 0
-               and geometry['attributes'][t[12]]['FloorCode'] == 'Press'
-               and geometry['attributes'][t[12]]['FloorCodeIndex'] == 19}
-        if len(top) != 2 or {t[k] - obj['translate'][1] for t in top.values() for k in (1, 4, 7)} != {450.}:
+               and geometry['attributes'][t[12]]['FloorCode'] == ('Ground' if lift else 'Press')
+               and geometry['attributes'][t[12]]['FloorCodeIndex'] == (8 if lift else 19)}
+        top_height = 0. if lift else 450.
+        if len(top) != 2 or {t[k] - obj['translate'][1] for t in top.values() for k in (1, 4, 7)} != {top_height}:
             return
         raw = geometry['models'][obj['model'] + '#0']['prisms']
-        if any(raw[t[17]][2] != 450. or raw[t[17]][4:7] != [0, 1, 0] for t in top.values()):
+        if any(raw[t[17]][2] != top_height or raw[t[17]][4:7] != [0, 1, 0] for t in top.values()):
             return
         def floats(cell, count, separator=','):
             tokens = cell.split(separator)
@@ -243,8 +261,8 @@ class Evidence:
         rides, pointers = set(), set()
         for f, positions in timeline.items():
             row, side = rows[f], mario[f]
-            position = positions['obj167']
-            previous = timeline.get(f - 1, positions)['obj167']
+            position = positions[identity]
+            previous = timeline.get(f - 1, positions)[identity]
             delta = [f32(a-b) for a,b in zip(position, previous)]
             diag = key_values(rewrite.get(f, {}).get('collision', ''))
             if any(side[k] != '0' for k in ('pressed', 'pressed_ground', 'pressed_wall', 'gate_true')):
@@ -261,6 +279,11 @@ class Evidence:
                 return
             hosts = parse_hit_hosts(row.get('hit_hosts'))
             host = hosts.get('ground')
+            if lift and f >= 0 and host and host['host'] != geometry['key_move_parts'][0]['host']:
+                # The recorded departure lands on exported static obj3027.
+                if host['moving'] != '0' or host['parts_flag'] == '0' or diag.get('groundpart'):
+                    return
+                continue
             if not side['ground_part']:
                 if host or any(side[k] for k in ('ground_matrix_bits', 'ground_previous_matrix_bits', 'ground_origin_delta_bits', 'ground_moving')):
                     return
@@ -274,7 +297,7 @@ class Evidence:
             for name in ('ground_matrix', 'ground_previous_matrix'):
                 if floats(side[name + '_bits'], 12) != [float(side[name + '_' + a]) for a in 'abcdefghijkl']:
                     return
-            height = f32(f32(position[1] + 450.) - start[1])
+            height = f32(f32(position[1] + top_height) - start[1])
             if float(row['floor_y']) != height or key_values(row['collision']).get('gn') != '0.000000/1.000000/0.000000':
                 return
             if row['ground'] == '1' and float(row['py']) != height:
@@ -291,8 +314,8 @@ class Evidence:
             if not inside:
                 return
             if f >= 0:
-                identity, triangle = diag['groundpart'].split('/')
-                if (identity != 'obj167' or int(triangle) not in top
+                native_id, triangle = diag['groundpart'].split('/')
+                if (native_id != identity or int(triangle) not in top
                         or floats(diag['groundmatrix'], 12, '/') != matrix(position)
                         or floats(diag['groundprevious'], 12, '/') != matrix(previous)
                         or floats(diag['grounddelta'], 3, '/') != delta):

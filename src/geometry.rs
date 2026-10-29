@@ -103,6 +103,7 @@ pub struct TriangleMesh {
     /// steps are far coarser than the replay's start-relative numbers.
     origin: [f64; 3],
     cells: HashMap<(i32, i32), Vec<u32>>,
+    moving_triangles: Vec<u32>,
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
     pub death: crate::water::WaterAreas,
@@ -538,6 +539,21 @@ impl TriangleMesh {
                     motion: Vec3::ZERO,
                 });
         }
+        mesh.moving_triangles = mesh
+            .triangles
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                t.local
+                    .filter(|p| {
+                        mesh.key_move_parts.iter().any(|s| {
+                            s.part == p.part as usize
+                                && (s.keys[0].x != s.keys[1].x || s.keys[0].z != s.keys[1].z)
+                        })
+                    })
+                    .map(|_| i as u32)
+            })
+            .collect();
         Ok(mesh)
     }
 
@@ -742,6 +758,9 @@ impl TriangleMesh {
                 }
             }
         }
+        // Moving parts have their own broadphase in the game. Their original
+        // static cells cannot locate a horizontally translated placement.
+        found.extend_from_slice(&self.moving_triangles);
         found.retain(|&i| {
             self.triangles[i as usize]
                 .local

@@ -1388,6 +1388,10 @@ impl PlayerCollider {
     /// `calcForceMovePowerExceptNormal`: currently supplied by reproduced
     /// translating collision parts. Rotating sources are not implemented.
     pub fn moving_ground_force(&self, mesh: &TriangleMesh) -> Vec3 {
+        self.moving_ground_force_at(mesh, self.ground_position())
+    }
+
+    pub fn moving_ground_force_at(&self, mesh: &TriangleMesh, point: Vec3) -> Vec3 {
         self.floor.as_ref().map_or(Vec3::ZERO, |hit| {
             let Some(local) = mesh.triangles[hit.triangle as usize].local else {
                 return Vec3::ZERO;
@@ -1399,7 +1403,17 @@ impl PlayerCollider {
             else {
                 return Vec3::ZERO;
             };
-            let mut force = source.motion;
+            if source.motion == Vec3::ZERO {
+                return Vec3::ZERO;
+            }
+            let frame = &mesh.parts[source.part];
+            let mut previous = frame.base;
+            previous[3] -= source.motion.x;
+            previous[7] -= source.motion.y;
+            previous[11] -= source.motion.z;
+            let inverse = crate::prism::invert(&previous).expect("key-move previous matrix");
+            let local = transform_point(&inverse, point.to_array());
+            let mut force = Vec3::from_array(transform_point(&frame.base, local)) - point;
             let outward = dot(force, hit.normal);
             if outward > 0. {
                 force -= hit.normal * outward;
@@ -1442,7 +1456,8 @@ impl PlayerCollider {
         // PlayerCollider::collide (0x4301ac): the previous moving ground
         // carries the input position before either sweep. Outward normal
         // motion is supplied by collision; inward motion must follow the part.
-        let ground_carry = self.moving_ground_force(mesh);
+        let input = absolute.map_or_else(|| mesh.to_game_vec(pos), |p| p.0);
+        let ground_carry = self.moving_ground_force_at(mesh, input);
         self.pressed_ground = false;
         self.pressed_wall = false;
         self.floor = None;

@@ -204,6 +204,14 @@ impl Default for AirMove {
     }
 }
 impl AirMove {
+    /// calcJumpInertia augments the speed cap before its vector is added to
+    /// the takeoff velocity; steering keeps the original takeoff axes.
+    pub fn add_ground_inertia(&mut self, v: &mut Vec3, inertia: Vec3, t: &Takeoff) {
+        self.speed_cap = self
+            .speed_cap
+            .max((inertia.length() + t.base_speed).min(t.speed_limit));
+        *v += inertia;
+    }
     /// The stick steered the velocity in the last update (the take-off locks it for a while).
     pub fn steered(&self) -> bool {
         self.steered

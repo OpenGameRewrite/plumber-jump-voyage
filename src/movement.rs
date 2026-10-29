@@ -4090,6 +4090,27 @@ impl Player {
             takeoff.speed_limit = takeoff.speed_limit.max(self.force_run.speed);
         }
         self.air.setup(&mut self.v, self.facing, &takeoff);
+        // rs::calcJumpInertia (0x55ca7c) is separate from the external
+        // velocity's one-frame departure request. It uses the moving ground
+        // at takeoff, scaled by JumpInertiaRate and forward agreement.
+        if self.collider.floor.is_some() {
+            let force = self.ground_inertia.saved.with_y(0.);
+            if force != Vec3::ZERO {
+                let (direction, _) = pose_math::try_normalize_or_zero(force);
+                let launch = if self.speed_h() < t::NORMAL_MIN {
+                    Vec3::ZERO
+                } else {
+                    pose_math::try_normalize_or_zero(self.v.with_y(0.)).0
+                };
+                let rate = if launch == Vec3::ZERO {
+                    0.7
+                } else {
+                    0.7 * pose_math::dot(direction, launch).max(0.)
+                };
+                self.air
+                    .add_ground_inertia(&mut self.v, force * rate, &takeoff);
+            }
+        }
         self.air_turn.reset();
         self.air_for = Some(mode);
         self.jump_power = power;
