@@ -1,4 +1,5 @@
 //! Placement-bound flower objects and the player's independent carry keeper.
+pub use super::grow_seed::Seed;
 use super::push_receiver::{PushReceiver, calc_push_trans};
 use super::*;
 
@@ -65,9 +66,10 @@ pub struct Carry {
     pub upper: Option<(&'static str, f32)>,
     pub hold: Option<look_joint::Mat34>,
     pub hold_matrix: Option<look_joint::Mat34>,
-    origin: Vec3,
+    pub(super) origin: Vec3,
     pub picked_up: bool,
     pub unsupported_release: bool,
+    pub released: bool,
 }
 
 /// The receive dispatch compares message identities; an unhandled identity falls through.
@@ -210,106 +212,9 @@ fn hex_vec(v: Vec3) -> String {
         .join("/")
 }
 
-#[derive(Clone, Debug)]
-pub struct Seed {
-    pub id: String,
-    pub position: Vec3,
-    pub velocity: Vec3,
-    ground: Option<Vec3>,
-    settled: bool,
-    connecting: Option<usize>,
-    rebound: bool,
-    age: u32,
-}
-
 impl Player {
     pub fn is_carry(&self) -> bool {
         self.carry.held
-    }
-
-    /// Only placement/init state enters the replay. No carry observation file is loaded.
-    pub fn init_flower_seed(&mut self, mesh: &crate::geometry::TriangleMesh) {
-        self.carry.origin = mesh.to_game_vec(Vec3::ZERO);
-        if let Some(source) = mesh
-            .carry_sources
-            .iter()
-            .find(|s| s.class == "GrowFlowerSeed" && s.active)
-        {
-            self.carry.seed = Some(Seed {
-                id: source.id.clone(),
-                position: source.position,
-                velocity: Vec3::new(0., -1.8 * 0.995, 0.),
-                ground: None,
-                settled: false,
-                connecting: None,
-                rebound: false,
-                age: 1,
-            });
-        }
-    }
-
-    pub(super) fn update_flower_seed(&mut self, scene: &Course) {
-        let Some(mesh) = scene.mesh.as_deref() else {
-            return;
-        };
-        let Some(seed) = &mut self.carry.seed else {
-            return;
-        };
-        if self.carry.held {
-            if let Some(hold) = self.carry.hold {
-                seed.position = look_joint::translation(&hold);
-                seed.velocity = Vec3::ZERO;
-            }
-            return;
-        }
-        seed.age += 1;
-        if seed.settled {
-            if let Some(part) = seed.connecting {
-                let frame = &mesh.parts[part];
-                let local = crate::prism::transform_point(&frame.inverse, seed.position.to_array());
-                seed.position = Vec3::from_array(crate::prism::transform_point(&frame.base, local));
-            }
-            return;
-        }
-        seed.position += seed.velocity;
-        let centre = mesh.relative_vec(seed.position + Vec3::Y * 40.);
-        let mut normal = None;
-        let was_connecting = seed.connecting.is_some();
-        for (triangle, hit) in crate::collider::sphere_strike_hits(mesh, centre, 40.) {
-            let n = mesh.triangles[triangle as usize].normal;
-            if hit.depth > 0. {
-                seed.position += n * hit.depth;
-            }
-            if n.y > 0.5 {
-                normal = Some(n);
-                seed.connecting = mesh.triangles[triangle as usize]
-                    .local
-                    .map(|p| p.part as usize);
-            }
-        }
-        if let Some(n) = normal {
-            if seed.velocity.with_y(0.).length_squared() < 1.5 * 1.5 {
-                seed.velocity = Vec3::ZERO;
-                if was_connecting {
-                    seed.settled = true;
-                    seed.ground = Some(n);
-                    return;
-                }
-            }
-            seed.rebound = !seed.rebound;
-            if seed.rebound {
-                let d = pose_math::dot(n, seed.velocity);
-                if d < 0. {
-                    seed.velocity = (seed.velocity - n * d) * 0.7 - (n * d) * 0.7;
-                }
-            }
-        }
-        // GrowSeedStateWait's ground/air gravity and drag (0x18bafb0).
-        seed.velocity.y -= 1.8;
-        seed.velocity.x *= if normal.is_some() { 0.85 } else { 1. };
-        seed.velocity.z *= if normal.is_some() { 0.85 } else { 1. };
-        seed.velocity.y *= if normal.is_some() { 0.8 } else { 0.995 };
-        seed.ground = normal;
     }
 
     pub(super) fn carry_sensor_phase(&mut self, o: &Orders, scene: &Course) {
@@ -370,15 +275,49 @@ impl Player {
     }
 
     /// Keeper update 0x42e654 / Start 0x42ef20 / Carry 0x42f028.
-    pub(super) fn update_carry(&mut self, o: &Orders) {
+    pub(super) fn update_carry(&mut self, o: &Orders, scene: &Course) {
+        if self.carry.held {
+            self.pre_throw = 0;
+        }
+        if self.carry.held && o.throw_pressed && !self.carry.picked_up && self.carry.phase < 3 {
+            self.carry.phase = 3;
+            self.carry.step = 0;
+            self.carry.inhibition = 10;
+            self.events.push(Fx::CarryThrow);
+            if self.tilt >= STICK_DEADZONE {
+                let up = self
+                    .mesh_ground
+                    .filter(|_| self.grounded)
+                    .unwrap_or(Vec3::Y);
+                let direction = plane::along_vector_normal_h(self.stick, Vec3::Y, up);
+                self.set_pose(plane::quat_up_front(up, direction));
+            }
+        }
         self.carry.inhibition = self.carry.inhibition.saturating_sub(1);
-        if !self.carry.held {
+        if self.carry.phase == 3 {
+            if self.carry.step == 0 {
+                self.carry.upper = None;
+                self.upper_cleared = true;
+                self.start_sub("CarryFrontThrow", 24., -1.);
+            }
+            if self.carry.held && self.carry.step >= 5 {
+                self.release_flower_seed(scene);
+                self.carry.held = false;
+            }
+            if !self.carry.held && (!self.sub.active || self.sub.frame >= self.sub.length) {
+                self.carry.phase = 0;
+                self.carry.step = 0;
+                self.carry.wall_keep = false;
+            } else {
+                self.carry.step += 1;
+            }
             return;
         }
-        self.pre_throw = 0;
-        if o.throw_pressed && !self.carry.picked_up {
-            // Part 2 owns throw/release; expose the unsupported request.
-            self.carry.unsupported_release = true;
+        if !self.carry.held {
+            if self.carry.released {
+                self.carry.step += 1;
+            }
+            return;
         }
         if !self.carry.picked_up {
             match self.carry.upper {
@@ -416,7 +355,13 @@ impl Player {
         let spine = joints[Joint::Spine2 as usize];
         let left = look_joint::translation(&joints[Joint::HandL as usize]) + self.carry.origin;
         let right = look_joint::translation(&joints[Joint::HandR as usize]) + self.carry.origin;
-        let position = (left + right) * 0.5;
+        let position =
+            if self.carry.phase == 3 && self.sub.active && self.sub.name == "CarryFrontThrow" {
+                let hand = joints[Joint::HandR as usize];
+                right + Vec3::new(hand[0][0], hand[1][0], hand[2][0]) * 30.
+            } else {
+                (left + right) * 0.5
+            };
         let rotation = hold_matrix(spine, position);
         self.carry.hold_matrix = Some(rotation);
         let offset = Vec3::new(0., -30., 40.);
@@ -482,6 +427,7 @@ fn hold_matrix(spine: look_joint::Mat34, position: Vec3) -> look_joint::Mat34 {
 
 #[cfg(test)]
 mod tests {
+    pub use super::grow_seed::Seed;
     use super::*;
 
     #[test]
@@ -498,25 +444,25 @@ mod tests {
         p.carry.upper = Some(("CarryFrontStart", 0.));
         p.carry.picked_up = true;
         let orders = Orders::default();
-        p.update_carry(&orders);
+        p.update_carry(&orders, &Course::default());
         p.carry.picked_up = false;
         for _ in 0..8 {
-            p.update_carry(&orders);
+            p.update_carry(&orders, &Course::default());
         }
         assert_eq!(
             (p.carry.phase, p.carry.step, p.carry.upper),
             (1, 9, Some(("CarryFrontStart", 8.)))
         );
-        p.update_carry(&orders);
+        p.update_carry(&orders, &Course::default());
         assert_eq!((p.carry.phase, p.carry.step), (2, 0));
-        p.update_carry(&orders);
+        p.update_carry(&orders, &Course::default());
         assert_eq!(p.carry.upper, Some(("CarryFront", 0.)));
         assert!(!p.ground_actions(&Orders {
             crouch: true,
             ..default()
         }));
         p.carry.inhibition = 10;
-        p.update_carry(&orders);
+        p.update_carry(&orders, &Course::default());
         assert_eq!(p.carry.inhibition, 9);
     }
 

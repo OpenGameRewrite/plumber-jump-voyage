@@ -142,7 +142,7 @@ impl Player {
         if self.mode != Move::Pole {
             self.joints.pole.release();
         }
-        if self.is_carry() {
+        if self.is_carry() && self.carry.phase < 3 {
             self.joints.pole.ask_carry_front();
         }
         self.joints.pole.update();

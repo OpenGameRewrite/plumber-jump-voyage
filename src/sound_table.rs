@@ -230,6 +230,7 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         Fx::RollJumpLand => reaction("Land"),
         Fx::RollLand => reaction("RollLand"),
         Fx::CarryStart => reaction("ものつかみ開始"),
+        Fx::CarryThrow => reaction("もの投げ開始"),
         Fx::PoundLand => reaction("HipDropLand"),
         Fx::RollStart => vec![],
         // `PlayerStateRolling::restartRolling` names the reaction by its restart counter:

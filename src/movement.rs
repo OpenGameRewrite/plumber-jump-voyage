@@ -242,6 +242,7 @@ mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
 mod ground_inertia;
+mod grow_seed;
 pub mod key_move_parts;
 mod press;
 pub mod pukupuku;
@@ -898,6 +899,7 @@ pub enum Fx {
     Jump(Move),
     Crushed,
     CarryStart,
+    CarryThrow,
     Land {
         hard: bool,
     },
@@ -3059,7 +3061,7 @@ impl Player {
             self.update_flower_seed(scene);
         }
         self.carry_sensor_phase(&o, scene);
-        self.update_carry(&o);
+        self.update_carry(&o, scene);
         self.flower_sensor_phase(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
