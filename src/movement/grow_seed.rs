@@ -371,7 +371,11 @@ impl Player {
         let (_, front) = self.pose_axes();
         let flat_front = try_normalize_or_zero(Vec3::new(front.x, 0., front.z)).0;
         let direction = pose_math::turn_vec_to_vec_degree(flat_front, Vec3::Y, 70.);
-        let velocity = try_normalize_or_zero(direction).0 * 28. + self.units_per_frame().with_y(0.);
+        let player_velocity = self.units_per_frame().with_y(0.);
+        // `throwFromPlayer` normalises the turned direction and `setVelocityToDirection`
+        // normalises it again before it scales it by the speed.
+        let aimed = try_normalize_or_zero(try_normalize_or_zero(direction).0).0;
+        let velocity = aimed * 28. + player_velocity;
         let player_position = self.position_cm();
         let Some(seed) = &mut self.carry.seed else {
             return;

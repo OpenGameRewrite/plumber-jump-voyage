@@ -69,8 +69,8 @@ pub struct Carry {
     pub hold_matrix: Option<look_joint::Mat34>,
     pub(super) origin: Vec3,
     pub picked_up: bool,
-    /// The throw released the seed during this keeper update (the standing state already ran).
-    pub releasing: bool,
+    /// The throw reached its release step; the seed leaves the hand once the frame's state ran.
+    pub release_due: bool,
 }
 
 /// The receive dispatch compares message identities; an unhandled identity falls through.
@@ -276,8 +276,7 @@ impl Player {
     }
 
     /// Keeper update 0x42e654 / Start 0x42ef20 / Carry 0x42f028.
-    pub(super) fn update_carry(&mut self, o: &Orders, scene: &Course) {
-        self.carry.releasing = false;
+    pub(super) fn update_carry(&mut self, o: &Orders, _scene: &Course) {
         if self.carry.held {
             self.pre_throw = 0;
         }
@@ -305,9 +304,9 @@ impl Player {
                 self.start_sub("CarryFrontThrow", 24., -1.);
             }
             if self.carry.held && self.carry.step >= 5 {
-                self.release_flower_seed(scene);
-                self.carry.held = false;
-                self.carry.releasing = true;
+                // The keeper releases in the actor's control, after the standing state of the
+                // frame ran: `finish_carry_release` does it there.
+                self.carry.release_due = true;
             }
             if !self.carry.held && (!self.sub.active || self.sub.frame >= self.sub.length) {
                 self.carry.phase = 0;
@@ -347,6 +346,16 @@ impl Player {
         self.carry.step += u32::from(
             self.carry.phase != 2 || self.carry.upper.is_some_and(|(n, _)| n == "CarryFront"),
         );
+    }
+
+    /// The release of a throw (`PlayerRelease` to the held object) happens in `updateCarry`,
+    /// which the actor's control runs after the state of the frame: Mario's pose and velocity
+    /// are those the state left.
+    pub(super) fn finish_carry_release(&mut self, scene: &Course) {
+        if std::mem::take(&mut self.carry.release_due) {
+            self.release_flower_seed(scene);
+            self.carry.held = false;
+        }
     }
 
     pub(super) fn record_hold_pose(&mut self, joints: &crate::skeleton_pose::Matrices) {

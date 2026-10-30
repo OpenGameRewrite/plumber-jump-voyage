@@ -165,11 +165,6 @@ impl Player {
     /// the landing hands over to `Wait`, and each stage of the idle sequence
     /// chooses the next one.
     pub(super) fn wait_nerve(&mut self, step: u32) {
-        // The standing state ran while the carry target was still held; updateCarry
-        // releases it later in the original actor control order.
-        if self.carry.releasing {
-            return;
-        }
         if self.damage.hp == 1 {
             // PlayerStateWait::exeWait selects DamageWait while one HP remains.
             if self.clip() != "DamageWait" {

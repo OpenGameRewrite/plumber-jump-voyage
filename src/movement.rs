@@ -3091,6 +3091,7 @@ impl Player {
             self.judge_rolling_wall_hit_down();
         }
         self.update_sand_affect(scene);
+        self.finish_carry_release(scene);
         let moved = self.v;
         self.collide(&o, scene);
         self.update_water_finder(scene);
