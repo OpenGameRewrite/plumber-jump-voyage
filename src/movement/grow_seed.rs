@@ -204,7 +204,7 @@ impl Seed {
             .collider
             .floor
             .is_present()
-            .then(|| self.collider.floor.hit);
+            .then_some(self.collider.floor.hit);
         let ground_normal = ground
             .map(|hit| hit.normal)
             .filter(|normal| angle_to_up_degrees(*normal) < GROUND_ANGLE_DEGREES);
@@ -212,7 +212,7 @@ impl Seed {
             .collider
             .wall
             .is_present()
-            .then(|| self.collider.wall.hit);
+            .then_some(self.collider.wall.hit);
         let touching = ground_normal.is_some() || wall.is_some();
         let contact_normal = ground_normal.or(wall.map(|hit| hit.normal));
         if ground_normal.is_some() {

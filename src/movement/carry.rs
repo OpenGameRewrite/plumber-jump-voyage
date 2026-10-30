@@ -69,6 +69,7 @@ pub struct Carry {
     pub(super) origin: Vec3,
     pub picked_up: bool,
     pub(super) held_during_sensor_phase: bool,
+    pub(super) reconstruction_release_unavailable: bool,
     /// The throw reached its release step; the seed leaves the hand once the frame's state ran.
     pub release_due: bool,
 }
@@ -277,15 +278,22 @@ impl Player {
     }
 
     /// Keeper update 0x42e654 / Start 0x42ef20 / Carry 0x42f028.
-    pub(super) fn update_carry(&mut self, o: &Orders) {
+    pub(super) fn update_carry(&mut self, o: &Orders, advance_sources: bool) {
         if self.carry.held {
             self.pre_throw = 0;
         }
         if self.carry.held && o.throw_pressed && !self.carry.picked_up && self.carry.phase < 3 {
-            self.carry.phase = 3;
-            self.carry.step = 0;
-            self.carry.inhibition = 10;
-            self.events.push(Fx::CarryThrow);
+            if advance_sources {
+                self.carry.phase = 3;
+                self.carry.step = 0;
+                self.carry.inhibition = 10;
+                self.events.push(Fx::CarryThrow);
+            } else {
+                // A chosen-nerve reconstruction repeats the pickup button with a
+                // keeper that already holds the object. Preserve the existing
+                // snapshot limit; this is not a second source-side action.
+                self.carry.reconstruction_release_unavailable = true;
+            }
         }
         self.carry.inhibition = self.carry.inhibition.saturating_sub(1);
         if self.carry.phase == 3 {
@@ -456,25 +464,25 @@ mod tests {
         p.carry.upper = Some(("CarryFrontStart", 0.));
         p.carry.picked_up = true;
         let orders = Orders::default();
-        p.update_carry(&orders);
+        p.update_carry(&orders, true);
         p.carry.picked_up = false;
         for _ in 0..8 {
-            p.update_carry(&orders);
+            p.update_carry(&orders, true);
         }
         assert_eq!(
             (p.carry.phase, p.carry.step, p.carry.upper),
             (1, 9, Some(("CarryFrontStart", 8.)))
         );
-        p.update_carry(&orders);
+        p.update_carry(&orders, true);
         assert_eq!((p.carry.phase, p.carry.step), (2, 0));
-        p.update_carry(&orders);
+        p.update_carry(&orders, true);
         assert_eq!(p.carry.upper, Some(("CarryFront", 0.)));
         assert!(!p.ground_actions(&Orders {
             crouch: true,
             ..default()
         }));
         p.carry.inhibition = 10;
-        p.update_carry(&orders);
+        p.update_carry(&orders, true);
         assert_eq!(p.carry.inhibition, 9);
     }
 
@@ -496,24 +504,45 @@ mod tests {
         p.carry.held = true;
         p.carry.phase = 2;
         p.carry.upper = Some(("CarryFront", 0.));
-        p.update_carry(&Orders {
-            throw_pressed: true,
-            ..default()
-        });
+        p.update_carry(
+            &Orders {
+                throw_pressed: true,
+                ..default()
+            },
+            true,
+        );
         assert_eq!((p.carry.phase, p.carry.step, p.carry.inhibition), (3, 1, 9));
         assert!(p.carry.upper.is_none());
         assert!(p.upper_cleared);
         assert_eq!(p.model_sub(), Some(("CarryFrontThrow", -1.)));
         for _ in 1..5 {
-            p.update_carry(&Orders::default());
+            p.update_carry(&Orders::default(), true);
             p.finish_carry_release(&Course::default());
             assert!(p.carry.held);
         }
-        p.update_carry(&Orders::default());
+        p.update_carry(&Orders::default(), true);
         assert!(p.carry.held);
         assert!(p.carry.release_due);
         p.finish_carry_release(&Course::default());
         assert!(!p.carry.held);
         assert!(!p.carry.release_due);
+    }
+
+    #[test]
+    fn a_reconstructed_pickup_is_not_a_second_object_action() {
+        let mut p = Player::default();
+        p.carry.held = true;
+        p.carry.phase = 1;
+        p.carry.upper = Some(("CarryFrontStart", 0.));
+        p.update_carry(
+            &Orders {
+                throw_pressed: true,
+                ..default()
+            },
+            false,
+        );
+        assert_eq!((p.carry.phase, p.carry.step), (1, 1));
+        assert!(p.model_sub().is_none());
+        assert_eq!(p.fidelity_limits(), "carry_release_unavailable");
     }
 }

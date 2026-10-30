@@ -230,9 +230,8 @@ impl ActorCollider {
             motion_step,
         );
         let mut found = self.find_collide_pos(terrain, &mut sweep);
-        let displacement;
-        if !found && sweep.finished() {
-            displacement = (position - centre) + velocity;
+        let displacement = if !found && sweep.finished() {
+            (position - centre) + velocity
         } else {
             let mut index = 0;
             loop {
@@ -278,8 +277,8 @@ impl ActorCollider {
                 break;
             }
             self.store_contact_planes();
-            displacement = position - centre;
-        }
+            position - centre
+        };
         self.previous_centre = displacement + centre;
         self.previous_radius = self.radius;
         self.no_ground_counter = if self.floor.depth < 0. {

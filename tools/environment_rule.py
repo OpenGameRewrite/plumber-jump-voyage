@@ -261,6 +261,8 @@ class Judge:
                              dict(MaxCount=256, Name='Body', Radius=1000., Type='EnemyBody')]
                         and part.get('static') is True
                         and part.get('translate') == [p.get('Translate', {}).get(a) for a in 'XYZ']
+                        and p.get('Rotate') == dict(X=0.,Y=0.,Z=0.)
+                        and p.get('Scale') == dict(X=1.,Y=1.,Z=1.)
                         and part.get('rotate') == [0.,0.,0.] and part.get('scale') == [1.,1.,1.]):
                     self._paint_floor = (paint['host'], part['translate'])
         self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
@@ -553,7 +555,8 @@ class Judge:
         for c in parse_contacts(self.rows[f].get("contacts")):
             host = c["host"]
             where = f" ({c['self']}:{c['self_type']} vs {c['other']}:{c['other_type']}" + (f", {c['host_class']}" if c["host_class"] else "") + ")"
-            if c['host_class'] == 'PaintObj':
+            if (c['host_class'] == 'PaintObj' and self._paint_floor is not None
+                    and host == self._paint_floor[0]):
                 if self._paint_contact(f, c):
                     v.accept(f, "exported obj7234 PaintObj floor",
                              "Forest scenario 1 static placement/KCL; ConfirmPaintObj rejected by Mario's original dispatch")
@@ -613,7 +616,8 @@ class Judge:
         host, position = self._paint_floor
         floor = self._hosts.get(f, {}).get('ground', {})
         base = tuple(float(f'{f32(f32(x)-f32(s)):.6f}') for x,s in zip(position, self._start))
-        if (contact['who'] != 'player' or contact['host'] != host or contact['other'] != 'Body'
+        if (contact['host_class'] != 'PaintObj' or contact['who'] != 'player'
+                or contact['host'] != host or contact['other'] != 'Body'
                 or contact['other_type'] != '9' or not re.fullmatch(r'[1-9][0-9]*', contact['actor'])
                 or floor.get('host') != host or floor.get('base') != base
                 or floor.get('moving') != '0' or floor.get('parts_flag') == '0'):

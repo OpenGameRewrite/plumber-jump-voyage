@@ -63,6 +63,11 @@ again. The seed keeper is therefore one step ahead after pickup. Those runs
 remain refused in lockstep; no comparison margin or source-state injection
 compensates for either limit.
 
+A chosen-nerve reconstruction can also repeat the pickup button with a keeper
+that already holds the seed. It retains the existing `carry_release_unavailable`
+snapshot diagnostic and keeper advancement; it cannot send a second object
+action or start a throw. Ordinary free replay implements the release below.
+
 Normal front seed throws now use the independent keeper's Throw phase (3),
 five-step release, ten-step inhibition, CarryFrontThrow sub animation and the
 throw-facing quaternion after the movement state. The seed's own actor collider,
