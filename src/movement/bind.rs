@@ -15,10 +15,12 @@ use super::*;
 /// (`calcNerveEaseOutRate(this, 12)`, 0x25c2a0 / literal 0xc).
 const MOVE_IN_STEPS: u32 = 12;
 /// `exeIn` hides the puppet from this step when the pipe and its destination are in
-/// different dimensions (`mov w9, #0x32` at 0x25c4a8) and from 60 otherwise (0x25c49c).
+/// different dimensions (`mov w9, #0x32` at 0x25c4ac) and from 60 otherwise (`mov w8, #0x3c` at 0x25c4a8).
 const IN_STEPS_BETWEEN_DIMENSIONS: u32 = 50;
 const IN_STEPS_SAME_DIMENSION: u32 = 60;
-/// The Body sensor of the player (sphere radius and centre height above the feet).
+/// The Body sensor of the player (sphere radius and centre height above the feet). GUESS
+/// (not yet traced to the sensor registration code): the values are what the recorder logged
+/// for the registered sensor (`game.dimension_sensors.csv`, Mario Body: 50, 75 above the feet).
 const BODY_RADIUS: f32 = 50.;
 const BODY_HEIGHT: f32 = 75.;
 

@@ -672,6 +672,8 @@ impl Recorder {
         // row), which is the frame the controller holds after its step.
         let shown = if matches!(p.anim.name, "Move" | "MoveMoon") {
             p.shown_frame()
+        } else if p.model_switch_row() {
+            0.
         } else if p.puppet_synced_row() {
             // A pipe's puppet action: the first row shows the synced counter.
             p.anim.rate

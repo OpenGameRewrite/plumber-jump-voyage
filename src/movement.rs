@@ -1441,6 +1441,8 @@ pub struct Player {
     bound_to: Option<usize>,
     puppet_hidden: bool,
     puppet_clip_pending: bool,
+    /// The model changed this step: the new model's animator has not synced its counter yet.
+    model_switch_row: bool,
     puppet_first_row: bool,
     bind_staged: Vec<usize>,
     bind_ready: Vec<usize>,
@@ -1645,6 +1647,7 @@ impl Default for Player {
             bound_to: None,
             puppet_hidden: false,
             puppet_clip_pending: false,
+            model_switch_row: false,
             puppet_first_row: false,
             bind_staged: Vec::new(),
             bind_ready: Vec::new(),
@@ -2329,6 +2332,11 @@ impl Player {
             return 0;
         }
         crate::local_assets::interp_frames(to, from) as u32
+    }
+    /// The row of a model switch: the new animator's counter still reads 0 while its pose
+    /// layer shows the synced frame (`PlayerModelChangerHakoniwa` restarts the action).
+    pub fn model_switch_row(&self) -> bool {
+        self.model_switch_row
     }
     /// The first row of a clip a pipe's puppet action started (see `play_puppet_action`).
     pub fn puppet_synced_row(&self) -> bool {
@@ -3109,6 +3117,7 @@ impl Player {
             self.dimension
                 .update(&mesh.dimension, mesh.to_game_vec(self.position_cm()));
             self.dimension_diagnostic = self.dimension.diagnostic(&mesh.dimension);
+            self.model_switch_row = self.dimension.change_2d || self.dimension.change_3d;
             if self.dimension.change_2d {
                 self.events.push(Fx::Change2D);
             }
