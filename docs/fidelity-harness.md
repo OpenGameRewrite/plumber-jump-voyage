@@ -18,17 +18,43 @@ is near zero. Its original strict predicates, signed zeros, negative correction
 and positive correction cap are retained. Optional `PJV_DIMENSION_CASES` and
 `PJV_DIMENSION_KEEPER_CASES` exercise these functions against local executable
 oracle results generated from synthetic inputs. No trace trajectory supplies a
-rule, and the native simulation reads no dimension/pipe side files.
+rule, and the native simulation reads no dimension/pipe side file except the camera
+director's interpolation flag described below.
 
-This foundation does **not** implement Dokan puppets, camera completion, model
-switching, the 2D disk collider/filter, Run2D or 2D input/jump wiring. Mario's
-keeper starts invalid in the existing 3D replay initialization contract. Spawning
-directly in a 2D area needs the original conditional initAfterPlacement path;
-moving/switch-controlled areas also need independent source state. The snap
-helper is not yet applied to Mario: gravity/pose/rotation-centre correction and
-collider reset must be connected together. All four wave16 recordings remain
-unsupported and receive no environment exemption. No 8-bit asset is installed
-or substituted, and no 2D presentation parity is claimed.
+## Dokan side entrance into a 2D area (partial port)
+
+`movement/bind.rs` owns `Move::Bind` / `Move::BindFall` and one actor plus puppet
+controller per exported pipe (`dokans` of the 2D source export, `--geometry`). Order
+as the original scheduler is sampled: the sensor pair list is two updates old,
+Mario's update sends BindStart (`dokan.rs` ports the side/3D branch of
+`judgeMsgBindStart`) and BindInit; the pipe actor (nerve step, then the controller's
+step) runs after Mario inside the same frame, which the port executes at the start
+of the next player step. The controller blends the saved pose into the mouth pose
+over 12 steps, hides the player at step 50 (60 when both pipes share a dimension),
+the actor warps to the upright Dokan2D mouth and validates the keeper (the model
+and the collision form change on the next player update), waits for the camera,
+plays `DokanOut`, ends the puppet with twice the area's gravity and PlayerStateBind
+EndFall falls onto the 2DOnly floor. The installed Mario assets need the six
+original clips `DokanSideIn DokanSideOut DokanIn DokanOut DokanReady DokanJump`
+(`convert-outfits.py --add-clip ...` then `--curves`) and the sound table needs the
+`2D変身` reaction plus the `HrIn2DArea` play (`extract-sounds.py --add-reaction` and
+`--add-play ... --vgmstream`).
+
+**Camera director input.** The camera director is not simulated. Its
+`isActiveCameraInterpole` state (the pipe waits on it before it lets Mario out;
+`CameraInterpole::start` 0xa49e24 derives the step count from camera poses the replay
+does not have) is therefore a replay input like the camera pose: `TraceFile` reads the
+`camera_active` samples of `game.pipes.csv` next to the camera trace into
+`Orders::camera_interpolating`. No other pipe or movement field is read from a
+recording.
+
+Not ported: 2D input (`PlayerInput::updateInput2D`, `calcHoldMoveInput2D`),
+`PlayerStateRun2D`, 2D Fall/Jump, the return trip through the upright pipe, the
+8-bit model's own skeleton bind pose and joint translations (row of the model switch
+and the DokanOut clip), moving or switched areas and the disk collider's moving parts.
+The four wave16 fixtures therefore remain REFUSED and no environment exemption exists;
+`2d-jump-short` rows before the 2D run match an unqualified raw diagnostic except the
+model-switch row's animation counter and the 8-bit joints' placeholder positions.
 
 ## CapTrampoline spin jump
 

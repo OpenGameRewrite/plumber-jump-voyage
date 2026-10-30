@@ -1,8 +1,45 @@
 use super::*;
 
 pub(super) fn run() {
+    side_bind_judge_follows_the_original_gates();
     original_mouth_and_puppet_pose_operations();
     executable_entry_cases();
+}
+
+/// `judgeMsgBindStart` (0x25b2f0) side branch: speed along the pipe's up axis above 0.4,
+/// facing against that axis, and the player below the pipe's origin.
+#[cfg_attr(test, test)]
+fn side_bind_judge_follows_the_original_gates() {
+    let source = serde_json::json!({
+        "placement": {
+            "Id": "synthetic", "UnitConfigName": "Dokan",
+            "IsConnectToCollision": false, "IsNoSnap": false, "IsMoon": false,
+            "IsExitOnly": false, "Scale": {"X": 1., "Y": 1., "Z": 1.}
+        },
+        "destination_id": "other",
+        // Side direction: the up axis is world +X, the front -Z.
+        "raw_matrix": [0., 1., 0., 0., 1., 0., 0., 0., 0., 0., -1., 0.],
+        "sensors": [{"Name": "Bind", "Radius": 80., "Y": 120.}]
+    });
+    let pipe = Dokan::load(&source, &DimensionAreas::default()).unwrap();
+    let (below, facing, going) = (Vec3::new(50., -30., 0.), Vec3::NEG_X, Vec3::NEG_X);
+    assert!(pipe.accepts_side_bind(below, facing, going));
+    assert!(
+        !pipe.accepts_side_bind(below, facing, Vec3::ZERO),
+        "standing still"
+    );
+    assert!(
+        !pipe.accepts_side_bind(below, facing, Vec3::new(-0.3, 0., 0.)),
+        "0.4 limit"
+    );
+    assert!(
+        !pipe.accepts_side_bind(below, Vec3::X, going),
+        "facing along the up axis"
+    );
+    assert!(
+        !pipe.accepts_side_bind(Vec3::new(50., 30., 0.), facing, going),
+        "above the origin"
+    );
 }
 
 #[cfg_attr(test, test)]
