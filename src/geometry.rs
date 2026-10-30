@@ -111,6 +111,7 @@ pub struct TriangleMesh {
     moving_triangles: Vec<u32>,
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
+    pub dimension: crate::movement::dimension::DimensionAreas,
     pub death: crate::water::WaterAreas,
     pub snap_move: Vec<crate::water::WaterAreas>,
     pub recovery: crate::water::WaterAreas,
@@ -273,6 +274,7 @@ impl TriangleMesh {
             water: crate::water::WaterAreas::from_export(&root["areas"])
                 .with_oceans(&root["ocean_waves"]),
             death: crate::water::WaterAreas::from_export_named(&root["areas"], "DeathArea"),
+            dimension: crate::movement::dimension::DimensionAreas::from_export(&root["areas"]),
             snap_move: root["areas"]
                 .as_array()
                 .into_iter()

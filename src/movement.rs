@@ -234,6 +234,7 @@ mod damage_fire;
 mod damage_life;
 mod damage_swim;
 pub mod death;
+pub mod dimension;
 mod entrance_camera;
 pub mod external_velocity;
 mod force_run;
@@ -1093,6 +1094,8 @@ struct PoseTilt {
 #[derive(Component, Debug)]
 pub struct Player {
     pub constants: &'static PlayerConstants,
+    pub dimension: dimension::DimensionKeeper,
+    pub dimension_diagnostic: String,
     is_moon: bool,
     /// State changes decided last step, waiting for their first step.
     nerve: Nerve,
@@ -1423,8 +1426,13 @@ impl Default for Player {
         // begins on the first step.
         let mut nerve = Nerve::default();
         nerve.queue("Wait", |_| {});
+        let mut dimension = dimension::DimensionKeeper::default();
+        // PlayerActorHakoniwa::initAfterPlacement, 1.0.0 0x41dc04.
+        dimension.invalidate();
         Self {
             constants: &PlayerConstants::NORMAL,
+            dimension,
+            dimension_diagnostic: String::new(),
             is_moon: false,
             nerve,
             fire: FireControl::default(),
@@ -3014,6 +3022,11 @@ impl Player {
         if o.reset {
             self.reset();
             return;
+        }
+        if let Some(mesh) = &scene.mesh {
+            self.dimension
+                .update(&mesh.dimension, mesh.to_game_vec(self.position_cm()));
+            self.dimension_diagnostic = self.dimension.diagnostic(&mesh.dimension);
         }
         self.note_frame_start_for_joints();
         self.own_cap_trample = false;
@@ -6135,6 +6148,7 @@ mod spin_checks;
 mod wall_air_checks;
 
 pub fn self_check() {
+    dimension::self_check();
     cap_trampoline::self_check();
     spin_flower::self_check();
     sand_geyser::self_check();

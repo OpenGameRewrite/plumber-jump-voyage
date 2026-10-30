@@ -4,6 +4,32 @@ Development tooling for comparing the controller with the original game frame
 by frame. Nothing here needs game data; the optional sound table
 (`assets/local/sounds/player.json`) only adds sound names to the trace.
 
+## Dimension keeper (bounded foundation)
+
+`movement/dimension.rs` owns the six dimension flags, priority/ignore selection,
+the current and last nonempty movement-area sets, and the cube/cylinder/disk
+surface queries. Static `2DMoveArea` / `2DKeepArea` placements come from the
+geometry export. Invalid keepers refresh containment without entering 2D.
+The additive `dimension_keeper` column reports flags and selected placement IDs;
+it does not imply a model or collision-form switch.
+
+The positional snap removes lock-axis velocity even when its supplied length
+is near zero. Its original strict predicates, signed zeros, negative correction
+and positive correction cap are retained. Optional `PJV_DIMENSION_CASES` and
+`PJV_DIMENSION_KEEPER_CASES` exercise these functions against local executable
+oracle results generated from synthetic inputs. No trace trajectory supplies a
+rule, and the native simulation reads no dimension/pipe side files.
+
+This foundation does **not** implement Dokan puppets, camera completion, model
+switching, the 2D disk collider/filter, Run2D or 2D input/jump wiring. Mario's
+keeper starts invalid in the existing 3D replay initialization contract. Spawning
+directly in a 2D area needs the original conditional initAfterPlacement path;
+moving/switch-controlled areas also need independent source state. The snap
+helper is not yet applied to Mario: gravity/pose/rotation-centre correction and
+collider reset must be connected together. All four wave16 recordings remain
+unsupported and receive no environment exemption. No 8-bit asset is installed
+or substituted, and no 2D presentation parity is claimed.
+
 ## CapTrampoline spin jump
 
 `tools/export-cap-trampoline.py` adds the original placement, InitSensor data and
