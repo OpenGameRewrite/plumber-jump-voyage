@@ -1,48 +1,390 @@
-//! GrowFlowerSeed release, flight and support connection.
+//! `GrowFlowerSeed`: the placed seed that rests on the ground, is carried and thrown.
+//!
+//! The actor runs its nerve, then `control`, then its collider (`LiveActor::movement`). While it
+//! waits, the state `GrowSeedStateWait` pulls it down, bounces it off what it hits and ties it to
+//! the ground it comes to rest on. A hold ends in `GrowFlowerSeed::exeThrow`, the actor
+//! falling into a death area revives after 300 steps.
+//!
+//! Ported: the throw (`GrowSeedUtil::throwFromPlayer`, the arrow check that moves the seed to the
+//! player), flight and landing on static terrain with `ActorCollider`, resting (the ground
+//! connector) and the death area. Not ported (never reached by the fixtures, each listed in the
+//! port notes): water, quicksand and jump-pad floors, other actors' touch messages, moving
+//! terrain, the seed's rolling visual and the random orientation of a revival.
+use super::actor_collider::{ActorCollider, StrikeHit, Terrain};
+use super::pose_math::{ActorPose, dot, squared_length, try_normalize_or_zero};
 use super::*;
+
+/// The collider radius the seed is made with (recorded at init: 40).
+const COLLIDER_RADIUS: f32 = 40.;
+/// GUESS: the collider's centre lies one radius above the translation (the offset the actor
+/// sets when it starts waiting, `[0x138]`, was not decoded; the rest height of the fixtures
+/// matches this to the bit).
+const COLLIDER_OFFSET: f32 = 40.;
+/// `GrowSeedStateWait`'s parameters (data at 0x18bafb0): gravity, then horizontal and vertical
+/// scale in the air and on the ground.
+const GRAVITY: f32 = 1.8;
+const AIR_SCALE: (f32, f32) = (1.0, 0.995);
+const GROUND_SCALE: (f32, f32) = (0.85, 0.8);
+/// A ground contact steeper than this does not count as ground.
+const GROUND_ANGLE_DEGREES: f32 = 60.;
+/// The rebound keeps this share of the speed and gives back this share of the normal speed.
+const REBOUND: f32 = 0.7;
+/// The seed rests when its horizontal speed is under this.
+const REST_SPEED: f32 = 1.5;
+/// Steps a landing counts as one contact for the hit reactions (`GrowSeedStateWait +0x50`).
+const CONTACT_COUNTER: i32 = 10;
+/// `exeRevival`: steps hidden before the seed returns to its placement.
+const REVIVAL_STEPS: u32 = 300;
+/// A seed is picked up once its pickup counter reached this (`GrowFlowerSeed::receiveMsg`).
+pub(super) const PICKUP_AGE: u32 = 31;
+/// The throw helper scales the body sensor's radius by this for its arrow check.
+const ARROW_SENSOR_SCALE: f32 = 1.5;
+const BODY_SENSOR_RADIUS: f32 = 50.;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Nerve {
+    Wait,
+    Hold,
+    Throw,
+    Revival,
+}
+
+/// The two nerves of `GrowSeedStateWait` that matter on land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WaitState {
+    NoConnect,
+    Connecting,
+}
 
 #[derive(Clone, Debug)]
 pub struct Seed {
     pub id: String,
     pub position: Vec3,
     pub velocity: Vec3,
-    pub(super) ground: Option<Vec3>,
-    pub(super) settled: bool,
-    pub(super) connecting: Option<usize>,
-    pub(super) rebound: bool,
+    /// `GrowFlowerSeed +0x17c`: control steps since the last throw (a pickup needs 31).
     pub(super) age: u32,
-    flight_step: Option<u32>,
-    support: Option<(u32, Vec3)>,
-    contact: Option<Vec3>,
-    offset: Vec3,
-    revival: Option<u32>,
+    nerve: Nerve,
+    pending_nerve: Option<Nerve>,
+    nerve_step: u32,
+    state: WaitState,
+    pending_state: Option<WaitState>,
+    state_step: u32,
+    /// The pose the actor was last given (a front-up quaternion after a throw).
+    quat: Quat,
+    /// The up axis of the actor's base matrix: it follows the pose at the end of each update.
+    pose_up: Vec3,
+    collider: ActorCollider,
+    collide_off: bool,
+    contact_counter: i32,
+    /// The bounce happens on every second contact (`GrowSeedStateWait +0x62`).
+    rebound_pending: bool,
+    /// The collision part the seed came to rest on (the ground connector's host).
+    connection: Option<usize>,
+    home: Vec3,
+}
+
+impl Seed {
+    fn new(id: String, position: Vec3) -> Self {
+        Self {
+            id,
+            position,
+            velocity: Vec3::ZERO,
+            age: 1,
+            nerve: Nerve::Wait,
+            pending_nerve: None,
+            nerve_step: 0,
+            state: WaitState::NoConnect,
+            pending_state: None,
+            state_step: 0,
+            quat: Quat::IDENTITY,
+            pose_up: Vec3::Y,
+            collider: ActorCollider::new(COLLIDER_RADIUS, COLLIDER_OFFSET, position),
+            collide_off: false,
+            contact_counter: 0,
+            rebound_pending: false,
+            connection: None,
+            home: position,
+        }
+    }
+
+    fn set_nerve(&mut self, nerve: Nerve) {
+        self.pending_nerve = Some(nerve);
+    }
+
+    fn set_state(&mut self, state: WaitState) {
+        self.pending_state = Some(state);
+    }
+
+    /// Applies the nerve change asked for during the previous update.
+    fn enter_pending_nerve(&mut self) {
+        if let Some(nerve) = self.pending_nerve.take() {
+            self.nerve = nerve;
+            self.nerve_step = 0;
+            if nerve == Nerve::Wait {
+                // The state is started afresh with the nerve.
+                self.state = WaitState::NoConnect;
+                self.pending_state = None;
+                self.state_step = 0;
+            }
+        }
+    }
+
+    /// `MapObjStatePlayerHold::exeHold`: the seed follows the carrying pose.
+    pub(super) fn follow_hold(&mut self, pose: &look_joint::Mat34) {
+        if self.nerve != Nerve::Hold {
+            self.nerve = Nerve::Hold;
+            self.pending_nerve = None;
+            self.nerve_step = 0;
+            self.velocity = Vec3::ZERO;
+        }
+        self.position = look_joint::translation(pose);
+        self.pose_up = Vec3::new(pose[0][1], pose[1][1], pose[2][1]);
+        self.nerve_step += 1;
+        self.age += 1;
+    }
+
+    /// `GrowSeedStateRevival::appear` invalidates the hit sensors until the seed is back.
+    pub(super) fn hit_sensors_valid(&self) -> bool {
+        self.nerve != Nerve::Revival
+    }
+
+    fn update(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        self.enter_pending_nerve();
+        match self.nerve {
+            Nerve::Hold => {}
+            Nerve::Throw => self.exe_throw(),
+            Nerve::Wait => self.exe_wait(mesh),
+            Nerve::Revival => self.exe_revival(),
+        }
+        self.nerve_step += 1;
+        self.control(mesh);
+        self.update_collider(mesh);
+        // The model's pose, and with it the base matrix, is brought up to date last.
+        self.pose_up = ActorPose::new(self.quat).up();
+    }
+
+    /// `GrowFlowerSeed::exeThrow`, a single step: the collision starts afresh and the seed waits.
+    fn exe_throw(&mut self) {
+        if self.nerve_step == 0 {
+            self.collide_off = false;
+            self.collider.invalidate(self.position, self.pose_up);
+            self.age = 0;
+        }
+        self.set_nerve(Nerve::Wait);
+    }
+
+    /// `GrowFlowerSeed::exeWait` on land: the state decides what the seed does this step.
+    fn exe_wait(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        if self.nerve_step == 0 {
+            self.collider.set_offset_y(COLLIDER_OFFSET);
+        }
+        if let Some(state) = self.pending_state.take() {
+            self.state = state;
+            self.state_step = 0;
+        }
+        match self.state {
+            WaitState::NoConnect => self.exe_no_connect(mesh),
+            WaitState::Connecting => self.exe_connecting(mesh),
+        }
+        self.state_step += 1;
+    }
+
+    /// `GrowSeedStateWait::exeNoConnect`: bounce, come to rest, gravity and drag.
+    fn exe_no_connect(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        if self.state_step == 0 {
+            self.collide_off = false;
+            self.collider.invalidate(self.position, self.pose_up);
+            self.contact_counter = CONTACT_COUNTER;
+        }
+        let ground = self
+            .collider
+            .floor
+            .is_present()
+            .then(|| self.collider.floor.hit);
+        let ground_normal = ground
+            .map(|hit| hit.normal)
+            .filter(|normal| angle_to_up_degrees(*normal) < GROUND_ANGLE_DEGREES);
+        let wall = self
+            .collider
+            .wall
+            .is_present()
+            .then(|| self.collider.wall.hit);
+        let touching = ground_normal.is_some() || wall.is_some();
+        let contact_normal = ground_normal.or(wall.map(|hit| hit.normal));
+        if ground_normal.is_some() {
+            self.contact_counter = CONTACT_COUNTER;
+            let horizontal = Vec3::new(self.velocity.x, 0., self.velocity.z);
+            if squared_length(horizontal) < REST_SPEED * REST_SPEED {
+                self.velocity = Vec3::ZERO;
+                self.connection = mesh.triangles[self.collider.floor.hit.face as usize]
+                    .local
+                    .map(|local| local.part as usize);
+                self.set_state(WaitState::Connecting);
+            }
+        }
+        if touching {
+            let first = !self.rebound_pending;
+            self.rebound_pending = first;
+            if let (true, Some(normal)) = (first, contact_normal) {
+                let into = dot(normal, self.velocity);
+                if into < 0. {
+                    self.velocity -= normal * into;
+                    self.velocity *= REBOUND;
+                    self.velocity -= normal * into * REBOUND;
+                }
+            }
+            self.contact_counter = CONTACT_COUNTER;
+        }
+        self.velocity.y -= GRAVITY;
+        let (horizontal, vertical) = if ground_normal.is_some() {
+            GROUND_SCALE
+        } else {
+            AIR_SCALE
+        };
+        self.velocity = Vec3::new(
+            self.velocity.x * horizontal,
+            self.velocity.y * vertical,
+            self.velocity.z * horizontal,
+        );
+        self.contact_counter -= 1;
+    }
+
+    /// `GrowSeedStateWait::exeConnecting`: tied to the ground, the seed no longer collides.
+    fn exe_connecting(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        if self.state_step == 0 {
+            self.collide_off = true;
+        }
+        self.velocity = Vec3::ZERO;
+        // The connector carries the seed with its host: out of the part's frame and back in.
+        // For terrain that stands still this is the identity up to single-precision noise.
+        if let Some(part) = self.connection {
+            let frame = &mesh.parts[part];
+            let local = crate::prism::transform_point(&frame.inverse, self.position.to_array());
+            self.position = Vec3::from_array(crate::prism::transform_point(&frame.base, local));
+        }
+    }
+
+    /// Where the seed's body sensor is: its offset follows the actor's pose.
+    pub(super) fn body_sensor(&self, offset: f32) -> Vec3 {
+        if self.nerve == Nerve::Hold {
+            self.position + Vec3::Y * offset
+        } else {
+            self.position + self.pose_up * offset
+        }
+    }
+
+    /// `GrowFlowerSeed::exeRevival`: hidden for 300 steps, then back at the placement.
+    fn exe_revival(&mut self) {
+        if self.nerve_step == 0 {
+            self.velocity = Vec3::ZERO;
+            self.collide_off = true;
+        }
+        if self.nerve_step >= REVIVAL_STEPS {
+            self.position = self.home;
+            self.collide_off = false;
+            // (The revival draws a random orientation; it does not touch the trace.)
+            self.age = 0;
+            self.set_nerve(Nerve::Wait);
+        }
+    }
+
+    /// `GrowFlowerSeed::control`: the death area sends the seed to revival.
+    fn control(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        let in_death_area = mesh.death.volume_at(self.position).is_some();
+        if in_death_area && !matches!(self.nerve, Nerve::Hold | Nerve::Revival) {
+            self.set_nerve(Nerve::Revival);
+        } else {
+            self.age += 1;
+        }
+    }
+
+    /// `GrowFlowerSeed::updateCollider`: no collision while it is held.
+    fn update_collider(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        if self.nerve == Nerve::Hold {
+            return;
+        }
+        if self.collide_off {
+            self.position += self.velocity;
+            self.collider.invalidate(self.position, self.pose_up);
+        } else {
+            self.position +=
+                self.collider
+                    .collide(mesh, self.position, self.pose_up, self.velocity);
+        }
+    }
+}
+
+fn angle_to_up_degrees(normal: Vec3) -> f32 {
+    normal.dot(Vec3::Y).clamp(-1., 1.).acos().to_degrees()
+}
+
+impl Terrain for crate::geometry::TriangleMesh {
+    fn strike_sphere(&self, centre: Vec3, radius: f32) -> Vec<StrikeHit> {
+        crate::collider::sphere_strike_hits_game(self, centre, radius)
+            .into_iter()
+            .map(|(face, hit)| StrikeHit {
+                face,
+                normal: self.triangles[face as usize].normal,
+                depth: hit.depth,
+                position: hit.position,
+                centre,
+                at_face: hit.is_face(),
+            })
+            .collect()
+    }
 }
 
 impl Player {
-    /// GrowSeedUtil::throwFromPlayer and GrowFlowerSeed's release arrow check.
+    /// Only placement/init state enters the replay. No carry observation file is loaded.
+    pub fn init_flower_seed(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        self.carry.origin = mesh.to_game_vec(Vec3::ZERO);
+        if let Some(source) = mesh
+            .carry_sources
+            .iter()
+            .find(|s| s.class == "GrowFlowerSeed" && s.active)
+        {
+            self.carry.seed = Some(Seed::new(source.id.clone(), source.position));
+        }
+    }
+
+    /// One update of the seed actor, in the original's order for the frame.
+    pub(super) fn update_flower_seed(&mut self, scene: &Course) {
+        let Some(mesh) = scene.mesh.as_deref() else {
+            return;
+        };
+        let held_pose = self.carry.held.then_some(self.carry.hold).flatten();
+        let Some(seed) = &mut self.carry.seed else {
+            return;
+        };
+        if self.carry.held {
+            if let Some(pose) = held_pose {
+                seed.follow_hold(&pose);
+            }
+            return;
+        }
+        seed.update(mesh);
+    }
+
+    /// `GrowFlowerSeed::receiveMsg` for PlayerRelease: the pose turns to the player's front, the
+    /// throw helper (0x291934) aims it, and the seed starts its throw.
     pub(super) fn release_flower_seed(&mut self, scene: &Course) {
-        let front = self.pose_axes().1.with_y(0.);
-        let front = pose_math::try_normalize_or_zero(front).0;
-        let direction = pose_math::turn_vec_to_vec_degree(front, Vec3::Y, 70.);
-        let velocity =
-            pose_math::try_normalize_or_zero(direction).0 * 28. + self.units_per_frame().with_y(0.);
+        let (_, front) = self.pose_axes();
+        let flat_front = try_normalize_or_zero(Vec3::new(front.x, 0., front.z)).0;
+        let direction = pose_math::turn_vec_to_vec_degree(flat_front, Vec3::Y, 70.);
+        let velocity = try_normalize_or_zero(direction).0 * 28. + self.units_per_frame().with_y(0.);
         let player_position = self.position_cm();
         let Some(seed) = &mut self.carry.seed else {
             return;
         };
+        seed.quat = pose_math::quat_front_up(front, Vec3::Y);
         seed.velocity = velocity;
-        seed.settled = false;
-        seed.connecting = None;
-        seed.ground = None;
-        seed.rebound = false;
-        seed.flight_step = Some(0);
-        seed.support = None;
-        seed.contact = None;
-        seed.offset = self.carry.hold.map_or(Vec3::Y * 40., |m| Vec3::new(m[0][1],m[1][1],m[2][1]) * 40.);
         if let Some(mesh) = scene.mesh.as_deref() {
-            let direction = pose_math::try_normalize_or_zero(velocity).0;
-            let extent = pose_math::squared_length(seed.position + direction * 75.).sqrt();
-            let arrow = direction * extent;
+            // The helper tests an arrow behind the seed (as long as the distance of its
+            // outer point from the world origin) and moves the seed to the player on a hit.
+            let direction = try_normalize_or_zero(velocity).0;
+            let reach = ARROW_SENSOR_SCALE * BODY_SENSOR_RADIUS;
+            let length = squared_length(seed.position + direction * reach).sqrt();
+            let arrow = direction * length;
             if crate::collider::first_strike(
                 mesh,
                 mesh.relative_vec(seed.position - arrow),
@@ -54,210 +396,8 @@ impl Player {
                 seed.position = mesh.to_game_vec(player_position);
             }
         }
-        self.carry.released = true;
+        seed.collide_off = false;
+        seed.collider.invalidate(seed.position, seed.pose_up);
+        seed.set_nerve(Nerve::Throw);
     }
-    /// Only placement/init state enters the replay. No carry observation file is loaded.
-    pub fn init_flower_seed(&mut self, mesh: &crate::geometry::TriangleMesh) {
-        self.carry.origin = mesh.to_game_vec(Vec3::ZERO);
-        if let Some(source) = mesh
-            .carry_sources
-            .iter()
-            .find(|s| s.class == "GrowFlowerSeed" && s.active)
-        {
-            self.carry.seed = Some(Seed {
-                id: source.id.clone(),
-                position: source.position,
-                velocity: Vec3::new(0., -1.8 * 0.995, 0.),
-                ground: None,
-                settled: false,
-                connecting: None,
-                rebound: false,
-                age: 1,
-                flight_step: None,
-                support: None,
-                contact: None,
-                offset: Vec3::Y * 40.,
-                revival: None,
-            });
-        }
-    }
-
-    pub(super) fn update_flower_seed(&mut self, scene: &Course) {
-        let Some(mesh) = scene.mesh.as_deref() else {
-            return;
-        };
-        let Some(seed) = &mut self.carry.seed else {
-            return;
-        };
-        if self.carry.held {
-            if let Some(hold) = self.carry.hold {
-                seed.position = look_joint::translation(&hold);
-                seed.velocity = Vec3::ZERO;
-            }
-            return;
-        }
-        seed.age += 1;
-        if self.carry.released {
-            seed.update_released(mesh);
-            return;
-        }
-        if seed.settled {
-            if let Some(part) = seed.connecting {
-                let frame = &mesh.parts[part];
-                let local = crate::prism::transform_point(&frame.inverse, seed.position.to_array());
-                seed.position = Vec3::from_array(crate::prism::transform_point(&frame.base, local));
-            }
-            return;
-        }
-        seed.position += seed.velocity;
-        let centre = mesh.relative_vec(seed.position + Vec3::Y * 40.);
-        let mut normal = None;
-        let was_connecting = seed.connecting.is_some();
-        for (triangle, hit) in crate::collider::sphere_strike_hits(mesh, centre, 40.) {
-            let n = mesh.triangles[triangle as usize].normal;
-            if hit.depth > 0. {
-                seed.position += n * hit.depth;
-            }
-            if n.y > 0.5 {
-                normal = Some(n);
-                seed.connecting = mesh.triangles[triangle as usize]
-                    .local
-                    .map(|p| p.part as usize);
-            }
-        }
-        if let Some(n) = normal {
-            if seed.velocity.with_y(0.).length_squared() < 1.5 * 1.5 {
-                seed.velocity = Vec3::ZERO;
-                if was_connecting {
-                    seed.settled = true;
-                    seed.ground = Some(n);
-                    return;
-                }
-            }
-            seed.rebound = !seed.rebound;
-            if seed.rebound {
-                let d = pose_math::dot(n, seed.velocity);
-                if d < 0. {
-                    seed.velocity = (seed.velocity - n * d) * 0.7 - (n * d) * 0.7;
-                }
-            }
-        }
-        // GrowSeedStateWait's ground/air gravity and drag (0x18bafb0).
-        seed.velocity.y -= 1.8;
-        seed.velocity.x *= if normal.is_some() { 0.85 } else { 1. };
-        seed.velocity.z *= if normal.is_some() { 0.85 } else { 1. };
-        seed.velocity.y *= if normal.is_some() { 0.8 } else { 0.995 };
-        seed.ground = normal;
-    }
-}
-
-impl Seed {
-    fn update_released(&mut self, mesh: &crate::geometry::TriangleMesh) {
-        if let Some(step) = &mut self.revival {
-            // GrowSeedStateRevival uses actor steps, not time since pickup. The
-            // 300-step random reappearance requires an independently seeded RNG.
-            *step += 1;
-            self.velocity = Vec3::ZERO;
-            return;
-        }
-        let step = self.flight_step.unwrap_or(0);
-        self.flight_step = Some(step + 1);
-        if self.settled {
-            if let Some(part) = self.connecting {
-                let frame = &mesh.parts[part];
-                let local = crate::prism::transform_point(&frame.inverse, self.position.to_array());
-                self.position = Vec3::from_array(crate::prism::transform_point(&frame.base, local));
-            }
-            return;
-        }
-        if step > 0 {
-            let ground = self.support.filter(|(_, n)| n.y > 0.5);
-            if ground.is_some() && pose_math::squared_length(self.velocity.with_y(0.)) < 1.5 * 1.5 {
-                self.velocity = Vec3::ZERO;
-                self.connecting = ground.and_then(|(t,_)| mesh.triangles[t as usize].local.map(|p|p.part as usize));
-                if self.ground.is_some() {
-                    self.settled = true;
-                    return;
-                }
-            }
-            if let Some(normal) = ground.map(|(_, n)| n).or(self.contact) {
-                self.rebound = !self.rebound;
-                if self.rebound {
-                    let dot = pose_math::dot(normal,self.velocity);
-                    if dot < 0. {
-                        self.velocity = (self.velocity - normal * dot) * 0.7 - (normal * dot) * 0.7;
-                    }
-                }
-            }
-            self.velocity.y -= 1.8;
-            self.velocity.x *= if ground.is_some() {0.85} else {1.};
-            self.velocity.z *= if ground.is_some() {0.85} else {1.};
-            self.velocity.y *= if ground.is_some() {0.8} else {0.995};
-            self.ground = ground.map(|(_, n)| n);
-        }
-        // exeThrow retains the held actor matrix. exeWait restores its upright
-        // matrix before the next collision; joint rotation belongs to the model.
-        let offset = if step == 0 { self.offset } else { Vec3::Y * 40. };
-        let mut centre = self.position + offset;
-        self.support = None;
-        self.contact = None;
-        let mut remaining = self.velocity;
-        // al::Collider::collide, static sphere path: includes the initial sample,
-        // componentwise correction extrema, then slides the remaining motion.
-        let mut sweep = SphereSweep::new(centre, remaining, 40.);
-        let mut seen = Vec::new();
-        loop {
-            let hits = crate::collider::sphere_strike_hits(mesh, mesh.relative_vec(sweep.position()),40.);
-            if hits.is_empty() {
-                if sweep.done() { centre = sweep.position(); break; }
-                sweep.advance();
-                continue;
-            }
-            let mut min = Vec3::ZERO;
-            let mut max = Vec3::ZERO;
-            let mut normal = Vec3::ZERO;
-            for (triangle, hit) in hits {
-                let n = mesh.triangles[triangle as usize].normal;
-                if n.y >= 0.34202015 {
-                    self.support = Some((triangle,n));
-                } else if n.y.abs() < 0.34202015 {
-                    self.contact = Some(n);
-                }
-                let fix = n * hit.depth;
-                min = min.min(fix); max = max.max(fix);
-                normal += n;
-            }
-            let fix = min + max;
-            let at = sweep.position() + fix;
-            remaining = sweep.remaining();
-            let axis = if pose_math::squared_length(fix) < 0.001 * 0.001 { normal } else { fix };
-            let axis = pose_math::try_normalize_or_zero(axis).0;
-            let d = pose_math::dot(axis,remaining);
-            if d < 0. { remaining -= axis * d; }
-            if pose_math::dot(self.velocity,remaining) < 0. || sweep.done() || seen.contains(&at) {
-                centre = at; break;
-            }
-            seen.push(at);
-            sweep = SphereSweep::new(at,remaining,40.);
-            sweep.advance();
-        }
-        // LiveActor adds the collider's displacement to the original actor
-        // translation instead of subtracting a possibly rotated offset again.
-        self.position += centre - (self.position + offset);
-        if mesh.death.volume_at(self.position).is_some() {
-            self.revival = Some(0);
-        }
-    }
-}
-
-struct SphereSweep { start: Vec3, motion: Vec3, t: f32, step: f32 }
-impl SphereSweep {
-    fn new(start: Vec3, motion: Vec3, radius: f32) -> Self {
-        let length = pose_math::squared_length(motion).sqrt();
-        Self { start, motion, t: 0., step: if length > 0. { (radius * 0.9).min(35.) / length } else {1.} }
-    }
-    fn position(&self) -> Vec3 { self.start + self.motion * self.t }
-    fn remaining(&self) -> Vec3 { self.motion * (1. - self.t) }
-    fn done(&self) -> bool { self.t >= 1. }
-    fn advance(&mut self) { self.t = (self.t + self.step).min(1.); }
 }

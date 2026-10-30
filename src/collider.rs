@@ -946,6 +946,31 @@ pub fn sphere_strike_hits(mesh: &TriangleMesh, center: Vec3, radius: f32) -> Vec
         .collect()
 }
 
+/// [`sphere_strike_hits`] for a centre in the game's own coordinates, with the touched point
+/// returned in them too (`CollisionParts::checkStrikeSphereCore` keeps the prism hit's point
+/// carried through the part's matrix, and the sphere centre as given). Actor colliders work in
+/// these coordinates, so no start-relative rounding enters their arithmetic.
+pub fn sphere_strike_hits_game(
+    mesh: &TriangleMesh,
+    center: Vec3,
+    radius: f32,
+) -> Vec<(u32, SphereHit)> {
+    mesh.candidates(Aabb::around(mesh.relative_vec(center), radius))
+        .into_iter()
+        .filter_map(|i| {
+            let t = &mesh.triangles[i as usize];
+            Some((i, sphere_hit(mesh, t, center, radius)?))
+        })
+        .collect()
+}
+
+impl SphereHit {
+    /// The sphere's centre lies over the triangle's face, not beside an edge or corner.
+    pub fn is_face(&self) -> bool {
+        self.location == Location::Face
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Hit {
     Sphere(SphereHit),

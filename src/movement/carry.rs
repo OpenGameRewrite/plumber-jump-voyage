@@ -1,4 +1,5 @@
 //! Placement-bound flower objects and the player's independent carry keeper.
+use super::grow_seed;
 pub use super::grow_seed::Seed;
 use super::push_receiver::{PushReceiver, calc_push_trans};
 use super::*;
@@ -68,8 +69,7 @@ pub struct Carry {
     pub hold_matrix: Option<look_joint::Mat34>,
     pub(super) origin: Vec3,
     pub picked_up: bool,
-    pub unsupported_release: bool,
-    pub released: bool,
+    /// The throw released the seed during this keeper update (the standing state already ran).
     pub releasing: bool,
 }
 
@@ -108,7 +108,7 @@ impl Player {
             }
         }
         if let Some(seed) = &self.carry.seed {
-            let at = seed.position + Vec3::Y * 35.;
+            let at = seed.body_sensor(35.);
             sensors.push(look_at::LookSensor {
                 host: "[育つ花]種".into(),
                 name: "Body".into(),
@@ -233,7 +233,7 @@ impl Player {
         let (Some(mesh), Some(seed)) = (scene.mesh.as_deref(), self.carry.seed.as_ref()) else {
             return;
         };
-        if seed.age < 31 {
+        if seed.age < grow_seed::PICKUP_AGE {
             return;
         }
         let feet = mesh.to_game_vec(self.position_cm());
@@ -287,11 +287,13 @@ impl Player {
             self.carry.inhibition = 10;
             self.events.push(Fx::CarryThrow);
             if self.tilt >= STICK_DEADZONE {
+                // updateCarry 0x420d70: the throw turns Mario at once to the stick's direction
+                // on the plane of the ground (`PlayerInput::calcMoveDirection`).
                 let up = self
                     .mesh_ground
                     .filter(|_| self.grounded)
                     .unwrap_or(Vec3::Y);
-                let direction = plane::along_vector_normal_h(self.stick, Vec3::Y, up);
+                let (direction, _) = pose_math::try_normalize_or_zero(self.plane_stick(up));
                 self.set_pose(plane::quat_up_front(up, direction));
             }
         }
@@ -317,9 +319,6 @@ impl Player {
             return;
         }
         if !self.carry.held {
-            if self.carry.released {
-                self.carry.step += 1;
-            }
             return;
         }
         if !self.carry.picked_up {

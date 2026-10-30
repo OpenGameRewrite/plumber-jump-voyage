@@ -224,6 +224,7 @@ pub type ControllerState = (
     hip_spring::HipSpring,
 );
 mod abyss;
+mod actor_collider;
 pub mod carry;
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
@@ -2862,6 +2863,12 @@ impl Player {
         if self.sub.active {
             if self.sub.frame >= self.sub.length {
                 self.sub.active = false;
+                if self.sub.name == "CarryFrontThrow" {
+                    // The carry throw's end restarts the main clip with that clip's own
+                    // interpolation length (recorded: Wait 6, WaitCold 10 steps), unlike
+                    // the shorter fade the cap catch leaves.
+                    self.ended_sub = Some((self.sub.name, self.sub.frame));
+                }
             } else {
                 self.sub.frame += 1.;
             }
@@ -3429,7 +3436,12 @@ impl Player {
                     .invalidate_source_sensor(scene.look_sensors().len() + i * 2 + 1);
             }
         }
-        if self.is_carry() && self.carry.seed.is_some() {
+        if self
+            .carry
+            .seed
+            .as_ref()
+            .is_some_and(|seed| self.is_carry() || !seed.hit_sensors_valid())
+        {
             self.look.invalidate_source_sensor(sensors.len() - 1);
         }
         self.look.step(&actor, enabled, &sensors);
