@@ -1041,3 +1041,6 @@ def self_check():
     assert not in_death_area(dict(area, links=["SwitchAppear"]), [0, -10, 0])
     assert not in_death_area(dict(area, shape="Unknown"), [0, -10, 0])
     assert ranges([1, 2, 3, 5, 7, 8]) == "1-3,5,7-8"
+    # A stopped independent actor remains unproved even after every contact ends.
+    frozen = {0: dict(carry_source='stone=obj1837/00000000/00000000/00000000;stone_limit=stone_runtime_rng_unavailable')}
+    assert 0 in judge_run({0: dict(contacts='')}, frozen, {}).refused
