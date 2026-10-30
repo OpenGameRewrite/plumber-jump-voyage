@@ -143,7 +143,11 @@ impl Player {
             self.joints.pole.release();
         }
         if self.is_carry() && self.carry.phase < 3 {
-            self.joints.pole.ask_carry_front();
+            // Start/Carry copy the keeper's requested angles. Front's block stays zero;
+            // the flower FrontWallKeep agreement requests the existing 30-degree bend.
+            self.joints
+                .pole
+                .ask_carry_front(if self.carry.wall_keep { 30. } else { 0. });
         }
         self.joints.pole.update();
         // `PlayerStateWallCatch::kill` leaves the target at nothing; the spring follows it.

@@ -85,14 +85,30 @@ the sideways fixture ends while hidden in Revival, before its 300-step return.
 return rather than fabricating a respawn.
 
 The exporter also accepts original KickStone placements and their INITIAL joint
-orientation/kick count. This permits selecting the recording's exported Forest
-geometry for a refused diagnostic; it does not install a stone simulator.
+orientation/kick count. Forest scenario 1 obj1837 now has its own native source:
+Front pickup (FrontWallKeep is rejected), `(0,30,65)` attachment, radius60/Y5
+collider, held radius18, collider-derived CollidePush, release collision expansion
+and the deterministic Fall prefix. The independent keeper also evaluates the
+collide-lock-up condition. Front keeps zero hand angles; the flower's existing
+FrontWallKeep contract keeps its 30-degree hand bend.
+
+The source stops before its first unseeded global RNG consumer in the landing
+reaction and reports `stone_runtime_rng_unavailable`; the environment judge
+refuses that frame and every subsequent frozen-source frame even without contacts.
+Wall rebound, water, restart, obstruction cancellation and entry to Roll have
+separate unsupported limits. The fixture's IsRandomKickCount=false skips the
+actor-local init generator, but does not establish the shared runtime RNG order.
+The original stone recording contains no attachment-matrix events; sampled held
+poses and flight velocity retain small f32 differences. No stone contact waiver,
+new numeric margin or full-source PASS is granted. A finite input can measure a
+prefix, but cannot turn this full recording into a strict PASS.
 Forest PaintObj confirmation is accepted only as a rejected message from the
 exported scenario-1 obj7234 floor, with its placement, sensor and KCL identity
 proved. Other PaintObj compositions receive no exemption.
 
-Stone held collision/flight, overhead carry, damage cancellation,
-water and obstruction feedback are not established by these fixtures. Rendered
+Stone held collision/flight is implemented but not strictly certified; later
+rebound/Roll/rest, overhead carry, damage cancellation,
+water and obstruction cancellation remain unestablished. Rendered
 replay poses Mario's carry layer; stage scenery and the flower object's mesh are
 not rendered by this harness.
 

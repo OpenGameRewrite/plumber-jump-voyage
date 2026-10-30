@@ -138,6 +138,14 @@ impl Stone {
         if !self.limit.is_empty() {
             return;
         }
+        if mesh.water.is_water(self.position) {
+            self.limit = "stone_water_unavailable";
+            return;
+        }
+        if mesh.death.volume_at(self.position).is_some() {
+            self.limit = "stone_restart_unavailable";
+            return;
+        }
         if let Some(nerve) = self.pending.take() {
             self.nerve = nerve;
             self.step = 0;
@@ -254,32 +262,43 @@ impl Stone {
             Nerve::Fall => "Fall",
         };
         format!(
-            ";stone={}/{};stone_velocity={};stone_quat={quat};stone_joint={joint};stone_nerve={nerve}/{};stone_radius={:08x};stone_push={};stone_rng_unavailable={}",
+            ";stone={}/{};stone_velocity={};stone_quat={quat};stone_joint={joint};stone_nerve={nerve}/{};stone_radius={:08x};stone_push={};stone_limit={}",
             self.id,
             hex_vec(self.position),
             hex_vec(self.velocity),
             if self.pending.is_some() { 0 } else { self.step },
             self.collider.radius().to_bits(),
             hex_vec(self.push),
-            u8::from(!self.limit.is_empty())
+            self.limit
         )
     }
 }
 
 /// calcQuatRotateDegree/calcRPY followed by MapObjStatePlayerHold's Euler matrix.
 fn rotation_from_joint(q: Quat) -> joint_math::Rows {
-    let pitch = -(q.x * q.z - q.w * q.y) * 2.;
-    let angles = Vec3::new(
-        pose_math::atan2f(
-            (q.w * q.x + q.y * q.z) * 2.,
-            ((q.w * q.w - q.x * q.x) - q.y * q.y) + q.z * q.z,
-        ),
-        pose_math::asinf(pitch),
-        pose_math::atan2f(
-            (q.x * q.y + q.w * q.z) * 2.,
-            ((q.w * q.w + q.x * q.x) - q.y * q.y) - q.z * q.z,
-        ),
-    ) * 57.295_776
+    let opposite_pitch = (q.x * q.z - q.w * q.y) * 2.;
+    let angles = if 1. - opposite_pitch.abs() < 1.192_092_9e-6 {
+        Vec3::new(
+            0.,
+            (opposite_pitch / opposite_pitch.abs()) * -std::f32::consts::FRAC_PI_2,
+            pose_math::atan2f(
+                -((q.x * q.y - q.w * q.z) * 2.),
+                -opposite_pitch * ((q.w * q.y + q.x * q.z) * 2.),
+            ),
+        )
+    } else {
+        Vec3::new(
+            pose_math::atan2f(
+                (q.w * q.x + q.y * q.z) * 2.,
+                ((q.w * q.w - q.x * q.x) - q.y * q.y) + q.z * q.z,
+            ),
+            pose_math::asinf(-opposite_pitch),
+            pose_math::atan2f(
+                (q.x * q.y + q.w * q.z) * 2.,
+                ((q.w * q.w + q.x * q.x) - q.y * q.y) - q.z * q.z,
+            ),
+        )
+    } * 57.295_776
         * pose_math::DEGREES_TO_RADIANS;
     let (sx, sy, sz) = (
         pose_math::sinf(angles.x),
@@ -343,5 +362,61 @@ impl Player {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source() -> Source {
+        Source {
+            id: "test".into(),
+            position: Vec3::new(0., 100., 0.),
+            joint: Quat::IDENTITY,
+        }
+    }
+
+    #[test]
+    fn hold_shrinks_on_actor_entry_and_release_restores_the_collider() {
+        let mesh = crate::geometry::TriangleMesh::from_corners(&[]);
+        let mut stone = Stone::new(&source());
+        stone.pick_up();
+        assert!(!stone.can_pick_up());
+        assert_eq!(stone.collider.radius(), 60.);
+        let hold = [[1., 0., 0., 0.], [0., 1., 0., 100.], [0., 0., 1., 0.]];
+        stone.update(&mesh, Some(&hold), true, Vec3::ZERO, Vec3::Z);
+        assert_eq!(stone.collider.radius(), 18.);
+        assert_eq!(stone.push, Vec3::ZERO);
+        assert_eq!((stone.nerve, stone.step), (Nerve::Hold, 1));
+        stone.release(&mesh, Vec3::Z);
+        assert_eq!(stone.collider.radius(), 60.);
+        assert_eq!(stone.velocity, Vec3::new(0., 32.5, 22.5));
+        assert_eq!(stone.pending, Some(Nerve::Fall));
+        stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
+        assert!(stone.velocity.y < 32.5);
+        assert!(stone.position.z > 0.);
+        stone.limit = "stone_runtime_rng_unavailable";
+        let position = stone.position;
+        let velocity = stone.velocity;
+        stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
+        assert_eq!(stone.position, position);
+        assert_eq!(stone.velocity, velocity);
+    }
+
+    #[test]
+    fn held_collider_computes_obstruction_feedback_without_moving_the_attachment() {
+        let mesh = crate::geometry::TriangleMesh::from_corners(&[[
+            Vec3::new(-1000., 0., -1000.),
+            Vec3::new(0., 0., 1000.),
+            Vec3::new(1000., 0., -1000.),
+        ]]);
+        let mut stone = Stone::new(&source());
+        stone.pick_up();
+        let hold = [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]];
+        stone.update(&mesh, Some(&hold), false, Vec3::new(0., 50., -50.), Vec3::Z);
+        assert_eq!(stone.position, Vec3::ZERO);
+        assert!(stone.push.length_squared() > 0.);
+        assert!(stone.collider.floor.is_present());
     }
 }

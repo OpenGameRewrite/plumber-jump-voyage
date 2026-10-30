@@ -245,6 +245,13 @@ class Judge:
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
+        # KickStone's deterministic port stops before the first unseeded global RNG
+        # consumer. Absence of later Mario contacts cannot certify the frozen source.
+        # This grants no contact exception; stone's held/flight evidence remains unproved.
+        for f, row in rewrite_rows.items():
+            source = dict(part.split('=', 1) for part in row.get('carry_source', '').split(';') if '=' in part)
+            if source.get('stone') and source.get('stone_limit'):
+                v.refuse(f, 'KickStone source stopped: ' + source['stone_limit'])
         for f in self._carry.required - self._carry.frames:
             v.refuse(f, "seed throw lacks exact independently simulated keeper/attachment/flight evidence")
         self._paint_floor = None

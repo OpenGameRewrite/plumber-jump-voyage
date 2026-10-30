@@ -3095,6 +3095,7 @@ impl Player {
         self.finish_carry_release(scene);
         let moved = self.v;
         self.collide(&o, scene);
+        self.update_stone_collide_lock_up(scene);
         self.update_water_finder(scene);
         self.fall.update(
             self.pos.y / UNIT,
@@ -3104,6 +3105,9 @@ impl Player {
         );
         if self.grounded
             && !was_grounded
+            // exeWait keeps its state when its own short airborne pull reaches ground.
+            // Migrate this source composition without changing older snapshot contracts.
+            && (self.mode != Move::Idle || self.carry.stone.is_none())
             && !self.burning()
             && !self.is_dead()
             && !self.recovering()

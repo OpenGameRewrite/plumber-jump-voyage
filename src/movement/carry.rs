@@ -61,6 +61,7 @@ pub struct Carry {
     pub held: bool,
     pub wall_keep: bool,
     pub saved_position: Vec3,
+    pub lock_up: u32,
     pub phase: u8,
     pub step: u32,
     pub inhibition: u32,
@@ -226,6 +227,36 @@ pub(super) fn hex_vec(v: Vec3) -> String {
 }
 
 impl Player {
+    /// PlayerCarryKeeper::updateCollideLockUp, called after updateCollider (0x4215b8).
+    /// A cancellation is exposed as unsupported before changing the held ownership.
+    pub(super) fn update_stone_collide_lock_up(&mut self, scene: &Course) {
+        if self.carry.stone.is_none() {
+            return;
+        }
+        let position = scene
+            .mesh
+            .as_ref()
+            .map_or(self.position_cm(), |m| m.to_game_vec(self.position_cm()));
+        let push = self.carry.push.collide_min + self.carry.push.collide_max;
+        let constrained = self.carry.held
+            && !self.is_collided_ground()
+            && !vector_lib::is_near_zero(push, 0.001)
+            && pose_math::squared_length(position - self.carry.saved_position) <= 900.
+            && pose_math::dot(push, Vec3::NEG_Y) <= 0.
+            && pose_math::dot(self.units_per_frame(), Vec3::NEG_Y) >= 0.;
+        if constrained {
+            self.carry.lock_up = (self.carry.lock_up + 1).min(10);
+            if self.carry.lock_up == 10
+                && let Some(stone) = &mut self.carry.stone
+            {
+                stone.limit = "stone_hold_cancel_unavailable";
+            }
+        } else {
+            self.carry.lock_up = 0;
+            self.carry.saved_position = position;
+        }
+    }
+
     pub fn is_carry(&self) -> bool {
         self.carry.held
     }
@@ -456,6 +487,7 @@ impl Player {
         }
         if let Some(stone) = &self.carry.stone {
             out.push_str(&stone.diagnostic());
+            out.push_str(&format!(";lockup={}", self.carry.lock_up));
         }
         if let Some(m) = self.carry.hold {
             out.push_str(&format!(
