@@ -74,6 +74,7 @@ impl WaitStage {
 /// What the standing state keeps between steps.
 #[derive(Clone, Debug, Default)]
 pub(super) struct WaitControl {
+    pub(super) shade_query_unavailable: bool,
     /// Steps the current sub-nerve has run (`al::NerveKeeper`'s step counter).
     /// It starts over whenever a sub-nerve is chosen; the new nerve's first
     /// step, which starts its clip, is step 0.
@@ -82,6 +83,15 @@ pub(super) struct WaitControl {
 }
 
 impl Player {
+    /// A visible fidelity limit, not a claim that this position is sunlit.
+    pub fn fidelity_limits(&self) -> &'static str {
+        if self.wait.shade_query_unavailable {
+            "temperature_shade_unavailable"
+        } else {
+            ""
+        }
+    }
+
     pub(super) fn land_nerve(&self) -> bool {
         matches!(
             self.clip(),

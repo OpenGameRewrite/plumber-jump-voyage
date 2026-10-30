@@ -91,8 +91,6 @@ pub const DIVE_LAND_COUNT: i32 = 0;
 pub const DIVE_LAND_CANCEL_FRAME: i32 = 15;
 /// `JumpHipDropPermitEndFrame`: the jump button works this many steps into the landing.
 pub const JUMP_HIP_DROP_PERMIT_END_FRAME: i32 = 30;
-/// `JumpHipDropPower`: the most the pop jump out of the water may rise with.
-pub const JUMP_HIP_DROP_POWER: f32 = 40.;
 
 /// The jump from the bottom (`SwimJumpHipDrop*`).
 pub const JUMP_HIP_DROP_SPEED: f32 = 27.;

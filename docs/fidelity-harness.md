@@ -292,6 +292,20 @@ head-on wall stop, floor and lock-on reactions.
 
 ## Trace columns
 
+`fidelity_limits` is an additive rewrite-only diagnostic. The value
+`temperature_shade_unavailable` marks an encountered temperature -4 area:
+the original queries a CPU depth-shadow texture and uses temperature -2 in
+shade, otherwise 0. That query and the corresponding cold-idle choice are
+unported; an empty area override does not establish that the player is sunlit.
+This diagnostic does not exclude frames or relax comparison thresholds.
+
+The player constant set and run animation slot are selected once from the
+exported PlayerList placement's `IsMoon`. `export-restart-points.py` adds
+`player_placements` to a geometry export; replay requires matching stage and
+scenario and one identified entry player before selecting Moon constants.
+Normal and Moon players retain independent immutable constants. `MoveMoon`
+uses the original `ActionAnimCtrl` layers, replacing `Run` with `RunMoon`.
+
 One row per step, values after the step. The base columns are `frame`
 through `events`; the extended columns follow the real-game probe's layout.
 Empty cells mean the rewrite has no equivalent:

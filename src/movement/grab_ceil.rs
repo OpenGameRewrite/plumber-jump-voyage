@@ -675,7 +675,11 @@ impl Player {
         self.collider_end = None;
         self.v = Vec3::Y * if jump { 20. } else { 3. };
         self.v += front * if jump { direction * 15. } else { -1. };
-        self.grab_ceil.gravity = if jump { 1. } else { 1.2 };
+        self.grab_ceil.gravity = if jump {
+            1.
+        } else {
+            self.constants.grab_ceil_leave_pop_gravity
+        };
         self.grab_ceil.invalid = if jump { 10 } else { 0 };
         self.collider
             .reset_expand_check(self.facing.x.atan2(self.facing.z));

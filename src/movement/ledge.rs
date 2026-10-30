@@ -1061,7 +1061,7 @@ impl Player {
     /// stick pushes, else the standing state; a jump pressed goes on.
     pub(super) fn hold_to_ground(&mut self) {
         self.dive_possible = true;
-        self.gravity = t::GRAVITY_AIR;
+        self.gravity = self.constants.gravity_air;
         self.air_for = None;
         if self.grounded && self.tilt > 0.05 {
             self.run_frames = t::BRAKE_ON_COUNTER;

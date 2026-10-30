@@ -113,14 +113,14 @@ pub(super) fn angle_on_plane(a: Vec3, b: Vec3, axis: Vec3) -> f32 {
 
 /// What the wall jump asks of the air control (`PlayerActionAirMoveControl::setup`
 /// in `PlayerStateNormalWallJump::exeJump`).
-pub(super) fn wall_jump_takeoff() -> air_move::Takeoff {
+pub(super) fn wall_jump_takeoff(constants: &PlayerConstants) -> air_move::Takeoff {
     air_move::Takeoff {
         speed_limit: WALL_JUMP_SPEED_LIMIT,
         base_speed: t::WALL_JUMP_H,
         extend_frames: 0,
         power: t::WALL_JUMP_POWER,
-        gravity: t::WALL_JUMP_GRAVITY,
-        input_lock: t::WALL_JUMP_NO_INPUT,
+        gravity: constants.wall_jump_gravity,
+        input_lock: constants.wall_jump_invalidate_input_frame,
         speed_window: None,
         fall_max: t::FALL_MAX,
     }
@@ -515,7 +515,7 @@ impl Player {
         self.v = self
             .wall_air
             .slide
-            .slide(self.v, stick, t::WALL_SLIDE_GRAVITY);
+            .slide(self.v, stick, self.constants.gravity_wall_slide);
     }
 
     /// `PlayerStateWallAir::exeSlide`'s pre-input jump: the wall jump is the
@@ -537,10 +537,11 @@ impl Player {
             p.v = away * t::WALL_JUMP_H;
             p.dive_possible = true;
             p.jump_extend = false;
-            p.gravity = t::WALL_JUMP_GRAVITY;
+            p.gravity = p.constants.wall_jump_gravity;
             p.grounded = false;
             p.events.push(Fx::Jump(Move::WallJump));
-            p.air.setup(&mut p.v, p.facing, &wall_jump_takeoff());
+            p.air
+                .setup(&mut p.v, p.facing, &wall_jump_takeoff(p.constants));
             p.air_for = Some(Move::WallJump);
             p.jump_power = t::WALL_JUMP_POWER;
         });

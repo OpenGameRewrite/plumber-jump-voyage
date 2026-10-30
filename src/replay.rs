@@ -830,6 +830,26 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         seed_key_move_parts(mesh, script, options.camera.or(options.lockstep))?;
     }
     let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
+    if let Some(mesh) = &options.geometry {
+        let meta = options
+            .camera
+            .or(options.lockstep)
+            .map(|game| &game.metadata);
+        let stage = script.stage.as_deref().or_else(|| meta?["stage"].as_str());
+        let scenario = script
+            .scenario
+            .or_else(|| meta?["scenario_no"].as_u64().map(|n| n as u32));
+        if stage == mesh.stage.as_deref() && scenario == mesh.scenario {
+            // This export has one entry player. Ambiguous PlayerList exports
+            // need an explicit entry identity before selecting its constants.
+            if let [placement] = mesh.player_placements.as_slice()
+                && placement["unit"] == "PlayerActorHakoniwa"
+                && placement["id"].as_str().is_some()
+            {
+                player.init_placement(placement["is_moon"].as_bool().unwrap_or(false));
+            }
+        }
+    }
     player.prepare_recorded_teleport();
     let recorded = options.camera.or(options.lockstep);
     if let (Some(game), Some(mesh)) = (recorded, &options.geometry) {

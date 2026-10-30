@@ -145,7 +145,7 @@ impl Player {
             Move::SpinJump,
             clip,
             t::SPIN_JUMP_POWER,
-            t::SPIN_JUMP_GRAVITY,
+            self.constants.spin_jump_gravity,
             |p| p.jump_extend = false,
         );
     }
@@ -158,7 +158,7 @@ impl Player {
         let clip = self.spin_clip("SpinJumpDownFallL", "SpinJumpDownFallR");
         self.defer(Move::SpinDrop, clip, |p| {
             // `setVelocityToGravity`: straight down, whatever the jump had.
-            p.v = Vec3::NEG_Y * t::SPIN_DOWN_FALL_INIT;
+            p.v = Vec3::NEG_Y * p.constants.spin_jump_down_fall_init_speed;
         });
     }
 
@@ -180,7 +180,11 @@ impl Player {
                 // The nerve's first step with its restart flag: the air
                 // control starts over, then the velocity is set straight down
                 // at the fall limit, so no horizontal speed is left.
-                p.arm_air_control(Move::SpinJump, t::SPIN_JUMP_POWER, t::SPIN_JUMP_GRAVITY);
+                p.arm_air_control(
+                    Move::SpinJump,
+                    t::SPIN_JUMP_POWER,
+                    p.constants.spin_jump_gravity,
+                );
                 p.v = Vec3::NEG_Y * t::FALL_MAX;
             });
         }

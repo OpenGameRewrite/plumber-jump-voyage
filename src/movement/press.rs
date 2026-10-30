@@ -56,7 +56,7 @@ impl Player {
     }
     pub(super) fn press_step(&mut self) {
         self.anim.rate = 0.;
-        if self.anim.name == "Move" {
+        if matches!(self.anim.name, "Move" | "MoveMoon") {
             self.cycle.rate = 0.;
             self.cycle.phase = self.press.frozen_frame;
             self.cycle.shown = if self.frame == 0 {

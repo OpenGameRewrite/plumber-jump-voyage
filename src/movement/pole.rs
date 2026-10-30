@@ -922,13 +922,13 @@ impl Player {
             self.v = away * t::WALL_JUMP_H;
             self.dive_possible = true;
             self.jump_extend = false;
-            self.gravity = t::WALL_JUMP_GRAVITY;
+            self.gravity = self.constants.wall_jump_gravity;
             self.grounded = false;
             if !top {
                 self.events.push(Fx::Jump(Move::WallJump));
             }
             self.air
-                .setup(&mut self.v, self.facing, &wall_jump_takeoff());
+                .setup(&mut self.v, self.facing, &wall_jump_takeoff(self.constants));
             self.air_for = Some(self.mode);
             self.jump_power = t::WALL_JUMP_POWER;
         }

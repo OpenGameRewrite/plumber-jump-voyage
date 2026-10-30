@@ -709,7 +709,7 @@ impl Player {
             side_brake: t::ROLL_SIDE_BRAKE,
             side_max_speed: t::ROLL_SIDE_MAX,
             turn_degree: t::SLOPE_TURN_DEG,
-            gravity: t::GRAVITY_AIR,
+            gravity: self.constants.gravity_air,
             rolling: true,
         };
         let mut control = self.rolling.control;

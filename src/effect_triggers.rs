@@ -468,7 +468,10 @@ pub fn code_driven(p: &Player) -> Vec<&'static str> {
     // state, through its brake and turn and through the steps a run goes on
     // in the air before it falls (recorded: it stops with the state).
     if matches!(p.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
-        && matches!(p.anim.name, "Move" | "Brake" | "Turn" | "TurnPoint")
+        && matches!(
+            p.anim.name,
+            "Move" | "MoveMoon" | "Brake" | "Turn" | "TurnPoint"
+        )
     {
         wanted.extend(p.run_cycle().effect.map(|effect| {
             if effect == "DashFast" && p.water_surface_run() {

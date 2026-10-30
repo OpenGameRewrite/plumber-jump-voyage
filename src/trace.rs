@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Column names, in file order.
-pub const COLUMNS: [&str; 66] = [
+pub const COLUMNS: [&str; 67] = [
     "frame",
     "px",
     "py",
@@ -95,6 +95,7 @@ pub const COLUMNS: [&str; 66] = [
     "look_target",
     "look_keeper",
     "look_sensors",
+    "fidelity_limits",
 ];
 
 /// One clip contributing to the pose.
@@ -212,7 +213,7 @@ impl Pose {
                 .collect(),
             };
         }
-        if a.name != "Move" {
+        if !matches!(a.name, "Move" | "MoveMoon") {
             return Self {
                 slot: a.name,
                 partial: Vec::new(),
@@ -257,7 +258,7 @@ impl Pose {
         Self {
             layers,
             partial: Vec::new(),
-            slot: "Move",
+            slot: a.name,
         }
     }
     /// The name the game gives this pose in the interp column.
@@ -654,7 +655,7 @@ impl Recorder {
         // whose pose still shows t - 1 (SpinCapStart's frame 8 and 11 sounds
         // were logged at shown frames 7 and 10; frame-0 sounds in the first
         // row), which is the frame the controller holds after its step.
-        let shown = if p.anim.name == "Move" {
+        let shown = if matches!(p.anim.name, "Move" | "MoveMoon") {
             p.shown_frame()
         } else {
             main_frame(&p.anim)
@@ -875,7 +876,7 @@ impl Recorder {
             (Some(s), _) => num(sub_frame(&s)),
             (None, Some((_, frame))) => num(frame),
             (None, None) if self.last_sub.is_empty() => String::new(),
-            (None, None) if p.anim.name == "Move" => num(p.run_cycle().phase),
+            (None, None) if matches!(p.anim.name, "Move" | "MoveMoon") => num(p.run_cycle().phase),
             (None, None) => num(pose.layers.first().map_or(p.anim.frame, |l| l.frame)),
         });
         cells.num(info.camera_yaw_deg);
@@ -892,12 +893,13 @@ impl Recorder {
         cells.num(v.x.hypot(v.z));
         cells.text(&layers.join("|"));
         // Only the run cycle's length is known (its 60-frame phase).
-        if p.anim.name == "Move" {
+        if matches!(p.anim.name, "Move" | "MoveMoon") {
             cells.num(60.);
         } else {
             cells.empty();
         }
-        cells.int(looping(p.anim.name) as i64 | (p.anim.name == "Move") as i64);
+        cells
+            .int(looping(p.anim.name) as i64 | (matches!(p.anim.name, "Move" | "MoveMoon")) as i64);
         cells.text(&parts);
         let skeleton = self.posed_skeleton(p, covering, kept);
         cells.text(&Self::bones_cell(skeleton.as_ref(), p));
@@ -976,6 +978,7 @@ impl Recorder {
             cells.empty(); // random, model, face, cam_mode, cam_fov
         }
         self.head_cells(p, &mut cells, skeleton.as_ref());
+        cells.text(p.fidelity_limits());
         cells.finish()
     }
 }
@@ -1433,14 +1436,14 @@ impl TraceFile {
     /// current nerve has been going and the nerve chosen in this row.
     fn run_hint(&self, row: usize) -> Option<RunHint> {
         let anim = self.cell(row, "anim")?;
-        if !matches!(anim, "Move" | "Brake" | "Turn" | "TurnPoint") {
+        if !matches!(anim, "Move" | "MoveMoon" | "Brake" | "Turn" | "TurnPoint") {
             return None;
         }
         let mut hint = RunHint {
             rate: self.number(row, "anim_rate").unwrap_or(1.),
             ..RunHint::default()
         };
-        if anim == "Move" {
+        if matches!(anim, "Move" | "MoveMoon") {
             let mut phase = None;
             for item in self.cell(row, "anim_layers")?.split('|') {
                 // `Name@frame*rate=weight`
@@ -1449,7 +1452,7 @@ impl TraceFile {
                 let (_, weight) = rest.split_once('=')?;
                 let slot = ["Walk", "Run", "Dash", "DashFast", "RunStart"]
                     .iter()
-                    .position(|n| *n == name)?;
+                    .position(|n| *n == if name == "RunMoon" { "Run" } else { name })?;
                 hint.weights[slot] = weight.parse().ok()?;
                 let length = [60., 17., 17., 14., 30.][slot];
                 phase = phase.or(frame.parse::<f32>().ok().map(|f| f * 60. / length));
@@ -1463,8 +1466,9 @@ impl TraceFile {
             first -= 1;
         }
         hint.steps = (row - first + 1) as u32;
-        hint.after_turn =
-            anim == "Move" && first > 0 && self.cell(first - 1, "anim") == Some("Turn");
+        hint.after_turn = matches!(anim, "Move" | "MoveMoon")
+            && first > 0
+            && self.cell(first - 1, "anim") == Some("Turn");
         // The next row shows the clip a nerve chose in this one starting.
         let next = self.cell(row + 1, "anim");
         if next != Some(anim) && self.number(row + 1, "anim_frame") == Some(0.) {
@@ -1473,6 +1477,7 @@ impl TraceFile {
                 Some("Turn") => Some("Turn"),
                 Some("TurnPoint") => Some("TurnPoint"),
                 Some("Move") => Some("Move"),
+                Some("MoveMoon") => Some("MoveMoon"),
                 _ => None,
             };
         }
@@ -1807,11 +1812,21 @@ impl TraceFile {
                 .and_then(|s| state_from_nerve(s, anim_name, speed))
         };
         let shown = n("anim_frame");
-        let moving_cycle = ["Move", "Walk", "Run", "Dash", "DashFast"].contains(&anim_name)
+        let moving_cycle = [
+            "Move", "MoveMoon", "Walk", "Run", "RunMoon", "Dash", "DashFast",
+        ]
+        .contains(&anim_name)
             && matches!(mode, Some(Move::Walk | Move::Run));
-        let anim = if anim_name == "Move" && moving_cycle {
+        let anim = if matches!(anim_name, "Move" | "MoveMoon") && moving_cycle {
             // The game's `Move` slot is the 60-frame cycle phase itself.
-            Some(("Move", shown.rem_euclid(60.)))
+            Some((
+                if anim_name == "MoveMoon" {
+                    "MoveMoon"
+                } else {
+                    "Move"
+                },
+                shown.rem_euclid(60.),
+            ))
         } else if moving_cycle {
             // A clip of the cycle: the phase runs over 60 frames whatever the length.
             self.number(row, "anim_len")

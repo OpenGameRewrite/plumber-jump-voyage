@@ -12,7 +12,7 @@ impl Player {
     pub(super) fn update_sounds(&mut self, scene: &Course) {
         let frame = SeFrame {
             // A whole-body sub clip (the dive's stand-up) takes the legs over.
-            stepping: self.anim.name == "Move" && self.sub_anim.is_none(),
+            stepping: matches!(self.anim.name, "Move" | "MoveMoon") && self.sub_anim.is_none(),
             rate: self.anim.rate,
             phase: self.cycle.shown,
             run_start: self.cycle.weights[4],

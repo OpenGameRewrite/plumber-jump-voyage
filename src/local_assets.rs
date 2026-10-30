@@ -232,8 +232,8 @@ fn colors(
 pub fn interp_frames(name: &str, _from: &str) -> f32 {
     match name {
         "JumpInterp" | "JumpReverseInterp" => 3.,
-        "SandWait" | "SandWalk" | "Move" | "RunStart" | "Walk" | "Run" | "Dash" | "Push"
-        | "WallCatch" | "WallCatchEnd" => 5.,
+        "SandWait" | "SandWalk" | "Move" | "MoveMoon" | "RunMoon" | "RunStart" | "Walk" | "Run"
+        | "Dash" | "Push" | "WallCatch" | "WallCatchEnd" => 5.,
         "Wait" | "Fall" | "WaitRelaxStart" => 6.,
         // PlayerAnimation/AnimInterp.byml.
         "DeadFall" | "WaitHot" | "WaitCold" | "DamageWait" | "TractorBubbleWait" => 10.,
@@ -1196,7 +1196,7 @@ mod imported {
                     })
                     .collect(),
             }
-        } else if anim.name == "Move" {
+        } else if matches!(anim.name, "Move" | "MoveMoon") {
             let cycle = p.run_cycle();
             let phase = ((cycle.phase + cycle.rate * ahead) / 60.).rem_euclid(1.);
             let clips = cycle

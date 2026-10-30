@@ -70,7 +70,7 @@ impl Player {
         } else {
             self.mode = Move::DamageAir;
             self.v = self.pose_axes().1 * -2.;
-            self.damage_air_setup(30., 2., 12., 0.95);
+            self.damage_air_setup(30., 2., 12., self.constants.gravity_damage);
         }
     }
     pub(super) fn damage_choose(&mut self, mode: Move) {

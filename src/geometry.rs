@@ -91,6 +91,9 @@ const CELL: f32 = 400.;
 
 #[derive(Clone, Debug, Default)]
 pub struct TriangleMesh {
+    pub stage: Option<String>,
+    pub scenario: Option<u32>,
+    pub player_placements: Vec<serde_json::Value>,
     pub triangles: Vec<MeshTriangle>,
     pub codes: Vec<CollisionCodes>,
     /// Model name of every object the triangles come from.
@@ -316,6 +319,12 @@ impl TriangleMesh {
                 })
                 .collect(),
             restart_points: root["restart_points"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+            stage: root["stage"].as_str().map(str::to_owned),
+            scenario: root["scenario"].as_u64().map(|n| n as u32),
+            player_placements: root["player_placements"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default(),

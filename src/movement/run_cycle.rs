@@ -6,6 +6,7 @@
 //! against recorded runs. The slot holds Walk, Run, Dash, DashFast and
 //! RunStart; all of them play one 60-frame phase, each clip at its own length.
 use super::ground::rate01;
+use super::player_constants::PlayerConstants;
 use super::t;
 
 /// The `Move` slot's clips with their lengths in frames; the phase is spread
@@ -30,9 +31,6 @@ const DASH_FAST_RANGE: f32 = 1.;
 const RATE_SPEED_MAX: f32 = 26.;
 const RATE_RUN_START: f32 = 2.;
 const RATE_MIN_RUN: f32 = 1.;
-const RATE_MAX_RUN: f32 = 3.5;
-const RATE_MAX_DASH: f32 = 4.;
-const RATE_MAX_DASH_FAST: f32 = 5.;
 /// Frames the run-start clip fades in and out over.
 const START_BLEND_FRAMES: i32 = 5;
 /// A stick pushed this far counts as full tilt.
@@ -67,6 +65,7 @@ pub struct Layer {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RunCycle {
+    moon: bool,
     /// The run-start clip may blend in (a run that begins from a standstill).
     start_allowed: bool,
     start_frames: i32,
@@ -88,6 +87,10 @@ pub struct RunCycle {
     advanced: bool,
 }
 impl RunCycle {
+    /// PlayerAnimControlRun constructor 0x42c5b4; MoveMoon SklAnim data.
+    pub fn set_moon(&mut self, moon: bool) {
+        self.moon = moon;
+    }
     /// The cycle starts playing: the first frame shows its first pose.
     pub fn start(&mut self) {
         self.phase = 0.;
@@ -135,7 +138,7 @@ impl RunCycle {
     }
     /// `PlayerAnimControlRun::update`: weights and rate for this frame's
     /// speed and stick tilt, and the pose's move on.
-    pub fn update(&mut self, speed: f32, tilt: f32) {
+    pub fn update(&mut self, speed: f32, tilt: f32, constants: &PlayerConstants) {
         let fresh = self.advanced;
         let start_length = super::clip::RUN_START as i32;
         // The run-start clip fades in over a run from a standstill, plays on
@@ -158,8 +161,8 @@ impl RunCycle {
             weights = [0., 0., keep * (1. - fast), keep * fast, start];
             effect = Some("DashFast");
             rate = lerp(
-                RATE_MAX_DASH,
-                RATE_MAX_DASH_FAST,
+                constants.anim_frame_rate_max_dash,
+                constants.anim_frame_rate_max_dash_fast,
                 rate01(speed, DASH_FAST_BORDER - DASH_FAST_RANGE, RATE_SPEED_MAX),
             );
         } else if tilt >= FULL_TILT || speed > DASH_BORDER - DASH_RANGE {
@@ -167,8 +170,8 @@ impl RunCycle {
             weights = [0., keep * (1. - dash), keep * dash, 0., start];
             effect = Some(if dash > 0.5 { "Dash" } else { "Run" });
             rate = lerp(
-                RATE_MAX_RUN,
-                RATE_MAX_DASH,
+                constants.anim_frame_rate_max_run,
+                constants.anim_frame_rate_max_dash,
                 rate01(
                     speed,
                     DASH_BORDER - DASH_RANGE,
@@ -187,7 +190,7 @@ impl RunCycle {
             effect = (run > 0.5).then_some("Run");
             rate = lerp(
                 RATE_MIN_RUN,
-                RATE_MAX_RUN,
+                constants.anim_frame_rate_max_run,
                 rate01(speed, RUN_BORDER - RUN_RANGE, DASH_BORDER - DASH_RANGE),
             );
         }
@@ -214,7 +217,11 @@ impl RunCycle {
             .zip(self.weights)
             .filter(|(_, weight)| *weight > 0.001)
             .map(|((name, length), weight)| Layer {
-                name,
+                name: if self.moon && *name == "Run" {
+                    "RunMoon"
+                } else {
+                    name
+                },
                 weight,
                 frame: if *name == "RunStart" {
                     self.start_clip
@@ -228,6 +235,7 @@ impl RunCycle {
     pub fn from_recorded(phase: f32, rate: f32, weights: [f32; 5], steps: u32) -> Self {
         let length = super::clip::RUN_START as i32;
         Self {
+            moon: false,
             start_allowed: weights[4] > 0.,
             start_frames: (steps as i32).min(length),
             blend_frames: (weights[4] * START_BLEND_FRAMES as f32).round() as i32,
@@ -251,7 +259,7 @@ mod tests {
         let mut cycle = RunCycle::default();
         cycle.start();
         cycle.reset(0.18, false);
-        cycle.update(0.18375, 1.);
+        cycle.update(0.18375, 1., &PlayerConstants::NORMAL);
         assert!((cycle.weights[4] - 0.2).abs() < 1.0e-6);
         assert!((cycle.weights[1] - 0.8).abs() < 1.0e-6, "run, not walk");
         assert!((cycle.rate - 3.2).abs() < 1.0e-5, "{}", cycle.rate);
@@ -264,7 +272,7 @@ mod tests {
         cycle.start();
         cycle.reset(8.5, true);
         cycle.begin_frame();
-        cycle.update(8.5, 0.5);
+        cycle.update(8.5, 0.5, &PlayerConstants::NORMAL);
         assert!((cycle.weights[0] - 0.375).abs() < 1.0e-6);
         assert!((cycle.weights[1] - 0.625).abs() < 1.0e-6);
         assert!((cycle.rate - 1.78125).abs() < 1.0e-5);

@@ -610,8 +610,8 @@ impl Player {
     /// `JumpHipDropPower`); the jump keeps the clip playing and has no extension.
     fn start_swim_pop_jump(&mut self) {
         let speed_up = (-pose_math::dot(self.v, GRAVITY)).max(0.) + k::JUMP_HIP_DROP_POP_JUMP_ADD;
-        let power = if speed_up > k::JUMP_HIP_DROP_POWER {
-            k::JUMP_HIP_DROP_POWER
+        let power = if speed_up > self.constants.jump_hip_drop_power {
+            self.constants.jump_hip_drop_power
         } else {
             speed_up
         };
@@ -619,9 +619,9 @@ impl Player {
         self.frame = 0;
         self.nerve.choose_keeping_clip(true, move |p| {
             p.prior_v = p.v;
-            p.leave_ground(Move::Jump, power, t::JUMP_GRAVITY);
+            p.leave_ground(Move::Jump, power, p.constants.jump_gravity);
             p.jump_extend = false;
-            p.arm_air_control(Move::Jump, power, t::JUMP_GRAVITY);
+            p.arm_air_control(Move::Jump, power, p.constants.jump_gravity);
         });
     }
 

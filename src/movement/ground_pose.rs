@@ -10,7 +10,7 @@
 //!
 //! * Tilt: the turn tilt `T` leans the root and the spine to the side (about the front axis of
 //!   the root, by up to 20 and 15 degrees per unit), the head over, the legs' tops out.
-//! * Centre tilt: off. It is driven by `PlayerConst::CenterTiltRateMax`, which is 0 for Mario.
+//! * Centre tilt: a spring driven by side velocity; PlayerConstMoon enables it.
 //! * Inverse kinematics, on the root: works out the frame the others use. The root's up axis
 //!   against the world's up gives the turn that stands the hip (by at most 25 degrees per unit
 //!   of the rate) and the spine (30) upright about the root's position, and a shift to the side
@@ -173,6 +173,9 @@ pub struct Balance {
 
 #[derive(Clone, Debug, Default)]
 pub struct GroundPose {
+    center_tilt_rate: f32,
+    center_tilt: f32,
+    center_tilt_velocity: f32,
     /// The turn tilt (`+0x1e4`).
     tilt: f32,
     /// The follower of the body's inverse kinematics target (`+0x1d8`) and the strength the
@@ -187,6 +190,17 @@ pub struct GroundPose {
 }
 
 impl GroundPose {
+    /// `updateCenterTilt` (0x4545c8), called before the other ground controls.
+    pub fn update_center_tilt(&mut self, rate: f32, velocity: Vec3, side: Vec3) {
+        self.center_tilt_rate = converge(self.center_tilt_rate, rate, 0.2);
+        let force = spring_damper_force(self.center_tilt, self.center_tilt_velocity, 0.5, 0.25);
+        let velocity = self.center_tilt_velocity * 0.999
+            + dot(side, velocity) * (self.center_tilt_rate * 0.15);
+        let velocity = (force * 0.1 + velocity).clamp(-2., 2.);
+        self.center_tilt = (self.center_tilt + velocity * 0.1).clamp(-2., 2.);
+        self.center_tilt_velocity = velocity;
+    }
+
     /// The recorder waits in Wait for 120 frames before teleporting. Its
     /// resetMarioDynamics resets parts, not this body's converged IK rates.
     pub fn settled_wait() -> Self {
@@ -266,9 +280,47 @@ impl GroundPose {
     /// it. `solved` holds the matrices of the joints before it (the legs rewrite theirs).
     pub fn calc(&mut self, joint: Joint, world: &mut Mat34, solved: &mut Matrices) {
         self.calc_tilt(joint, world, solved);
-        // (`calcCenterTilt` has nothing to do: its rate is 0 for Mario.)
+        self.calc_center_tilt(joint, world);
         self.calc_center_balance(joint, world);
         self.calc_inverse_kinematics(joint, world, solved);
+    }
+
+    /// `calcCenterTilt` (0x45226c): rotate AllRoot about a point 80 units
+    /// along its unnormalized up, with the original 35-degree bound.
+    fn calc_center_tilt(&self, joint: Joint, world: &mut Mat34) {
+        let rate = self.center_tilt_rate;
+        if joint != Joint::AllRoot || is_near_zero_value(rate, NEAR_ZERO) {
+            return;
+        }
+        let front = normalize(column(world, 2));
+        let up = column(world, 1);
+        let offset = up * 80.;
+        let pivot = column(world, 3) + offset;
+        let signed = {
+            let angle = calc_angle_degree(Vec3::Y, up);
+            if dot(cross(Vec3::Y, up), front) < 0. {
+                -angle
+            } else {
+                angle
+            }
+        };
+        let sign = if self.center_tilt > 0. {
+            1.
+        } else if self.center_tilt < 0. {
+            -1.
+        } else {
+            0.
+        };
+        let amount = (sign * ease_out(calc_rate01(self.center_tilt.abs(), 0., 2.))) * rate;
+        let target = (amount * 35. + signed).clamp(-35., 35.);
+        let half = (((target - signed) * rate) * DEGREES_TO_RADIANS) * 0.5;
+        let (sine, cosine) = (sinf(half), cosf(half));
+        let q = Quat::from_xyzw(sine * front.x, sine * front.y, sine * front.z, cosine);
+        let rotated = rotate_by_quat(offset, q);
+        rotate_axes_only(&rotation_rows(q), world);
+        for axis in 0..3 {
+            world[axis][3] = pivot[axis] - rotated[axis];
+        }
     }
 
     fn calc_tilt(&self, joint: Joint, world: &mut Mat34, solved: &Matrices) {
@@ -726,6 +778,62 @@ fn separate_vector_hv(direction: Vec3, vec: Vec3) -> (Vec3, Vec3) {
 /// `al::calcSpringDumperForce(position, velocity, stiffness, damping)`.
 fn spring_damper_force(position: f32, velocity: f32, stiffness: f32, damping: f32) -> f32 {
     -(position * stiffness + velocity * damping)
+}
+
+#[cfg(test)]
+mod center_tilt_tests {
+    use super::*;
+
+    /// Independent sequences executed by the original update and callback;
+    /// no recorded Mario trajectory participates in these oracle inputs.
+    #[test]
+    fn center_tilt_matches_original() {
+        let Some(path) = std::env::var_os("PJV_CENTER_TILT_CASES") else {
+            return;
+        };
+        let cases: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut pose = GroundPose::default();
+        for (index, case) in cases.as_array().unwrap().iter().enumerate() {
+            let numbers = |key: &str| -> Vec<f32> {
+                case[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap() as f32)
+                    .collect()
+            };
+            let v = numbers("velocity");
+            pose.update_center_tilt(
+                case["rate"].as_f64().unwrap() as f32,
+                Vec3::new(v[0], v[1], v[2]),
+                Vec3::X,
+            );
+            let state = [
+                pose.center_tilt_rate,
+                pose.center_tilt,
+                pose.center_tilt_velocity,
+            ];
+            assert_eq!(
+                state.map(f32::to_bits).as_slice(),
+                numbers("state")
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                "state {index}"
+            );
+            let m = numbers("matrix");
+            let mut matrix = std::array::from_fn(|r| std::array::from_fn(|c| m[r * 4 + c]));
+            pose.calc_center_tilt(Joint::AllRoot, &mut matrix);
+            for (i, (actual, expected)) in matrix.iter().flatten().zip(numbers("out")).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "matrix {index}/{i}: {actual} vs {expected}"
+                );
+            }
+        }
+    }
 }
 
 /// `al::calcDistanceVecToPlane(direction, point, normal, on_plane)`: how far along `direction`

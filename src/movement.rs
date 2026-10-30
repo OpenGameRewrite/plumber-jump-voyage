@@ -41,6 +41,9 @@ pub const SPAWN: Vec3 = Vec3::new(0.0, 0.0, 5.0);
 pub const RUN: f32 = t::NORMAL_MAX * UNIT * FPS;
 
 /// Tuning in original units per frame, following the original player constants.
+pub mod player_constants;
+use player_constants::PlayerConstants;
+
 mod t {
     pub const GRAVITY: f32 = 3.;
     pub const NORMAL_MAX: f32 = 14.;
@@ -70,7 +73,6 @@ mod t {
     pub const EXTEND_FRAMES: u32 = 10;
     pub const JUMP_POWER_MIN: f32 = 17.;
     pub const JUMP_POWER_MAX: f32 = 19.5;
-    pub const JUMP_GRAVITY: f32 = 1.5;
     pub const JUMP_MOVE_MIN: f32 = 11.;
     pub const JUMP_MOVE_MAX: f32 = 30.;
     pub const JUMP_ACCEL_FRONT: f32 = 0.5;
@@ -82,26 +84,20 @@ mod t {
     pub const CONTINUOUS_JUMP_TIMER: u32 = 10;
     pub const CONTINUOUS_JUMP_POWER_MIN: f32 = 19.5;
     pub const JUMP_POWER_MAX_2ND: f32 = 21.;
-    pub const JUMP_GRAVITY_2ND: f32 = 1.5;
     pub const JUMP_POWER_3RD: f32 = 25.;
-    pub const JUMP_GRAVITY_3RD: f32 = 1.;
-    pub const GRAVITY_AIR: f32 = 1.5;
     pub const FRICTION_AIR: f32 = 0.99;
     pub const FALL_MAX: f32 = 35.;
     pub const LONG_FALL: f32 = 3000.;
 
     pub const SQUAT_JUMP_POWER: f32 = 32.;
-    pub const SQUAT_JUMP_GRAVITY: f32 = 1.;
     pub const SQUAT_JUMP_BACK: f32 = 5.;
     pub const SQUAT_JUMP_MOVE_MAX: f32 = 9.;
     pub const TURN_JUMP_POWER: f32 = 32.;
-    pub const TURN_JUMP_GRAVITY: f32 = 1.;
     pub const TURN_JUMP_VEL_H: f32 = 9.;
 
     pub const LONG_JUMP_ACCEL: f32 = 0.25;
     pub const LONG_JUMP_BRAKE: f32 = 0.5;
     pub const LONG_JUMP_SIDE_ACCEL: f32 = 0.25;
-    pub const LONG_JUMP_GRAVITY: f32 = 0.48;
     pub const LONG_JUMP_POWER: f32 = 12.;
     pub const LONG_JUMP_MOVE_POW: f32 = 4.;
     pub const LONG_JUMP_INIT_SPEED: f32 = 14.;
@@ -110,9 +106,7 @@ mod t {
     pub const CONTINUOUS_LONG_JUMP_TIMER: u32 = 15;
 
     pub const SPIN_JUMP_POWER: f32 = 20.;
-    pub const SPIN_JUMP_GRAVITY: f32 = 0.4;
     pub const SPIN_JUMP_MOVE_MAX: f32 = 8.;
-    pub const SPIN_DOWN_FALL_INIT: f32 = 35.;
     pub const SPIN_DOWN_FALL_POWER: f32 = 1.5;
     pub const SPIN_DOWN_FALL_MAX: f32 = 45.;
     pub const SPIN_DOWN_FALL_FRAME_MIN: u32 = 5;
@@ -121,18 +115,13 @@ mod t {
     pub const GROUND_SPIN_ACCEL_RATE: f32 = 0.5;
     pub const GROUND_SPIN_BRAKE_RATE: f32 = 0.95;
 
-    pub const HIP_DROP_SPEED: f32 = 45.;
     pub const HIP_DROP_LAND_CANCEL: u32 = 24;
     pub const HIP_DROP_JUMP_BEGIN: u32 = 5;
     pub const HIP_DROP_JUMP_END: u32 = 30;
-    pub const HIP_DROP_JUMP_POWER: f32 = 40.;
 
-    pub const HEAD_SLIDING_SPEED: f32 = 20.;
     pub const HEAD_SLIDING_SPEED_MIN: f32 = 2.5;
     pub const HEAD_SLIDING_BRAKE: f32 = 0.5;
     pub const HEAD_SLIDING_SIDE_ACCEL: f32 = 0.125;
-    pub const HEAD_SLIDING_JUMP: f32 = 28.;
-    pub const HEAD_SLIDING_GRAVITY: f32 = 2.;
 
     pub const ROLL_START: f32 = 20.;
     pub const ROLL_BOOST: f32 = 30.;
@@ -185,26 +174,20 @@ mod t {
     pub const SQUAT_WALK: f32 = 3.5;
 
     /// `GravityWallSlide`.
-    pub const WALL_SLIDE_GRAVITY: f32 = 0.5;
     pub const WALL_KEEP_FRAMES: u32 = 3;
     /// `FallWallScaleVelocity`.
     pub const FALL_WALL_SCALE_VELOCITY: f32 = 0.5;
     pub const WALL_JUMP_POWER: f32 = 23.;
-    pub const WALL_JUMP_GRAVITY: f32 = 0.95;
     pub const WALL_JUMP_H: f32 = 8.6;
-    pub const WALL_JUMP_NO_INPUT: u32 = 25;
 
     /// The jump off a trampled cap (`PlayerStateJump::appear`, request 11):
     /// `TrampleHighJumpPower` and `TrampleHighGravity`.
     pub const TRAMPLE_HIGH_JUMP_POWER: f32 = 25.;
-    pub const TRAMPLE_HIGH_GRAVITY: f32 = 1.;
     /// Share of the horizontal speed a rising player keeps when he tramples
     /// with the stick pushed (`TrampleRisingBrakeVelH`).
     pub const TRAMPLE_RISING_BRAKE: f32 = 0.3;
     pub const CAP_CATCH_POP_POWER: f32 = 10.;
-    pub const CAP_CATCH_POP_GRAVITY: f32 = 0.8;
     pub const CAP_CATCH_JUMP_POWER: f32 = 22.;
-    pub const CAP_CATCH_JUMP_GRAVITY: f32 = 1.3;
     pub const CAP_CATCH_WINDOW: u32 = 10;
     pub const PRE_INPUT_THROW: u32 = 10;
 
@@ -1092,6 +1075,8 @@ struct PoseTilt {
 
 #[derive(Component, Debug)]
 pub struct Player {
+    pub constants: &'static PlayerConstants,
+    is_moon: bool,
     /// State changes decided last step, waiting for their first step.
     nerve: Nerve,
     fire: FireControl,
@@ -1419,6 +1404,8 @@ impl Default for Player {
         let mut nerve = Nerve::default();
         nerve.queue("Wait", |_| {});
         Self {
+            constants: &PlayerConstants::NORMAL,
+            is_moon: false,
             nerve,
             fire: FireControl::default(),
             sand: sand_sink::SandControl::default(),
@@ -1517,7 +1504,7 @@ impl Default for Player {
             catch_window: 0,
             cap_jump_possible: true,
             dive_possible: true,
-            gravity: t::GRAVITY_AIR,
+            gravity: PlayerConstants::NORMAL.gravity_air,
             jump_extend: false,
             max_air_speed: t::JUMP_MOVE_MIN,
             wall_air: WallAirControl::default(),
@@ -1933,13 +1920,13 @@ fn takeoff_of(mode: Move, extend_frames: u32, power: f32, gravity: f32) -> air_m
 /// A fall (`PlayerStateFallHakoniwa`'s first step): the vertical speed stays,
 /// the speed range and gravity are those of a jump, and the speed the player
 /// had is kept up to the jump speed limit.
-fn fall_takeoff(vertical_speed: f32) -> air_move::Takeoff {
+fn fall_takeoff(constants: &PlayerConstants, vertical_speed: f32) -> air_move::Takeoff {
     air_move::Takeoff {
         speed_limit: t::JUMP_MOVE_MAX,
         base_speed: t::JUMP_MOVE_MIN,
         extend_frames: 0,
         power: vertical_speed,
-        gravity: t::JUMP_GRAVITY,
+        gravity: constants.jump_gravity,
         input_lock: 0,
         speed_window: None,
         fall_max: t::FALL_MAX,
@@ -1961,6 +1948,23 @@ fn spin_air_takeoff() -> air_move::Takeoff {
     }
 }
 impl Player {
+    /// Initialization-only placement choice, shared by physics and animation.
+    /// The original reads IsMoon once, before constructing the player states.
+    pub fn init_placement(&mut self, is_moon: bool) {
+        self.is_moon = is_moon;
+        self.constants = if is_moon {
+            &PlayerConstants::MOON
+        } else {
+            &PlayerConstants::NORMAL
+        };
+        self.gravity = self.constants.gravity_air;
+        self.cycle.set_moon(is_moon);
+    }
+
+    fn move_animation(&self) -> &'static str {
+        if self.is_moon { "MoveMoon" } else { "Move" }
+    }
+
     pub fn flat_speed(&self) -> f32 {
         self.vel.with_y(0.).length()
     }
@@ -2212,7 +2216,7 @@ impl Player {
     /// The clip frame a trace row shows: the animator's counter, which for the
     /// run cycle is the previous pose moved on, not wrapped.
     pub fn shown_frame(&self) -> f32 {
-        if self.anim.name == "Move" {
+        if matches!(self.anim.name, "Move" | "MoveMoon") {
             self.cycle.shown
         } else {
             self.anim.frame
@@ -2356,13 +2360,13 @@ impl Player {
                 self.damage.hp = 0;
             }
             self.gravity = match mode {
-                Move::DoubleJump => t::JUMP_GRAVITY_2ND,
-                Move::TripleJump => t::JUMP_GRAVITY_3RD,
-                Move::Backflip | Move::Sideflip => t::TURN_JUMP_GRAVITY,
-                Move::LongJump => t::LONG_JUMP_GRAVITY,
-                Move::SpinJump => t::SPIN_JUMP_GRAVITY,
-                Move::PoundJump => t::JUMP_GRAVITY,
-                _ => t::GRAVITY_AIR,
+                Move::DoubleJump => self.constants.jump_gravity2nd,
+                Move::TripleJump => self.constants.jump_gravity3rd,
+                Move::Backflip | Move::Sideflip => self.constants.turn_jump_gravity,
+                Move::LongJump => self.constants.long_jump_gravity,
+                Move::SpinJump => self.constants.spin_jump_gravity,
+                Move::PoundJump => self.constants.jump_gravity,
+                _ => self.constants.gravity_air,
             };
             self.max_air_speed = match mode {
                 Move::Sideflip => t::TURN_JUMP_VEL_H,
@@ -2435,7 +2439,7 @@ impl Player {
                 self.start_clip(name);
             }
             self.anim.frame = frame;
-            if name == "Move" {
+            if matches!(name, "Move" | "MoveMoon") {
                 self.step_phase = frame;
             }
         }
@@ -2495,6 +2499,7 @@ impl Player {
                     self.run_nerve = RunNerve::RunAfterTurn;
                 }
                 self.cycle = RunCycle::from_recorded(hint.phase, hint.rate, hint.weights, steps);
+                self.cycle.set_moon(self.is_moon);
                 self.step_phase = hint.phase;
                 // Forced/surface steering carries hidden turn acceleration;
                 // the printed facing delta is not that controller's turn rate.
@@ -2694,6 +2699,11 @@ impl Player {
     }
     /// Start a clip now: the first step of a state, or an injected snapshot.
     fn start_clip(&mut self, name: &'static str) {
+        let name = if name == "Move" {
+            self.move_animation()
+        } else {
+            name
+        };
         self.restart_wait_steps(name);
         self.anim = Anim {
             name,
@@ -2702,7 +2712,7 @@ impl Player {
             rate: 1.,
         };
         self.anim_skip = true;
-        if name == "Move" {
+        if matches!(name, "Move" | "MoveMoon") {
             // The run cycle starts over in the nerve that plays it.
             self.cycle.start();
             self.step_phase = 0.;
@@ -2789,7 +2799,7 @@ impl Player {
             self.anim.frame = self.press.frozen_frame;
             return;
         }
-        if self.anim.name == "Move" {
+        if matches!(self.anim.name, "Move" | "MoveMoon") {
             // The dive's landing clip covers the legs for a while; the run's
             // pose does not move under it.
             if self.sub_anim.is_some_and(|s| s.name == "RollingStandUp") {
@@ -2858,7 +2868,7 @@ impl Player {
             if sub.held() >= length {
                 let whole_body = sub.name == "RollingStandUp";
                 self.sub_anim = None;
-                if whole_body && self.anim.name == "Move" {
+                if whole_body && matches!(self.anim.name, "Move" | "MoveMoon") {
                     // The landing clip covered the legs; their cycle starts
                     // over underneath it, the counter running on.
                     self.cycle.restart_pose();
@@ -2880,7 +2890,7 @@ impl Player {
         }
         if self.cycle_restart_in > 0 {
             self.cycle_restart_in -= 1;
-            if self.cycle_restart_in == 0 && self.anim.name == "Move" {
+            if self.cycle_restart_in == 0 && matches!(self.anim.name, "Move" | "MoveMoon") {
                 self.cycle.start();
                 self.anim.frame = 0.;
                 self.step_phase = 0.;
@@ -3198,18 +3208,24 @@ impl Player {
         }
         self.update_ground_height(scene);
         if self.mode == Move::Idle && (self.nerve.step == 0 || self.wait.area_clip.is_none()) {
-            self.wait.area_clip = scene.mesh.as_ref().and_then(|m| {
+            let temperature = scene.mesh.as_ref().and_then(|m| {
                 m.temperature
                     .iter()
                     .rev()
                     .find(|(a, _)| a.volume_at(m.to_game_vec(self.position_cm())).is_some())
-                    .and_then(|(_, t)| match t {
-                        2.. => Some("WaitHot"),
-                        -2 => Some("WaitCold"),
-                        i32::MIN..=-3 => Some("WaitVeryCold"),
-                        _ => None,
-                    })
+                    .map(|(_, t)| *t)
             });
+            self.wait.shade_query_unavailable = temperature == Some(-4);
+            self.wait.area_clip = match temperature {
+                // Original initAreaAnim (0x48ccdc): -4 first queries the CPU
+                // shadow texture, then uses -2 in shade or 0 outside shade.
+                // That renderer query is UNPORTED; neither result is asserted.
+                Some(-4) => None,
+                Some(2..) => Some("WaitHot"),
+                Some(-2) => Some("WaitCold"),
+                Some(i32::MIN..=-3) => Some("WaitVeryCold"),
+                _ => None,
+            };
         }
         match self.mode {
             Move::Idle | Move::Walk | Move::Run => {
@@ -3948,7 +3964,7 @@ impl Player {
     /// The original's run cycle: weights and pace by speed and tilt, and the
     /// footfalls the pose passes.
     fn update_move_anim(&mut self, speed: f32) {
-        if self.anim.name != "Move" {
+        if !matches!(self.anim.name, "Move" | "MoveMoon") {
             return;
         }
         let tilt = self.ground_stick().length();
@@ -3957,7 +3973,7 @@ impl Player {
         } else {
             speed
         };
-        self.cycle.update(speed, tilt);
+        self.cycle.update(speed, tilt, self.constants);
         self.anim.rate = self.cycle.rate;
         self.step_phase = self.cycle.phase;
     }
@@ -4245,7 +4261,7 @@ impl Player {
             self.v = vector_lib::verticalize_vec(self.collided_ground_normal(), self.v);
             self.v.y = vertical;
         }
-        let mut takeoff = fall_takeoff(self.v.y);
+        let mut takeoff = fall_takeoff(self.constants, self.v.y);
         if self.fall_after_ledge.is_some() {
             takeoff.input_lock = ledge::LET_GO_INPUT_LOCK;
         }
@@ -4263,24 +4279,24 @@ impl Player {
         }
         .unwrap_or(0);
         let (extend, mut gravity) = match self.mode {
-            Move::DoubleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_2ND),
-            Move::TripleJump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY_3RD),
-            Move::Jump => (t::EXTEND_FRAMES, t::JUMP_GRAVITY),
-            Move::CapBounce => (0, t::TRAMPLE_HIGH_GRAVITY),
-            Move::CatchJump => (0, t::CAP_CATCH_JUMP_GRAVITY),
-            Move::SpinJump => (0, t::SPIN_JUMP_GRAVITY),
-            Move::WallJump => (0, t::WALL_JUMP_GRAVITY),
-            _ => (0, t::JUMP_GRAVITY),
+            Move::DoubleJump => (t::EXTEND_FRAMES, self.constants.jump_gravity2nd),
+            Move::TripleJump => (t::EXTEND_FRAMES, self.constants.jump_gravity3rd),
+            Move::Jump => (t::EXTEND_FRAMES, self.constants.jump_gravity),
+            Move::CapBounce => (0, self.constants.trample_high_gravity),
+            Move::CatchJump => (0, self.constants.jump_gravity_cap_catch),
+            Move::SpinJump => (0, self.constants.spin_jump_gravity),
+            Move::WallJump => (0, self.constants.wall_jump_gravity),
+            _ => (0, self.constants.jump_gravity),
         };
         let forced_jump = s.anim.is_some_and(|(name, _)| name == "JumpDashFast");
         if forced_jump {
-            gravity = 1.;
+            gravity = self.constants.jump_gravity_force_run;
             self.gravity = gravity;
         }
         let mut takeoff = if self.mode == Move::Fall {
-            fall_takeoff(self.v.y)
+            fall_takeoff(self.constants, self.v.y)
         } else if self.mode == Move::WallJump {
-            wall_air::wall_jump_takeoff()
+            wall_air::wall_jump_takeoff(self.constants)
         } else {
             takeoff_of(self.mode, extend, self.v.y, gravity)
         };
@@ -4385,21 +4401,21 @@ impl Player {
                 "Jump3",
                 t::CONTINUOUS_JUMP_POWER_MIN,
                 t::JUMP_POWER_3RD,
-                t::JUMP_GRAVITY_3RD,
+                self.constants.jump_gravity3rd,
             ),
             1 => (
                 Move::DoubleJump,
                 "Jump2",
                 t::CONTINUOUS_JUMP_POWER_MIN,
                 t::JUMP_POWER_MAX_2ND,
-                t::JUMP_GRAVITY_2ND,
+                self.constants.jump_gravity2nd,
             ),
             _ => (
                 Move::Jump,
                 "Jump",
                 t::JUMP_POWER_MIN,
                 t::JUMP_POWER_MAX,
-                t::JUMP_GRAVITY,
+                self.constants.jump_gravity,
             ),
         };
         // The power follows the speed along the facing.
@@ -4407,7 +4423,7 @@ impl Player {
         let power =
             air_move::jump_power(forward, t::NORMAL_MIN, t::NORMAL_MAX, power_min, power_max);
         let (clip, power, gravity) = if self.force_run.is_active() {
-            ("JumpDashFast", 18., 1.)
+            ("JumpDashFast", 18., self.constants.jump_gravity_force_run)
         } else {
             (clip, power, gravity)
         };
@@ -4522,7 +4538,7 @@ impl Player {
                 Move::CatchJump,
                 "JumpCapCatchCommon",
                 t::CAP_CATCH_JUMP_POWER,
-                t::CAP_CATCH_JUMP_GRAVITY,
+                self.constants.jump_gravity_cap_catch,
                 |p| p.jump_extend = false,
             );
             return;
@@ -4545,8 +4561,8 @@ impl Player {
         self.jump_with(
             Move::PoundJump,
             "JumpHipDrop",
-            t::HIP_DROP_JUMP_POWER,
-            t::JUMP_GRAVITY,
+            self.constants.jump_hip_drop_power,
+            self.constants.jump_gravity,
             |p| {
                 p.set_h(Vec3::ZERO);
                 p.jump_extend = false;
@@ -4567,7 +4583,7 @@ impl Player {
             Move::Sideflip,
             "JumpTurn",
             t::TURN_JUMP_POWER,
-            t::TURN_JUMP_GRAVITY,
+            self.constants.turn_jump_gravity,
             move |p| {
                 p.facing = direction;
                 p.set_h(direction * t::TURN_JUMP_VEL_H);
@@ -4582,7 +4598,7 @@ impl Player {
             Move::Backflip,
             "JumpBack",
             t::SQUAT_JUMP_POWER,
-            t::SQUAT_JUMP_GRAVITY,
+            self.constants.squat_jump_gravity,
             |p| {
                 p.set_h(-p.facing * t::SQUAT_JUMP_BACK);
                 p.jump_extend = false;
@@ -4597,19 +4613,25 @@ impl Player {
     fn long_jump_as(&mut self, mode: Move) {
         const NAMES: [&str; 3] = ["JumpBroad", "JumpBroad2", "JumpBroad3"];
         let name = NAMES[self.long_combo.count as usize % 3];
-        self.jump_with(mode, name, t::LONG_JUMP_POWER, t::LONG_JUMP_GRAVITY, |p| {
-            p.long_combo.count_up();
-            p.v = air_move::long_jump_velocity(
-                p.prior_v,
-                &air_move::LongJumpTakeoff {
-                    move_pow: t::LONG_JUMP_MOVE_POW,
-                    speed_min: t::LONG_JUMP_SPEED_MIN,
-                    init_speed: t::LONG_JUMP_INIT_SPEED,
-                    power: t::LONG_JUMP_POWER,
-                },
-            );
-            p.jump_extend = false;
-        });
+        self.jump_with(
+            mode,
+            name,
+            t::LONG_JUMP_POWER,
+            self.constants.long_jump_gravity,
+            |p| {
+                p.long_combo.count_up();
+                p.v = air_move::long_jump_velocity(
+                    p.prior_v,
+                    &air_move::LongJumpTakeoff {
+                        move_pow: t::LONG_JUMP_MOVE_POW,
+                        speed_min: t::LONG_JUMP_SPEED_MIN,
+                        init_speed: t::LONG_JUMP_INIT_SPEED,
+                        power: t::LONG_JUMP_POWER,
+                    },
+                );
+                p.jump_extend = false;
+            },
+        );
     }
     /// The stick as a push in the world (length up to one).
     fn push(&self) -> Vec3 {
@@ -4636,7 +4658,7 @@ impl Player {
                 speed_max: t::LONG_JUMP_SPEED,
                 speed_min: t::LONG_JUMP_SPEED_MIN,
                 side_accel: t::LONG_JUMP_SIDE_ACCEL,
-                gravity: t::LONG_JUMP_GRAVITY,
+                gravity: self.constants.long_jump_gravity,
                 fall_max: t::FALL_MAX,
                 turn_rate: air_move::tune::SLERP_QUAT_GRAV,
             },
@@ -4655,7 +4677,7 @@ impl Player {
                 back: air_move::tune::SQUAT_JUMP_MOVE_POWER,
                 side: air_move::tune::SQUAT_JUMP_MOVE_POWER,
                 speed_max: t::SQUAT_JUMP_MOVE_MAX,
-                gravity: t::SQUAT_JUMP_GRAVITY,
+                gravity: self.constants.squat_jump_gravity,
                 fall_max: t::FALL_MAX,
             },
         );
@@ -4676,7 +4698,7 @@ impl Player {
                 speed_max: t::TURN_JUMP_VEL_H,
                 speed_min: 0.,
                 side_accel: air_move::tune::TURN_JUMP_SIDE_ACCEL,
-                gravity: t::TURN_JUMP_GRAVITY,
+                gravity: self.constants.turn_jump_gravity,
                 fall_max: t::FALL_MAX,
                 turn_rate: 0.,
             },
@@ -4760,8 +4782,8 @@ impl Player {
             self.v.y -= self.gravity;
         }
         self.v.y = self.v.y.max(-t::FALL_MAX);
-        if self.v.y < 0. && self.gravity != t::GRAVITY_AIR {
-            self.gravity = t::GRAVITY_AIR;
+        if self.v.y < 0. && self.gravity != self.constants.gravity_air {
+            self.gravity = self.constants.gravity_air;
         }
         // Jump clips end in a fall pose; then the fall loop takes over.
         let ends: Option<u32> = match self.anim.name {
@@ -4850,7 +4872,12 @@ impl Player {
                 self.play("HipDrop");
             }
         } else {
-            self.v = Vec3::NEG_Y * t::HIP_DROP_SPEED;
+            // exeFall (0x470658): initial HipDropSpeed, then HipDropGravity,
+            // both limited by the unchanged HipDropSpeedMax (45).
+            if self.anim.frame == 0. {
+                self.v.y = (self.v.y - self.constants.hip_drop_speed).max(-45.);
+            }
+            self.v.y = (self.v.y - self.constants.hip_drop_gravity).max(-45.);
         }
     }
     /// `PlayerStateHipDrop::isEnableLandCancel`: the pound's landing nerve may
@@ -4924,8 +4951,8 @@ impl Player {
                 h = p.stick;
             }
             p.facing = h;
-            let up = p.v.y.max(0.) + t::HEAD_SLIDING_JUMP;
-            p.v = h * t::HEAD_SLIDING_SPEED + Vec3::Y * up;
+            let up = p.v.y.max(0.) + p.constants.head_sliding_jump;
+            p.v = h * p.constants.head_sliding_speed + Vec3::Y * up;
             p.dive_possible = false;
             p.head_slide_dive_in = false;
             p.events.push(Fx::Dive);
@@ -4954,10 +4981,10 @@ impl Player {
             &air_move::DivingJump {
                 accel: 0.,
                 brake: t::HEAD_SLIDING_BRAKE,
-                speed_max: t::HEAD_SLIDING_SPEED,
+                speed_max: self.constants.head_sliding_speed,
                 speed_min: t::HEAD_SLIDING_SPEED_MIN,
                 side_accel: t::HEAD_SLIDING_SIDE_ACCEL,
-                gravity: t::HEAD_SLIDING_GRAVITY,
+                gravity: self.constants.head_sliding_gravity_air,
                 fall_max: t::FALL_MAX,
                 turn_rate: air_move::tune::SLERP_QUAT_GRAV,
             },
@@ -5256,7 +5283,7 @@ impl Player {
         if step > 22 && !self.winding {
             self.set(Move::Fall);
             self.spin_fall = true;
-            self.gravity = t::GRAVITY_AIR;
+            self.gravity = self.constants.gravity_air;
         }
     }
     fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {
@@ -5452,8 +5479,8 @@ impl Player {
         }
         self.catch_window = 0;
         self.v.y = t::CAP_CATCH_POP_POWER;
-        self.gravity = t::CAP_CATCH_POP_GRAVITY;
-        self.air.set_gravity(t::CAP_CATCH_POP_GRAVITY);
+        self.gravity = self.constants.cap_catch_pop_gravity;
+        self.air.set_gravity(self.constants.cap_catch_pop_gravity);
         self.play("JumpCapCatchCommon");
         true
     }
@@ -5546,7 +5573,7 @@ impl Player {
             Move::CapBounce,
             clip,
             t::TRAMPLE_HIGH_JUMP_POWER,
-            t::TRAMPLE_HIGH_GRAVITY,
+            self.constants.trample_high_gravity,
             move |p| {
                 match (pushing, falling) {
                     (true, true) => {}
@@ -5652,7 +5679,7 @@ impl Player {
             // the ground (`clearLandLimitStandAngle`), the landing step included.
             self.cap_jump_possible = true;
         }
-        self.gravity = t::GRAVITY_AIR;
+        self.gravity = self.constants.gravity_air;
         self.hard_land = self.fall.distance >= t::LONG_FALL
             && !matches!(
                 self.mode,
@@ -5667,8 +5694,9 @@ impl Player {
             // the landing clip are its first step (the game's logic does not
             // freeze there).
             Move::GroundPound => {
-                // Nothing has slowed the fall: the row still reports it.
-                self.v.y = -t::HIP_DROP_SPEED;
+                // Execute the last Fall pull with the incoming velocity that
+                // collision bookkeeping saved (the original collider retains it).
+                self.v.y = (self.touchdown_speed - self.constants.hip_drop_gravity).max(-45.);
                 self.defer(Move::PoundLand, "HipDropLand", |p| {
                     p.events.push(Fx::PoundLand);
                     // `PlayerActorHakoniwa::exeHipDrop`, on the landing, wets the body that

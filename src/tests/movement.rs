@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn placement_constants_belong_to_each_player() {
+    let mut moon = Player::default();
+    moon.init_placement(true);
+    let mut normal = Player::default();
+    normal.init_placement(false);
+    assert_eq!(
+        fall_takeoff(moon.constants, 0.).gravity.to_bits(),
+        0.4_f32.to_bits()
+    );
+    assert_eq!(
+        fall_takeoff(normal.constants, 0.).gravity.to_bits(),
+        1.5_f32.to_bits()
+    );
+    assert_eq!(wall_air::wall_jump_takeoff(moon.constants).input_lock, 30);
+    assert_eq!(wall_air::wall_jump_takeoff(normal.constants).input_lock, 25);
+    moon.start_clip("Move");
+    normal.start_clip("Move");
+    assert_eq!(moon.anim.name, "MoveMoon");
+    assert_eq!(normal.anim.name, "Move");
+    moon.cycle.update(14., 1., moon.constants);
+    normal.cycle.update(14., 1., normal.constants);
+    assert!(moon.cycle.layers().any(|layer| layer.name == "RunMoon"));
+    assert!(normal.cycle.layers().any(|layer| layer.name == "Run"));
+    moon.init_placement(false);
+    assert_eq!(moon.constants, normal.constants);
+}
+
 fn floor() -> Course {
     Course {
         solids: vec![Solid {

@@ -92,7 +92,7 @@ impl Player {
             * if on_ground {
                 t::GRAVITY
             } else {
-                t::GRAVITY_AIR
+                self.constants.gravity_air
             };
         self.v = along_front + along_side + up;
         if !on_ground {

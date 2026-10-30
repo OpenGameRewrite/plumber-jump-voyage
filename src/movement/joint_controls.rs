@@ -150,6 +150,18 @@ impl Player {
         let rate = self.joints.grab.update();
         self.joints.spring.set_control_rate(rate);
         let inputs = self.ground_pose_inputs();
+        let center_rate = if self.actor_name() == "Run" && self.run_nerve == RunNerve::Run {
+            let blend = (1. - self.cycle.weights[4]).clamp(0., 1.);
+            let max = self.constants.center_tilt_rate_max;
+            joint_math::lerp_value(max.min(0.1), max, blend * blend)
+        } else {
+            0.
+        };
+        self.joints.ground.update_center_tilt(
+            center_rate,
+            self.units_per_frame(),
+            self.actor_pose().side(),
+        );
         let center = std::mem::take(&mut self.joints.center);
         self.joints.ground.update(inputs, &center);
     }

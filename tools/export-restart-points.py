@@ -40,6 +40,12 @@ def main():
             restart['area_id'] = area['Id']
             points.append(restart)
     geometry['restart_points'] = points
+    # IsMoon belongs to PlayerList initialization, not to a restart/checkpoint.
+    geometry['player_placements'] = [
+        dict(id=obj['Id'], unit=obj['UnitConfigName'], is_moon=obj.get('IsMoon', False))
+        for obj in placement.get('PlayerList', [])
+        if obj['UnitConfigName'] == 'PlayerActorHakoniwa'
+    ]
     args.geometry.write_text(json.dumps(geometry, separators=(',', ':')), encoding='utf8')
     print(f'{args.geometry}: {len(points)} restart placements')
 
