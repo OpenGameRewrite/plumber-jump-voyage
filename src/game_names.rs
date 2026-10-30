@@ -55,6 +55,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::Backflip => known("Jump/JumpBack"),
         Move::Sideflip => known("Jump/JumpTurn"),
         Move::SpinJump => known("Jump/JumpSpinGround"),
+        Move::SpinFlower => known("Jump/JumpSpinFlower"),
         Move::SpinDrop => known("Jump/JumpSpinGroundDownFall"),
         Move::GroundSpin => known("Run/GroundSpin3D"),
         Move::GroundPound if anim == "HipDropStart" => known("HipDrop/Start"),

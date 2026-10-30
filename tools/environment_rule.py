@@ -37,6 +37,7 @@ from rocket_flower import Evidence as RocketEvidence
 from coin_chameleon import Evidence as CoinChameleonEvidence
 from pukupuku import Evidence as PukupukuEvidence
 from carry_objects import Evidence as CarryEvidence, mario_answer
+from cap_trampoline import Evidence as TrampolineEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -217,7 +218,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -244,6 +245,7 @@ class Judge:
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
+        self._trampoline = TrampolineEvidence(geometry, trampolines, spin_player, spin_messages, rewrite_rows, game_rows, preroll or {})
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
         # KickStone's deterministic port stops before the first unseeded global RNG
         # consumer. Absence of later Mario contacts cannot certify the frozen source.
@@ -569,6 +571,9 @@ class Judge:
                              "Forest scenario 1 static placement/KCL; ConfirmPaintObj rejected by Mario's original dispatch")
                 else:
                     v.refuse(f, f"unproved PaintObj contact with {host}{where}")
+                continue
+            if self._trampoline.contact(f, c):
+                v.accept(f, "exported obj1088 CapTrampoline", "original placement, exact source sensors/counters, independent native source and ordered type-13 request")
                 continue
             if self._carry.contact(f, c):
                 v.accept(f, "exported flower carry/push", "placement identity, source state, typed dispatch and independently simulated receiver/keeper")

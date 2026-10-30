@@ -225,6 +225,7 @@ pub type ControllerState = (
 );
 mod abyss;
 mod actor_collider;
+pub mod cap_trampoline;
 pub mod carry;
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
@@ -255,6 +256,7 @@ pub mod rotate_parts;
 mod safety;
 pub mod sand_geyser;
 mod sand_sink;
+mod spin_flower;
 mod stain;
 mod surface_run;
 use damage::Damage;
@@ -467,6 +469,7 @@ pub mod clip {
     /// state goes on (the jump state never switches them to the fall clip).
     pub fn held_length(name: &str) -> Option<u32> {
         match name {
+            "SpinJumpStart" => Some(26),
             "GrabCeilStart" => Some(51),
             "GrabCeilJump" => Some(46),
             "SquatStart" => Some(3),
@@ -490,6 +493,7 @@ pub mod clip {
     /// Length of the clips that loop (their frame wraps).
     pub fn loop_length(name: &str) -> Option<f32> {
         match name {
+            "SpinJumpLoop" => Some(23.),
             "GrabCeilWait" => Some(90.),
             "Wait" | "Snooze" => Some(180.),
             "WaitRelax" => Some(1200.),
@@ -539,8 +543,10 @@ pub mod clip {
             // 23, then 1) before they wrap.
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
-            "GrabCeilWait" | "SandWait" | "SandWalk" | "SwimStandSurface" | "SwimSurfaceNormal"
-            | "SwimStandWait" | "SwimWalk" | "WaitCold" | "WaitVeryCold" => 1.,
+            "SpinJumpLoop" | "GrabCeilWait" | "SandWait" | "SandWalk" | "SwimStandSurface"
+            | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" | "WaitCold" | "WaitVeryCold" => {
+                1.
+            }
             _ => 0.,
         }
     }
@@ -583,6 +589,7 @@ pub enum Move {
     Backflip,
     Sideflip,
     SpinJump,
+    SpinFlower,
     SpinDrop,
     GroundSpin,
     GroundPound,
@@ -629,7 +636,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 59] = [
+    pub const ALL: [Move; 60] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -646,6 +653,7 @@ impl Move {
         Self::Backflip,
         Self::Sideflip,
         Self::SpinJump,
+        Self::SpinFlower,
         Self::SpinDrop,
         Self::GroundSpin,
         Self::GroundPound,
@@ -707,6 +715,7 @@ impl Move {
             Self::Backflip => "Backflip",
             Self::Sideflip => "Side somersault",
             Self::SpinJump => "Spin jump",
+            Self::SpinFlower => "Trampoline spin jump",
             Self::SpinDrop => "Spin drop",
             Self::GroundSpin => "Spin",
             Self::GroundPound | Self::PoundLand => "Ground pound",
@@ -750,6 +759,7 @@ impl Move {
                 self,
                 Self::LongJump
                     | Self::SpinDrop
+                    | Self::SpinFlower
                     | Self::GroundPound
                     | Self::Dive
                     | Self::BurnJump
@@ -1096,6 +1106,8 @@ pub struct Player {
     /// `PlayerCounterForceRun`: set by RocketFlower equipment.
     force_run: force_run::ForceRun,
     pub rocket: rocket_flower::RocketFlowers,
+    pub trampolines: Vec<cap_trampoline::Trampoline>,
+    spin_flower: spin_flower::SpinFlower,
     surface_run: surface_run::SurfaceRun,
     damage: Damage,
     life: damage_life::LifeControl,
@@ -1424,6 +1436,8 @@ impl Default for Player {
             stage_carry: None,
             force_run: force_run::ForceRun::default(),
             rocket: default(),
+            trampolines: default(),
+            spin_flower: default(),
             surface_run: default(),
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
@@ -3055,6 +3069,9 @@ impl Player {
             self.rocket_sensor_phase(scene);
         }
         self.query_equipment_force_run();
+        if advance_sources {
+            self.trampoline_sensor_phase(scene);
+        }
         self.cap_sensor_phase(&o);
         self.puku_sensor_phase(scene);
         self.start_pending_abyss();
@@ -3306,6 +3323,7 @@ impl Player {
             Move::GrabCeil => self.grab_ceil_step(o),
             Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
+            Move::SpinFlower => self.spin_flower_step(o),
             _ => self.air(o),
         }
         // The jump states ask for the `DiveInWater` clip at the end of their steps

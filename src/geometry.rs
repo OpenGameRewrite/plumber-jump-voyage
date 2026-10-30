@@ -128,6 +128,7 @@ pub struct TriangleMesh {
     /// Settled, initially lit candlestands; positions stay in absolute stage centimetres.
     pub candle_fire: Vec<Vec3>,
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
+    pub trampolines: Vec<crate::movement::cap_trampoline::Trampoline>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     pub force_areas: Vec<crate::movement::external_velocity::ForceArea>,
@@ -490,6 +491,32 @@ impl TriangleMesh {
             ),
             origin,
         ));
+        for source in root["cap_trampolines"].as_array().into_iter().flatten() {
+            mesh.trampolines
+                .push(crate::movement::cap_trampoline::Trampoline::load(source)?);
+            let p = &source["placement"];
+            let origin = mesh.trampolines.last().unwrap().position;
+            for (name, radius, y) in [
+                ("Body", 76., 0.),
+                ("CapHit", 110., 60.),
+                ("TrampleHit", 120., -20.),
+                ("Attack", 200., 0.),
+            ] {
+                let at = origin + Vec3::Y * y;
+                mesh.look_sensors
+                    .push(crate::movement::look_at::LookSensor {
+                        host: p["UnitConfig"]["DisplayName"]
+                            .as_str()
+                            .ok_or("trampoline host")?
+                            .into(),
+                        name: name.into(),
+                        kind: 12,
+                        radius,
+                        position: mesh.relative_vec(at),
+                        stage_position: at,
+                    });
+            }
+        }
         mesh.geyser_curves = root.get("sand_geyser_curves").cloned();
         if let Some(source) = root.get("pukupuku") {
             if root["stage"] != "SeaWorldUtsuboCaveStage"
