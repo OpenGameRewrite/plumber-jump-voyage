@@ -2,6 +2,7 @@
 //! Nerve/camera/bind execution is not implied by loading these source poses.
 use super::dimension::{DimensionAreas, DimensionKeeper};
 use super::pose_math::{dot, make_mtx_up_front, quat_front_up, quat_to_axes};
+use super::vector_lib::{is_near_zero, parallelize_vec};
 use bevy::prelude::{Quat, Vec3};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +114,42 @@ impl Dokan {
             bind_radius,
             bind_offset: Vec3::new(component("X"), component("Y"), component("Z")),
         })
+    }
+
+    /// `DokanPuppetController::judgeMsgBindStart` (0x25b2f0) for an ordinary
+    /// side entrance met by a 3D player: the straight-line branch at
+    /// 0x25b3d8..0x25b6e8. The bind sensor overlap itself is the caller's.
+    pub fn accepts_side_bind(&self, player_pos: Vec3, front: Vec3, velocity: Vec3) -> bool {
+        if self.is_2d || self.direction != Direction::Side {
+            return false;
+        }
+        // al::isNearZero 0x91df0c with the .001 literal 0x187fc80 (0x25b454).
+        if is_near_zero(velocity, 0.001) {
+            return false;
+        }
+        // The speed along the pipe's up axis (al::parallelizeVec 0x923fe0)
+        // must exceed the 0.4 literal at 0x187fea8 (0x25b478).
+        let up = self.up();
+        if is_near_zero(parallelize_vec(up, velocity), 0.4) {
+            return false;
+        }
+        // The player must face against the pipe's up axis (0x25b678..0x25b6a0)
+        // while standing below its origin: the world down direction (negated
+        // sead::Vector3f::ey, 0x25b608) against the normalized offset.
+        if dot(front, up) >= 0. {
+            return false;
+        }
+        let to_player = player_pos - self.position();
+        let direction = if dot(to_player, to_player) > 0. {
+            to_player.normalize()
+        } else {
+            Vec3::Z
+        };
+        dot(Vec3::NEG_Y, direction) > 0.
+    }
+
+    pub fn bind_radius(&self) -> f32 {
+        self.bind_radius
     }
 
     pub fn position(&self) -> Vec3 {

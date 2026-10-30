@@ -225,6 +225,7 @@ pub type ControllerState = (
 );
 mod abyss;
 mod actor_collider;
+mod bind;
 pub mod cap_trampoline;
 pub mod carry;
 #[path = "movement/console_libm.rs"]
@@ -440,6 +441,8 @@ fn upper_catch_last(clip: &str) -> i32 {
 
 /// Frame counts of clips whose end the controller waits for.
 pub mod clip {
+    /// The pipe's out clip (`DokanOut`, 21 frames after its first: the controller waits for it).
+    pub const DOKAN_OUT: u32 = 21;
     pub const HIP_DROP_START: u32 = 24;
     pub const HIP_DROP_LAND: u32 = 44;
     pub const ROLLING_START: u32 = 6;
@@ -635,10 +638,12 @@ pub enum Move {
     CapBounce,
     CatchJump,
     Throw,
+    /// `PlayerStateBind`: a pipe's puppet controller owns the pose.
+    Bind,
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 60] = [
+    pub const ALL: [Move; 61] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -699,6 +704,7 @@ impl Move {
         Self::CapBounce,
         Self::CatchJump,
         Self::Throw,
+        Self::Bind,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -751,6 +757,7 @@ impl Move {
             Self::CapBounce => "Cap jump",
             Self::CatchJump => "Catch jump",
             Self::Throw => "Cap throw",
+            Self::Bind => "Bind",
         }
     }
     /// A state that ends by reaching the ground: the contact is flagged in one
@@ -1409,6 +1416,13 @@ pub struct Player {
     pub key_move_sources: String,
     pub rotate_sources: String,
     press: press::Press,
+    pipes: Vec<bind::DokanActor>,
+    bound_to: Option<usize>,
+    /// The puppet bind has ended and the state is falling out of it (`PlayerStateBind` EndFall).
+    bind_end: bool,
+    puppet_hidden: bool,
+    bind_staged: Vec<usize>,
+    bind_ready: Vec<usize>,
     /// The main clip looped back to its start in this step, as the game's triggers see it: a
     /// clip whose counter shows its length for a row before it wraps starts its loop in that
     /// row.
@@ -1606,6 +1620,12 @@ impl Default for Player {
             key_move_sources: String::new(),
             rotate_sources: String::new(),
             press: press::Press::default(),
+            pipes: Vec::new(),
+            bound_to: None,
+            bind_end: false,
+            puppet_hidden: false,
+            bind_staged: Vec::new(),
+            bind_ready: Vec::new(),
             clip_wrapped: false,
             counter_wrapped: false,
             pose_seen: None,
@@ -2976,6 +2996,8 @@ impl Player {
             self.restart_after_death(scene);
         }
         if advance_sources {
+            // The pipe actor updates after the player within a frame.
+            self.dokan_update(scene, o);
             self.key_move_sources = scene
                 .mesh
                 .as_ref()
@@ -3102,6 +3124,9 @@ impl Player {
         self.carry_sensor_phase(&o, scene);
         self.update_carry(&o, advance_sources);
         self.flower_sensor_phase(scene);
+        if advance_sources {
+            self.dokan_sensor_phase(scene);
+        }
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
@@ -3125,7 +3150,9 @@ impl Player {
         self.update_sand_affect(scene);
         self.finish_carry_release(scene);
         let moved = self.v;
-        self.collide(&o, scene);
+        if self.mode != Move::Bind {
+            self.collide(&o, scene);
+        }
         self.update_stone_collide_lock_up(scene);
         self.update_water_finder(scene);
         self.fall.update(
@@ -3168,6 +3195,9 @@ impl Player {
         self.finish_frame(scene);
         self.carry.push.clear();
         self.snapshot_injected = false;
+        if advance_sources {
+            self.dokan_sensor_trail(scene);
+        }
         // The camera updates after the actors of the frame.
         self.entrance_camera.update(self.position_cm(), o.recenter);
     }
@@ -3321,6 +3351,7 @@ impl Player {
             }
             Move::SandGeyser => self.sand_geyser_step(scene),
             Move::Press => self.press_step(),
+            Move::Bind => self.bind_state(),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {

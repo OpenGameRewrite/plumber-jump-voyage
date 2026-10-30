@@ -231,6 +231,10 @@ pub struct Orders {
     pub view: Option<crate::movement::move_input::ViewRows>,
     /// The visible camera's rows. A probe may override the input view independently.
     pub camera_view: Option<crate::movement::move_input::ViewRows>,
+    /// The camera director is interpolating (`al::isActiveCameraInterpole`). The camera
+    /// director is not simulated: like the camera's pose, this state of it is an input of the
+    /// replay, which a pipe waits on before it lets the player out.
+    pub camera_interpolating: bool,
     pub look: Vec2,
     pub jump: bool,
     pub jump_held: bool,

@@ -214,6 +214,7 @@ pub struct CameraTrack {
     /// the view to the script's `camera` yaw, `move_input::locked_view`).
     view_rows: Vec<Option<ViewRows>>,
     locked_rows: Option<ViewRows>,
+    interpolating: Vec<bool>,
 }
 /// The real game's camera for one frame, in the rewrite's world (metres,
 /// start at the origin; the game's axes and Bevy's are both right-handed
@@ -329,6 +330,7 @@ impl CameraTrack {
                 views: Vec::new(),
                 view_rows: Vec::new(),
                 locked_rows,
+                interpolating: Vec::new(),
             });
         };
         let view_rows = (0..game.rows.len())
@@ -383,7 +385,12 @@ impl CameraTrack {
             views,
             view_rows,
             locked_rows,
+            interpolating: game.camera_interpolating.clone(),
         })
+    }
+    /// The camera director's interpolation state at core `frame`.
+    pub fn interpolating(&self, frame: usize) -> bool {
+        self.interpolating.get(frame).copied().unwrap_or(false)
     }
     /// The view matrix of `frame` for the stick (the last recorded one past the end of the
     /// trace), when the run records it or its camera is locked.
@@ -1050,6 +1057,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 );
                 orders.view = camera.view_rows(last);
                 orders.camera_view = camera.view(last).map(View::rows);
+                orders.camera_interpolating = camera.interpolating(last);
                 let spin = player.spin_input();
                 update_static_clipping(&mut player, &course, camera.view(last));
                 if !player.rocket.flowers.is_empty() {
@@ -1130,6 +1138,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         );
         orders.view = camera.view_rows(frame);
         orders.camera_view = camera.view(frame).map(View::rows);
+        orders.camera_interpolating = camera.interpolating(frame);
         // The game's camera (when the trace records it) is what its sound control hears.
         player.set_camera_position(camera.view(frame).map(|view| view.position * 100.));
         // Scene RNG is external to a player-only replay. Feed raw getU32 results

@@ -1283,6 +1283,9 @@ pub struct TraceFile {
     pub rocket_seed: Option<serde_json::Value>,
     pub press_seed: Vec<HashMap<String, String>>,
     pub puku_seed: Vec<HashMap<String, String>>,
+    /// Per frame, whether the camera director was interpolating when the pipes sampled it
+    /// (`game.pipes.csv` `camera_active`): the director's state is a replay input.
+    pub camera_interpolating: Vec<bool>,
 }
 impl TraceFile {
     pub fn read(path: &str) -> Result<Self, String> {
@@ -1295,6 +1298,7 @@ impl TraceFile {
             )
             .map_err(|e| format!("{}: {e}", meta.display()))?;
         }
+        trace.camera_interpolating = read_camera_interpolation(path);
         let seed = std::path::Path::new(path).with_extension("geyser_seed.json");
         if seed.exists() {
             trace.geyser_seed = Some(
@@ -1417,6 +1421,7 @@ impl TraceFile {
             press_seed: Vec::new(),
             puku_seed: Vec::new(),
             grabceil_seed: None,
+            camera_interpolating: Vec::new(),
         })
     }
     /// A non-empty cell.
@@ -1971,4 +1976,47 @@ mod checks;
 
 pub fn self_check() {
     checks::run();
+}
+
+/// The camera director's interpolation flag per core frame, from the pipe samples beside a
+/// trace (none when the run recorded no pipes). Any pipe's positive query counts.
+fn read_camera_interpolation(path: &str) -> Vec<bool> {
+    let side = std::path::Path::new(path).with_file_name("game.pipes.csv");
+    let Ok(text) = std::fs::read_to_string(side) else {
+        return Vec::new();
+    };
+    let mut lines = text.lines();
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let header: Vec<_> = header.split(',').collect();
+    let column = |name: &str| header.iter().position(|h| *h == name);
+    let (Some(frame), Some(kind), Some(active)) =
+        (column("frame"), column("kind"), column("camera_active"))
+    else {
+        return Vec::new();
+    };
+    let mut flags: Vec<bool> = Vec::new();
+    for line in lines {
+        // Quoted cells hold commas; only the leading columns are needed, and the quoted ones
+        // all come after `camera_active`.
+        let cells: Vec<_> = line.splitn(header.len(), ',').collect();
+        let (Some(row_frame), Some(row_kind), Some(row_active)) =
+            (cells.get(frame), cells.get(kind), cells.get(active))
+        else {
+            continue;
+        };
+        let Ok(row_frame) = row_frame.parse::<i64>() else {
+            continue;
+        };
+        if *row_kind != "sample" || row_frame < 0 {
+            continue;
+        }
+        let row_frame = row_frame as usize;
+        if flags.len() <= row_frame {
+            flags.resize(row_frame + 1, false);
+        }
+        flags[row_frame] |= *row_active == "1";
+    }
+    flags
 }
