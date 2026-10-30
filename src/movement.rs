@@ -1962,6 +1962,8 @@ impl Player {
     }
 
     fn move_animation(&self) -> &'static str {
+        // PlayerAnimControlRun constructor (0x42c5b4) selects the slot from
+        // initPlayer's IsMoon; ActionAnimCtrl supplies its RunMoon layer.
         if self.is_moon { "MoveMoon" } else { "Move" }
     }
 

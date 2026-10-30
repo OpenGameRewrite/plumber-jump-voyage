@@ -8,6 +8,7 @@ pub(super) fn run() {
     lockstep();
     command_line();
     geometry_per_scenario();
+    placement_constant_selection();
 }
 
 const IDLE: &str = "start 0 0 0 0\n60 0 0 -\n";
@@ -308,4 +309,38 @@ start 0 0 0 0
         (Some("S"), Some(1))
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg_attr(test, test)]
+fn placement_constant_selection() {
+    let script = Script::parse("stage MoonWorldHomeStage 1\nstart 0 0 0 0\n1 0 0 -\n").unwrap();
+    let placement = serde_json::json!({"id":"obj2", "unit":"PlayerActorHakoniwa", "is_moon":true});
+    let mut mesh = TriangleMesh::default();
+    mesh.stage = Some("MoonWorldHomeStage".into());
+    mesh.scenario = Some(1);
+    mesh.player_placements = vec![placement.clone()];
+    assert_eq!(placement_is_moon(&script, None, Some(&mesh)), Some(true));
+    mesh.scenario = Some(2);
+    assert_eq!(placement_is_moon(&script, None, Some(&mesh)), None);
+    mesh.scenario = Some(1);
+    mesh.stage = Some("Other".into());
+    assert_eq!(placement_is_moon(&script, None, Some(&mesh)), None);
+    mesh.stage = Some("MoonWorldHomeStage".into());
+    mesh.player_placements.push(placement.clone());
+    assert_eq!(placement_is_moon(&script, None, Some(&mesh)), None);
+    mesh.player_placements = vec![placement];
+    for invalid in [serde_json::Value::Null, serde_json::json!("true")] {
+        mesh.player_placements[0]["is_moon"] = invalid;
+        assert_eq!(placement_is_moon(&script, None, Some(&mesh)), None);
+    }
+    mesh.player_placements[0]["is_moon"] = serde_json::json!(false);
+    assert_eq!(placement_is_moon(&script, None, Some(&mesh)), Some(false));
+    let unnamed = Script::parse(IDLE).unwrap();
+    assert_eq!(placement_is_moon(&unnamed, None, Some(&mesh)), None);
+    let mut recorded = TraceFile::parse("frame\n0\n").unwrap();
+    recorded.metadata = serde_json::json!({"stage":"MoonWorldHomeStage", "scenario_no":1});
+    assert_eq!(
+        placement_is_moon(&unnamed, Some(&recorded), Some(&mesh)),
+        Some(false)
+    );
 }

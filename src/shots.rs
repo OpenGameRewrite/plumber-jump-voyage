@@ -49,6 +49,7 @@ pub struct Driver {
     look_sensors: Vec<LookSensor>,
     geometry: Option<Arc<TriangleMesh>>,
     initial_rocket: crate::movement::rocket_flower::RocketFlowers,
+    placement_is_moon: Option<bool>,
 }
 #[derive(PartialEq)]
 enum Phase {
@@ -80,6 +81,8 @@ impl Driver {
             crate::replay::seed_pukupuku(Arc::make_mut(mesh), script, recorded)?;
             crate::replay::seed_key_move_parts(Arc::make_mut(mesh), script, recorded)?;
         }
+        let placement_is_moon =
+            crate::replay::placement_is_moon(script, recorded, geometry.as_deref());
         Ok(Self {
             frames: script.frames().cloned().collect(),
             camera,
@@ -98,6 +101,7 @@ impl Driver {
                 .map_or_else(Vec::new, |m| m.look_sensors.clone()),
             geometry,
             initial_rocket: player.rocket,
+            placement_is_moon,
         })
     }
     /// Where the picture of the frame being captured goes.
@@ -186,10 +190,15 @@ fn begin(
     menu.begun = true;
     orbit.locked = true;
     **player = Player::spawn_facing(Vec3::ZERO, driver.start_yaw_deg);
+    if let Some(moon) = driver.placement_is_moon {
+        player.init_placement(moon);
+    }
     player.rocket = driver.initial_rocket.clone();
-    if course.mesh.as_ref().is_some_and(|m| {
-        m.pukupuku.is_some() || !m.key_move_parts.is_empty() || !m.rotate_parts.is_empty()
-    }) {
+    if driver.placement_is_moon == Some(true)
+        || course.mesh.as_ref().is_some_and(|m| {
+            m.pukupuku.is_some() || !m.key_move_parts.is_empty() || !m.rotate_parts.is_empty()
+        })
+    {
         player.prepare_recorded_teleport();
     }
     driver.phase = Phase::Loading;

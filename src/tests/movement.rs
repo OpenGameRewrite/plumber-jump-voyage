@@ -26,6 +26,11 @@ fn placement_constants_belong_to_each_player() {
     assert!(normal.cycle.layers().any(|layer| layer.name == "Run"));
     moon.init_placement(false);
     assert_eq!(moon.constants, normal.constants);
+    moon.init_placement(true);
+    moon.restart_after_death(&Course::default());
+    assert_eq!(moon.constants, &player_constants::PlayerConstants::MOON);
+    moon.start_clip("Move");
+    assert_eq!(moon.anim.name, "MoveMoon");
 }
 
 fn floor() -> Course {

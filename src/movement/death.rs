@@ -108,7 +108,9 @@ impl Player {
         let external = self.death.external_reload;
         let generation = self.death.generation + 1;
         let camera = self.camera_cm;
+        let is_moon = self.is_moon;
         *self = Self::spawn_facing(pose.0, pose.1);
+        self.init_placement(is_moon);
         self.ground_contact = 0;
         // al::tryGetQuat(PlacementInfo) uses f32 radians and half-angle libm.
         let half = (pose.1 * pose_math::DEGREES_TO_RADIANS) * 0.5;

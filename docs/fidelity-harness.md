@@ -305,6 +305,25 @@ exported PlayerList placement's `IsMoon`. `export-restart-points.py` adds
 scenario and one identified entry player before selecting Moon constants.
 Normal and Moon players retain independent immutable constants. `MoveMoon`
 uses the original `ActionAnimCtrl` layers, replacing `Run` with `RunMoon`.
+The constructor selector is `PlayerAnimControlRun` (1.0.0, 0x42c5b4), reached
+from `initPlayer` through the 3D run state; it chooses `MoveMoon` on `IsMoon`,
+independently of speed. `ActionAnimCtrl` provides Walk/RunMoon/Dash/DashFast/RunStart;
+the three maximum animation rates come from the selected constant set.
+Headless and rendered replay share the placement check, and an actor reconstructed
+after death keeps the initialization choice. An absent, ambiguous or mismatched
+placement does not establish Moon physics. No Moon-specific environment waiver
+is added: the existing static surface and actor-message rules still apply.
+
+The selected set covers all 44 `PlayerConstMoon` overrides. Existing consumers
+read it explicitly: run rates and centre tilt, air/fall/jump families, wall slide,
+wall/climb jumps, damage, head slide, hip drop, cap catch/pop/high trample,
+GrabCeil release and water hip-drop pop. Values awaiting an implemented consumer
+are the cap head-spring pair, cap leapfrog triplet, 2D jump pair, spin-flower
+down-fall pair, ordinary trample gravity, the three 2D trample values, and the
+hip-drop trample pair. These stored values do not claim those families are ported.
+General directional gravity remains outside this vertical-gravity port. Moon's
+cold idle still requires an unavailable shade/depth texture; the diagnostic above
+reports this limitation without supplying a fabricated sunlight result.
 
 One row per step, values after the step. The base columns are `frame`
 through `events`; the extended columns follow the real-game probe's layout.

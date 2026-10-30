@@ -6,7 +6,7 @@
 //! have decompiled source; the judges do) and confirmed with the recordings
 //! `ledge-grab`, `ledge-jump` and `ledge-drop`, which jump at the edge of the
 //! raised platform in the Cap Kingdom and hang from it. The values are
-//! `PlayerConst`'s defaults, which the game's data does not override for Mario.
+//! `PlayerConst` defaults, except the selected set's `WallClimbJumpGravity`.
 //!
 //! * A falling body that touched a wall in the last step asks the judge
 //!   (`PlayerJudgeWallCatch`) after its step. The judge looks from the touched
@@ -62,7 +62,6 @@ const FALL_SPEED_MAX: f32 = 35.;
 const TALL: f32 = 160.;
 const CLIMB_JUMP_SPEED_V: f32 = 20.;
 const CLIMB_JUMP_SPEED_H: f32 = 3.;
-const CLIMB_JUMP_GRAVITY: f32 = 1.5;
 const CLIMB_JUMP_INVALID_FRAME: u32 = 12;
 const JUMP_MOVE_SPEED_MAX: f32 = 30.;
 /// Steps the climbs keep the body on the ledge's hanging form: after them the
@@ -1013,13 +1012,13 @@ impl Player {
                 base_speed: CLIMB_JUMP_SPEED_H,
                 extend_frames: 0,
                 power: CLIMB_JUMP_SPEED_V,
-                gravity: CLIMB_JUMP_GRAVITY,
+                gravity: self.constants.wall_climb_jump_gravity,
                 input_lock: CLIMB_JUMP_INVALID_FRAME,
                 speed_window: None,
                 fall_max: t::FALL_MAX,
             };
             self.air.setup(&mut self.v, self.facing, &takeoff);
-            self.gravity = CLIMB_JUMP_GRAVITY;
+            self.gravity = self.constants.wall_climb_jump_gravity;
             self.jump_power = CLIMB_JUMP_SPEED_V;
         }
         let steer = air_move::Steering {
@@ -1073,5 +1072,20 @@ impl Player {
         } else {
             self.go(Move::Fall, "Fall");
         }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn climb_jump_uses_placement_gravity() {
+    for moon in [false, true] {
+        let mut player = Player::default();
+        player.init_placement(moon);
+        player.exe_jump(&Orders::default());
+        assert_eq!(player.gravity, player.constants.wall_climb_jump_gravity);
+        assert_eq!(
+            player.v.y.to_bits(),
+            (CLIMB_JUMP_SPEED_V - player.constants.wall_climb_jump_gravity).to_bits()
+        );
     }
 }
