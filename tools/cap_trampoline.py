@@ -3,7 +3,7 @@ import math
 import struct
 from collections import defaultdict
 from sand_geyser import f32, bits
-from carry_objects import exact_vector
+from carry_objects import exact_vector, mario_answer
 
 
 SENSORS = {'Body': (76., 0.), 'CapHit': (110., 60.),
@@ -142,6 +142,16 @@ class Evidence:
                     or not exact_vector(r['velocity_bits'], '00000000,00000000,00000000')
                     or r['quat_bits'] != '00000000,3f3504f2,00000000,3f3504f3'):
                 raise ValueError(f'source state {f}')
+            # Action metadata: Jump19, Open46 looping. Nerve changes retain the
+            # completed action until the new nerve's first execution.
+            animation, animation_frame = (
+                ('Jump', source.step-1) if source.phase == 2 else
+                ('Wait', 0) if source.step == -1 else
+                ('Jump', 19) if source.step == 0 else ('Open', (source.step-1) % 46))
+            if (r['anim'] != animation or r['anim_frame_bits'] != bits(animation_frame)
+                    or r['anim_rate_bits'] != bits(1.)
+                    or r['counter118'] != '0' or r['flag120'] != '0'):
+                raise ValueError(f'source action {f}')
             if set(sensors[f]) != set(SENSORS):
                 raise ValueError('source sensor set')
             for name, (radius, y) in SENSORS.items():
@@ -173,7 +183,10 @@ class Evidence:
                 if e['sender_id'] != p['Id'] or e['sender_actor'] != identity[0] or e['sender_generation'] != identity[1]:
                     raise ValueError('unbound message sender')
                 msg, own, other = e['message_type'], e['receiver_sensor'], e['sender_sensor']
-                expected = (own not in ('Carry', 'HipDropKnockDown') and msg == 'rs::SensorMsgRequestPlayerSpinJump')
+                expected = (own not in ('Carry', 'HipDropKnockDown')
+                            if msg == 'rs::SensorMsgRequestPlayerSpinJump' else mario_answer(msg, own))
+                if expected is None:
+                    raise ValueError('unported Mario dispatch')
                 if e['answer'] != str(int(expected)):
                     raise ValueError('unproved Mario answer')
                 if expected and (not request or own != 'Foot' or other != 'TrampleHit'):
@@ -256,6 +269,9 @@ def self_check():
                            cooldown=str(source.cooldown), close_counter='300', connector='0',
                            dead='0', clipped='0', collision_parts='0', moon='0', tutorial='0',
                            continue_open='1', camera_arg='1',
+                           anim='Wait' if frame == -1 else 'Jump',
+                           anim_frame_bits=bits(max(0, source.step-1)),
+                           anim_rate_bits=bits(1.), counter118='0', flag120='0',
                            pos_bits=','.join(bits(v) for v in pos),
                            velocity_bits='00000000,00000000,00000000',
                            quat_bits='00000000,3f3504f2,00000000,3f3504f3'))
