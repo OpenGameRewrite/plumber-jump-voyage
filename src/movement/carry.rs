@@ -70,6 +70,7 @@ pub struct Carry {
     pub picked_up: bool,
     pub unsupported_release: bool,
     pub released: bool,
+    pub releasing: bool,
 }
 
 /// The receive dispatch compares message identities; an unhandled identity falls through.
@@ -276,6 +277,7 @@ impl Player {
 
     /// Keeper update 0x42e654 / Start 0x42ef20 / Carry 0x42f028.
     pub(super) fn update_carry(&mut self, o: &Orders, scene: &Course) {
+        self.carry.releasing = false;
         if self.carry.held {
             self.pre_throw = 0;
         }
@@ -303,6 +305,7 @@ impl Player {
             if self.carry.held && self.carry.step >= 5 {
                 self.release_flower_seed(scene);
                 self.carry.held = false;
+                self.carry.releasing = true;
             }
             if !self.carry.held && (!self.sub.active || self.sub.frame >= self.sub.length) {
                 self.carry.phase = 0;
