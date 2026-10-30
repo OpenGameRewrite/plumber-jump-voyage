@@ -6027,6 +6027,7 @@ pub fn self_check() {
     damage::self_check();
     key_move_parts::self_check();
     ground_inertia::self_check();
+    joint_controls::self_check();
     external_velocity::self_check();
     rotate_parts::self_check();
     press::self_check();

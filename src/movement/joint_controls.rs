@@ -432,3 +432,47 @@ impl JointCalc for Controls<'_> {
         self.spring.calc(joint, world);
     }
 }
+
+pub(super) fn self_check() {
+    platform_power_sways_the_body_only_when_it_changes();
+    landing_on_moving_ground_adds_its_motion_to_the_impulse();
+}
+
+fn standing_on_ground() -> Player {
+    let mut player = Player::default();
+    player.collider.floor = Some(crate::collider::Contact {
+        normal: Vec3::Y,
+        position: Vec3::ZERO,
+        triangle: 0,
+        location: crate::collider::Location::Face,
+    });
+    player
+}
+
+#[cfg_attr(test, test)]
+fn platform_power_sways_the_body_only_when_it_changes() {
+    let mut player = standing_on_ground();
+    player.ground_inertia.jump_force = Vec3::new(0., 0., 10.);
+    // `PlayerStateWait::appear` takes the platform's power as the starting point.
+    player.wait_state_appears_on_platform();
+    player.wait_state_platform_control();
+    assert!(!player.joints.center.follow_up);
+    // A change of at least 3 gives the follow-up impulse, bounded to 4.
+    player.ground_inertia.jump_force = Vec3::new(0., 0., 20.);
+    player.wait_state_platform_control();
+    assert!(player.joints.center.follow_up);
+    assert!((player.joints.center.follow_up_vector - Vec3::new(0., 0., -4.)).length() < 1e-5);
+}
+
+#[cfg_attr(test, test)]
+fn landing_on_moving_ground_adds_its_motion_to_the_impulse() {
+    let mut player = standing_on_ground();
+    player.ground_contact = 1;
+    player.ground_inertia.jump_force = Vec3::new(0., 0., 10.);
+    player.start_center_joint_control(Vec3::ZERO, false);
+    assert_eq!(player.joints.center.impulse_vector, Vec3::new(0., 0., -10.));
+    // Without the landing frame the ground's motion is not added.
+    player.ground_contact = 2;
+    player.start_center_joint_control(Vec3::ZERO, false);
+    assert_eq!(player.joints.center.impulse_vector, Vec3::ZERO);
+}
