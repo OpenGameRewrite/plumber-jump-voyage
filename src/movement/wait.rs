@@ -100,18 +100,37 @@ impl Player {
             // landGroundPoseAndSnap (0x56599c) tests the actual clamped turn.
             self.request_collision_reset_after_turn(before, self.pose_axes().0);
         }
-        let snap = if self.frame == 0 && self.is_collided_ground() {
-            let at = scene.in_water_frame(self.position_cm());
-            pose_math::dot(at - self.collider.ground_position(), normal).clamp(0., t::FALL_MAX)
-        } else {
-            0.
-        };
+        let snap = self.landing_snap(scene, normal);
         self.swim_wait_ground(
             t::GRAVITY + snap,
             t::FALL_MAX,
             t::SLERP_QUAT_RATE_WAIT,
             t::WAIT_POSE_DEGREE_MAX,
         );
+    }
+
+    /// `rs::landGroundPoseAndSnap`'s distance from the feet to the ground contact point along the
+    /// normal, added to the first ground pull of a landing.
+    fn landing_snap(&self, scene: &Course, normal: Vec3) -> f32 {
+        if self.frame == 0 && self.is_collided_ground() {
+            let at = scene.in_water_frame(self.position_cm());
+            pose_math::dot(at - self.collider.ground_position(), normal).clamp(0., t::FALL_MAX)
+        } else {
+            0.
+        }
+    }
+
+    /// The snap of a landing on level ground, where the landing clip's first step otherwise
+    /// only keeps the ground pull.
+    pub(super) fn flat_land_snap(&self, scene: &Course) -> f32 {
+        if matches!(
+            self.clip(),
+            "Land" | "LandTurn" | "LandRolling" | "LandJump3"
+        ) {
+            self.landing_snap(scene, self.ground_normal_or_up())
+        } else {
+            0.
+        }
     }
 
     /// A standing clip starts: that is the first step of its sub-nerve.

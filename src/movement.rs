@@ -1378,6 +1378,8 @@ pub struct Player {
     after_turn_speed: f32,
     /// Pull on the ground the latest ground step kept, units per frame.
     pull: f32,
+    /// The distance `rs::landGroundPoseAndSnap` adds to a flat landing's first ground pull.
+    land_snap: f32,
     /// The sounds the player's code starts itself (footsteps, roll, fall).
     sounds: SeCtrl,
     /// The collider still reports the floor under a hop that leaves it (the
@@ -1561,6 +1563,7 @@ impl Default for Player {
             ground_frame: None,
             ground_part: None,
             rotating_ground: false,
+            land_snap: 0.,
             ground_inertia: ground_inertia::GroundInertia::default(),
             area_velocity: Vec3::ZERO,
             area_source: String::new(),
@@ -3467,6 +3470,7 @@ impl Player {
                 self.land_ground(scene);
             } else {
                 self.wait_pose();
+                self.land_snap = self.flat_land_snap(scene);
             }
             self.stand(o);
         } else if self.run_nerve == RunNerve::WallPush {
@@ -3547,8 +3551,9 @@ impl Player {
         // `rs::waitGround` adds the pull every step; the floor takes it back at once, but in
         // the air it builds up to the fall speed limit (a player placed in the air falls
         // 3, 6, 9... per step until the fall state takes over).
+        let snap = std::mem::take(&mut self.land_snap);
         self.v.y = if self.grounded {
-            -t::GRAVITY
+            -(t::GRAVITY + snap)
         } else {
             (self.v.y - t::GRAVITY).max(-t::FALL_MAX)
         };

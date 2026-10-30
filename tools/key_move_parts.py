@@ -259,6 +259,7 @@ class Evidence:
                 raise ValueError('rider bit/decimal mismatch')
             return result
         rides, pointers = set(), set()
+        landing_row = None
         for f, positions in timeline.items():
             row, side = rows[f], mario[f]
             position = positions[identity]
@@ -301,7 +302,20 @@ class Evidence:
             if float(row['floor_y']) != height or key_values(row['collision']).get('gn') != '0.000000/1.000000/0.000000':
                 return
             if row['ground'] == '1' and float(row['py']) != height:
-                return
+                # A body that lands on the moving top is not always on its plane: the
+                # collision's single-precision arithmetic leaves the contact frame above it
+                # (reproduced bit for bit by the independent simulation) and the landing
+                # state's snap closes the gap on the first step it runs, one row after the
+                # state is chosen. So an off-plane row must be the contact itself, equal to
+                # the simulated landing after a flight, or the row right after it that only
+                # approaches the plane; nothing may push the body away from it.
+                simulated = rewrite.get(f, {}).get('py')
+                after_flight = f - 1 in rows and rows[f - 1]['ground'] == '0'
+                landing = after_flight and simulated is not None and float(simulated) == float(row['py'])
+                settling = (f - 1 == landing_row and height < float(row['py']) <= float(rows[f - 1]['py']))
+                if not (landing or settling):
+                    return
+                landing_row = f if landing else None
             # The observed selected ground point lies on this raw top. The
             # native diagnostic additionally identifies the tested KCL prism.
             x, z = float(row['px']) + start[0], float(row['pz']) + start[2]
