@@ -254,6 +254,9 @@ impl Player {
     /// ledge and the wall judges): a body that touched a pole it can climb
     /// takes hold of it.
     pub(super) fn judge_pole_climb(&mut self, o: &Orders, scene: &Course) {
+        if self.is_carry() {
+            return;
+        }
         if self.nerve.deferred || !self.pole_judge_applies() {
             return;
         }

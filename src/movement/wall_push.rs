@@ -12,6 +12,9 @@ impl Player {
                 || self.mode == Move::Idle && self.nerve.deferred)
     }
     fn wall_push_judge(&self) -> bool {
+        if self.is_carry() {
+            return false;
+        }
         let Some(wall) = &self.touched.wall_contact else {
             return false;
         };

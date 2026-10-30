@@ -175,7 +175,8 @@ impl Player {
         if matches!(self.clip(), "WaitHot" | "WaitCold" | "WaitVeryCold") {
             return;
         }
-        if self.clip() == "Wait"
+        if !self.is_carry()
+            && self.clip() == "Wait"
             && let Some(clip) = self.wait.area_clip
             && (step >= RELAX_AFTER_STEPS || clip != "WaitHot")
         {
@@ -194,6 +195,9 @@ impl Player {
             }
             return;
         };
+        if self.is_carry() {
+            return;
+        }
         match stage {
             WaitStage::Wait if step >= RELAX_AFTER_STEPS => self.play("WaitRelaxStart"),
             WaitStage::RelaxStart if self.anim_done(clip::WAIT_RELAX_START) => {

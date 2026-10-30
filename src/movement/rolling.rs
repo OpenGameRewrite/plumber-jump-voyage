@@ -217,6 +217,9 @@ impl Player {
 
     /// Start rolling (`PlayerStateRolling::appear`, then the first nerve).
     pub(super) fn start_roll(&mut self, kind: RollStart) {
+        if self.is_carry() {
+            return;
+        }
         // appear calls startHitReactionLandIfLanding(actor, collision, false).
         if self.is_just_land() {
             self.events.push(Fx::Land { hard: false });

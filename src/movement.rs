@@ -224,6 +224,7 @@ pub type ControllerState = (
     hip_spring::HipSpring,
 );
 mod abyss;
+pub mod carry;
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
 mod damage;
@@ -244,6 +245,7 @@ mod ground_inertia;
 pub mod key_move_parts;
 mod press;
 pub mod pukupuku;
+mod push_receiver;
 mod recovery_dead;
 pub mod rocket_flower;
 pub mod rotate_parts;
@@ -895,6 +897,7 @@ pub enum Throw {
 pub enum Fx {
     Jump(Move),
     Crushed,
+    CarryStart,
     Land {
         hard: bool,
     },
@@ -1095,6 +1098,7 @@ pub struct Player {
     /// The pole climb in progress (`PlayerStatePoleClimb`).
     pole: PoleControl,
     grab_ceil: grab_ceil::GrabCeilControl,
+    pub carry: carry::Carry,
     rolling: RollControl,
     /// Where the last stage collision left the body: the metres of `pos` it was stored as, and
     /// the position in centimetres (start-relative, on the game's single-precision grid) the
@@ -1421,6 +1425,7 @@ impl Default for Player {
             life: damage_life::LifeControl::default(),
             pole: PoleControl::default(),
             grab_ceil: grab_ceil::GrabCeilControl::default(),
+            carry: carry::Carry::default(),
             rolling: RollControl::default(),
             collider_end: None,
             trans_carry: None,
@@ -3050,6 +3055,12 @@ impl Player {
         self.receive_sand_geyser();
         self.dispatch_damage(scene);
         self.receive_grab_ceil_force(scene);
+        if advance_sources {
+            self.update_flower_seed(scene);
+        }
+        self.carry_sensor_phase(&o, scene);
+        self.update_carry(&o);
+        self.flower_sensor_phase(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
@@ -3109,6 +3120,7 @@ impl Player {
         self.update_recovery_point(scene);
         self.update_force_run_counter();
         self.finish_frame(scene);
+        self.carry.push.clear();
         self.snapshot_injected = false;
         // The camera updates after the actors of the frame.
         self.entrance_camera.update(self.position_cm(), o.recenter);
@@ -3428,11 +3440,12 @@ impl Player {
             self.ground_jump(o);
             return true;
         }
-        if o.crouch && self.slope_slide_judge() {
+        if !self.is_carry() && o.crouch && self.slope_slide_judge() {
             self.start_slope_slide();
             return true;
         }
-        if !self.force_run.is_active()
+        if !self.is_carry()
+            && !self.force_run.is_active()
             && o.crouch
             && !matches!(self.mode, Move::SquatBrake | Move::Crouch | Move::Crawl)
         {
@@ -3717,6 +3730,7 @@ impl Player {
         // The next step's nerves read the joint axes this calculation leaves.
         self.model_axes = swim_dive_in::ModelAxes::of(&world);
         self.rocket.head = Some(world[crate::skeleton_pose::Joint::Head as usize]);
+        self.record_hold_pose(&world);
         world
     }
 
@@ -5465,6 +5479,9 @@ impl Player {
     /// The partial animation (`partial0`) on screen: the catch's upper-body clip and the frame
     /// it shows, from the row that starts it (frame 0) to its last frame.
     pub fn partial_anim(&self) -> Option<(&'static str, f32)> {
+        if self.carry.held {
+            return self.carry.upper;
+        }
         self.upper_catch
             .filter(|frame| *frame >= 0)
             .map(|frame| (self.catch_clip, frame as f32))

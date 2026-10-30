@@ -95,6 +95,12 @@ impl PolePose {
 
     /// How fast the controller follows the block: the climbing moves ask for a tenth, the
     /// states where the limbs hang still for the whole.
+    pub fn ask_carry_front(&mut self) {
+        self.block.arms = Vec3::new(30., 0., 0.);
+        self.block.legs = Vec3::ZERO;
+        self.block.rate = 0.5;
+    }
+
     pub fn ask_rate(&mut self, rate: f32) {
         self.block.rate = rate;
     }

@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Column names, in file order.
-pub const COLUMNS: [&str; 67] = [
+pub const COLUMNS: [&str; 68] = [
     "frame",
     "px",
     "py",
@@ -96,6 +96,7 @@ pub const COLUMNS: [&str; 67] = [
     "look_keeper",
     "look_sensors",
     "fidelity_limits",
+    "carry_source",
 ];
 
 /// One clip contributing to the pose.
@@ -809,12 +810,15 @@ impl Recorder {
             String::new()
         };
         // Clips that need the model's data (eye and hand parts) are not known here.
-        let parts = p
+        let mut parts = p
             .sub_anim
             .filter(|_| covering.is_none())
             .map(|s| format!("upper:{upper}@{}", num(sub_frame(&s))))
             .unwrap_or_default();
 
+        if let Some((name, frame)) = p.carry.upper {
+            parts = format!("partial0:{name}@{}", num(frame));
+        }
         let v = p.units_per_frame();
         // The probe reads `al::calcQuat`: `toQuat` over the actor's rotation matrix, whose
         // largest-of-four selection decides the sign (a quarter turn about the vertical axis is
@@ -979,6 +983,7 @@ impl Recorder {
         }
         self.head_cells(p, &mut cells, skeleton.as_ref());
         cells.text(p.fidelity_limits());
+        cells.text(&p.carry_diagnostic());
         cells.finish()
     }
 }

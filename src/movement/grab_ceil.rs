@@ -302,6 +302,9 @@ impl Player {
     }
 
     pub(super) fn judge_grab_ceil(&mut self, scene: &Course) {
+        if self.is_carry() {
+            return;
+        }
         if self.nerve.deferred
             || self.is_dead()
             || self.recovering()

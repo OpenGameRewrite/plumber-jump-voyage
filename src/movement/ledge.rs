@@ -541,6 +541,9 @@ impl Player {
     /// The actor's catch judge, asked after the state's own step (before the
     /// wall judge): a falling body at a ledge it can reach starts the hang.
     pub(super) fn judge_wall_catch(&mut self, scene: &Course) {
+        if self.is_carry() {
+            return;
+        }
         if self.nerve.deferred || !self.wall_catch_applies() {
             return;
         }

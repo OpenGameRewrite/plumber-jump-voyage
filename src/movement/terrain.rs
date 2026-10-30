@@ -284,6 +284,9 @@ impl Player {
         if let Some(force) = self.take_grab_ceil_force() {
             velocity = force;
         }
+        if !mesh.carry_sources.is_empty() {
+            velocity = self.receive_sensor_push_velocity(velocity, start);
+        }
         let yaw = self.facing.x.atan2(self.facing.z);
         // The ledge and pole holds put the actor on their pose before the
         // collider runs; the collider carries itself from where it stood last

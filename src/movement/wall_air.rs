@@ -233,6 +233,9 @@ impl Player {
     /// with. Not ported: the force-run, upper-punch and carry conditions (the
     /// controller has none of them) and the 2D rules.
     fn wall_keep_judged(&self, scene: &Course) -> bool {
+        if self.is_carry() {
+            return false;
+        }
         let trans = self.pos / UNIT;
         // Neither on the ground nor just above it.
         if self.ground_height < WALL_HEIGHT_LOW_LIMIT || self.grounded {

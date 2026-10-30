@@ -142,6 +142,9 @@ impl Player {
         if self.mode != Move::Pole {
             self.joints.pole.release();
         }
+        if self.is_carry() {
+            self.joints.pole.ask_carry_front();
+        }
         self.joints.pole.update();
         // `PlayerStateWallCatch::kill` leaves the target at nothing; the spring follows it.
         if self.mode != Move::Ledge || self.catch.is_killed() {
@@ -150,13 +153,14 @@ impl Player {
         let rate = self.joints.grab.update();
         self.joints.spring.set_control_rate(rate);
         let inputs = self.ground_pose_inputs();
-        let center_rate = if self.actor_name() == "Run" && self.run_nerve == RunNerve::Run {
-            let blend = (1. - self.cycle.weights[4]).clamp(0., 1.);
-            let max = self.constants.center_tilt_rate_max;
-            joint_math::lerp_value(max.min(0.1), max, blend * blend)
-        } else {
-            0.
-        };
+        let center_rate =
+            if !self.is_carry() && self.actor_name() == "Run" && self.run_nerve == RunNerve::Run {
+                let blend = (1. - self.cycle.weights[4]).clamp(0., 1.);
+                let max = self.constants.center_tilt_rate_max;
+                joint_math::lerp_value(max.min(0.1), max, blend * blend)
+            } else {
+                0.
+            };
         self.joints.ground.update_center_tilt(
             center_rate,
             self.units_per_frame(),
@@ -370,7 +374,15 @@ impl Player {
                 let ik = self.wait_inverse_kinematics_rate(sub);
                 (ik, ik, 0.)
             }
-            ("Run", "Run3D") => (self.joints.run.ik, 0., self.joints.run.turn_tilt),
+            ("Run", "Run3D") => (
+                self.joints.run.ik,
+                0.,
+                if self.is_carry() {
+                    0.
+                } else {
+                    self.joints.run.turn_tilt
+                },
+            ),
             ("Rolling", "StandUp") => (1., 0., 0.),
             ("Squat", _) | ("HipDrop", "Land") => (1., 1., 0.),
             // `PlayerStateSpinCap`'s flag, set near the end of the ground spin's clip.

@@ -229,6 +229,7 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         Fx::Land { hard: false } => landing_reaction(context.mode).map_or(vec![], reaction),
         Fx::RollJumpLand => reaction("Land"),
         Fx::RollLand => reaction("RollLand"),
+        Fx::CarryStart => reaction("???????"),
         Fx::PoundLand => reaction("HipDropLand"),
         Fx::RollStart => vec![],
         // `PlayerStateRolling::restartRolling` names the reaction by its restart counter:
