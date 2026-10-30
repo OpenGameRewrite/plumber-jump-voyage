@@ -169,6 +169,14 @@ impl ActorCollider {
         self.offset_y = offset_y;
     }
 
+    pub fn set_radius(&mut self, radius: f32) {
+        self.radius = radius;
+    }
+
+    pub fn radius(&self) -> f32 {
+        self.radius
+    }
+
     /// `Collider::calcCheckPos`: the centre of the check sphere.
     fn check_centre(&self, translation: Vec3, up: Vec3) -> Vec3 {
         Vec3::new(

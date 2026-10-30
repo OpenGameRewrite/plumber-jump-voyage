@@ -245,6 +245,7 @@ mod ground;
 mod ground_inertia;
 mod grow_seed;
 pub mod key_move_parts;
+pub mod kick_stone;
 mod press;
 pub mod pukupuku;
 mod push_receiver;
@@ -3065,6 +3066,7 @@ impl Player {
         self.receive_grab_ceil_force(scene);
         if advance_sources {
             self.update_flower_seed(scene);
+            self.update_kick_stone(scene);
         }
         self.carry_sensor_phase(&o, scene);
         self.update_carry(&o, advance_sources);
@@ -3438,7 +3440,9 @@ impl Player {
         }
         if self.carry.seed.as_ref().is_some_and(|seed| {
             self.is_carry() || self.carry.held_during_sensor_phase || !seed.hit_sensors_valid()
-        }) {
+        }) || (self.carry.stone.is_some()
+            && (self.is_carry() || self.carry.held_during_sensor_phase))
+        {
             self.look.invalidate_source_sensor(sensors.len() - 1);
         }
         self.look.step(&actor, enabled, &sensors);
@@ -4036,7 +4040,7 @@ impl Player {
     fn slide_on(&mut self) -> f32 {
         // New flower-source exports use the original ground-plane brake (0x565ae4).
         // Existing captures retain their established reconstruction arithmetic.
-        if self.carry.seed.is_some() {
+        if self.carry.seed.is_some() || self.carry.stone.is_some() {
             let up = self.ground_normal_or_up();
             let previous = self.run_up.map_or(up, |(_, n, _)| n);
             let velocity = self.velocity_in_plane(up);
@@ -4065,7 +4069,7 @@ impl Player {
     }
     fn brake_step(&mut self, step: u32) {
         if step == 0 {
-            self.brake_dir = if self.carry.seed.is_some() {
+            self.brake_dir = if self.carry.seed.is_some() || self.carry.stone.is_some() {
                 self.pose_axes().1
             } else {
                 self.facing
@@ -4117,7 +4121,7 @@ impl Player {
     fn pivot_step(&mut self) {
         self.joints.run.pivoting();
         let flat_velocity = Vec3::new(self.v.x, 0., self.v.z);
-        let step = if self.carry.seed.is_some() {
+        let step = if self.carry.seed.is_some() || self.carry.stone.is_some() {
             let up = self.ground_normal_or_up();
             let step = self.pivot.update_on_plane(
                 self.plane_stick(up),
@@ -4131,13 +4135,13 @@ impl Player {
             self.pivot
                 .update(self.ground_stick(), self.facing, flat_velocity)
         };
-        if self.carry.seed.is_none() {
+        if self.carry.seed.is_none() && self.carry.stone.is_none() {
             self.facing = step.front;
         }
         self.set_h(step.velocity);
         self.v.y = -t::GRAVITY;
         self.pull = t::GRAVITY;
-        if self.carry.seed.is_some() {
+        if self.carry.seed.is_some() || self.carry.stone.is_some() {
             let up = self.ground_normal_or_up();
             self.run_up = Some((
                 Vec2::new(self.v.x, self.v.z),

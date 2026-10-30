@@ -284,7 +284,7 @@ impl Player {
         if let Some(force) = self.take_grab_ceil_force() {
             velocity = force;
         }
-        if !mesh.carry_sources.is_empty() {
+        if !mesh.carry_sources.is_empty() || !mesh.kick_stones.is_empty() {
             velocity = self.receive_sensor_push_velocity(velocity, start);
         }
         let yaw = self.facing.x.atan2(self.facing.z);
@@ -303,7 +303,10 @@ impl Player {
         // Migrate the cave fixture to original absolute translation storage.
         // Older fixtures retain their established coordinate contract while
         // their own numerical residuals are investigated separately.
-        let absolute = (mesh.pukupuku.is_some() || !mesh.rotate_parts.is_empty()).then(|| {
+        let absolute = (mesh.pukupuku.is_some()
+            || !mesh.rotate_parts.is_empty()
+            || !mesh.kick_stones.is_empty())
+        .then(|| {
             let at = self
                 .stage_translation
                 .filter(|(p, _)| *p == self.pos)

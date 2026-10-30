@@ -95,6 +95,7 @@ pub struct TriangleMesh {
     pub scenario: Option<u32>,
     pub player_placements: Vec<serde_json::Value>,
     pub carry_sources: Vec<crate::movement::carry::Source>,
+    pub kick_stones: Vec<crate::movement::kick_stone::Source>,
     pub triangles: Vec<MeshTriangle>,
     pub codes: Vec<CollisionCodes>,
     /// Model name of every object the triangles come from.
@@ -324,6 +325,7 @@ impl TriangleMesh {
                 .cloned()
                 .unwrap_or_default(),
             carry_sources: crate::movement::carry::sources(&root),
+            kick_stones: crate::movement::kick_stone::sources(&root),
             stage: root["stage"].as_str().map(str::to_owned),
             scenario: root["scenario"].as_u64().map(|n| n as u32),
             player_placements: root["player_placements"]

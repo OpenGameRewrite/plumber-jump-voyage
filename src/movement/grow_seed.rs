@@ -369,6 +369,7 @@ impl Player {
     /// Only placement/init state enters the replay. No carry observation file is loaded.
     pub fn init_flower_seed(&mut self, mesh: &crate::geometry::TriangleMesh) {
         self.carry.origin = mesh.to_game_vec(Vec3::ZERO);
+        self.carry.stone = mesh.kick_stones.first().map(super::kick_stone::Stone::new);
         if let Some(source) = mesh
             .carry_sources
             .iter()

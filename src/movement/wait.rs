@@ -85,6 +85,11 @@ pub(super) struct WaitControl {
 impl Player {
     /// A visible fidelity limit, not a claim that this position is sunlit.
     pub fn fidelity_limits(&self) -> &'static str {
+        if let Some(stone) = &self.carry.stone
+            && !stone.limit.is_empty()
+        {
+            return stone.limit;
+        }
         if self.carry.reconstruction_release_unavailable {
             return "carry_release_unavailable";
         }

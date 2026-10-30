@@ -57,6 +57,7 @@ pub struct Carry {
     pub push: PushReceiver,
     pub diagnostic: String,
     pub seed: Option<Seed>,
+    pub stone: Option<super::kick_stone::Stone>,
     pub held: bool,
     pub wall_keep: bool,
     pub saved_position: Vec3,
@@ -117,6 +118,16 @@ impl Player {
                 radius: 50.,
                 position: mesh.map_or(at, |m| m.relative_vec(at)),
                 stage_position: at,
+            });
+        }
+        if let Some(stone) = &self.carry.stone {
+            sensors.push(look_at::LookSensor {
+                host: "キック小石".into(),
+                name: "Body".into(),
+                kind: 9,
+                radius: 70.,
+                position: mesh.map_or(stone.position, |m| m.relative_vec(stone.position)),
+                stage_position: stone.position,
             });
         }
     }
@@ -232,40 +243,57 @@ impl Player {
         {
             return;
         }
-        let (Some(mesh), Some(seed)) = (scene.mesh.as_deref(), self.carry.seed.as_ref()) else {
+        let Some(mesh) = scene.mesh.as_deref() else {
             return;
         };
-        if !seed.can_pick_up() {
+        let (target, target_radius, wall_keep) = if let Some(seed) = &self.carry.seed {
+            if !seed.can_pick_up() {
+                return;
+            }
+            (
+                seed.position + Vec3::Y * 35.,
+                if o.throw_pressed { 75. } else { 50. },
+                true,
+            )
+        } else if let Some(stone) = &self.carry.stone {
+            if !stone.can_pick_up() {
+                return;
+            }
+            (stone.position, 70., false)
+        } else {
             return;
-        }
+        };
         let feet = mesh.to_game_vec(self.position_cm());
         // Carry (Action edge) and Body (held Action) are distinct attack paths.
-        let (height, radius, target_radius) = if o.throw_pressed {
-            (100., 130., 75.)
+        let (height, radius) = if o.throw_pressed {
+            (100., 130.)
         } else {
-            (75., 50., 50.)
+            (75., 50.)
         };
         let centre = feet + self.pose_axes().0 * height;
-        let target = seed.position + Vec3::Y * 35.;
         if pose_math::squared_length(centre - target)
             >= (radius + target_radius) * (radius + target_radius)
         {
             return;
         }
-        if crate::collider::first_strike(
-            mesh,
-            mesh.relative_vec(target),
-            feet - target,
-            crate::collider::FaceFilter::Any,
-        )
-        .is_some()
+        if self.carry.seed.is_some()
+            && crate::collider::first_strike(
+                mesh,
+                mesh.relative_vec(target),
+                feet - target,
+                crate::collider::FaceFilter::Any,
+            )
+            .is_some()
         {
             return;
         }
-        // GrowFlowerSeed accepts FrontWallKeep in Wait after its pickup timer.
+        // GrowFlowerSeed accepts FrontWallKeep; KickStone only accepts Front.
+        if let Some(stone) = &mut self.carry.stone {
+            stone.pick_up();
+        }
         self.carry.saved_position = feet;
         self.carry.held = true;
-        self.carry.wall_keep = true;
+        self.carry.wall_keep = wall_keep;
         self.carry.phase = 1;
         self.carry.step = 0;
         self.carry.upper = Some(("CarryFrontStart", 0.));
@@ -362,6 +390,10 @@ impl Player {
             self.set_pose(plane::quat_up_front(up, direction));
         }
         if std::mem::take(&mut self.carry.release_due) {
+            let front = self.pose_axes().1;
+            if let (Some(mesh), Some(stone)) = (scene.mesh.as_deref(), &mut self.carry.stone) {
+                stone.release(mesh, front);
+            }
             self.release_flower_seed(scene);
             self.carry.held = false;
         }
@@ -384,7 +416,11 @@ impl Player {
             };
         let rotation = hold_matrix(spine, position);
         self.carry.hold_matrix = Some(rotation);
-        let offset = Vec3::new(0., -30., 40.);
+        let offset = if self.carry.stone.is_some() {
+            super::kick_stone::HOLD_OFFSET
+        } else {
+            Vec3::new(0., -30., 40.)
+        };
         let mut pose = rotation;
         for row in &mut pose {
             row[3] += row[2].mul_add(offset.z, row[1].mul_add(offset.y, row[0] * offset.x));
@@ -393,7 +429,10 @@ impl Player {
     }
 
     pub fn carry_diagnostic(&self) -> String {
-        if self.carry.seed.is_none() && self.carry.diagnostic.is_empty() {
+        if self.carry.seed.is_none()
+            && self.carry.stone.is_none()
+            && self.carry.diagnostic.is_empty()
+        {
             return String::new();
         }
         let mut out = self.carry.diagnostic.clone();
@@ -414,6 +453,9 @@ impl Player {
         if let Some(seed) = &self.carry.seed {
             out.push_str(&format!(";seed={}/{}", seed.id, hex_vec(seed.position)));
             out.push_str(&seed.throw_diagnostic());
+        }
+        if let Some(stone) = &self.carry.stone {
+            out.push_str(&stone.diagnostic());
         }
         if let Some(m) = self.carry.hold {
             out.push_str(&format!(

@@ -200,6 +200,7 @@ fn begin(
                 || !m.key_move_parts.is_empty()
                 || !m.rotate_parts.is_empty()
                 || !m.carry_sources.is_empty()
+                || !m.kick_stones.is_empty()
         })
     {
         player.prepare_recorded_teleport();
