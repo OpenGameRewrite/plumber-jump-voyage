@@ -1099,8 +1099,9 @@ was added for these recordings.
 The three bounded GrabCeil recordings pass every comparable free-replay column.
 The swing capture ends during Jump; it verifies no landing. These checks cover
 world-down, fixed upright bars and the recorded initial conditions. Moving parts,
-NoSnap areas, moon tuning, arbitrary gravity and off-plane SnapMoveArea position
-centering are unsupported. The nonzero lateral GrabPose arm-IK branch is not
+NoSnap areas, arbitrary gravity and off-plane SnapMoveArea position
+centering are unsupported. Moon's leave-pop constant is selected, but a Moon/bar
+composition remains unrecorded. The nonzero lateral GrabPose arm-IK branch is not
 implemented: these captures have zero lateral spring, whose requested grab up
 aligns with the actor pose; the existing GrabDynamics block remains disabled for
 GrabCeil. Converted animation joints and AllRoot offsets are compared, but this
