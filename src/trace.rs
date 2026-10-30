@@ -1998,9 +1998,19 @@ fn read_camera_interpolation(path: &str) -> Vec<bool> {
     };
     let mut flags: Vec<bool> = Vec::new();
     for line in lines {
-        // Quoted cells hold commas; only the leading columns are needed, and the quoted ones
-        // all come after `camera_active`.
-        let cells: Vec<_> = line.splitn(header.len(), ',').collect();
+        let mut quoted = false;
+        let mut cell = String::new();
+        let mut cells: Vec<String> = Vec::new();
+        for c in line.chars() {
+            if c == '"' {
+                quoted = !quoted;
+            } else if c == ',' && !quoted {
+                cells.push(std::mem::take(&mut cell));
+            } else {
+                cell.push(c);
+            }
+        }
+        cells.push(cell);
         let (Some(row_frame), Some(row_kind), Some(row_active)) =
             (cells.get(frame), cells.get(kind), cells.get(active))
         else {
@@ -2009,14 +2019,14 @@ fn read_camera_interpolation(path: &str) -> Vec<bool> {
         let Ok(row_frame) = row_frame.parse::<i64>() else {
             continue;
         };
-        if *row_kind != "sample" || row_frame < 0 {
+        if row_kind != "sample" || row_frame < 0 {
             continue;
         }
         let row_frame = row_frame as usize;
         if flags.len() <= row_frame {
             flags.resize(row_frame + 1, false);
         }
-        flags[row_frame] |= *row_active == "1";
+        flags[row_frame] |= row_active == "1";
     }
     flags
 }

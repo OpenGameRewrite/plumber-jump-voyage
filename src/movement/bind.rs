@@ -183,21 +183,24 @@ impl Player {
         self.nerve.step = 0;
         self.frame = 0;
         self.mode = Move::Bind;
-        self.bind_end = false;
         self.sub.active = false;
         self.sub_anim = None;
         self.interpolation_cleared = true;
     }
 
-    /// Mario's own update while bound: `PlayerStateBind::exeBind` does nothing; after the
-    /// puppet ends, `exeEndFall` runs the air control (0x4675b0) until the ground.
+    /// Mario's own update while bound: `PlayerStateBind::exeBind` does nothing.
     pub(super) fn bind_state(&mut self) {
-        if self.bind_end {
-            self.v.y -= self.constants.gravity_air;
-            self.v.y = self.v.y.max(-t::FALL_MAX);
-        } else {
-            self.v = Vec3::ZERO;
-            self.grounded = false;
+        self.v = Vec3::ZERO;
+        self.grounded = false;
+    }
+
+    /// `PlayerStateBind::exeEndFall` (0x4675b0): the air control keeps falling; once the
+    /// fall has reached the ground the player's wait state takes over.
+    pub(super) fn bind_fall_state(&mut self) {
+        self.v.y -= self.constants.gravity_air;
+        self.v.y = self.v.y.max(-t::FALL_MAX);
+        if self.grounded {
+            self.go(Move::Idle, "Wait");
         }
     }
 
@@ -330,7 +333,8 @@ impl Player {
             .map_or(Vec3::NEG_Y, |(direction, _)| direction);
         // exeOut 0x25cb1c: twice the 2D area's gravity direction.
         self.v = gravity + gravity;
-        self.bind_end = true;
+        self.mode = Move::BindFall;
+        self.frame = 0;
         self.puppet_hidden = false;
         let pipe = &mut self.pipes[index];
         pipe.bound = false;

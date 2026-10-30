@@ -441,7 +441,7 @@ fn upper_catch_last(clip: &str) -> i32 {
 
 /// Frame counts of clips whose end the controller waits for.
 pub mod clip {
-    /// The pipe's out clip (`DokanOut`, 21 frames after its first: the controller waits for it).
+    /// The pipe's out clip (`DokanOut`): the controller waits for its last frame.
     pub const DOKAN_OUT: u32 = 21;
     pub const HIP_DROP_START: u32 = 24;
     pub const HIP_DROP_LAND: u32 = 44;
@@ -492,6 +492,9 @@ pub mod clip {
             "JumpTurn" => Some(60),
             "JumpBroad" | "JumpBroad2" | "JumpBroad3" => Some(38),
             "JumpHipDrop" => Some(46),
+            // The pipe clips (the converted originals' frame counts).
+            "DokanSideIn" => Some(56),
+            "DokanOut" => Some(DOKAN_OUT),
             _ => None,
         }
     }
@@ -640,10 +643,12 @@ pub enum Move {
     Throw,
     /// `PlayerStateBind`: a pipe's puppet controller owns the pose.
     Bind,
+    /// `PlayerStateBind` EndFall: the puppet has ended and the air control takes over.
+    BindFall,
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 61] = [
+    pub const ALL: [Move; 62] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -705,6 +710,7 @@ impl Move {
         Self::CatchJump,
         Self::Throw,
         Self::Bind,
+        Self::BindFall,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -757,7 +763,7 @@ impl Move {
             Self::CapBounce => "Cap jump",
             Self::CatchJump => "Catch jump",
             Self::Throw => "Cap throw",
-            Self::Bind => "Bind",
+            Self::Bind | Self::BindFall => "Bind",
         }
     }
     /// A state that ends by reaching the ground: the contact is flagged in one
@@ -1418,8 +1424,6 @@ pub struct Player {
     press: press::Press,
     pipes: Vec<bind::DokanActor>,
     bound_to: Option<usize>,
-    /// The puppet bind has ended and the state is falling out of it (`PlayerStateBind` EndFall).
-    bind_end: bool,
     puppet_hidden: bool,
     bind_staged: Vec<usize>,
     bind_ready: Vec<usize>,
@@ -1622,7 +1626,6 @@ impl Default for Player {
             press: press::Press::default(),
             pipes: Vec::new(),
             bound_to: None,
-            bind_end: false,
             puppet_hidden: false,
             bind_staged: Vec::new(),
             bind_ready: Vec::new(),
@@ -2089,6 +2092,7 @@ impl Player {
                     | Move::FireDead
                     | Move::Press
                     | Move::Dead
+                    | Move::BindFall
             )
             && (self.v.y == 0. || self.v.y == -self.pull)
         {
@@ -3152,6 +3156,11 @@ impl Player {
         let moved = self.v;
         if self.mode != Move::Bind {
             self.collide(&o, scene);
+            if self.mode == Move::BindFall {
+                // The puppet fall keeps the velocity the air control gave it; the
+                // collision response does not clear it.
+                self.v = moved;
+            }
         }
         self.update_stone_collide_lock_up(scene);
         self.update_water_finder(scene);
@@ -3172,6 +3181,7 @@ impl Player {
             && self.mode != Move::GroundSpin
             && self.mode != Move::SlopeSlide
             && self.mode != Move::Swim
+            && !matches!(self.mode, Move::Bind | Move::BindFall)
             && !self.in_damage_state()
             && !self.in_sand_state()
             && !self.stands_on_ledge()
@@ -3352,6 +3362,7 @@ impl Player {
             Move::SandGeyser => self.sand_geyser_step(scene),
             Move::Press => self.press_step(),
             Move::Bind => self.bind_state(),
+            Move::BindFall => self.bind_fall_state(),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
