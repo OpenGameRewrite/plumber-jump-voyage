@@ -284,6 +284,37 @@ fn executable_surface_cases() {
             vec3(&case["snap_velocity"]).to_array().map(f32::to_bits),
             "case {index} snapped velocity"
         );
+        let up = vec3(&case["actor_up"]);
+        let front = vec3(&case["actor_front"]);
+        let quat_bits = |v: &serde_json::Value| {
+            std::array::from_fn::<_, 4, _>(|i| (v[i].as_f64().unwrap() as f32).to_bits())
+        };
+        assert_eq!(
+            keeper
+                .snap_pose(&areas, position, up, front, false)
+                .to_array()
+                .map(f32::to_bits),
+            quat_bits(&case["pose"]),
+            "case {index} snapped pose"
+        );
+        let mut pipe_position = position;
+        let mut pipe_velocity = Vec3::ZERO;
+        keeper.snap(&areas, &mut pipe_position, &mut pipe_velocity, 500.);
+        assert_eq!(
+            pipe_position.to_array().map(f32::to_bits),
+            vec3(&case["parallel_position"])
+                .to_array()
+                .map(f32::to_bits),
+            "case {index} pipe position"
+        );
+        assert_eq!(
+            keeper
+                .snap_pose(&areas, pipe_position, up, front, true)
+                .to_array()
+                .map(f32::to_bits),
+            quat_bits(&case["parallel_pose"]),
+            "case {index} pipe pose"
+        );
         assert!(!area.id.is_empty());
     }
 }

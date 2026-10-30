@@ -22,6 +22,9 @@
 pub type Matrix34 = [f32; 12];
 pub type Point = [f32; 3];
 
+#[path = "prism_disk.rs"]
+mod disk;
+
 /// `al::isNearZero(float, float)`'s limit for the scale factors.
 const SCALE_EPSILON: f32 = 0.001;
 /// The floor `calcPosLocal` puts under a corner's divisor (the literal 2^-23 at 0x187fe78).

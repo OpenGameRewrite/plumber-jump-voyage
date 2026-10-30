@@ -235,6 +235,7 @@ mod damage_life;
 mod damage_swim;
 pub mod death;
 pub mod dimension;
+pub mod dokan;
 mod entrance_camera;
 pub mod external_velocity;
 mod force_run;
@@ -6148,6 +6149,7 @@ mod spin_checks;
 mod wall_air_checks;
 
 pub fn self_check() {
+    dokan::self_check();
     dimension::self_check();
     cap_trampoline::self_check();
     spin_flower::self_check();

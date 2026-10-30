@@ -8,13 +8,23 @@
 //! other side of a face. The functions run against the executable's own in a local interpreter
 //! (`PJV_COLLIDER_CASES`, see `tests/collider_result.rs`).
 //!
-//! Left out: the per-class `HitInfo` arrays (`collectHitInfoArray`) and the disk shape.
+//! Left out: the per-class `HitInfo` arrays (`collectHitInfoArray`).
 use super::*;
 use crate::movement::console_libm::cosf;
 
 /// What `calcResultVecSphere` and `calcResultVecArrow` read from a shape of the keeper.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ShapeFacts {
+    Disk {
+        /// CollisionShapeInfoDisk +0x80/+0x88/+0x98.
+        support: Option<f32>,
+        support_axis: Vec3,
+        /// CollisionShapeInfoDisk +0xa4.
+        ignore_ground: bool,
+        /// Collider pose translation and keeper +0x54, used by 0x433090..0x4330d8.
+        reference_position: Vec3,
+        ground_limit: f32,
+    },
     Sphere {
         /// `CollisionShapeInfoSphere::+0x44/+0x4c`: the body sphere that holds the player up
         /// and how far from its axis a contact still counts as directly underneath.
@@ -135,6 +145,9 @@ struct Flags {
     ceiling: bool,
     /// An arrow found floor.
     arrow_floor: bool,
+    disk_floor: bool,
+    disk_wall: bool,
+    disk_ceiling: bool,
 }
 impl Flags {
     fn of(results: &[ContactFacts]) -> Self {
@@ -157,6 +170,12 @@ impl Flags {
                     }
                 }
                 Hit::Sphere(_) => {}
+                Hit::Disk(hit) if hit.location == Location::Face => match classify(result.normal) {
+                    Class::Floor => flags.disk_floor = true,
+                    Class::Wall => flags.disk_wall = true,
+                    Class::Ceiling => flags.disk_ceiling = true,
+                },
+                Hit::Disk(_) => {}
             }
         }
         flags
@@ -165,6 +184,9 @@ impl Flags {
         u32::from(self.floor)
             | u32::from(self.wall) << 1
             | u32::from(self.ceiling) << 2
+            | u32::from(self.disk_floor) << 3
+            | u32::from(self.disk_wall) << 4
+            | u32::from(self.disk_ceiling) << 5
             | u32::from(self.arrow_floor) << 6
     }
 }
@@ -324,6 +346,9 @@ impl PlayerCollider {
                 }
                 ShapeFacts::Sphere { .. } => {
                     self.sphere_fix(result, &flags, border, behind, &mut fixes);
+                }
+                ShapeFacts::Disk { .. } => {
+                    self.disk_fix(result, &flags, border, behind, &mut fixes);
                 }
             }
         }
@@ -577,6 +602,90 @@ impl PlayerCollider {
                     fix_vector(&hit, normal)
                 }
             }
+        };
+        fixes.add_contact(fix, normal, result.motion);
+        self.record(class, hit.depth, result, hit.position, hit.location);
+    }
+
+    /// PlayerCollider::calcResultVecDisk, 0x432ef8. In particular, arrows suppress
+    /// disk support rather than supplying the sphere's small-step fallback.
+    fn disk_fix(
+        &mut self,
+        result: &ContactFacts,
+        flags: &Flags,
+        border: BorderCheck,
+        behind: &mut dyn FnMut(Vec3, Vec3) -> bool,
+        fixes: &mut Fixes,
+    ) {
+        let (
+            Hit::Disk(hit),
+            ShapeFacts::Disk {
+                support,
+                support_axis,
+                ignore_ground,
+                reference_position,
+                ground_limit,
+            },
+        ) = (result.hit, result.shape)
+        else {
+            return;
+        };
+        let normal = result.normal;
+        let class = classify(normal);
+        let at_face = hit.location == Location::Face;
+        let fix = match class {
+            Class::Floor => {
+                if ignore_ground {
+                    return;
+                }
+                if self.keeper.has_arrow {
+                    let Some(range) = support else {
+                        return;
+                    };
+                    if flags.arrow_floor {
+                        return;
+                    }
+                    if flags.disk_floor {
+                        if !at_face {
+                            return;
+                        }
+                    } else {
+                        let across = verticalize(support_axis, hit.position - hit.center);
+                        if squared_length(across).sqrt() >= range {
+                            return;
+                        }
+                    }
+                    fix_along_normal(hit.depth, normal)
+                } else if flags.disk_floor {
+                    fix_along_normal(hit.depth, normal)
+                } else {
+                    fix_vector(&hit, normal)
+                }
+            }
+            Class::Wall => {
+                let checks = match border {
+                    BorderCheck::Off => false,
+                    BorderCheck::NoFace => !at_face,
+                    BorderCheck::All => true,
+                };
+                if checks && behind(hit.position, normal) {
+                    return;
+                }
+                if !flags.disk_wall && support.is_some() && flags.arrow_floor {
+                    let height = ground_limit + dot(GRAVITY, hit.position - reference_position);
+                    // al::isNearZeroOrGreater at 0x4330d4, literal 0x187fc80.
+                    if height >= 0. || near_zero(height, NEAR_ZERO) {
+                        return;
+                    }
+                }
+                let fix = fix_along_normal(hit.depth, normal);
+                if !flags.disk_wall && !at_face {
+                    verticalize(GRAVITY, fix)
+                } else {
+                    fix
+                }
+            }
+            Class::Ceiling => fix_along_normal(hit.depth, normal),
         };
         fixes.add_contact(fix, normal, result.motion);
         self.record(class, hit.depth, result, hit.position, hit.location);

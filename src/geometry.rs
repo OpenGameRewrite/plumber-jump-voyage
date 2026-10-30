@@ -100,6 +100,8 @@ pub struct TriangleMesh {
     pub codes: Vec<CollisionCodes>,
     /// Model name of every object the triangles come from.
     pub objects: Vec<String>,
+    /// Original InitCollision.SpecialPurpose, indexed like objects.
+    pub collision_2d_only: Vec<bool>,
     pub thickness: f32,
     /// The collision parts of the objects the local prisms belong to.
     pub parts: Vec<PartFrame>,
@@ -112,6 +114,7 @@ pub struct TriangleMesh {
     /// The stage's `WaterArea`s, in the stage's own coordinates (the export's `areas`).
     pub water: crate::water::WaterAreas,
     pub dimension: crate::movement::dimension::DimensionAreas,
+    pub dokans: Vec<crate::movement::dokan::Dokan>,
     pub death: crate::water::WaterAreas,
     pub snap_move: Vec<crate::water::WaterAreas>,
     pub recovery: crate::water::WaterAreas,
@@ -308,6 +311,12 @@ impl TriangleMesh {
                 .flatten()
                 .map(|o| o["ask_safety_point"].as_bool().unwrap_or(false))
                 .collect(),
+            collision_2d_only: root["objects"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|o| o["init_collision"]["SpecialPurpose"] == "2DOnly")
+                .collect(),
             temperature: root["areas"]
                 .as_array()
                 .into_iter()
@@ -357,6 +366,21 @@ impl TriangleMesh {
                 .collect(),
             ..Self::default()
         };
+        mesh.dokans = root["dokans"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|source| crate::movement::dokan::Dokan::load(source, &mesh.dimension))
+            .collect::<Result<_, _>>()?;
+        for source in &mesh.dokans {
+            if !mesh
+                .dokans
+                .iter()
+                .any(|dst| dst.id == source.destination_id)
+            {
+                return Err(format!("Dokan {} has no exported destination", source.id));
+            }
+        }
         // Per object: the part frame of its base matrix (newer exports only).
         let mut object_part: Vec<Option<u32>> = Vec::new();
         for (i, object) in root["objects"].as_array().into_iter().flatten().enumerate() {

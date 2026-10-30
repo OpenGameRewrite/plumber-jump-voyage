@@ -111,6 +111,31 @@ fn facts_of(case: &Value) -> ContactFacts {
             normal,
             triangle: 0,
         }
+    } else if case["k"] == "d" {
+        let loc = case["loc"].as_u64().unwrap() as u8;
+        ContactFacts {
+            motion: None,
+            shape: ShapeFacts::Disk {
+                support: case["support"].as_f64().map(|r| r as f32),
+                support_axis: v3(&case["axis"]),
+                ignore_ground: case["ign"].as_bool().unwrap(),
+                reference_position: Vec3::ZERO,
+                ground_limit: 0.,
+            },
+            hit: Hit::Disk(SphereHit {
+                motion: None,
+                depth: num(&case["depth"]),
+                location: if loc == 1 {
+                    Location::Face
+                } else {
+                    Location::Edge(loc - 1)
+                },
+                position: v3(&case["pos"]),
+                center: v3(&case["center"]),
+            }),
+            normal,
+            triangle: 0,
+        }
     } else {
         let loc = case["loc"].as_u64().unwrap() as u8;
         ContactFacts {

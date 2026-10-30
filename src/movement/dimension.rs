@@ -3,10 +3,12 @@
 //! This is the keeper, not a second player. Pipe puppets, model switching,
 //! collision-form switching and the player's gravity/rotation-centre correction
 //! are separate consumers; none is implied by merely containing a point.
-use super::pose_math::{dot, squared_length, try_normalize_or_zero};
-use super::vector_lib::verticalize_vec;
+use super::pose_math::{
+    cross, dot, normalize, quat_front_up, squared_length, try_normalize_or_zero,
+};
+use super::vector_lib::{parallelize_vec, verticalize_vec};
 use crate::water::{Area, Shape, WaterAreas};
-use bevy::prelude::Vec3;
+use bevy::prelude::{Quat, Vec3};
 
 /// `MoveArea2D` predicates at 0x6148/0x6270/0x6384 load 0x187fc80.
 /// `isNearZeroOrLess` 0x91f568 / `OrGreater` 0x91f544 use a strict abs test.
@@ -113,6 +115,18 @@ pub struct DimensionAreas {
 }
 
 impl DimensionAreas {
+    /// A consumer of rs::tryFind2DAreaObj that currently supports only a
+    /// single containing area must reject overlaps rather than replace the
+    /// original single-area query with the keeper's weighted gravity sum.
+    pub(crate) fn single_movement_at(&self, position: Vec3) -> Option<&MoveArea> {
+        let selected = self.select(position);
+        if selected.len() == 1 {
+            Some(&self.movement[selected[0]])
+        } else {
+            None
+        }
+    }
+
     /// Original placement data only. Like the existing area loader, this
     /// represents static volumes; switch-controlled/moving areas need their
     /// own independently simulated activation/pose before they can qualify.
@@ -208,6 +222,48 @@ impl Default for DimensionKeeper {
 }
 
 impl DimensionKeeper {
+    /// Pose part of 0x54229c (Mario) and 0x5425b0 (Dokan2D's
+    /// parallel-front initialization). Query the lock after positional snap.
+    pub fn snap_pose(
+        &self,
+        areas: &DimensionAreas,
+        position: Vec3,
+        up: Vec3,
+        front: Vec3,
+        parallel_front: bool,
+    ) -> Quat {
+        let (lock, _) = self.lock(areas, position);
+        let (projected_up, usable) = try_normalize_or_zero(verticalize_vec(lock, up));
+        let up = if usable {
+            projected_up
+        } else {
+            // al::sign 0x920acc keeps zero, otherwise returns +/-1.
+            let alignment = dot(lock, up);
+            let sign = if alignment > 0. {
+                1.
+            } else if alignment < 0. {
+                -1.
+            } else {
+                alignment
+            };
+            normalize(up * sign)
+        };
+        let projected = if parallel_front {
+            parallelize_vec(lock, front)
+        } else {
+            verticalize_vec(lock, front)
+        };
+        let (front, usable) = try_normalize_or_zero(projected);
+        let front = if usable {
+            front
+        } else if parallel_front {
+            -lock
+        } else {
+            normalize(cross(up, lock))
+        };
+        quat_front_up(front, up)
+    }
+
     pub fn diagnostic(&self, areas: &DimensionAreas) -> String {
         if areas.movement.is_empty() {
             return String::new();

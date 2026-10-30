@@ -8,6 +8,78 @@ pub(super) fn run() {
     the_corners_of_a_prism_are_where_the_edges_meet();
     the_exes_prism_tests_agree_bit_for_bit();
     the_exes_face_data_agrees_bit_for_bit();
+    disks_use_their_axial_slab_and_strict_face_boundary();
+    the_exes_disk_tests_agree_bit_for_bit();
+}
+
+#[cfg_attr(test, test)]
+fn disks_use_their_axial_slab_and_strict_face_boundary() {
+    let p = floor_prism();
+    assert_eq!(
+        p.disk_test([20., 50., -20.], 55., 1., 5., [0., 0., 1.]),
+        Some((5., 1))
+    );
+    assert!(
+        p.disk_test([20., 55., -20.], 55., 1., 5., [0., 0., 1.])
+            .is_none()
+    );
+    assert!(
+        p.disk_test([20., 50., -20.], 55., 1., 5., [0., 1., 0.])
+            .is_none()
+    );
+}
+
+#[cfg_attr(test, test)]
+fn the_exes_disk_tests_agree_bit_for_bit() {
+    let Some(path) = std::env::var_os("PJV_DISK_CASES") else {
+        return;
+    };
+    let cases: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("disk oracle cases"))
+            .expect("disk oracle JSON");
+    let cases = cases.as_array().unwrap();
+    assert!(!cases.is_empty());
+    let point = |v: &serde_json::Value| std::array::from_fn(|i| v[i].as_f64().unwrap() as f32);
+    for (index, case) in cases.iter().enumerate() {
+        let p = &case["prism"];
+        let prism = Prism {
+            length: p["length"].as_f64().unwrap() as f32,
+            origin: point(&p["origin"]),
+            face: point(&p["face"]),
+            edges: std::array::from_fn(|i| point(&p["edges"][i])),
+            thickness: p["thickness"].as_f64().unwrap() as f32,
+        };
+        let got = prism.disk_test(
+            point(&case["center"]),
+            case["radius"].as_f64().unwrap() as f32,
+            case["scale"].as_f64().unwrap() as f32,
+            case["half_height"].as_f64().unwrap() as f32,
+            point(&case["axis"]),
+        );
+        if case["hit"].is_null() {
+            assert!(got.is_none(), "disk case {index}: {got:?}");
+        } else {
+            let (depth, region) =
+                got.unwrap_or_else(|| panic!("disk case {index}: missing {:?}", case["hit"]));
+            assert_eq!(
+                region,
+                case["hit"][1].as_u64().unwrap() as u8,
+                "disk case {index} region"
+            );
+            assert_eq!(
+                depth.to_bits(),
+                (case["hit"][0].as_f64().unwrap() as f32).to_bits(),
+                "disk case {index} depth"
+            );
+            let position = prism.sphere_hit_position(point(&case["center"]), region);
+            let expected: [f32; 3] = point(&case["position"]);
+            assert_eq!(
+                position.map(f32::to_bits),
+                expected.map(f32::to_bits),
+                "disk case {index} position"
+            );
+        }
+    }
 }
 
 /// A floor triangle in the plane y = 0 with corners (0,0,0), (100,0,0) and (0,0,-100), face up.

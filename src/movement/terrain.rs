@@ -163,7 +163,14 @@ impl Player {
 
     /// The collider's form and cut direction for the actor's state.
     fn prepare_collider(&mut self) {
-        let form = self.collision_form();
+        // PlayerFormSensorCollisionArranger::syncForm,0x443de8..0x443e14:
+        // model2D selects the dedicated normal/mini keeper. Keeper activation
+        // and model lifecycle must agree before the pipe path is accepted.
+        let form = match (self.dimension.is_2d, self.collision_form()) {
+            (true, Form::Normal) => Form::Normal2D,
+            (true, Form::Mini) => Form::Mini2D,
+            (_, form) => form,
+        };
         self.collider.set_form(form);
         self.collider.set_ground_offset(self.sand.depth);
         // The hanging forms drop the push along the direction they face.

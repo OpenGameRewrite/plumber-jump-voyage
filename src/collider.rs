@@ -38,12 +38,15 @@
 //! which a shape is in collision, pushes the body out by the combined fix
 //! vector (`calcResultVec`), removes the part of the remaining move that goes
 //! into the surface and goes on, up to 100 rounds.
+#[path = "collider_disk.rs"]
+mod disk;
 #[path = "collider_result.rs"]
 mod result;
 use crate::geometry::{Aabb, MeshTriangle, TriangleMesh};
 use crate::movement::plane::{normalize, try_normalize_or_zero};
 use crate::prism::{PartFrame, Point, rotate_vector, transform_point};
 use bevy::prelude::{Quat, Vec3};
+use disk::{disk_hit, line_arrow_start};
 use result::{dot, near_zero, near_zero_vec, squared_length};
 
 /// `PlayerCollider::_1b0`, the slope limit in degrees: a face whose normal is
@@ -105,6 +108,10 @@ pub fn walkable_normal_y() -> f32 {
 pub enum Form {
     /// `changeCollisionNormal`
     Normal,
+    /// PlayerColliderHakoniwa::changeCollision2DNormal (0x436e78).
+    Normal2D,
+    /// PlayerColliderHakoniwa::changeCollision2DMini (0x436ed4).
+    Mini2D,
     /// `changeCollisionMini`: the squat, the slope slide and the roll.
     Mini,
     /// `changeCollisionWallGrab`: the body hanging from a ledge.
@@ -119,6 +126,13 @@ pub enum Form {
 
 #[derive(Clone, Debug)]
 enum Shape {
+    Disk {
+        center: Vec3,
+        radius: f32,
+        half_height: f32,
+        axis: Vec3,
+        support: Option<f32>,
+    },
     /// Local centre, radius, and for a ground-support sphere how far from its
     /// axis a contact may be to count as directly underneath.
     Sphere {
@@ -143,6 +157,15 @@ impl Shape {
     fn bounding(&self) -> (Vec3, f32) {
         match self {
             Self::Sphere { center, radius, .. } => (*center, *radius),
+            Self::Disk {
+                center,
+                radius,
+                half_height,
+                ..
+            } => (
+                *center,
+                (radius * radius + half_height * half_height).sqrt(),
+            ),
             Self::Arrow { start, vector, .. } => (*start + *vector * 0.5, vector.length() * 0.5),
         }
     }
@@ -150,6 +173,11 @@ impl Shape {
     fn check_range(&self) -> f32 {
         match self {
             Self::Sphere { radius, .. } => *radius,
+            Self::Disk {
+                radius,
+                half_height,
+                ..
+            } => radius.min(half_height + half_height),
             Self::Arrow { vector, .. } => vector.length() * 0.5,
         }
     }
@@ -186,6 +214,7 @@ impl Keeper {
         // and `changeCollisionPoleClimb` install).
         let mut arrows_at = Vec3::ZERO;
         match form {
+            Form::Normal2D | Form::Mini2D => return Self::two_dimensional(form == Form::Mini2D),
             Form::Normal => {
                 shapes.push(sphere(Vec3::new(0., 65., 0.), support, false));
                 shapes.push(sphere(Vec3::new(0., 105., 0.), None, false));
@@ -237,6 +266,42 @@ impl Keeper {
             check_step,
             has_arrow: true,
             arrows_at,
+        }
+    }
+
+    /// Original normal/mini 2D keepers, 0x436354..0x4364b4. These use
+    /// arrows first, then Body and Head disks, as in the source allocation order.
+    fn two_dimensional(mini: bool) -> Self {
+        let mut shapes = Vec::new();
+        for index in 0..3 {
+            shapes.push(Shape::Arrow {
+                start: line_arrow_start(index, Vec3::ZERO),
+                vector: Vec3::new(0., -60., 0.),
+                margin: 20.,
+                index,
+            });
+        }
+        // Radius55 is literal0x18800ac loaded at0x435e88; half-height5
+        // at0x4363a4, support14.5 at0x435ea0 (s9 is preserved).
+        // Head130 is literal0x187fd1c at0x4363d0. Local axis is Vector3f::ex.
+        for (height, support) in [(55., Some(14.5)), (if mini { 55. } else { 130. }, None)] {
+            shapes.push(Shape::Disk {
+                center: Vec3::Y * height,
+                radius: 55.,
+                half_height: 5.,
+                axis: Vec3::X,
+                support,
+            });
+        }
+        Self {
+            check_step: shapes
+                .iter()
+                .map(Shape::check_range)
+                .fold(f32::MAX, f32::min),
+            bounding_radius: enclosing_radius(&shapes),
+            shapes,
+            has_arrow: true,
+            arrows_at: Vec3::ZERO,
         }
     }
 
@@ -974,6 +1039,8 @@ impl SphereHit {
 #[derive(Clone, Copy, Debug)]
 enum Hit {
     Sphere(SphereHit),
+    /// The common HitInfo geometry; disk response remains separate from spheres.
+    Disk(SphereHit),
     Arrow(ArrowHit),
 }
 #[derive(Clone, Copy, Debug)]
@@ -981,6 +1048,7 @@ struct ShapeResult {
     shape: usize,
     triangle: u32,
     hit: Hit,
+    scale: f32,
 }
 #[derive(Default)]
 struct Results {
@@ -993,8 +1061,42 @@ struct Results {
 /// (its own list); everything else is a collision.
 fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: Vec3) -> Results {
     let mut results = Results::default();
+    let only_2d = keeper
+        .shapes
+        .iter()
+        .any(|s| matches!(s, Shape::Disk { .. }));
     for (index, shape) in keeper.shapes.iter().enumerate() {
         match shape {
+            Shape::Disk {
+                center,
+                radius,
+                half_height,
+                axis,
+                ..
+            } => {
+                let world = pose.world_point(*center * scale);
+                let (axis, _) = try_normalize_or_zero(pose.rotate(*axis));
+                let radius = radius * scale;
+                let half_height = half_height * scale;
+                let bound = (radius * radius + half_height * half_height).sqrt();
+                for i in mesh.cell_triangles(Aabb::around(mesh.relative_vec(world), bound)) {
+                    let t = &mesh.triangles[i as usize];
+                    if !disk::is_2d_part(mesh, t) {
+                        continue;
+                    }
+                    let Some(hit) = disk_hit(mesh, t, world, radius, half_height, axis) else {
+                        continue;
+                    };
+                    if results.collide.len() < MAX_RESULTS {
+                        results.collide.push(ShapeResult {
+                            shape: index,
+                            triangle: i,
+                            hit: Hit::Disk(hit),
+                            scale,
+                        });
+                    }
+                }
+            }
             Shape::Sphere { center, radius, .. } => {
                 let (world, radius) = pose.world_sphere(*center, *radius, scale);
                 let world_rel = mesh.relative_vec(world);
@@ -1019,6 +1121,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                             shape: index,
                             triangle: i,
                             hit: Hit::Sphere(hit),
+                            scale,
                         });
                     }
                 }
@@ -1089,6 +1192,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                                     shape: index,
                                     triangle: i as u32,
                                     hit: Hit::Sphere(hit),
+                                    scale,
                                 });
                             }
                         }
@@ -1115,6 +1219,9 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                 };
                 for i in mesh.candidates(area) {
                     let t = &mesh.triangles[i as usize];
+                    if only_2d && !disk::is_2d_part(mesh, t) {
+                        continue;
+                    }
                     if t.local.is_some_and(|p| {
                         mesh.rotate_parts
                             .iter()
@@ -1129,6 +1236,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                         shape: index,
                         triangle: i,
                         hit: Hit::Arrow(hit),
+                        scale,
                     };
                     if hit.depth >= *margin {
                         if results.collide.len() < MAX_RESULTS {
@@ -1143,6 +1251,9 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                 // callbackFromServer rejects outward relative motion until the
                 // final sample. A takeoff must not retain the starting support.
                 for source in mesh.rotate_parts.iter().filter(|s| s.executions > 0) {
+                    if only_2d {
+                        continue;
+                    } // Moving 2D parts are not yet supported.
                     let frame = &mesh.parts[source.part];
                     let centre = from + vec * 0.5;
                     let radius = vec.length() * 0.5;
@@ -1185,6 +1296,7 @@ fn check(mesh: &TriangleMesh, keeper: &Keeper, pose: &Pose, scale: f32, motion: 
                                 shape: index,
                                 triangle: i as u32,
                                 hit: Hit::Arrow(hit),
+                                scale,
                             };
                             if hit.depth >= *margin {
                                 if results.collide.len() < MAX_RESULTS {
@@ -1416,7 +1528,12 @@ impl PlayerCollider {
         let arrows_at = self.keeper.arrows_at;
         for shape in &mut self.keeper.shapes {
             if let Shape::Arrow { start, index, .. } = shape {
-                *start = ring_arrow_start(*index, arrows_at + Vec3::Y * depth);
+                let offset = arrows_at + Vec3::Y * depth;
+                *start = if matches!(self.form, Form::Normal2D | Form::Mini2D) {
+                    line_arrow_start(*index, offset)
+                } else {
+                    ring_arrow_start(*index, offset)
+                };
             }
         }
         self.keeper.bounding_radius = enclosing_radius(&self.keeper.shapes);
@@ -1952,6 +2069,14 @@ impl PlayerCollider {
         list.iter()
             .map(|r| result::ContactFacts {
                 shape: match self.keeper.shapes[r.shape] {
+                    Shape::Disk { support, .. } => result::ShapeFacts::Disk {
+                        support: support.map(|range| range * r.scale),
+                        support_axis: pose.rotate(Vec3::Y),
+                        ignore_ground: !self.ground_support,
+                        reference_position: pose.pos,
+                        // CollisionShapeKeeper constructor 0x3f8880 zeros +0x54.
+                        ground_limit: 0.,
+                    },
                     Shape::Sphere {
                         support,
                         ignore_ground,
@@ -1974,7 +2099,7 @@ impl PlayerCollider {
                     },
                 },
                 motion: match r.hit {
-                    Hit::Sphere(hit) => hit.motion,
+                    Hit::Sphere(hit) | Hit::Disk(hit) => hit.motion,
                     Hit::Arrow(hit) => hit.motion,
                 },
                 hit: r.hit,
