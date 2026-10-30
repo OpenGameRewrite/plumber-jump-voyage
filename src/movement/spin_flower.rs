@@ -33,6 +33,8 @@ impl Player {
         }
         let mut gravity = self.constants.jump_gravity;
         let mut fall_max = 8.;
+        // exeJumpSpinFlower 0x472e90..0x472eac: descending, or `al::isNearZero(calcSpeedV, 0.001)`
+        // with the tolerance passed explicitly from the literal at 0x187fc80.
         if self.v.y < 0. || self.v.y.abs() < 0.001 {
             gravity = 0.1;
             if self.spin_flower.stay > 0 {
