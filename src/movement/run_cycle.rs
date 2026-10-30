@@ -124,6 +124,14 @@ impl RunCycle {
         self.shown = self.phase + self.rate;
         self.advanced = false;
     }
+    /// A frame the run control does not run in (a bound player): the animator still moves
+    /// the pose on, so the layers read the moved pose in this frame's row.
+    pub fn move_on_without_control(&mut self) {
+        if !self.advanced {
+            self.move_on();
+            self.advanced = true;
+        }
+    }
     /// A frame while another clip covers the legs: the animator's counter just
     /// runs on by the previous rate and the pose stays where it is.
     pub fn begin_frame_covered(&mut self) {

@@ -233,7 +233,7 @@ impl Pose {
                             // (The model is one rate change ahead of the counter.)
                             let frame = a.frame + p.anim_rate_change();
                             clip::held_length(name).map_or(frame, |length| frame.min(length as f32))
-                                - clip::loop_length(name)
+                                - p.loop_len(name)
                                     .filter(|length| frame >= *length)
                                     .unwrap_or(0.)
                         }),
@@ -584,6 +584,18 @@ impl Recorder {
     /// The `bones` cell: every joint's position (cm, replay frame) as the probe prints them,
     /// and the actor itself.
     fn bones_cell(skeleton: Option<&Matrices>, p: &Player) -> String {
+        if p.model_2d() {
+            // The 8-bit model (Mario2D): AllRoot and the MarioDot joints, whose animation
+            // only toggles visibility, so every joint sits at the actor.
+            let feet = p.pos / UNIT;
+            return ["AllRoot", "MarioDot"]
+                .into_iter()
+                .map(str::to_string)
+                .chain((0..=8).map(|i| format!("MarioDot{i:02}")))
+                .map(|name| format!("{name}:{}/{}/{}", num(feet.x), num(feet.y), num(feet.z)))
+                .collect::<Vec<_>>()
+                .join("|");
+        }
         let Some(skeleton) = skeleton else {
             return String::new();
         };
@@ -660,6 +672,9 @@ impl Recorder {
         // row), which is the frame the controller holds after its step.
         let shown = if matches!(p.anim.name, "Move" | "MoveMoon") {
             p.shown_frame()
+        } else if p.puppet_synced_row() {
+            // A pipe's puppet action: the first row shows the synced counter.
+            p.anim.rate
         } else {
             main_frame(&p.anim)
         };
@@ -1131,7 +1146,7 @@ impl Recorder {
                 } else {
                     from
                 };
-                self.restart = Some((from, 0, interp_frames(p.anim.name, from) as u32));
+                self.restart = Some((from, 0, p.interp_frames_of(p.anim.name, from)));
                 self.stale_clip = from;
             } else {
                 self.restart = None;
@@ -1175,7 +1190,7 @@ impl Recorder {
                 })
                 .or_else(|| self.shown_blend.clone().map(|flat| Pose { slot, ..flat }));
             let restart_frames = if p.ended_model_sub().is_some() {
-                interp_frames(p.anim.name, ended) as u32
+                p.interp_frames_of(p.anim.name, ended)
             } else {
                 RESTART_BLEND_FRAMES
             };
@@ -1207,6 +1222,10 @@ impl Recorder {
             if interp.is_empty() && done < length {
                 interp = format!("{from}:{}", num(done as f32 / length as f32));
             }
+        }
+        if p.model_2d() {
+            // The 8-bit actions are not blended (see `Player::interp_frames_of`).
+            interp.clear();
         }
         PoseStep {
             covering,

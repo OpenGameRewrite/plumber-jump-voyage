@@ -62,6 +62,9 @@ impl Player {
     }
 
     pub fn fire_sub_steps(&self) -> Option<u32> {
+        if let Some(steps) = self.bind_sub_steps() {
+            return Some(steps);
+        }
         if self.mode == Move::Idle && matches!(self.anim.name, "WaitCold" | "WaitVeryCold") {
             return Some(self.wait.steps);
         }

@@ -190,6 +190,9 @@ impl Player {
 
     /// Mario's own update while bound: `PlayerStateBind::exeBind` does nothing.
     pub(super) fn bind_state(&mut self) {
+        if matches!(self.anim.name, "Move" | "MoveMoon") {
+            self.cycle.move_on_without_control();
+        }
         self.v = Vec3::ZERO;
         self.grounded = false;
     }
@@ -278,7 +281,7 @@ impl Player {
             Controller::Wait => {}
             Controller::MoveIn => {
                 if step == 0 {
-                    self.play("DokanSideIn");
+                    self.play_puppet_action("DokanSideIn");
                 }
                 let rate = ease_out((step as f32 / MOVE_IN_STEPS as f32).clamp(0., 1.));
                 let (axes, position) =
@@ -312,7 +315,7 @@ impl Player {
                         self.set_pose(pose);
                     }
                     self.puppet_hidden = false;
-                    self.play("DokanOut");
+                    self.play_puppet_action("DokanOut");
                 }
                 // isPuppetActionEnd: the clip has played to its last frame.
                 if step > 0 && self.anim_done(clip::DOKAN_OUT) {
@@ -340,6 +343,24 @@ impl Player {
         pipe.bound = false;
         pipe.next_controller = Some(Controller::Wait);
         self.bound_to = None;
+    }
+
+    /// The trace's sub-nerve step counter of the bind states: Bind is one nerve for the
+    /// whole trip; EndFall counts from its own first step.
+    pub(super) fn bind_sub_steps(&self) -> Option<u32> {
+        match self.mode {
+            Move::Bind => Some(self.nerve.step),
+            Move::BindFall => Some(self.frame as u32),
+            _ => None,
+        }
+    }
+
+    /// `rs::startPuppetAction`: the clip starts with the player's next update; the counter
+    /// of that first row is the synced one (`PlayerAnimFrameCtrl::updateSync`: the frame
+    /// plus the rate) while the pose layer still shows frame 0.
+    fn play_puppet_action(&mut self, name: &'static str) {
+        self.play(name);
+        self.puppet_clip_pending = true;
     }
 
     /// `rs::setPuppetTrans` + `rs::setPuppetQuat(makeQuatFrontUp(front, up))`.

@@ -541,6 +541,19 @@ pub mod clip {
             _ => None,
         }
     }
+    /// Looping actions of the 8-bit model.
+    pub fn loop_length_2d(name: &str) -> Option<f32> {
+        match name {
+            "Wait" => Some(60.),
+            _ => None,
+        }
+    }
+    pub fn loop_slack_2d(name: &str) -> f32 {
+        match name {
+            "Wait" => 1.,
+            _ => 0.,
+        }
+    }
     /// How far past its length a looping clip's counter runs before it wraps
     /// (the layer's own frame wraps at the length): the side moves' counter
     /// reads 21.03 in the step after the clip loops and 2.08 in the next.
@@ -925,6 +938,8 @@ pub enum Throw {
 pub enum Fx {
     Jump(Move),
     Crushed,
+    /// The dimension keeper changed to 2D: Mario's `2D変身` hit reaction.
+    Change2D,
     CarryStart,
     CarryThrow,
     Land {
@@ -1425,6 +1440,8 @@ pub struct Player {
     pipes: Vec<bind::DokanActor>,
     bound_to: Option<usize>,
     puppet_hidden: bool,
+    puppet_clip_pending: bool,
+    puppet_first_row: bool,
     bind_staged: Vec<usize>,
     bind_ready: Vec<usize>,
     /// The main clip looped back to its start in this step, as the game's triggers see it: a
@@ -1627,6 +1644,8 @@ impl Default for Player {
             pipes: Vec::new(),
             bound_to: None,
             puppet_hidden: false,
+            puppet_clip_pending: false,
+            puppet_first_row: false,
             bind_staged: Vec::new(),
             bind_ready: Vec::new(),
             clip_wrapped: false,
@@ -2148,8 +2167,8 @@ impl Player {
     /// within the clip, a loop that has just run past the clip's length counted from its start.
     pub fn effect_frame(&self) -> f32 {
         let frame = self.trigger_frame();
-        match clip::loop_length(self.anim.name) {
-            Some(length) if clip::loop_slack(self.anim.name) > 0. && frame >= length => {
+        match self.loop_len(self.anim.name) {
+            Some(length) if self.loop_slack_of(self.anim.name) > 0. && frame >= length => {
                 frame - length
             }
             _ => frame,
@@ -2159,8 +2178,8 @@ impl Player {
     /// without the wrap: the counter plus the rate change it has still to take over. The loop
     /// restarts for the triggers when this reaches the clip's length.
     fn loop_pose_frame(&self) -> Option<f32> {
-        let length = clip::loop_length(self.anim.name)?;
-        (clip::loop_slack(self.anim.name) > 0.).then(|| {
+        let length = self.loop_len(self.anim.name)?;
+        (self.loop_slack_of(self.anim.name) > 0.).then(|| {
             let wrapped = if self.counter_wrapped { length } else { 0. };
             self.anim.frame + self.anim_rate_change + wrapped
         })
@@ -2168,7 +2187,7 @@ impl Player {
     /// A looping clip with a slack starts its loop for the triggers in the step its pose frame
     /// reaches the clip's length (the pose wraps there, the counter a row later).
     fn update_loop_start(&mut self) {
-        let Some(length) = clip::loop_length(self.anim.name) else {
+        let Some(length) = self.loop_len(self.anim.name) else {
             self.pose_seen = None;
             return;
         };
@@ -2279,6 +2298,41 @@ impl Player {
         } else {
             self.anim.frame
         }
+    }
+    /// The 8-bit model is the visible one (`PlayerModelChangerHakoniwa` 2D model): the
+    /// keeper has changed to 2D.
+    pub fn model_2d(&self) -> bool {
+        self.dimension.is_2d
+    }
+    /// Length of a clip that loops, in the model that is on screen: the 8-bit model's own
+    /// action lengths (`PlayerAnimation2D`, as converted: Wait is 60 frames) replace the 3D
+    /// ones.
+    pub fn loop_len(&self, name: &str) -> Option<f32> {
+        if self.model_2d() {
+            return clip::loop_length_2d(name);
+        }
+        clip::loop_length(name)
+    }
+    /// How long a looping clip's counter shows its length before it wraps, in the model on
+    /// screen (the 8-bit Wait shows its 60 for a row).
+    pub fn loop_slack_of(&self, name: &str) -> f32 {
+        if self.model_2d() {
+            return clip::loop_slack_2d(name);
+        }
+        clip::loop_slack(name)
+    }
+    /// Frames the animator blends between two actions. The 8-bit model's actions only
+    /// toggle visibility, so nothing is blended on screen. (UNVERIFIED against the 2D
+    /// action table beyond the Wait recorded after the pipe.)
+    pub fn interp_frames_of(&self, to: &str, from: &str) -> u32 {
+        if self.model_2d() {
+            return 0;
+        }
+        crate::local_assets::interp_frames(to, from) as u32
+    }
+    /// The first row of a clip a pipe's puppet action started (see `play_puppet_action`).
+    pub fn puppet_synced_row(&self) -> bool {
+        self.puppet_first_row && self.anim.frame == 0.
     }
     /// The body hangs on a ledge or clings to a pole and touches ground there
     /// (the top of the pole, the ledge the climb ends on): that contact is no
@@ -2885,8 +2939,8 @@ impl Player {
             if let Some(length) = clip::held_length(self.anim.name) {
                 self.anim.frame = self.anim.frame.min(length as f32 + 1.);
             }
-            if let Some(length) = clip::loop_length(self.anim.name) {
-                let slack = clip::loop_slack(self.anim.name);
+            if let Some(length) = self.loop_len(self.anim.name) {
+                let slack = self.loop_slack_of(self.anim.name);
                 // (A clip whose counter shows its length for a row starts its loop for the
                 // triggers when its pose does: `update_loop_start`.)
                 if slack == 0. {
@@ -2948,6 +3002,7 @@ impl Player {
         let first_step = self.nerve.step == 0;
         self.advance_clips();
         let (clip, work) = self.nerve.start();
+        self.puppet_first_row = std::mem::take(&mut self.puppet_clip_pending) && clip.is_some();
         if let Some(clip) = clip {
             self.start_clip(clip);
         }
@@ -3054,6 +3109,9 @@ impl Player {
             self.dimension
                 .update(&mesh.dimension, mesh.to_game_vec(self.position_cm()));
             self.dimension_diagnostic = self.dimension.diagnostic(&mesh.dimension);
+            if self.dimension.change_2d {
+                self.events.push(Fx::Change2D);
+            }
         }
         self.note_frame_start_for_joints();
         self.own_cap_trample = false;
