@@ -12,7 +12,13 @@ impl Player {
     pub(super) fn update_sounds(&mut self, scene: &Course) {
         let frame = SeFrame {
             // A whole-body sub clip (the dive's stand-up) takes the legs over.
-            stepping: matches!(self.anim.name, "Move" | "MoveMoon") && self.sub_anim.is_none(),
+            // PlayerSeCtrl::update 0x463064 vetoes the new full-body carry throw.
+            // Existing cap paths retain their established sound routing.
+            stepping: matches!(self.anim.name, "Move" | "MoveMoon")
+                && self.sub_anim.is_none()
+                && !self
+                    .model_sub()
+                    .is_some_and(|(name, _)| name == "CarryFrontThrow"),
             rate: self.anim.rate,
             phase: self.cycle.shown,
             run_start: self.cycle.weights[4],

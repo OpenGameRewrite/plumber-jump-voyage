@@ -36,7 +36,7 @@ from grab_ceil import Evidence as GrabCeilEvidence
 from rocket_flower import Evidence as RocketEvidence
 from coin_chameleon import Evidence as CoinChameleonEvidence
 from pukupuku import Evidence as PukupukuEvidence
-from carry_objects import Evidence as CarryEvidence
+from carry_objects import Evidence as CarryEvidence, mario_answer
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -245,6 +245,24 @@ class Judge:
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
+        for f in self._carry.required - self._carry.frames:
+            v.refuse(f, "seed throw lacks exact independently simulated keeper/attachment/flight evidence")
+        self._paint_floor = None
+        if (geometry or {}).get('stage') == 'ForestWorldHomeStage' and geometry.get('scenario') == 1:
+            for paint in geometry.get('paint_objects', []):
+                p = paint.get('placement', {})
+                part = next((o for o in geometry.get('objects', []) if o.get('id') == paint.get('id')), {})
+                if (paint.get('id') == p.get('Id') == 'obj7234'
+                        and p.get('UnitConfigName') == part.get('model') == 'ForestWorldHomeGround001'
+                        and p.get('UnitConfig', {}).get('ParameterConfigName') == 'PaintObj'
+                        and p.get('SensorOffsetY') == 0. and p.get('IsEnableDrawMario') is False
+                        and paint.get('host') == p.get('UnitConfig', {}).get('DisplayName')
+                        and paint.get('sensors') == [dict(Name='Collision', Type='CollisionParts'),
+                             dict(MaxCount=256, Name='Body', Radius=1000., Type='EnemyBody')]
+                        and part.get('static') is True
+                        and part.get('translate') == [p.get('Translate', {}).get(a) for a in 'XYZ']
+                        and part.get('rotate') == [0.,0.,0.] and part.get('scale') == [1.,1.,1.]):
+                    self._paint_floor = (paint['host'], part['translate'])
         self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
         self._puku = PukupukuEvidence(geometry, pukupuku, rewrite_rows, game_rows)
         self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
@@ -535,6 +553,13 @@ class Judge:
         for c in parse_contacts(self.rows[f].get("contacts")):
             host = c["host"]
             where = f" ({c['self']}:{c['self_type']} vs {c['other']}:{c['other_type']}" + (f", {c['host_class']}" if c["host_class"] else "") + ")"
+            if c['host_class'] == 'PaintObj':
+                if self._paint_contact(f, c):
+                    v.accept(f, "exported obj7234 PaintObj floor",
+                             "Forest scenario 1 static placement/KCL; ConfirmPaintObj rejected by Mario's original dispatch")
+                else:
+                    v.refuse(f, f"unproved PaintObj contact with {host}{where}")
+                continue
             if self._carry.contact(f, c):
                 v.accept(f, "exported flower carry/push", "placement identity, source state, typed dispatch and independently simulated receiver/keeper")
                 continue
@@ -581,6 +606,29 @@ class Judge:
                              f"probe actor {c['actor']} tagged by Coin death appearance, during proved Dead episode")
                     continue
                 self._physical_overlap(f, host, where, host_class=c["host_class"])
+
+    def _paint_contact(self, f, contact):
+        if self._paint_floor is None or self._start is None or not self.verdict.geometry_replay:
+            return False
+        host, position = self._paint_floor
+        floor = self._hosts.get(f, {}).get('ground', {})
+        base = tuple(float(f'{f32(f32(x)-f32(s)):.6f}') for x,s in zip(position, self._start))
+        if (contact['who'] != 'player' or contact['host'] != host or contact['other'] != 'Body'
+                or contact['other_type'] != '9' or not re.fullmatch(r'[1-9][0-9]*', contact['actor'])
+                or floor.get('host') != host or floor.get('base') != base
+                or floor.get('moving') != '0' or floor.get('parts_flag') == '0'):
+            return False
+        if contact['kind'] in ('r','p'):
+            return (contact['message'] == 'rs::SensorMsgConfirmPaintObj' and contact['answer'] == '0'
+                    and mario_answer(contact['message'], contact['self']) is False)
+        if contact['kind'] != 'a':
+            return False
+        if contact['self_type'] == SENSOR_TYPE_PLAYER_EYE:
+            return True
+        return any(c['actor'] == contact['actor'] and c['host'] == host
+                   and c['self'] == contact['self'] and c['other'] == 'Body'
+                   and c['kind'] in ('r','p') and c['message'] == 'rs::SensorMsgConfirmPaintObj'
+                   and c['answer'] == '0' for c in parse_contacts(self.rows[f].get('contacts')))
 
     # ---- map geometry ----
 

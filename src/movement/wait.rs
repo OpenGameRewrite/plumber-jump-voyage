@@ -85,6 +85,14 @@ pub(super) struct WaitControl {
 impl Player {
     /// A visible fidelity limit, not a claim that this position is sunlit.
     pub fn fidelity_limits(&self) -> &'static str {
+        if self
+            .carry
+            .seed
+            .as_ref()
+            .is_some_and(|seed| seed.revival_rng_unavailable)
+        {
+            return "seed_revival_rng_unavailable";
+        }
         if self.wait.shade_query_unavailable {
             "temperature_shade_unavailable"
         } else {

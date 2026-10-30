@@ -63,9 +63,30 @@ again. The seed keeper is therefore one step ahead after pickup. Those runs
 remain refused in lockstep; no comparison margin or source-state injection
 compensates for either limit.
 
-Throw/release and stone collision are separate work. An unsupported carry
-release request exposes `carry_release_unavailable` in `fidelity_limits`; that
-diagnostic grants no environment exemption. Overhead carry, damage cancellation,
+Normal front seed throws now use the independent keeper's Throw phase (3),
+five-step release, ten-step inhibition, CarryFrontThrow sub animation and the
+throw-facing quaternion after the movement state. The seed's own actor collider,
+gravity/drag, rebound, ground connector and death-area transition advance from
+its placement and simulated hand pose. The arrow helper can relocate release
+to Mario before flight. No object samples enter the native replay.
+
+After release, `carry_source` additionally exposes `seed_velocity`, `seed_quat`
+(the observed matrix-to-quaternion value), `seed_nerve=name/step` and
+`seed_collide_off`. The evidence rule requires exact f32 position, velocity and
+quaternion, source phase/step and collision state on every post-release frame,
+including frames without contacts. Both seed throw fixtures pass free replay;
+the sideways fixture ends while hidden in Revival, before its 300-step return.
+`seed_revival_rng_unavailable` exposes the unported random orientation at that
+return rather than fabricating a respawn.
+
+The exporter also accepts original KickStone placements and their INITIAL joint
+orientation/kick count. This permits selecting the recording's exported Forest
+geometry for a refused diagnostic; it does not install a stone simulator.
+Forest PaintObj confirmation is accepted only as a rejected message from the
+exported scenario-1 obj7234 floor, with its placement, sensor and KCL identity
+proved. Other PaintObj compositions receive no exemption.
+
+Stone held collision/flight, overhead carry, damage cancellation,
 water and obstruction feedback are not established by these fixtures. Rendered
 replay poses Mario's carry layer; stage scenery and the flower object's mesh are
 not rendered by this harness.

@@ -1,5 +1,4 @@
 //! Placement-bound flower objects and the player's independent carry keeper.
-use super::grow_seed;
 pub use super::grow_seed::Seed;
 use super::push_receiver::{PushReceiver, calc_push_trans};
 use super::*;
@@ -69,6 +68,7 @@ pub struct Carry {
     pub hold_matrix: Option<look_joint::Mat34>,
     pub(super) origin: Vec3,
     pub picked_up: bool,
+    pub(super) held_during_sensor_phase: bool,
     /// The throw reached its release step; the seed leaves the hand once the frame's state ran.
     pub release_due: bool,
 }
@@ -207,7 +207,7 @@ impl Player {
     }
 }
 
-fn hex_vec(v: Vec3) -> String {
+pub(super) fn hex_vec(v: Vec3) -> String {
     v.to_array()
         .map(|x| format!("{:08x}", x.to_bits()))
         .join("/")
@@ -219,6 +219,7 @@ impl Player {
     }
 
     pub(super) fn carry_sensor_phase(&mut self, o: &Orders, scene: &Course) {
+        self.carry.held_during_sensor_phase = self.carry.held;
         self.carry.picked_up = false;
         if self.carry.held
             || self.carry.inhibition > 0
@@ -233,7 +234,7 @@ impl Player {
         let (Some(mesh), Some(seed)) = (scene.mesh.as_deref(), self.carry.seed.as_ref()) else {
             return;
         };
-        if seed.age < grow_seed::PICKUP_AGE {
+        if !seed.can_pick_up() {
             return;
         }
         let feet = mesh.to_game_vec(self.position_cm());
@@ -276,7 +277,7 @@ impl Player {
     }
 
     /// Keeper update 0x42e654 / Start 0x42ef20 / Carry 0x42f028.
-    pub(super) fn update_carry(&mut self, o: &Orders, _scene: &Course) {
+    pub(super) fn update_carry(&mut self, o: &Orders) {
         if self.carry.held {
             self.pre_throw = 0;
         }
@@ -285,16 +286,6 @@ impl Player {
             self.carry.step = 0;
             self.carry.inhibition = 10;
             self.events.push(Fx::CarryThrow);
-            if self.tilt >= STICK_DEADZONE {
-                // updateCarry 0x420d70: the throw turns Mario at once to the stick's direction
-                // on the plane of the ground (`PlayerInput::calcMoveDirection`).
-                let up = self
-                    .mesh_ground
-                    .filter(|_| self.grounded)
-                    .unwrap_or(Vec3::Y);
-                let (direction, _) = pose_math::try_normalize_or_zero(self.plane_stick(up));
-                self.set_pose(plane::quat_up_front(up, direction));
-            }
         }
         self.carry.inhibition = self.carry.inhibition.saturating_sub(1);
         if self.carry.phase == 3 {
@@ -352,6 +343,16 @@ impl Player {
     /// which the actor's control runs after the state of the frame: Mario's pose and velocity
     /// are those the state left.
     pub(super) fn finish_carry_release(&mut self, scene: &Course) {
+        if self.carry.phase == 3 && self.carry.step == 1 && self.tilt >= STICK_DEADZONE {
+            // updateCarry 0x420e78..0x420ed0 runs after the state: its facing must
+            // survive that state's ground pose update, and must not steer its velocity.
+            let up = self
+                .mesh_ground
+                .filter(|_| self.grounded)
+                .unwrap_or(Vec3::Y);
+            let (direction, _) = pose_math::try_normalize_or_zero(self.plane_stick(up));
+            self.set_pose(plane::quat_up_front(up, direction));
+        }
         if std::mem::take(&mut self.carry.release_due) {
             self.release_flower_seed(scene);
             self.carry.held = false;
@@ -404,6 +405,7 @@ impl Player {
         }
         if let Some(seed) = &self.carry.seed {
             out.push_str(&format!(";seed={}/{}", seed.id, hex_vec(seed.position)));
+            out.push_str(&seed.throw_diagnostic());
         }
         if let Some(m) = self.carry.hold {
             out.push_str(&format!(
@@ -438,7 +440,6 @@ fn hold_matrix(spine: look_joint::Mat34, position: Vec3) -> look_joint::Mat34 {
 
 #[cfg(test)]
 mod tests {
-    pub use super::grow_seed::Seed;
     use super::*;
 
     #[test]
@@ -455,25 +456,25 @@ mod tests {
         p.carry.upper = Some(("CarryFrontStart", 0.));
         p.carry.picked_up = true;
         let orders = Orders::default();
-        p.update_carry(&orders, &Course::default());
+        p.update_carry(&orders);
         p.carry.picked_up = false;
         for _ in 0..8 {
-            p.update_carry(&orders, &Course::default());
+            p.update_carry(&orders);
         }
         assert_eq!(
             (p.carry.phase, p.carry.step, p.carry.upper),
             (1, 9, Some(("CarryFrontStart", 8.)))
         );
-        p.update_carry(&orders, &Course::default());
+        p.update_carry(&orders);
         assert_eq!((p.carry.phase, p.carry.step), (2, 0));
-        p.update_carry(&orders, &Course::default());
+        p.update_carry(&orders);
         assert_eq!(p.carry.upper, Some(("CarryFront", 0.)));
         assert!(!p.ground_actions(&Orders {
             crouch: true,
             ..default()
         }));
         p.carry.inhibition = 10;
-        p.update_carry(&orders, &Course::default());
+        p.update_carry(&orders);
         assert_eq!(p.carry.inhibition, 9);
     }
 
@@ -487,5 +488,32 @@ mod tests {
         assert_eq!(m[0][1].to_bits(), 0x3f7fffff);
         assert_eq!(m[2][0].to_bits(), 0x3f7fffff);
         assert_eq!(m[1][2].to_bits(), 0x3f7ffffe);
+    }
+
+    #[test]
+    fn front_throw_releases_after_the_fifth_state_step() {
+        let mut p = Player::default();
+        p.carry.held = true;
+        p.carry.phase = 2;
+        p.carry.upper = Some(("CarryFront", 0.));
+        p.update_carry(&Orders {
+            throw_pressed: true,
+            ..default()
+        });
+        assert_eq!((p.carry.phase, p.carry.step, p.carry.inhibition), (3, 1, 9));
+        assert!(p.carry.upper.is_none());
+        assert!(p.upper_cleared);
+        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", -1.)));
+        for _ in 1..5 {
+            p.update_carry(&Orders::default());
+            p.finish_carry_release(&Course::default());
+            assert!(p.carry.held);
+        }
+        p.update_carry(&Orders::default());
+        assert!(p.carry.held);
+        assert!(p.carry.release_due);
+        p.finish_carry_release(&Course::default());
+        assert!(!p.carry.held);
+        assert!(!p.carry.release_due);
     }
 }

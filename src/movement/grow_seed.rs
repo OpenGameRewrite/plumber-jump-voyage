@@ -14,11 +14,9 @@ use super::actor_collider::{ActorCollider, StrikeHit, Terrain};
 use super::pose_math::{ActorPose, dot, squared_length, try_normalize_or_zero};
 use super::*;
 
-/// The collider radius the seed is made with (recorded at init: 40).
+/// Original ObjectData/GrowFlowerSeed InitCollider: Radius=40, Y=40.
 const COLLIDER_RADIUS: f32 = 40.;
-/// GUESS: the collider's centre lies one radius above the translation (the offset the actor
-/// sets when it starts waiting, `[0x138]`, was not decoded; the rest height of the fixtures
-/// matches this to the bit).
+/// Saved by initAfterPlacement (0x2913e8), restored by exeWait (0x29181c).
 const COLLIDER_OFFSET: f32 = 40.;
 /// `GrowSeedStateWait`'s parameters (data at 0x18bafb0): gravity, then horizontal and vertical
 /// scale in the air and on the ground.
@@ -80,7 +78,8 @@ pub struct Seed {
     rebound_pending: bool,
     /// The collision part the seed came to rest on (the ground connector's host).
     connection: Option<usize>,
-    home: Vec3,
+    thrown: bool,
+    pub(super) revival_rng_unavailable: bool,
 }
 
 impl Seed {
@@ -103,7 +102,8 @@ impl Seed {
             contact_counter: 0,
             rebound_pending: false,
             connection: None,
-            home: position,
+            thrown: false,
+            revival_rng_unavailable: false,
         }
     }
 
@@ -146,6 +146,10 @@ impl Seed {
     /// `GrowSeedStateRevival::appear` invalidates the hit sensors until the seed is back.
     pub(super) fn hit_sensors_valid(&self) -> bool {
         self.nerve != Nerve::Revival
+    }
+
+    pub(super) fn can_pick_up(&self) -> bool {
+        self.nerve == Nerve::Wait && self.age >= PICKUP_AGE
     }
 
     fn update(&mut self, mesh: &crate::geometry::TriangleMesh) {
@@ -280,12 +284,39 @@ impl Seed {
             self.collide_off = true;
         }
         if self.nerve_step >= REVIVAL_STEPS {
-            self.position = self.home;
-            self.collide_off = false;
-            // (The revival draws a random orientation; it does not touch the trace.)
-            self.age = 0;
-            self.set_nerve(Nerve::Wait);
+            // The next state requires the actor's independently initialized random source.
+            // Keep the unsupported revival visible instead of inventing an orientation.
+            self.revival_rng_unavailable = true;
         }
+    }
+
+    pub(super) fn throw_diagnostic(&self) -> String {
+        if !self.thrown {
+            return String::new();
+        }
+        let name = |nerve| match nerve {
+            Nerve::Wait => "Wait",
+            Nerve::Hold => "Hold",
+            Nerve::Throw => "Throw",
+            Nerve::Revival => "Revival",
+        };
+        format!(
+            ";seed_velocity={};seed_quat={};seed_nerve={}/{};seed_collide_off={}",
+            super::carry::hex_vec(self.velocity),
+            // The probe observes al::calcQuat: matrix -> quaternion, not getQuatPtr.
+            ActorPose::new(self.quat)
+                .calc_quat()
+                .to_array()
+                .map(|v| format!("{:08x}", v.to_bits()))
+                .join("/"),
+            name(self.pending_nerve.unwrap_or(self.nerve)),
+            if self.pending_nerve.is_some() {
+                0
+            } else {
+                self.nerve_step
+            },
+            u8::from(self.collide_off),
+        )
     }
 
     /// `GrowFlowerSeed::control`: the death area sends the seed to revival.
@@ -381,6 +412,7 @@ impl Player {
             return;
         };
         seed.quat = pose_math::quat_front_up(front, Vec3::Y);
+        seed.thrown = true;
         seed.velocity = velocity;
         if let Some(mesh) = scene.mesh.as_deref() {
             // The helper tests an arrow behind the seed (as long as the distance of its
@@ -403,5 +435,31 @@ impl Player {
         seed.collide_off = false;
         seed.collider.invalidate(seed.position, seed.pose_up);
         seed.set_nerve(Nerve::Throw);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revival_cannot_be_picked_up_or_fake_its_unrecorded_random_orientation() {
+        let mut seed = Seed::new("test".into(), Vec3::ZERO);
+        seed.age = PICKUP_AGE;
+        assert!(seed.can_pick_up());
+        seed.nerve = Nerve::Revival;
+        seed.velocity = Vec3::Y;
+        seed.exe_revival();
+        assert_eq!(seed.velocity, Vec3::ZERO);
+        assert!(seed.collide_off);
+        assert!(!seed.can_pick_up());
+        seed.nerve_step = REVIVAL_STEPS - 1;
+        seed.exe_revival();
+        assert!(!seed.revival_rng_unavailable);
+        seed.nerve_step += 1;
+        seed.exe_revival();
+        assert!(seed.revival_rng_unavailable);
+        assert_eq!(seed.nerve, Nerve::Revival);
+        assert!(seed.pending_nerve.is_none());
     }
 }

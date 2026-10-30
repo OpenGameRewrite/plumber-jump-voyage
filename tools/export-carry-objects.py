@@ -1,4 +1,4 @@
-"""Add linked flower placements and InitSensor data to a local collision export.
+"""Add carry placements and original InitSensor data to a local collision export.
 
 Only INITIAL init/used-query records may establish saved availability. Runtime poses,
 sensor samples, attachment matrices and message transcripts are never replay input.
@@ -51,11 +51,36 @@ def main():
                                     passive_sensors=passive,
                                     initial_alive=row['dead'] == '0', initial_phase='init',
                                     host={'GrowFlowerPot':'[育つ花]植木鉢', 'GrowFlowerSeed':'[育つ花]種'}[p['UnitConfigName']]))
+    for p in stage['ObjectList']:
+        if p['Id'] not in args.id or p['UnitConfigName'] != 'KickStone':
+            continue
+        matches = [r for r in initial if r['id'] == p['Id'] and not r['parent']]
+        if len(matches) != 1:
+            raise ValueError('ambiguous/missing INITIAL stone: ' + p['Id'])
+        row = matches[0]
+        if list(map(float, row['pos_values'].split('/'))) != [p['Translate'][a] for a in 'XYZ']:
+            raise ValueError('INITIAL placement mismatch: ' + p['Id'])
+        archive = outfits.archive(args.romfs / 'ObjectData' / 'KickStone.szs')
+        sources.append(dict(id=p['Id'], parent='', placement=p,
+                            sensors=outfits.byml(archive['InitSensor.byml']),
+                            collider=outfits.byml(archive['InitCollider.byml']),
+                            initial_alive=row['dead'] == '0', initial_phase='init',
+                            initial_joint_quat=list(map(float, row['joint_quat_values'].split('/'))),
+                            initial_kick_count=int(row['kick_count']),
+                            host=p['UnitConfig']['DisplayName']))
+    # The floor is a concrete PaintObj placement. Export its identity and sensor contract;
+    # the environment judge still requires the original rejected message at each overlap.
+    if root['stage'] == 'ForestWorldHomeStage' and root['scenario'] == 1 and any(s['id'] == 'obj1837' for s in sources):
+        p = next(p for p in stage['ObjectList'] if p['Id'] == 'obj7234')
+        archive = outfits.archive(args.romfs / 'ObjectData' / (p['UnitConfigName'] + '.szs'))
+        root['paint_objects'] = [dict(id=p['Id'], placement=p,
+                                      host=p['UnitConfig']['DisplayName'],
+                                      sensors=outfits.byml(archive['InitSensor.byml']))]
     if {s['id'] for s in sources} != set(args.id):
         raise ValueError('not every requested linked placement was found')
     root['carry_objects'] = sources
     args.geometry.write_text(json.dumps(root, separators=(',', ':')), encoding='utf8')
-    print(f'{args.geometry}: {len(sources)} linked flower sources')
+    print(f'{args.geometry}: {len(sources)} carry placements')
 
 
 if __name__ == '__main__':

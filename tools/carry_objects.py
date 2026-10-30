@@ -26,7 +26,7 @@ def diagnostic(row):
     return dict(part.split('=', 1) for part in row.get('carry_source', '').split(';') if '=' in part)
 
 
-def hold_matrix(attachment):
+def hold_matrix(attachment, throw_hand=False):
     """calcPlayerHoldMtx 0x5727e0, using independently observed joints for validation only."""
     spine = values(attachment, 'Spine2')
     a = f32(f32(2. ** -0.5) * f32(2. ** 0.5))
@@ -38,7 +38,9 @@ def hold_matrix(attachment):
                      f32(math.fma(row[1], rotation[1][c], f32(row[0]*rotation[0][c])))))
                  for c in range(3)] for row in rows]
     left, right = values(attachment,'HandL'), values(attachment,'HandR')
-    return [v for i,row in enumerate(rows) for v in row + [f32(f32(left[4*i+3]+right[4*i+3])*0.5)]]
+    position = ([f32(right[4*i+3] + f32(right[4*i] * 30.)) for i in range(3)] if throw_hand else
+                [f32(f32(left[4*i+3]+right[4*i+3])*0.5) for i in range(3)])
+    return [v for i,row in enumerate(rows) for v in row + [position[i]]]
 
 
 def mario_answer(message, sensor):
@@ -67,6 +69,12 @@ class Evidence:
     def __init__(self, geometry, objects, mario, messages, rewrite, rows, preroll):
         self.frames, self.identity, self.pushing = set(), None, set()
         self.passive = set()
+        # The observed interval only defines the obligation to prove the simulation. It
+        # supplies no movement, release timing or object state to the native replay.
+        throws = [int(r['frame']) for r in (mario or []) if r.get('kind') == 'sample'
+                  and (r.get('keeper_pending_n_name') or r.get('keeper_current_n_name')) == 'Throw'
+                  and r.get('held_id') == 'obj2876']
+        self.required = {f for f in rows if throws and f >= min(throws)} if rows else set()
         self.error = None
         try:
             self.verify(geometry, objects, mario, messages, rewrite, rows, preroll)
@@ -150,10 +158,10 @@ class Evidence:
                     pushing.add(frame)
             else:
                 nerve = keeper['keeper_pending_n_name'] or keeper['keeper_current_n_name']
-                if nerve not in ('Wait', 'Start', 'Carry'):
-                    continue  # throw, release, stone and flight belong to part 2
+                if nerve not in ('Wait', 'Start', 'Carry', 'Throw'):
+                    continue
                 held = keeper['held_id'] == source['id']
-                phase = {'Wait': 0, 'Start': 1, 'Carry': 2}[nerve]
+                phase = {'Wait': 0, 'Start': 1, 'Carry': 2, 'Throw': 3}[nerve]
                 if state.get('keeper', '').split('/')[::2] != [str(phase), str(int(held))]:
                     continue
                 if phase and state.get('keeper') != f"{phase}/{keeper['keeper_step']}/{int(held)}":
@@ -161,13 +169,36 @@ class Evidence:
                 if held and (keeper['overhead'] != '0' or keeper['wall_keep'] != '1'
                              or 'held' not in state or not state.get('seed', '').startswith(source['id'] + '/')):
                     continue
+                if phase == 3 and held and state.get('inhibition') != keeper['inhibition']:
+                    continue
                 if frame in attachments:
                     attachment = attachments[frame]
-                    if not exact_vector(words(hold_matrix(attachment)), attachment['hold_matrix_bits']):
+                    previous_keeper = keepers.get(frame-1, {})
+                    throw_hand = (previous_keeper.get('keeper_pending_n_name') or
+                                  previous_keeper.get('keeper_current_n_name')) == 'Throw'
+                    if not exact_vector(words(hold_matrix(attachment, throw_hand)), attachment['hold_matrix_bits']):
                         raise ValueError('original attachment does not follow the hold-matrix equation')
                     previous = diagnostic(rewrite.get(frame-1, {}))
                     pose = previous.get('held', '').split('/')
-                    if len(pose) != 12 or state.get('seed') != source['id'] + '/' + '/'.join(pose[i] for i in (3,7,11)):
+                    if held and (len(pose) != 12 or state.get('seed') != source['id'] + '/' + '/'.join(pose[i] for i in (3,7,11))):
+                        continue
+                if frame in self.required and not held:
+                    if not seed_motion_matches(state, obj, source['id']):
+                        continue
+                if frame in self.required:
+                    released = keepers.get(frame-1, {}).get('held_id') == source['id'] and not held
+                    release_events = [e for e in events[frame] if e['kind'] == 'object_receive_after'
+                                      and 'Release' in e['message_type']]
+                    if released:
+                        if len(release_events) != 1:
+                            continue
+                        e = release_events[0]
+                        if (state.get('keeper') != '3/6/0' or e['message_type'] != 'al::SensorMsgPlayerRelease'
+                                or e['answer'] != '1' or e['receiver_id'] != source['id']
+                                or e['receiver_actor'] != token or e['sender_id'] != 'Mario'
+                                or e['keeper_current_n_name'] != 'Throw' or e['keeper_step'] != '5'):
+                            continue
+                    elif release_events:
                         continue
                 if obj['hold_collider_push'] != '0' or obj['collision_parts_present'] != '0':
                     raise ValueError('unsupported seed collision composition')
@@ -206,6 +237,25 @@ class Evidence:
         return contact['kind'] == 'a'
 
 
+def seed_motion_matches(state, obj, identity):
+    """No numeric margin: validate the independently simulated release/flight/rest/hidden seed."""
+    if not all(state.get(k) for k in ('seed', 'seed_velocity', 'seed_quat', 'seed_nerve', 'seed_collide_off')):
+        return False
+    seed = state.get('seed', '').split('/', 1)
+    if len(seed) != 2 or seed[0] != identity:
+        return False
+    if not exact_vector(seed[1], obj['pos_bits']):
+        return False
+    if not exact_vector(state.get('seed_velocity', ''), obj['velocity_bits']):
+        return False
+    if not exact_vector(state.get('seed_quat', ''), obj['quat_bits']):
+        return False
+    nerve = obj['pending_n_name'] or obj['current_n_name']
+    step = '0' if obj['pending_n_name'] else obj['step']
+    return (state.get('seed_nerve') == f'{nerve}/{step}'
+            and state.get('seed_collide_off') == obj['collide_off'])
+
+
 def self_check():
     assert mario_answer('rs::SensorMsgHitGrowFlowerPot', 'Body') is False
     assert mario_answer('rs::SensorMsgUnknownFutureType', 'Body') is False
@@ -213,6 +263,21 @@ def self_check():
     assert mario_answer('rs::SensorMsgPushToPlayer', 'Carry') is False
     assert mario_answer('al::SensorMsgCollidePush', 'Body') is None
     assert not Evidence(None, None, None, None, None, None, None).frames
+    state = dict(seed='obj2876/00000000/3f800000/40000000',
+                 seed_velocity='00000000/00000000/00000000',
+                 seed_quat='00000000/00000000/00000000/3f800000',
+                 seed_nerve='Revival/1', seed_collide_off='1')
+    obj = dict(pos_bits='00000000,3f800000,40000000',
+               velocity_bits=state['seed_velocity'], quat_bits=state['seed_quat'],
+               current_n_name='Revival', pending_n_name='', step='1', collide_off='1')
+    assert seed_motion_matches(state, obj, 'obj2876')
+    for key in state:
+        changed = dict(state, **{key: state[key] + '1'})
+        try:
+            assert not seed_motion_matches(changed, obj, 'obj2876')
+        except (ValueError, struct.error):
+            pass  # Malformed words are also a refusal, never a numeric allowance.
+    assert not seed_motion_matches(state, obj, 'another placement')
 
 
 if __name__ == '__main__':

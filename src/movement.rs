@@ -2864,9 +2864,8 @@ impl Player {
             if self.sub.frame >= self.sub.length {
                 self.sub.active = false;
                 if self.sub.name == "CarryFrontThrow" {
-                    // The carry throw's end restarts the main clip with that clip's own
-                    // interpolation length (recorded: Wait 6, WaitCold 10 steps), unlike
-                    // the shorter fade the cap catch leaves.
+                    // PlayerAnimator::endSubAnim (0x42a87c) starts the main action again;
+                    // startAction selects that action's exported interpolation settings.
                     self.ended_sub = Some((self.sub.name, self.sub.frame));
                 }
             } else {
@@ -3068,7 +3067,7 @@ impl Player {
             self.update_flower_seed(scene);
         }
         self.carry_sensor_phase(&o, scene);
-        self.update_carry(&o, scene);
+        self.update_carry(&o);
         self.flower_sensor_phase(scene);
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -3437,12 +3436,9 @@ impl Player {
                     .invalidate_source_sensor(scene.look_sensors().len() + i * 2 + 1);
             }
         }
-        if self
-            .carry
-            .seed
-            .as_ref()
-            .is_some_and(|seed| self.is_carry() || !seed.hit_sensors_valid())
-        {
+        if self.carry.seed.as_ref().is_some_and(|seed| {
+            self.is_carry() || self.carry.held_during_sensor_phase || !seed.hit_sensors_valid()
+        }) {
             self.look.invalidate_source_sensor(sensors.len() - 1);
         }
         self.look.step(&actor, enabled, &sensors);

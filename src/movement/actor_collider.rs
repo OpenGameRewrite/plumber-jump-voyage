@@ -492,6 +492,7 @@ mod tests {
     #[test]
     fn a_fall_into_the_floor_stops_at_the_surface_and_reports_the_ground() {
         let mut collider = ActorCollider::new(40., 40., Vec3::new(0., 5., 0.));
+        collider.invalidate(Vec3::new(0., 5., 0.), Vec3::Y);
         let step = collider.collide(
             &Plane(0.),
             Vec3::new(0., 5., 0.),
@@ -499,7 +500,7 @@ mod tests {
             Vec3::new(0., -30., 0.),
         );
         // The centre ends on the sphere's radius above the plane: the feet on the floor.
-        assert!((5. + step.y).abs() < 1.0e-3, "{step}");
+        assert_eq!(5. + step.y, 0.);
         assert!(collider.floor.is_present());
         assert_eq!(collider.floor.hit.normal, Vec3::Y);
     }
