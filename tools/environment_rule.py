@@ -842,6 +842,8 @@ def self_check():
     from sand_geyser import self_check as check_geysers
     from key_move_parts import self_check as check_key_parts
     check_key_parts()
+    from cap_trampoline import self_check as check_trampoline
+    check_trampoline()
     check_geysers()
     from grab_ceil import self_check as check_grabceil
     check_grabceil()

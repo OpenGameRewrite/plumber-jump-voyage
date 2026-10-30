@@ -4,6 +4,38 @@ Development tooling for comparing the controller with the original game frame
 by frame. Nothing here needs game data; the optional sound table
 (`assets/local/sounds/player.json`) only adds sound names to the trace.
 
+## CapTrampoline spin jump
+
+`tools/export-cap-trampoline.py` adds the original placement, InitSensor data and
+INITIAL pending Open phase to a separate local collision export. Use the runtime
+static view that omits the source's inactive archive collision; retain the full
+archive export and scan evidence. The native source consumes no actor samples or
+message transcripts. Its contact test, cooldown, Jump action and return to Open
+advance independently of Mario, including lockstep reconstruction.
+
+The supported composition is upright, stationary, unlinked and continuously open.
+A normal TrampleHit attack requests jump type 13 with power 60 (50 for IsMoon).
+Mario preserves horizontal velocity, replaces the gravity component, and uses the
+original Start26/Loop23 clips. Ascent uses JumpGravity; descent spends the
+80-update stay counter with gravity .1 and fall cap1, then cap8. The main model's
+synced counter is the model frame plus rate (PlayerAnimFrameCtrl::updateSync), so
+loop sounds restart when the model wraps while the counter still shows23.
+
+The environment rule binds acceptance to TrampolineWallCatchExStage scenario1
+obj1088. It verifies exact source transforms, sensor words, lifecycle/cooldown,
+ordered request identity/power and Mario's launch/stay fields against the native
+`trampoline_source` diagnostic. Side files only validate. `receivePushMsg` rejects
+the spin identity; the subsequent ordinary receive dispatch accepts it. No frame
+or column is excluded. Both bounded launch and airborne HipDrop entry use60;
+the source's earlier attack pre-empts HipDrop's outgoing messages.
+
+Power68 (Moon55) belongs to the alternate hip-drop receive path in the original
+source; that route is unrecorded and remains unported. Closed/opening/closing and
+connected sources, spin DownFall/re-entry, ordinary landing and the boss cap sender
+are outside this bounded port. Installed Mario/Cappy assets need no modification.
+Rendered replay uses the same source but has no trampoline mesh or original stage
+presentation; native movement PASS does not establish lighting/material/audio parity.
+
 ## Flower carry and sensor push
 
 An export can include `carry_objects`: original linked flower placements, their

@@ -20,7 +20,7 @@ impl Player {
         self.nerve.touchdown = false;
     }
 
-    pub(super) fn spin_flower_step(&mut self, _o: &Orders) {
+    pub(super) fn spin_flower_step(&mut self) {
         if self.frame == 0 {
             self.v = vector_lib::verticalize_vec(Vec3::NEG_Y, self.v);
             self.v += Vec3::Y * self.spin_flower.power;
@@ -35,7 +35,7 @@ impl Player {
         let mut fall_max = 8.;
         if self.v.y < 0. || self.v.y.abs() < 0.001 {
             gravity = 0.1;
-            if self.spin_flower.stay - 1 >= 0 {
+            if self.spin_flower.stay > 0 {
                 self.spin_flower.stay -= 1;
                 fall_max = 1.;
             }
@@ -61,5 +61,62 @@ impl Player {
         if self.tilt < STICK_DEADZONE {
             self.set_h(self.v.with_y(0.) * 0.95);
         }
+    }
+}
+
+pub(super) fn self_check() {
+    checks::a_request_preserves_horizontal_velocity_and_replaces_the_fall();
+    checks::descent_spends_the_stay_counter_before_the_full_fall_limit();
+}
+
+mod checks {
+    use super::*;
+
+    #[cfg_attr(test, test)]
+    pub(super) fn a_request_preserves_horizontal_velocity_and_replaces_the_fall() {
+        let scene = Course::default();
+        let mut p = Player {
+            mode: Move::GroundPound,
+            v: Vec3::new(3., -45., 4.),
+            ..default()
+        };
+        p.request_spin_flower(60.);
+        p.begin_step();
+        p.spin_flower_step();
+        assert_eq!(p.nerve_name().name, "Jump/JumpSpinFlower");
+        assert_eq!(p.anim.name, "SpinJumpStart");
+        assert_eq!(p.v, Vec3::new(3. * 0.95, 58.5, 4. * 0.95));
+        assert_eq!(p.spin_flower.stay, 80);
+        assert!(p.restarted_by_sensor());
+        p.anim.frame = 26.;
+        p.frame = 26;
+        p.spin_flower_step();
+        assert_eq!((p.anim.name, p.anim.frame), ("SpinJumpLoop", 0.));
+        let before = p.trampoline_diagnostic();
+        p.repeat_step_for_lockstep(&Orders::default(), &scene);
+        assert_eq!(p.trampoline_diagnostic(), before);
+    }
+
+    #[cfg_attr(test, test)]
+    pub(super) fn descent_spends_the_stay_counter_before_the_full_fall_limit() {
+        let mut p = Player {
+            mode: Move::SpinFlower,
+            frame: 1,
+            v: Vec3::NEG_Y,
+            ..default()
+        };
+        p.spin_flower.stay = 80;
+        for left in (0..80).rev() {
+            p.spin_flower_step();
+            assert_eq!(p.spin_flower.stay, left);
+            assert_eq!(p.v.y, -1.);
+        }
+        p.spin_flower_step();
+        assert_eq!(p.v.y, -1.1);
+        assert_eq!(p.spin_flower.stay, 0);
+        for _ in 0..100 {
+            p.spin_flower_step();
+        }
+        assert_eq!(p.v.y, -8.);
     }
 }

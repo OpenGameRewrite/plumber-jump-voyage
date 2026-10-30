@@ -3323,7 +3323,7 @@ impl Player {
             Move::GrabCeil => self.grab_ceil_step(o),
             Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
-            Move::SpinFlower => self.spin_flower_step(o),
+            Move::SpinFlower => self.spin_flower_step(),
             _ => self.air(o),
         }
         // The jump states ask for the `DiveInWater` clip at the end of their steps
@@ -6135,6 +6135,8 @@ mod spin_checks;
 mod wall_air_checks;
 
 pub fn self_check() {
+    cap_trampoline::self_check();
+    spin_flower::self_check();
     sand_geyser::self_check();
     recovery_dead::self_check();
     stain::self_check();

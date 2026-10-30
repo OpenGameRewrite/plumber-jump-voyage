@@ -16,7 +16,8 @@ pub struct Trampoline {
 impl Trampoline {
     pub fn load(source: &serde_json::Value) -> Result<Self, String> {
         let p = &source["placement"];
-        if p["UnitConfigName"] != "CapTrampoline"
+        if source["initial_phase"] != "OpenPending"
+            || p["UnitConfigName"] != "CapTrampoline"
             || p["IsContinueOpen"] != true
             || p["IsConnectToCollision"] != false
             || p["IsLinkDest"] != false
@@ -54,13 +55,8 @@ impl Trampoline {
             && pose_math::dot(velocity, delta) >= 0.
     }
 
-    fn power(&self, hip_drop: bool) -> f32 {
-        match (hip_drop, self.moon) {
-            (false, false) => 60.,
-            (false, true) => 50.,
-            (true, false) => 68.,
-            (true, true) => 55.,
-        }
+    fn power(&self) -> f32 {
+        if self.moon { 50. } else { 60. }
     }
 
     fn launch(&mut self, normal_attack: bool) {
@@ -93,10 +89,12 @@ impl Player {
         let mut request = None;
         for source in &mut self.trampolines {
             if source.accepts(feet, velocity, 1.45) {
-                request = Some(source.power(false));
+                request = Some(source.power());
                 source.launch(true);
             }
             if source.initial {
+                // The exported INITIAL pending nerve has not executed at the
+                // first Mario sample; actor scheduling begins after that sample.
                 source.initial = false;
             } else {
                 source.tick();
@@ -108,7 +106,8 @@ impl Player {
     }
 
     pub fn trampoline_diagnostic(&self) -> String {
-        self.trampolines
+        let sources = self
+            .trampolines
             .iter()
             .map(|s| {
                 format!(
@@ -117,16 +116,28 @@ impl Player {
                 )
             })
             .collect::<Vec<_>>()
-            .join("|")
+            .join("|");
+        if sources.is_empty() {
+            sources
+        } else {
+            format!(
+                "{sources};jump={:08x}/{}",
+                self.spin_flower.power.to_bits(),
+                self.spin_flower.stay
+            )
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
+pub(super) fn self_check() {
+    checks::attack_preempts_hip_drop_and_obeys_strict_contact_boundaries();
+}
+
+mod checks {
     use super::*;
 
-    #[test]
-    fn attack_preempts_hip_drop_and_obeys_strict_contact_boundaries() {
+    #[cfg_attr(test, test)]
+    pub(super) fn attack_preempts_hip_drop_and_obeys_strict_contact_boundaries() {
         let mut s = Trampoline {
             id: "test".into(),
             position: Vec3::ZERO,
@@ -139,10 +150,9 @@ mod tests {
         };
         let feet = Vec3::Y * 80.;
         assert!(s.accepts(feet, Vec3::NEG_Y * 45., 1.45));
-        assert_eq!(s.power(false), 60.);
-        assert_eq!(s.power(true), 68.);
+        assert_eq!(s.power(), 60.);
         s.moon = true;
-        assert_eq!(s.power(true), 55.);
+        assert_eq!(s.power(), 50.);
         s.launch(true);
         assert!(!s.accepts(feet, Vec3::NEG_Y * 45., 8.5));
         s.tick();
