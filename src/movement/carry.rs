@@ -23,10 +23,17 @@ pub fn sources(root: &serde_json::Value) -> Vec<Source> {
             let class = p["UnitConfigName"].as_str()?;
             if p["Id"] != item["id"]
                 || item["parent"] != "obj6326"
+                || item["initial_phase"] != "init"
+                || !item["initial_alive"].is_boolean()
                 || !matches!(class, "GrowFlowerPot" | "GrowFlowerSeed")
                 || p["Scale"] != serde_json::json!({"X":1.,"Y":1.,"Z":1.})
                 || (class == "GrowFlowerPot"
                     && item["sensors"] != serde_json::json!([{"Name":"Body","Radius":70.,"Y":50.}]))
+                || (class == "GrowFlowerSeed"
+                    && item["sensors"]
+                        != serde_json::json!([
+                        {"Name":"Body","Radius":50.,"Type":"EnemyBody","Y":35.},
+                        {"Name":"Hold","Radius":75.,"Type":"HoldObj","Y":35.}]))
             {
                 return None;
             }
@@ -50,16 +57,94 @@ pub struct Carry {
     pub diagnostic: String,
     pub seed: Option<Seed>,
     pub held: bool,
+    pub wall_keep: bool,
+    pub saved_position: Vec3,
     pub phase: u8,
     pub step: u32,
     pub inhibition: u32,
     pub upper: Option<(&'static str, f32)>,
     pub hold: Option<look_joint::Mat34>,
+    pub hold_matrix: Option<look_joint::Mat34>,
+    origin: Vec3,
     pub picked_up: bool,
     pub unsupported_release: bool,
 }
 
+/// The receive dispatch compares message identities; an unhandled identity falls through.
+/// SensorMsgPush and SensorMsgPushToPlayer are distinct original classes.
+#[derive(Clone, Copy)]
+pub(super) enum Message {
+    Push,
+    PushToPlayer,
+    #[allow(dead_code)] // The shared receive route; stone is part 2.
+    CollidePush(Vec3),
+    #[allow(dead_code)] // Unknown runtime identities use the default dispatch branch.
+    Unhandled,
+}
+
 impl Player {
+    pub fn flower_look_sensors(
+        &self,
+        sensors: &mut Vec<look_at::LookSensor>,
+        mesh: Option<&crate::geometry::TriangleMesh>,
+    ) {
+        if let Some(mesh) = mesh {
+            for source in &mesh.carry_sources {
+                if !source.active || source.class != "GrowFlowerPot" {
+                    continue;
+                }
+                let at = source.position + Vec3::Y * 50.;
+                sensors.push(look_at::LookSensor {
+                    host: "[育つ花]植木鉢".into(),
+                    name: "Body".into(),
+                    kind: 12,
+                    radius: 70.,
+                    position: mesh.relative_vec(at),
+                    stage_position: at,
+                });
+            }
+        }
+        if let Some(seed) = &self.carry.seed {
+            let at = seed.position + Vec3::Y * 35.;
+            sensors.push(look_at::LookSensor {
+                host: "[育つ花]種".into(),
+                name: "Body".into(),
+                kind: 9,
+                radius: 50.,
+                position: mesh.map_or(at, |m| m.relative_vec(at)),
+                stage_position: at,
+            });
+        }
+    }
+
+    pub(super) fn receive_object_message(
+        &mut self,
+        message: Message,
+        attack_sensor: bool,
+        push: Vec3,
+    ) -> bool {
+        if attack_sensor {
+            return false;
+        }
+        if matches!(self.mode, Move::Pole | Move::GrabCeil)
+            || self.recovering()
+            || self.recovery.push_invalid > 0
+        {
+            return false;
+        }
+        match message {
+            Message::PushToPlayer => {
+                self.carry.push.receive(push, false);
+                true
+            }
+            Message::CollidePush(force) => {
+                self.carry.push.receive(force, true);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Hit sensors update before Mario's movement; clear happens at its end (0x41f06c).
     pub(super) fn flower_sensor_phase(&mut self, scene: &Course) {
         let Some(mesh) = scene.mesh.as_deref() else {
@@ -79,7 +164,7 @@ impl Player {
             return;
         }
         for source in &mesh.carry_sources {
-            if source.class != "GrowFlowerPot" {
+            if !source.active || source.class != "GrowFlowerPot" {
                 continue;
             }
             let sender = source.position + Vec3::Y * 50.;
@@ -90,7 +175,9 @@ impl Player {
                 calc_push_trans(body, 50., sender, 70., Vec3::NEG_Y, self.pose_axes().1, 20.);
             // GrowFlowerPot 0x28f040: Push is unhandled; its fallback PushToPlayer
             // reaches the receiver only for the player's Body sensor.
-            self.carry.push.receive(push, false);
+            if !self.receive_object_message(Message::Push, false, push) {
+                self.receive_object_message(Message::PushToPlayer, false, push);
+            }
         }
     }
 
@@ -130,6 +217,7 @@ pub struct Seed {
     pub velocity: Vec3,
     ground: Option<Vec3>,
     settled: bool,
+    connecting: Option<usize>,
     rebound: bool,
     age: u32,
 }
@@ -141,6 +229,7 @@ impl Player {
 
     /// Only placement/init state enters the replay. No carry observation file is loaded.
     pub fn init_flower_seed(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        self.carry.origin = mesh.to_game_vec(Vec3::ZERO);
         if let Some(source) = mesh
             .carry_sources
             .iter()
@@ -152,6 +241,7 @@ impl Player {
                 velocity: Vec3::new(0., -1.8 * 0.995, 0.),
                 ground: None,
                 settled: false,
+                connecting: None,
                 rebound: false,
                 age: 1,
             });
@@ -167,18 +257,24 @@ impl Player {
         };
         if self.carry.held {
             if let Some(hold) = self.carry.hold {
-                seed.position = mesh.to_game_vec(look_joint::translation(&hold));
+                seed.position = look_joint::translation(&hold);
                 seed.velocity = Vec3::ZERO;
             }
             return;
         }
         seed.age += 1;
         if seed.settled {
+            if let Some(part) = seed.connecting {
+                let frame = &mesh.parts[part];
+                let local = crate::prism::transform_point(&frame.inverse, seed.position.to_array());
+                seed.position = Vec3::from_array(crate::prism::transform_point(&frame.base, local));
+            }
             return;
         }
         seed.position += seed.velocity;
         let centre = mesh.relative_vec(seed.position + Vec3::Y * 40.);
         let mut normal = None;
+        let was_connecting = seed.connecting.is_some();
         for (triangle, hit) in crate::collider::sphere_strike_hits(mesh, centre, 40.) {
             let n = mesh.triangles[triangle as usize].normal;
             if hit.depth > 0. {
@@ -186,14 +282,19 @@ impl Player {
             }
             if n.y > 0.5 {
                 normal = Some(n);
+                seed.connecting = mesh.triangles[triangle as usize]
+                    .local
+                    .map(|p| p.part as usize);
             }
         }
         if let Some(n) = normal {
             if seed.velocity.with_y(0.).length_squared() < 1.5 * 1.5 {
                 seed.velocity = Vec3::ZERO;
-                seed.settled = true;
-                seed.ground = Some(n);
-                return;
+                if was_connecting {
+                    seed.settled = true;
+                    seed.ground = Some(n);
+                    return;
+                }
             }
             seed.rebound = !seed.rebound;
             if seed.rebound {
@@ -232,7 +333,7 @@ impl Player {
         let feet = mesh.to_game_vec(self.position_cm());
         // Carry (Action edge) and Body (held Action) are distinct attack paths.
         let (height, radius, target_radius) = if o.throw_pressed {
-            (75., 100., 75.)
+            (100., 130., 75.)
         } else {
             (75., 50., 50.)
         };
@@ -254,7 +355,9 @@ impl Player {
             return;
         }
         // GrowFlowerSeed accepts FrontWallKeep in Wait after its pickup timer.
+        self.carry.saved_position = feet;
         self.carry.held = true;
+        self.carry.wall_keep = true;
         self.carry.phase = 1;
         self.carry.step = 0;
         self.carry.upper = Some(("CarryFrontStart", 0.));
@@ -311,14 +414,15 @@ impl Player {
         }
         use crate::skeleton_pose::Joint;
         let spine = joints[Joint::Spine2 as usize];
-        let left = look_joint::translation(&joints[Joint::HandL as usize]);
-        let right = look_joint::translation(&joints[Joint::HandR as usize]);
+        let left = look_joint::translation(&joints[Joint::HandL as usize]) + self.carry.origin;
+        let right = look_joint::translation(&joints[Joint::HandR as usize]) + self.carry.origin;
         let position = (left + right) * 0.5;
         let rotation = hold_matrix(spine, position);
+        self.carry.hold_matrix = Some(rotation);
         let offset = Vec3::new(0., -30., 40.);
         let mut pose = rotation;
         for row in &mut pose {
-            row[3] = row[2].mul_add(offset.z, row[1].mul_add(offset.y, row[0] * offset.x)) + row[3];
+            row[3] += row[2].mul_add(offset.z, row[1].mul_add(offset.y, row[0] * offset.x));
         }
         self.carry.hold = Some(pose);
     }
@@ -334,6 +438,14 @@ impl Player {
             self.carry.step,
             u8::from(self.carry.held)
         ));
+        if self.carry.held {
+            out.push_str(&format!(
+                ";saved={};front_wall_keep={};inhibition={}",
+                hex_vec(self.carry.saved_position),
+                u8::from(self.carry.wall_keep),
+                self.carry.inhibition
+            ));
+        }
         if let Some(seed) = &self.carry.seed {
             out.push_str(&format!(";seed={}/{}", seed.id, hex_vec(seed.position)));
         }
@@ -357,6 +469,66 @@ fn hold_matrix(spine: look_joint::Mat34, position: Vec3) -> look_joint::Mat34 {
     let z = joint_math::rotation_rows(Quat::from_xyzw(0., 0., s, -s));
     let y = joint_math::rotation_rows(Quat::from_xyzw(0., s, 0., -s));
     let mut rows = spine.map(|r| [r[0], r[1], r[2]]);
-    rows = joint_math::mul_rows(&joint_math::mul_rows(&rows, &z), &y);
+    let multiply = |a: &joint_math::Rows, b: &joint_math::Rows| {
+        std::array::from_fn(|r| {
+            std::array::from_fn(|c| {
+                a[r][2].mul_add(b[2][c], a[r][1].mul_add(b[1][c], a[r][0] * b[0][c]))
+            })
+        })
+    };
+    rows = multiply(&multiply(&rows, &z), &y);
     std::array::from_fn(|i| [rows[i][0], rows[i][1], rows[i][2], position[i]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pickup_layer_lifecycle_and_dispatch_are_independent_of_locomotion() {
+        let mut p = Player::default();
+        assert!(!p.receive_object_message(Message::Unhandled, false, Vec3::ONE));
+        assert!(!p.receive_object_message(Message::Push, false, Vec3::ONE));
+        assert!(!p.receive_object_message(Message::PushToPlayer, true, Vec3::ONE));
+        assert!(p.receive_object_message(Message::CollidePush(Vec3::X), false, Vec3::ZERO));
+        assert_eq!(p.carry.push.collide_max, Vec3::X);
+        p.carry.held = true;
+        p.carry.wall_keep = true;
+        p.carry.phase = 1;
+        p.carry.upper = Some(("CarryFrontStart", 0.));
+        p.carry.picked_up = true;
+        let orders = Orders::default();
+        p.update_carry(&orders);
+        p.carry.picked_up = false;
+        for _ in 0..8 {
+            p.update_carry(&orders);
+        }
+        assert_eq!(
+            (p.carry.phase, p.carry.step, p.carry.upper),
+            (1, 9, Some(("CarryFrontStart", 8.)))
+        );
+        p.update_carry(&orders);
+        assert_eq!((p.carry.phase, p.carry.step), (2, 0));
+        p.update_carry(&orders);
+        assert_eq!(p.carry.upper, Some(("CarryFront", 0.)));
+        assert!(!p.ground_actions(&Orders {
+            crouch: true,
+            ..default()
+        }));
+        p.carry.inhibition = 10;
+        p.update_carry(&orders);
+        assert_eq!(p.carry.inhibition, 9);
+    }
+
+    #[test]
+    fn hold_matrix_uses_spine_orientation_and_hand_midpoint() {
+        let m = hold_matrix(
+            [[1., 0., 0., 99.], [0., 1., 0., 98.], [0., 0., 1., 97.]],
+            Vec3::new(1., 2., 3.),
+        );
+        assert_eq!(look_joint::translation(&m), Vec3::new(1., 2., 3.));
+        assert_eq!(m[0][1].to_bits(), 0x3f7fffff);
+        assert_eq!(m[2][0].to_bits(), 0x3f7fffff);
+        assert_eq!(m[1][2].to_bits(), 0x3f7ffffe);
+    }
 }

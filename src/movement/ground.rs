@@ -84,6 +84,55 @@ pub struct PivotStep {
     pub velocity: Vec3,
 }
 impl PivotTurn {
+    /// PlayerActionPivotTurnControl::update (0x418c9c), in its support plane.
+    pub fn update_on_plane(
+        &mut self,
+        stick: Vec3,
+        front: Vec3,
+        velocity: Vec3,
+        up: Vec3,
+    ) -> PivotStep {
+        use super::{pose_math as p, vector_lib as v};
+        let wanted = p::try_normalize_or_zero(stick).0;
+        self.has_input = !v::is_near_zero(wanted, 0.001);
+        if self.has_input {
+            self.target = wanted;
+        }
+        let target = p::try_normalize_or_zero(v::verticalize_vec(up, self.target)).0;
+        let front = p::try_normalize_or_zero(v::verticalize_vec(up, front)).0;
+        self.steps = (self.steps + 1).min(10);
+        let share = self.steps as f32 / 10.;
+        // makeQuatAxisRotation 0x926efc measures on the prescribed axis and
+        // converts through degrees before constructing the half-angle.
+        let a = v::verticalize_vec(up, front);
+        let b = v::verticalize_vec(up, target);
+        let cross = p::cross(a, b);
+        let angle = p::atan2f(v::length(cross), p::dot(a, b));
+        let angle = if p::dot(up, cross) < 0. {
+            -angle
+        } else {
+            angle
+        };
+        let half = (((angle * 57.295_776) * share) * p::DEGREES_TO_RADIANS) * 0.5;
+        let sin = p::sinf(half);
+        let q = Quat::from_xyzw(up.x * sin, up.y * sin, up.z * sin, p::cosf(half));
+        let swung = p::try_normalize_or_zero(p::rotate_by_quat(front, q)).0;
+        self.done = p::get_axis_angle_from_two_vec(swung, target)
+            .is_none_or(|(_, angle)| angle <= 5. * p::DEGREES_TO_RADIANS);
+        if self.done {
+            let normal = up * p::dot(velocity, up);
+            PivotStep {
+                front: target,
+                velocity: target * v::length(v::verticalize_vec(up, velocity)) + normal,
+            }
+        } else {
+            PivotStep {
+                front: swung,
+                velocity,
+            }
+        }
+    }
+
     pub fn reset(&mut self, front: Vec3) {
         self.target = front;
         self.steps = 0;

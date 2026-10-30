@@ -3427,6 +3427,9 @@ impl Player {
                     .invalidate_source_sensor(scene.look_sensors().len() + i * 2 + 1);
             }
         }
+        if self.is_carry() && self.carry.seed.is_some() {
+            self.look.invalidate_source_sensor(sensors.len() - 1);
+        }
         self.look.step(&actor, enabled, &sensors);
         self.run_state_frame();
         self.update_joint_controls();
@@ -4020,6 +4023,28 @@ impl Player {
     }
     /// `rs::moveBrakeRun`: slide on the way the brake began, losing speed.
     fn slide_on(&mut self) -> f32 {
+        // New flower-source exports use the original ground-plane brake (0x565ae4).
+        // Existing captures retain their established reconstruction arithmetic.
+        if self.carry.seed.is_some() {
+            let up = self.ground_normal_or_up();
+            let previous = self.run_up.map_or(up, |(_, n, _)| n);
+            let velocity = self.velocity_in_plane(up);
+            let before = vector_lib::length(velocity);
+            let speed = ground::slide_speed(before);
+            self.brake_dir =
+                pose_math::normalize(along_vector_normal_h(self.brake_dir, previous, up));
+            self.slerp_pose_up(up, t::SLERP_QUAT_RATE, t::WAIT_POSE_DEGREE_MAX);
+            let velocity = self.brake_dir * speed;
+            self.set_h(velocity);
+            self.v.y = -GRAVITY_MOVE;
+            self.pull = GRAVITY_MOVE;
+            self.run_up = Some((
+                Vec2::new(self.v.x, self.v.z),
+                up,
+                velocity - up * GRAVITY_MOVE,
+            ));
+            return before;
+        }
         let before = self.speed_h();
         let speed = ground::slide_speed(before);
         self.set_h(self.brake_dir * speed);
@@ -4029,7 +4054,11 @@ impl Player {
     }
     fn brake_step(&mut self, step: u32) {
         if step == 0 {
-            self.brake_dir = self.facing;
+            self.brake_dir = if self.carry.seed.is_some() {
+                self.pose_axes().1
+            } else {
+                self.facing
+            };
         }
         let before = self.slide_on();
         if step == 0 {
@@ -4077,13 +4106,34 @@ impl Player {
     fn pivot_step(&mut self) {
         self.joints.run.pivoting();
         let flat_velocity = Vec3::new(self.v.x, 0., self.v.z);
-        let step = self
-            .pivot
-            .update(self.ground_stick(), self.facing, flat_velocity);
-        self.facing = step.front;
+        let step = if self.carry.seed.is_some() {
+            let up = self.ground_normal_or_up();
+            let step = self.pivot.update_on_plane(
+                self.plane_stick(up),
+                self.pose_axes().1,
+                self.velocity_in_plane(up),
+                up,
+            );
+            self.steer_pose(up, step.front);
+            step
+        } else {
+            self.pivot
+                .update(self.ground_stick(), self.facing, flat_velocity)
+        };
+        if self.carry.seed.is_none() {
+            self.facing = step.front;
+        }
         self.set_h(step.velocity);
         self.v.y = -t::GRAVITY;
         self.pull = t::GRAVITY;
+        if self.carry.seed.is_some() {
+            let up = self.ground_normal_or_up();
+            self.run_up = Some((
+                Vec2::new(self.v.x, self.v.z),
+                up,
+                step.velocity - up * t::GRAVITY,
+            ));
+        }
         if self.pivot.done {
             if self.pivot.has_input {
                 self.switch(Move::Walk, "Move", |p| p.enter_nerve(RunNerve::Run));

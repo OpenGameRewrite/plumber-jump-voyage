@@ -110,6 +110,13 @@ def replay_geometry(script, game, directory):
             scenario = int(words[2]) if len(words) > 2 else scenario
     if not stage:
         return None
+    recorded = meta.get('geometry_file', {}).get('path')
+    if recorded:
+        candidate = os.path.join(directory, os.path.basename(recorded))
+        if os.path.isfile(candidate):
+            source = json.load(open(candidate, encoding='utf8'))
+            if source.get('carry_objects') and (source.get('stage'), source.get('scenario')) == (stage, scenario):
+                return candidate
     if scenario is not None:
         specific = os.path.join(directory, f"{stage}.s{scenario}.json")
         if os.path.isfile(specific):

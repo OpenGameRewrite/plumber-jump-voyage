@@ -36,6 +36,7 @@ from grab_ceil import Evidence as GrabCeilEvidence
 from rocket_flower import Evidence as RocketEvidence
 from coin_chameleon import Evidence as CoinChameleonEvidence
 from pukupuku import Evidence as PukupukuEvidence
+from carry_objects import Evidence as CarryEvidence
 from collections import OrderedDict
 
 # ---- what the probe logs --------------------------------------------------------------------------
@@ -216,7 +217,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -243,6 +244,7 @@ class Judge:
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
+        self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
         self._coins = CoinChameleonEvidence(geometry, ceiling_check, game_rows)
         self._puku = PukupukuEvidence(geometry, pukupuku, rewrite_rows, game_rows)
         self._press = PressEvidence(geometry, press_parts, press_mario, rewrite_rows, game_rows, preroll or {}, start)
@@ -533,6 +535,9 @@ class Judge:
         for c in parse_contacts(self.rows[f].get("contacts")):
             host = c["host"]
             where = f" ({c['self']}:{c['self_type']} vs {c['other']}:{c['other_type']}" + (f", {c['host_class']}" if c["host_class"] else "") + ")"
+            if self._carry.contact(f, c):
+                v.accept(f, "exported flower carry/push", "placement identity, source state, typed dispatch and independently simulated receiver/keeper")
+                continue
             if self._rocket.contact(f, c, self.rows, self.preroll, self._start):
                 v.accept(f, "exported RocketFlower equipment", "placement-bound sensors and independently reproduced pickup, watcher phase, refresh and expiry")
                 continue
@@ -677,6 +682,9 @@ class Judge:
                     v.accept(f, "frame-zero displacement from preroll",
                              "the immediate frame -1 sample explains the legacy origin-based displacement flag")
                     return
+        if f in self._carry.frames and f in self._carry.pushing:
+            v.accept(f, "exported stationary pot push", "receiver min/max and pushed velocity match the original bit for bit")
+            return
         if self._geysers.carries(f, self._hosts.get(f, {}).get("ground"), self._start, self.rows, GROUND_RESIDUAL):
             v.accept(f, "exported geyser platform carry", "verified Top matrix motion carries the grounded player")
             return

@@ -230,10 +230,10 @@ impl Player {
     }
 
     /// `PlayerJudgeWallKeep::update`, on the contacts the last step ended
-    /// with. Not ported: the force-run, upper-punch and carry conditions (the
-    /// controller has none of them) and the 2D rules.
+    /// with. The FrontWallKeep carry variant permits this action; ordinary front/up carry
+    /// vetoes it (0x45ce18). The 2D rules remain outside this controller.
     fn wall_keep_judged(&self, scene: &Course) -> bool {
-        if self.is_carry() {
+        if self.is_carry() && !self.carry.wall_keep {
             return false;
         }
         let trans = self.pos / UNIT;

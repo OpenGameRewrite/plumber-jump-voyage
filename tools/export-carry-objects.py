@@ -43,9 +43,14 @@ def main():
                 archive = outfits.archive(args.romfs / 'ObjectData' / (p['UnitConfigName'] + '.szs'))
                 sensors = outfits.byml(archive['InitSensor.byml'])
                 if p['UnitConfigName'] == 'GrowFlowerPot':
+                    passive = [{k: s[k] for k in ('Name', 'Radius', 'Y')} for s in sensors if s['Name'] == 'SeedNear']
                     sensors = [{k: s[k] for k in ('Name', 'Radius', 'Y')} for s in sensors if s['Name'] == 'Body']
+                else:
+                    passive = []
                 sources.append(dict(id=p['Id'], parent=parent['Id'], placement=p, sensors=sensors,
-                                    initial_alive=row['dead'] == '0', initial_phase='init'))
+                                    passive_sensors=passive,
+                                    initial_alive=row['dead'] == '0', initial_phase='init',
+                                    host={'GrowFlowerPot':'[育つ花]植木鉢', 'GrowFlowerSeed':'[育つ花]種'}[p['UnitConfigName']]))
     if {s['id'] for s in sources} != set(args.id):
         raise ValueError('not every requested linked placement was found')
     root['carry_objects'] = sources

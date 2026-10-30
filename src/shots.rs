@@ -196,10 +196,16 @@ fn begin(
     player.rocket = driver.initial_rocket.clone();
     if driver.placement_is_moon == Some(true)
         || course.mesh.as_ref().is_some_and(|m| {
-            m.pukupuku.is_some() || !m.key_move_parts.is_empty() || !m.rotate_parts.is_empty()
+            m.pukupuku.is_some()
+                || !m.key_move_parts.is_empty()
+                || !m.rotate_parts.is_empty()
+                || !m.carry_sources.is_empty()
         })
     {
         player.prepare_recorded_teleport();
+    }
+    if let Some(mesh) = course.mesh.as_deref() {
+        player.init_flower_seed(mesh);
     }
     driver.phase = Phase::Loading;
     time.pause();

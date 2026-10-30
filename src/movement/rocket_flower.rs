@@ -173,6 +173,7 @@ impl Player {
                 });
             }
         }
+        self.flower_look_sensors(&mut sensors, scene);
         sensors
     }
 

@@ -4,6 +4,64 @@ Development tooling for comparing the controller with the original game frame
 by frame. Nothing here needs game data; the optional sound table
 (`assets/local/sounds/player.json`) only adds sound names to the trace.
 
+## Flower carry and sensor push
+
+An export can include `carry_objects`: original linked flower placements, their
+parent identity, `InitSensor` definitions and INITIAL saved availability. Add
+these locally with `tools/export-carry-objects.py <geometry.json> --romfs <romfs>
+--initial <game.carry_objects.csv> --id <placement>` (repeat `--id` for neighbouring
+pots). The exporter filters INITIAL `init` rows before reading state; sampled
+poses, messages and attachment matrices never enter the replay. The seed starts
+at its placement and settles with the exported collision, gravity and ground/air
+drag. Its held pose is calculated from Mario's simulated joints and the seed's
+own `(0,-30,40)` offset. Neither a seed trajectory nor a held pose is loaded
+from a recording.
+
+For these source exports, `--geometry-dir` and the dashboard can select the
+recording's named geometry file inside the requested directory. Its stage and
+scenario must match and it must contain flower sources; other exports retain
+their existing selection precedence. Source initialization is shared by native
+and rendered replay. Install `CarryFrontStart` and `CarryFront` through the
+existing `convert-outfits.py --add-clip` command, then regenerate curves with a
+current curves-capable adapter. The original clips have lengths 8 and 60 frames.
+The converter's default selection now also includes the Carry family.
+
+`carry_source` is an additive diagnostic column. Its semicolon-separated fields
+use f32 hexadecimal words separated by `/`:
+
+* `push`, `velocity`, `result`: accumulated component extrema sum, collision input
+  velocity and the receiver's output, before its end-of-movement clear.
+* `keeper=phase/step/held`: Wait=0, Start=1, Carry=2. Start/Carry steps follow the
+  independent keeper. Wait's unobserved boot-time counter is represented by zero.
+* `seed=id/x/y/z`: the simulated object's stage position for this frame.
+* `held`: twelve row-major floats of the seed pose calculated from this frame's
+  skeleton; the independently scheduled seed consumes it on its next update.
+* `saved`, `front_wall_keep`, `inhibition`: the pickup position and keeper gates.
+
+The original receive dispatch rejects attack sensors first and falls through
+to false for an unhandled message identity. HitGrowFlowerPot has no special
+exception. Push and PushToPlayer remain different types. The evidence rule binds
+the stationary sender to Sand scenario 1, watcher obj6326 and pot obj2873. Only
+exported obj2872/obj2871 SeedNear overlaps can accompany it, with their own
+constant-pose and no-Mario-message proof. For the seed it binds obj2876, checks
+Start/Carry steps, the original hold equation from observed joints, and that the
+simulated object consumes the previous simulated pose. Missing identity,
+modified composition, dropped observations or unproved messages remain refused.
+The carry side files are validation evidence only. Exact f32 comparisons use no
+added numeric margins (signed zeros compare by value).
+
+The sloped flower composition also uses the original support-plane brake and
+pivot routines. Existing captures retain their established arithmetic so their
+old columns remain byte-identical. This is a bounded migration of those older
+flat-plane approximations, not a carry speed or jump modifier.
+
+Throw/release and stone collision are separate work. An unsupported carry
+release request exposes `carry_release_unavailable` in `fidelity_limits`; that
+diagnostic grants no environment exemption. Overhead carry, damage cancellation,
+water and obstruction feedback are not established by these fixtures. Rendered
+replay poses Mario's carry layer; stage scenery and the flower object's mesh are
+not rendered by this harness.
+
 ```sh
 plumber-jump-voyage --replay run.input --trace rewrite.csv [--camera game.csv]
 plumber-jump-voyage --replay run.input --trace lockstep.csv --lockstep game.csv
