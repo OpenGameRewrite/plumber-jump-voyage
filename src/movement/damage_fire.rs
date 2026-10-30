@@ -341,7 +341,7 @@ impl Player {
             }
             Move::FireFall => {
                 if self.frame == 0 {
-                    self.fire_setup_air(0., 0, 0, 1.5);
+                    self.fire_setup_air(0., 0, 0, self.constants.gravity_air);
                 }
                 self.fire_air_update();
                 if self.grounded && self.is_on_ground_by(self.v) {

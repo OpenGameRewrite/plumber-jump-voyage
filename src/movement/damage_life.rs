@@ -222,7 +222,11 @@ impl Player {
                 if self.damage_on_ground() {
                     self.damage_brake_land(self.life.up);
                 } else {
-                    air_move::add_vector_limit(&mut self.v, Vec3::NEG_Y * 1.5, 35.);
+                    air_move::add_vector_limit(
+                        &mut self.v,
+                        Vec3::NEG_Y * self.constants.gravity_air,
+                        35.,
+                    );
                 }
                 ended = self.anim_done(78);
             }

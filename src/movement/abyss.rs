@@ -63,7 +63,7 @@ impl Player {
             self.start_clip("DeadFall");
             self.events.push(Fx::Abyss);
         }
-        self.v.y = (self.v.y - 1.5).max(-35.);
+        self.v.y = (self.v.y - self.constants.gravity_air).max(-35.);
     }
     pub(super) fn move_without_collision(&mut self, scene: &Course) {
         let start = self.position_cm();

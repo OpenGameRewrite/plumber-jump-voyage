@@ -29,6 +29,10 @@ fn placement_constants_belong_to_each_player() {
     moon.init_placement(true);
     moon.restart_after_death(&Course::default());
     assert_eq!(moon.constants, &player_constants::PlayerConstants::MOON);
+    moon.abyss_fall();
+    normal.abyss_fall();
+    assert_eq!(moon.v.y.to_bits(), (-1_f32).to_bits());
+    assert_eq!(normal.v.y.to_bits(), (-1.5_f32).to_bits());
     moon.start_clip("Move");
     assert_eq!(moon.anim.name, "MoveMoon");
 }
