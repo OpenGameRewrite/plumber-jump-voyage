@@ -352,7 +352,7 @@ impl Player {
     pub(super) fn bind_sub_steps(&self) -> Option<u32> {
         match self.mode {
             Move::Bind => Some(self.nerve.step),
-            Move::BindFall => Some(self.frame as u32),
+            Move::BindFall => Some(self.frame),
             _ => None,
         }
     }
