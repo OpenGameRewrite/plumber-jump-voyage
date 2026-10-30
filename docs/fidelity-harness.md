@@ -55,6 +55,14 @@ pivot routines. Existing captures retain their established arithmetic so their
 old columns remain byte-identical. This is a bounded migration of those older
 flat-plane approximations, not a carry speed or jump modifier.
 
+`push-pot-enter-exit`, `carry-seed-move-jump` and `carry-seed-run-turn` pass free
+replay. Lockstep currently has separate snapshot
+limits: decimal player injection loses low bits needed by the pot's exact
+push-evidence check, and chosen-nerve reconstruction advances the carry keeper
+again. The seed keeper is therefore one step ahead after pickup. Those runs
+remain refused in lockstep; no comparison margin or source-state injection
+compensates for either limit.
+
 Throw/release and stone collision are separate work. An unsupported carry
 release request exposes `carry_release_unavailable` in `fidelity_limits`; that
 diagnostic grants no environment exemption. Overhead carry, damage cancellation,
