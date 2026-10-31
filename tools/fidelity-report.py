@@ -110,6 +110,12 @@ def replay_geometry(script, game, directory):
             scenario = int(words[2]) if len(words) > 2 else scenario
     if not stage:
         return None
+    # Optional scenario-specific world export: explicit configuration, never actor samples.
+    view = os.path.join(directory, f"{stage}.s{scenario}.{os.path.splitext(os.path.basename(script))[0]}.json")
+    if os.path.isfile(view):
+        source = json.load(open(view, encoding='utf8'))
+        if (source.get('stage'), source.get('scenario')) == (stage, scenario):
+            return view
     # The full placement export retains both 3D and 2DOnly KCL, plus the linked
     # source actors. Older Cascade captures keep their existing geometry.
     if os.path.isfile(os.path.join(os.path.dirname(game), "game.dimension.csv")):

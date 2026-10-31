@@ -26,9 +26,21 @@ def overlap(a, b, radius):
 
 
 class Source:
-    def __init__(self):
-        self.phase, self.step, self.cooldown, self.close = 1, -1, 0, 300
-        self.initial = True
+    def __init__(self, closed=False):
+        self.id = 'obj1043' if closed else 'obj1088'
+        self.phase, self.step, self.cooldown, self.close = (0, 0, 0, 300) if closed else (1, -1, 0, 300)
+        self.initial = not closed
+        self.continue_open = not closed
+
+    def reflect(self, position, feet):
+        # receiveMsg 0x24362c..0x2436ec; InitSensor radii/offsets.
+        foot = [feet[0], f32(feet[1]+40.), feet[2]]
+        centre = [position[0], f32(position[1]+60.), position[2]]
+        accepted = (self.phase == 0 and self.cooldown <= 0
+                    and overlap(foot, centre, 150.) and foot[1] > f32(centre[1]-100.))
+        if accepted:
+            self.phase, self.step, self.cooldown, self.close = 3, -1, 10, 300
+        return accepted
 
     def attack(self, position, feet, velocity):
         centre = [position[0], f32(position[1]-20.), position[2]]
@@ -50,10 +62,14 @@ class Source:
         self.step = max(0, self.step)
         if self.phase == 2 and self.step == 19:
             self.phase, self.step = 1, -1
+        if self.phase == 3 and self.step == 15:
+            self.phase, self.step = 1, -1
+        if self.phase == 1 and not self.continue_open and self.step >= 0:
+            self.close -= 1  # exeOpen 0x243b24..0x243b34
         self.step += 1
 
     def diagnostic(self):
-        return f'obj1088/{self.phase}/{self.step}/{self.cooldown}/{self.close}'
+        return f'{self.id}/{self.phase}/{self.step}/{self.cooldown}/{self.close}'
 
 
 class Evidence:
@@ -75,20 +91,24 @@ class Evidence:
         if len(sources) != 1:
             return
         p = sources[0]['placement']
-        if (sources[0].get('initial_phase') != 'OpenPending'
-                or p['Id'] != 'obj1088' or p['UnitConfigName'] != 'CapTrampoline'
-                or p['Translate'] != dict(X=3800., Y=700., Z=-6200.)
-                or p['Rotate'] != dict(X=0., Y=90., Z=0.)
+        closed = p['Id'] == 'obj1043'
+        phase = 'WaitPending' if closed else 'OpenPending'
+        position = dict(X=400., Y=0., Z=-600.) if closed else dict(X=3800., Y=700., Z=-6200.)
+        rotation = dict(X=0., Y=0., Z=0.) if closed else dict(X=0., Y=90., Z=0.)
+        if (sources[0].get('initial_phase') != phase
+                or p['Id'] not in ('obj1088', 'obj1043') or p['UnitConfigName'] != 'CapTrampoline'
+                or p['Translate'] != position
+                or p['Rotate'] != rotation
                 or p['Scale'] != dict(X=1., Y=1., Z=1.) or p['Links']
                 or p['IsConnectToCollision'] or p['IsLinkDest'] or p['IsMoon']
-                or not p['IsContinueOpen'] or p['IsShowTutorial']
+                or p['IsContinueOpen'] != (not closed) or p['IsShowTutorial']
                 or sources[0]['sensors'] != [dict(Name=n, Radius=r, Type='MapObj', **({'Y': y} if y else {}))
                                             for n, (r, y) in SENSORS.items()]):
             raise ValueError('unsupported placement/sensors')
         position = [p['Translate'][a] for a in 'XYZ']
         samples, sensors, events = {}, defaultdict(dict), defaultdict(list)
         initial = [r for r in actors if r['id'] == p['Id'] and r['kind'] == 'init']
-        if len(initial) != 1 or initial[0]['step'] != '-1' or initial[0]['pending_n'] != '1ce4ea8':
+        if len(initial) != 1 or initial[0]['step'] != ('0' if closed else '-1') or initial[0]['pending_n'] != ('1ce4ea0' if closed else '1ce4ea8'):
             raise ValueError('initial source phase')
         for r in actors:
             if r['id'] != p['Id'] or int(r['frame']) == -2147483648:
@@ -109,10 +129,11 @@ class Evidence:
             events[int(r['frame'])].append(r)
         original = {**preroll, **rows}
         first, last = min(samples), max(samples)
-        source = Source()
+        source = Source(closed)
         identity = None
         frames, allowed = set(), set()
         power, stay, spinning = 0., 0, False
+        reflects = set()
         for f in range(first, last+1):
             r, m, g = samples[f], players[f], original[f]
             previous = original.get(f-1)
@@ -120,6 +141,14 @@ class Evidence:
             velocity = vector(previous['bits_vel']) if previous else None
             request = source.attack(position, feet, velocity) if previous else False
             source.tick()
+            wait_step = source.step
+            reflect = (source.reflect(position, feet) if previous and previous['state'] == 'HipDrop/Fall' else False)
+            if spinning and not request and previous.get('ground') == '1':
+                # exeJumpSpinFlower 0x472fd8..0x472ff4 ends the child;
+                # exeJump 0x4240a4..0x4240d8 counts/clears then setNerveOnGround.
+                if g['state'] != 'Wait/Land' or g['counters'].split('|')[0] != 'cjump=0/10':
+                    raise ValueError(f'spin grounded exit {f}')
+                spinning = False
             if request:
                 power, spinning = 60., True
             if spinning:
@@ -131,22 +160,25 @@ class Evidence:
             identity = identity or current
             if current != identity or r['zone'] or r['registry_dropped'] != '0':
                 raise ValueError('identity/drop')
-            nerve = '1ce4ea8' if source.phase == 1 else '1ce4eb0'
+            nerve = {0:'1ce4ea0', 1:'1ce4ea8', 2:'1ce4eb0', 3:'1ce4eb8'}[source.phase]
             if (r['pending_n'] or '0') not in ('0', nerve) or (r['pending_n'] if r['pending_n'] != '0' else r['current_n']) != nerve:
                 raise ValueError(f'nerve {f}')
             if (int(r['step']) != source.step or int(r['cooldown']) != source.cooldown
                     or int(r['close_counter']) != source.close
                     or any(r[k] != '0' for k in ('connector', 'dead', 'clipped', 'collision_parts', 'moon', 'tutorial'))
-                    or r['continue_open'] != '1' or r['camera_arg'] != '1'
+                    or r['continue_open'] != str(int(not closed)) or r['camera_arg'] != '1'
                     or not exact_vector(r['pos_bits'], ','.join(bits(v) for v in position))
                     or not exact_vector(r['velocity_bits'], '00000000,00000000,00000000')
-                    or r['quat_bits'] != '00000000,3f3504f2,00000000,3f3504f3'):
+                    or r['quat_bits'] != ('00000000,00000000,00000000,3f800000' if closed else '00000000,3f3504f2,00000000,3f3504f3')):
                 raise ValueError(f'source state {f}')
-            # Action metadata: Jump19, Open46 looping. Nerve changes retain the
+            # Original CapTrampoline.bfres: Wait2, Jump19, OpenStart15, Open46. Nerve changes retain the
             # completed action until the new nerve's first execution.
             animation, animation_frame = (
+                ('Wait', (wait_step-1) % 2) if source.phase == 0 or reflect else
+                ('OpenStart', source.step-1) if source.phase == 3 else
                 ('Jump', source.step-1) if source.phase == 2 else
                 ('Wait', 0) if source.step == -1 else
+                ('OpenStart', 15) if closed and source.step == 0 else
                 ('Jump', 19) if source.step == 0 else ('Open', (source.step-1) % 46))
             if (r['anim'] != animation or r['anim_frame_bits'] != bits(animation_frame)
                     or r['anim_rate_bits'] != bits(1.)
@@ -165,8 +197,14 @@ class Evidence:
                     or not exact_vector(m['player_velocity_bits'], g['bits_vel'].replace('0x', ''))):
                 raise ValueError(f'player side validation {f}')
             if spinning and (m['jump_launch_bits'] != bits(power) or int(m['stay_counter']) != stay
-                             or m['jump_b6'] != '0' or g['state'] != 'Jump/JumpSpinFlower'):
+                             or m['jump_b4'] != '0' or m['jump_b6'] != '0' or g['state'] != 'Jump/JumpSpinFlower'):
                 raise ValueError(f'spin launch/stay state {f}')
+            if reflect:
+                reflects.add(f)
+                self.verify_reflect(f, events[f], p, identity, m, g)
+            elif any(e['kind'] == 'object_receive_after' and e['answer'] == '1'
+                     and e['message_type'] == 'al::SensorMsgPlayerAttackObjHipDropReflect' for e in events[f]):
+                raise ValueError('unexpected accepted Reflect')
             accepted = [e for e in events[f] if e['kind'] == 'spin_request_after' and e['answer'] == '1']
             if len(accepted) != int(request):
                 raise ValueError(f'request schedule {f}')
@@ -194,6 +232,14 @@ class Evidence:
                 if msg not in ('al::SensorMsgPush', 'rs::SensorMsgPushToFish', 'rs::SensorMsgPushToPlayer', 'rs::SensorMsgRequestPlayerSpinJump', 'rs::SensorMsgRequestSphinxJump', 'rs::SensorMsgCapTrampolineAttack'):
                     raise ValueError('unproved Mario message type')
                 allowed.add((f, own, other, msg, e['answer']))
+            if closed and previous:
+                # ActorHitReactionCtrl/StompHit StopSceneFrame2; HitReactionKeeper
+                # 0x90cb80..0x90cb8c supplies delay2, SceneStopCtrl 0x9cf150.
+                if int(g['game_frame']) - int(previous['game_frame']) != (3 if f-2 in reflects else 1):
+                    raise ValueError('unproved pad/scene-stop clock')
+            if power and (m['jump_launch_bits'] != bits(power) or int(m['stay_counter']) != stay
+                          or m['jump_b4'] != '0' or m['jump_b6'] != '0'):
+                raise ValueError('retained spin launch/exit fields')
             if f >= 0:
                 if rewrite[f].get('trampoline_source', '') != source.diagnostic() + f';jump={bits(power)}/{stay}':
                     raise ValueError(f'native source {f}')
@@ -202,6 +248,34 @@ class Evidence:
                     self.previous[f] = feet
         self.frames, self.identity, self.messages = frames, (p['UnitConfig']['DisplayName'], *identity), allowed
         self.position = position
+
+    @staticmethod
+    def verify_reflect(frame, events, placement, identity, player, game):
+        # Keep original receive/send answers distinct from Mario's later request6.
+        msg = 'al::SensorMsgPlayerAttackObjHipDropReflect'
+        receives = [e for e in events if e['kind'] == 'object_receive_after' and e['message_type'] == msg]
+        sends = [e for e in events if e['kind'] == 'send_after' and e['message_type'] == msg]
+        if len(receives) != 2 or len(sends) != 2:
+            raise ValueError('Reflect dispatch count')
+        for group in (receives, sends):
+            if [(e['receiver_sensor'], e['answer']) for e in group] != [('CapHit', '1'), ('Attack', '0')]:
+                raise ValueError('Reflect original answers/order')
+            for e in group:
+                if (e['sender_id'] != 'Mario' or e['sender_sensor'] != 'Foot'
+                        or e['receiver_id'] != placement['Id'] or e['receiver_actor'] != identity[0]
+                        or e['receiver_generation'] != identity[1]):
+                    raise ValueError('Reflect identity')
+        ordered = [events.index(e) for e in (receives[0], sends[0], receives[1], sends[1])]
+        if ordered != sorted(ordered):
+            raise ValueError('Reflect receive/send nesting')
+        appears = [e for e in events if e['kind'] == 'jump_appear_after']
+        if len(appears) != 1 or appears[0]['request_type'] != '6' or appears[0]['attack3'] != '1':
+            raise ValueError('Reflect Mario request/trigger')
+        if events.index(appears[0]) <= ordered[-1]:
+            raise ValueError('Reflect appear ordering')
+        if (game['state'] != 'Jump/Jump' or player['jump_launch_bits'] != bits(35.)
+                or player['jump_a8_bits'] != bits(1.5) or player['jump_b6'] != '0'):
+            raise ValueError('Reflect launch')
 
     def contact(self, frame, c):
         if frame not in self.frames or not self.identity:
@@ -231,6 +305,14 @@ class Evidence:
 def self_check():
     from copy import deepcopy
 
+    closed = Source(True)
+    assert not closed.reflect([0., 0., 0.], [0., -80., 0.])
+    assert closed.reflect([0., 0., 0.], [0., 73., 0.])
+    assert (closed.phase, closed.step, closed.cooldown) == (3, -1, 10)
+    assert not closed.reflect([0., 0., 0.], [0., 73., 0.])
+    for _ in range(16):
+        closed.tick()
+    assert (closed.phase, closed.step, closed.cooldown, closed.close) == (1, 0, 0, 300)
     source = Source()
     source.initial = False
     assert not source.attack([0., 0., 0.], [0., 100., 0.], [0., -45., 0.])
@@ -261,7 +343,7 @@ def self_check():
         if frame == 0:
             assert source.attack(pos, feet, [0., -45., 0.])
         source.tick()
-        nerve = '1ce4ea8' if source.phase == 1 else '1ce4eb0'
+        nerve = {0:'1ce4ea0', 1:'1ce4ea8', 2:'1ce4eb0', 3:'1ce4eb8'}[source.phase]
         actors.append(dict(frame=str(frame), id='obj1088', kind='sample', actor='10',
                            generation='3', zone='', registry_dropped='0',
                            current_n='0' if frame == -1 else nerve,
@@ -285,7 +367,7 @@ def self_check():
                            state='Wait/Wait' if frame == -1 else 'Jump/JumpSpinFlower')
         players.append(dict(frame=str(frame), dropped='0', player_pos_bits=rows[frame]['bits_pos'],
                             player_velocity_bits=rows[frame]['bits_vel'], jump_launch_bits=bits(60.),
-                            stay_counter='0' if frame == -1 else '80', jump_b6='0'))
+                            stay_counter='0' if frame == -1 else '80', jump_b4='0', jump_b6='0'))
         if frame >= 0:
             rewrite[frame] = dict(trampoline_source=source.diagnostic() + ';jump=42700000/80')
     event = dict(frame='0', sender_id='obj1088', sender_actor='10', sender_generation='3',

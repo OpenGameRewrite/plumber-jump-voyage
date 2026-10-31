@@ -1251,6 +1251,16 @@ fn load_geometry(
             eprintln!("--geometry-dir: the replay names no stage, so it runs on the flat floor");
             return Ok(None);
         };
+        let scenario_export = flag(args, "--replay")?.and_then(|file| {
+            let stem = std::path::Path::new(&file).file_stem()?.to_str()?;
+            let number = scenario?;
+            let path = std::path::Path::new(dir).join(format!("{stage}.s{number}.{stem}.json"));
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+            (value["stage"].as_str() == Some(&stage)
+                && value["scenario"].as_u64() == Some(u64::from(number)))
+            .then_some(path)
+        });
         let recorded_export = meta
             .as_ref()
             .and_then(|m| m["geometry_file"]["path"].as_str())
@@ -1266,7 +1276,10 @@ fn load_geometry(
                         && r["carry_objects"].as_array().is_some_and(|a| !a.is_empty())
                 })
             });
-        match recorded_export.or_else(|| find_export(std::path::Path::new(dir), &stage, scenario)) {
+        match scenario_export
+            .or(recorded_export)
+            .or_else(|| find_export(std::path::Path::new(dir), &stage, scenario))
+        {
             Some(file) => file,
             None => {
                 eprintln!(

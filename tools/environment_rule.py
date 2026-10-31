@@ -580,7 +580,7 @@ class Judge:
                     v.refuse(f, f"unproved PaintObj contact with {host}{where}")
                 continue
             if self._trampoline.contact(f, c):
-                v.accept(f, "exported obj1088 CapTrampoline", "original placement, exact source sensors/counters, independent native source and ordered type-13 request")
+                v.accept(f, "exported CapTrampoline", "stage/scenario-bound obj1088 or obj1043, exact source sensors/counters, independent native source and ordered spin/Reflect dispatch")
                 continue
             if self._carry.contact(f, c):
                 v.accept(f, "exported flower carry/push", "placement identity, source state, typed dispatch and independently simulated receiver/keeper")

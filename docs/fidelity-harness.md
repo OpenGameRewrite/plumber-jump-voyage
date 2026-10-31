@@ -145,7 +145,9 @@ archive export and scan evidence. The native source consumes no actor samples or
 message transcripts. Its contact test, cooldown, Jump action and return to Open
 advance independently of Mario, including lockstep reconstruction.
 
-The supported composition is upright, stationary, unlinked and continuously open.
+The supported composition is upright, stationary and unlinked. The original
+obj1088 starts pending Open; obj1043 starts pending Wait, from the initial
+source export. CollisionParts is absent: neither source adds solid collision.
 A normal TrampleHit attack requests jump type 13 with power 60 (50 for IsMoon).
 Mario preserves horizontal velocity, replaces the gravity component, and uses the
 original Start26/Loop23 clips. Ascent uses JumpGravity; descent spends the
@@ -161,10 +163,51 @@ the spin identity; the subsequent ordinary receive dispatch accepts it. No frame
 or column is excluded. Both bounded launch and airborne HipDrop entry use60;
 the source's earlier attack pre-empts HipDrop's outgoing messages.
 
+**Ordinary exit and closed hip-drop bounce (wave 17).** SpinFlower ends on the
+previous collision's ground contact (0x472fb4..0x472ff4); exeJump calls
+tryCountUpContinuousJump then setNerveOnGround (0x4240a4..0x4240d8).
+Request13 clears the combo-enabled byte +0xb4 (request mask at
+0x470e58..0x470fc4); its ground exit clears the consecutive-jump count
+(0x471f70..0x471fa8). The existing Land/Wait movement already implements the exit.
+Foreign Chorobon Eye perception can replace the holder's candidate
+(tryRecordLookAtTarget 0x441520), without becoming the joint keeper's chosen
+target while airborne. This moving actor is unexported; the existing comparison
+contract identifies those candidate labels as unknown. No comparison filter or
+tolerance was changed to accept wave 17.
+
+Closed Wait receives Foot/CapHit ObjHipDropReflect at cooldown<=0 and sender Y
+strictly above receiver Y-100 (0x24362c..0x2436ec). It requests StompHit, sets
+cooldown10, close counter300 and pending OpenStart. Mario sets attack trigger3
+and request6 (0x427d80..0x427dc8); Jump appear selects
+TrampleHipDropJumpPower35 / Gravity1.5 / extension0 (0x4713d8..0x471404,
+PlayerConst.cpp:216-217). A later same-frame Reflect to Attack is rejected and
+preserves that accepted request. OpenStart15 ends into finite Open; Wait2,
+Jump19 and Open46 are original CapTrampoline.bfres action lengths.
+
+ActorHitReactionCtrl.byml defines StompHit with StopSceneFrame2 and
+IsStopSceneForHitEffect=true. HitReactionKeeper::start (0x90cb74..0x90cb8c)
+passes delay2; SceneStopCtrl (0x9cf124..0x9cf174) spends that delay before the stop.
+This explains the pad step3 at core121 after the reaction at119: player updates
+remain consecutive. Replay's logical frames count player updates, so no movement
+sample or effect age is inserted for the stopped scene. The validator checks
+this pad gap, both original receive/send answers and the type6 launch.
+Add the original StompHit sound triggers with extract-sounds.py --add-reaction
+(the Japanese original name); the existing extractor cannot decode StepLight's
+SePfStepStoneL sequence command0xa2, so that waveform remains unavailable.
+
+The closed fixture uses a separate original obj1043 placement export, named
+<stage>.s<scenario>.<script-stem>.json; --geometry-dir and the dashboard prefer
+this explicit scenario world view. The base stage export and existing scenarios
+keep their sources. Only exported placement and initial phase enter replay;
+all later actor, player and message side samples validate independently.
+spinflower-land (480) and trampoline-closed-hipdrop35 (160) pass strict free and
+camera-fed lockstep with zero excluded frames. The environment rule checks the
+retained launch fields through Land/Wait, including the combo clear.
+
 Power68 (Moon55) belongs to the alternate hip-drop receive path in the original
-source; that route is unrecorded and remains unported. Closed/opening/closing and
-connected sources, spin DownFall/re-entry, ordinary landing and the boss cap sender
-are outside this bounded port. Installed Mario/Cappy assets need no modification.
+source; it remains runtime-unverified and unported. Closing completion, cap-hit
+reopening, connected sources, spin DownFall/re-entry and the boss cap sender
+remain outside this port. Installed Mario/Cappy models need no modification.
 Rendered replay uses the same source but has no trampoline mesh or original stage
 presentation; native movement PASS does not establish lighting/material/audio parity.
 
