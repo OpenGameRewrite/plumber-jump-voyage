@@ -1584,6 +1584,9 @@ impl TraceFile {
                     .iter()
                     .position(|n| *n == if name == "RunMoon" { "Run" } else { name })?;
                 hint.weights[slot] = weight.parse().ok()?;
+                if slot == 4 {
+                    hint.start_frame = frame.parse().ok();
+                }
                 let length = [60., 17., 17., 14., 30.][slot];
                 phase = phase.or(frame.parse::<f32>().ok().map(|f| f * 60. / length));
             }

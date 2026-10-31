@@ -108,9 +108,8 @@ clips slide the joints along the mouth (DokanSideIn/DokanOut/DokanIn), which is
 what the trace's `bones` column shows while the model is hidden in the pipe.
 
 Strict status: all four fixtures PASS strictly in free replay (0 excluded frames,
-0 failing columns). Camera-fed lockstep still fails `anim_layers` and `bones` in
-rows 23-33, the run-start reconstruction residual of the 3D body that every
-lockstep run with a run start shows (see "Known lockstep residuals").
+0 failing columns). Lockstep restores the 3D approach's RunStart model clock
+separately from the looping Move phase (see "RunStart snapshot clocks").
 
 Windowed game: `src/model_2d_view.rs` shows the 8-bit model while the keeper is 2D,
 placed by the actor's pose matrix (side, up, front axes: facing flips as the pose
@@ -1040,10 +1039,33 @@ Quicksand (`sand_sink.rs`) rebuilds its hidden state in lockstep from the rows: 
 stood on and its `floor_y`; GUESS: the surface is flat under the body), the ground
 control's turn state, the jump's air control (counted from the jump nerve's own steps) and
 the slope slide's `mSlopeForceCounter` (the rows before it on flat ground). Residuals of the
-three sand runs: the first rows' `anim_layers`/`bones` (the run start, as in the other
-lockstep runs), the hill factor of the sand run on the slope (one row), the push judge's
+three sand runs include the hill factor of the sand run on the slope (one row), the push judge's
 counter (the wall push starts a row late), and the first row after `AreaAnimWait` is chosen
 (`sub_step`).
+
+### RunStart snapshot clocks
+
+`RunCycle::resume` restores RunStart's observed model frame separately from Move's
+looping phase. Nerve age is not a clip clock: `PlayerAnimControlRun::update`
+(1.0.0 `0x42cb58..0x42cbb0`) ranges the rate by current speed, then blends that
+rate toward `AnimFrameRateRunStart` by the RunStart weight. `PlayerConst.cpp:525–539`
+defines the speed borders, rate 2 and five-step start blend; `0x42c740..0x42c864`
+advances the blend counter and converts it to a weight. No new speed rule is
+introduced by snapshot restoration.
+
+`PlayerAnimator::setAnimRateCommon` (`0x42a490..0x42a4a4`) requests scaled rates
+for all slots; `al::setSklAnimBlendFrameRateAll` (`0x8d43a8..0x8d43fc`) divides
+by the first slot's length and multiplies by each other slot's length. Thus the
+original 30-frame, one-shot RunStart advances by half the 60-frame Move rate,
+holds its end, and cannot be reconstructed as `steps - 1`. The displayed animator
+counter is a third clock: `PlayerAnimFrameCtrl::updateSync` (`0x42d170`) reports
+the model frame plus rate. Restoring a pose uses its layer frame instead.
+
+Reconstruction also retains the independently simulated run effect. The original
+control selects it during `update` (`0x42c870..0x42c8ac`, `0x42cbb4..0x42cbc8`),
+and a subsequent Brake step does not call that control. Clearing it at each
+snapshot lost the still-active effect during braking. Zero-weight omitted layers
+likewise retain their simulated clock; no side file supplies animation state.
 
 ## Skeleton and the partial animation
 

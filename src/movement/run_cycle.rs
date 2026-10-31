@@ -4,7 +4,8 @@
 //! Written from the original's `PlayerAnimControlRun::update` and
 //! `PlayerAnimFrameCtrl`, as read from the 1.0.0 executable and confirmed
 //! against recorded runs. The slot holds Walk, Run, Dash, DashFast and
-//! RunStart; all of them play one 60-frame phase, each clip at its own length.
+//! RunStart; their rates scale the 60-frame cycle to each clip's length.
+//! RunStart plays once and holds, independently of the looping cycle's phase.
 use super::ground::rate01;
 use super::player_constants::PlayerConstants;
 use super::t;
@@ -239,11 +240,21 @@ impl RunCycle {
                 rate: self.rate * length / CYCLE,
             })
     }
-    /// The state a recorded pose stands for, for lockstep stepping.
-    pub fn from_recorded(phase: f32, rate: f32, weights: [f32; 5], steps: u32) -> Self {
+    /// Restore the observed model clocks, not a frame inferred from nerve age.
+    /// PlayerAnimControlRun::update (1.0.0 0x42cb58..0x42cbb0) blends a
+    /// speed-dependent rate with AnimFrameRateRunStart by the start weight;
+    /// setAnimRateCommon (0x42a490..0x42a4a4) applies it to every scaled slot.
+    /// An omitted zero-weight slot retains its independently advanced clock.
+    pub fn resume(
+        &mut self,
+        phase: f32,
+        rate: f32,
+        weights: [f32; 5],
+        start_frame: Option<f32>,
+        steps: u32,
+    ) {
         let length = super::clip::RUN_START as i32;
-        Self {
-            moon: false,
+        *self = Self {
             start_allowed: weights[4] > 0.,
             start_frames: (steps as i32).min(length),
             blend_frames: (weights[4] * START_BLEND_FRAMES as f32).round() as i32,
@@ -251,10 +262,12 @@ impl RunCycle {
             rate,
             phase,
             shown: phase + rate,
-            start_clip: (steps.saturating_sub(1) as f32).min(LAYERS[4].1),
-            effect: None,
+            start_clip: start_frame.unwrap_or(self.start_clip),
             advanced: true,
-        }
+            // Brake does not call the run control that selects/clears dust
+            // (0x42c870..0x42c8ac); snapshot restoration must not clear it either.
+            ..*self
+        };
     }
 }
 

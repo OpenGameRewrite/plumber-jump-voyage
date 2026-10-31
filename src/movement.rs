@@ -906,6 +906,8 @@ pub struct ThrowHint {
 pub struct RunHint {
     pub phase: f32,
     pub rate: f32,
+    /// RunStart's independent, non-looping model frame (not the run nerve's age).
+    pub start_frame: Option<f32>,
     /// Weights of Walk, Run, Dash, DashFast and RunStart.
     pub weights: [f32; 5],
     /// Degrees the facing turned in the recorded frame.
@@ -2698,7 +2700,8 @@ impl Player {
                 if hint.after_turn {
                     self.run_nerve = RunNerve::RunAfterTurn;
                 }
-                self.cycle = RunCycle::from_recorded(hint.phase, hint.rate, hint.weights, steps);
+                self.cycle
+                    .resume(hint.phase, hint.rate, hint.weights, hint.start_frame, steps);
                 self.cycle.set_moon(self.is_moon);
                 self.step_phase = hint.phase;
                 // Forced/surface steering carries hidden turn acceleration;

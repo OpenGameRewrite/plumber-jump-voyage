@@ -6,6 +6,39 @@ pub(super) fn run() {
     sample_point();
     preroll_interpolation();
     geyser_collider_pose();
+    run_start_clock();
+}
+
+#[cfg_attr(test, test)]
+fn run_start_clock() {
+    // The counter shown by updateSync is ahead of the model pose. Neither it
+    // nor the nerve's two steps is RunStart's accumulated, scaled clip frame.
+    let trace = TraceFile::parse(
+        "frame,anim,anim_rate,anim_layers,move_input\n\
+         0,Move,3.2,Run@0*0.906667=0.8|RunStart@0*1.6=0.2,0/1/1\n\
+         1,Move,2.9,Run@0.821667*0.821667=0.6|RunStart@1.45*1.45=0.4,0/1/1\n",
+    )
+    .unwrap();
+    let hint = trace.snapshot(1).run.unwrap();
+    assert_eq!(hint.steps, 2);
+    assert_eq!(hint.start_frame, Some(1.45));
+    let mut cycle = crate::movement::RunCycle::default();
+    cycle.resume(
+        hint.phase,
+        hint.rate,
+        hint.weights,
+        hint.start_frame,
+        hint.steps,
+    );
+    cycle.begin_frame();
+    cycle.update(0.578115, 1., Player::default().constants);
+    let start = cycle
+        .layers()
+        .find(|layer| layer.name == "RunStart")
+        .unwrap();
+    assert_eq!(start.frame, 2.75);
+    assert_eq!(start.rate, 1.3);
+    assert_eq!(start.weight, 0.6);
 }
 
 #[cfg_attr(test, test)]
