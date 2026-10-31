@@ -68,14 +68,46 @@ to reproduce the director. This exception supplies no pipe phase, transform,
 duration or player movement state. A replay without camera evidence cannot
 establish the original camera wait timing.
 
+**Return trip.** The upright Dokan2D is entered with the squat input while its actor
+is in ReadyBind (`PlayerFloorTouch` moves it from Wait, 0x257aa4..0x257e3c) and Mario
+is in the 2D model with the 2DBody sensor (Radius 60 / Y 60, selected by
+`syncForm` 0x443b54). The controller plays DokanReady/DokanIn, warps to the side mouth
+(0x25bc5c), ends the 2D keep (`endKeepOn2DPuppet` 0x25b974), waits on the camera flag,
+plays `DokanSideOut` (Land/LandMat sounds at StartFrame 52 from Mario.byml) and ends
+with `endBindOnGroundAndPuppetNull` (0x25cb40). The bound model switch restarts the
+new model's animator (counter 0, first update skipped) and the puppet's `updateSync`
+follows one row later; the pose does not advance in either row.
+
+**Environment acceptance.** `tools/dimension.py` accepts physical contact with the
+linked pipes only for Cascade scenario 1 with the exact area 420/camera 421 and
+pipe 419/418 placement/InitSensor contract, original typed actors/sensors, a preceding
+physical overlap, the native dimension flags/keeper selection and the native pipe
+diagnostics (`dokan_source`: bound pipe, hidden, collider, sensors) agreeing with the
+recorded puppet source, hide/collision state and Mario's body-class sensor validity.
+`environment_rule.self_check` carries positive, negative and mutation cases; no
+column, tolerance or frame is excluded. The dashboard selects the `2d-source-v1`
+geometry export for matching captures.
+
+**8-bit presentation facts.** Counter and pose follow the model without a sub
+animation (`PlayerAnimator::updateAnimFrame` 0x42a214 -> `updateSync` 0x42d170,
+counter = action frame + rate), so Wait/Move loops read their length for one row.
+Mario2D/PlayerAnimation2D carry no AnimInterp resource (interpolation 0). Jump/Fall
+visibility actions are 5 frames while their skeletal clips are 1 frame, so the pose
+layer holds frame 1 (`layer_hold_length_of`) as the counter runs on.
+
+Strict status: movement, state, collision, events, effects, sounds, anim counter and
+layers match for all four fixtures in free replay; only `bones` fails there (the
+8-bit joints need the unintegrated Mario2D skeleton). Camera-fed lockstep also shows
+the run-start layer/bone reconstruction residual of rows 23-33 that every lockstep
+run with a run start shows.
+
 Still unported: dedicated 2D Brake/Turn, suspended/separate-controller input,
-airborne side-snap pose variants, the return trip through the upright pipe,
-the installed Mario2D model and its skeleton/action integration, moving or
-switched areas and the disk collider's moving parts. The ordinary 3D model is
-still rendered after the dimension change; its pose is not 8-bit presentation.
-The converter's existing generic `--all-animations` and `--curves-only` modes
-can export Mario2D and PlayerAnimation2D; no hand-authored replacement is needed.
-All four wave16 fixtures remain REFUSED and no environment exemption exists.
+airborne side-snap pose variants, the installed Mario2D model and its skeleton/action
+integration, moving or switched areas and the disk collider's moving parts. The ordinary
+3D model is still rendered after the dimension change; its pose is not 8-bit
+presentation. The converter's existing generic `--all-animations` and `--curves-only`
+modes can export Mario2D and PlayerAnimation2D; no hand-authored replacement is needed.
+All four wave16 fixtures FAIL strictly on `bones` (and the lockstep residual) only.
 
 ## CapTrampoline spin jump
 
