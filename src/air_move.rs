@@ -204,6 +204,25 @@ impl Default for AirMove {
     }
 }
 impl AirMove {
+    /// PlayerActionAirMoveControl::verticalizeStartMoveDir (0x414bdc):
+    /// project the start direction, fall back to its side, then reject gravity-parallel
+    /// directions (literal0.01 at 0x187fd64, loaded at 0x414c74).
+    pub fn verticalize_start_direction(&mut self, lock: Vec3) {
+        use crate::movement::pose_math::{
+            NEGATED_GRAVITY, cross, is_parallel_direction, normalize,
+        };
+        use crate::movement::vector_lib::verticalize_vec;
+        let (direction, usable) = try_normalize_or_zero(verticalize_vec(lock, self.dir));
+        let (direction, usable) = if usable {
+            (direction, true)
+        } else {
+            try_normalize_or_zero(verticalize_vec(lock, self.side))
+        };
+        if usable && !is_parallel_direction(NEGATED_GRAVITY, direction, 0.01) {
+            self.dir = direction;
+            self.side = normalize(cross(NEGATED_GRAVITY, direction));
+        }
+    }
     /// calcJumpInertia augments the speed cap before its vector is added to
     /// the takeoff velocity; steering keeps the original takeoff axes.
     pub fn add_ground_inertia(&mut self, v: &mut Vec3, inertia: Vec3, t: &Takeoff) {

@@ -26,7 +26,7 @@ pub const PARALLEL_LIMIT: f32 = 0.01;
 /// `sead::QuatCalcCommon::slerpTo`: a sine under this takes the linear weights.
 const SLERP_LINEAR_SINE: f32 = 1.192_092_9e-7;
 /// The negated gravity (`-al::getGravity`, gravity being (0, -1, 0)), signed zeros included.
-pub(super) const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
+pub(crate) const NEGATED_GRAVITY: Vec3 = Vec3::new(-0., 1., -0.);
 
 pub(super) use super::console_libm::{acosf, asinf, atan2f, cosf, sinf};
 
@@ -39,7 +39,7 @@ pub(crate) fn squared_length(v: Vec3) -> f32 {
 }
 
 /// The cross product as the library computes it (`a.y*b.z - a.z*b.y`, ...).
-pub(super) fn cross(a: Vec3, b: Vec3) -> Vec3 {
+pub(crate) fn cross(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(
         a.y * b.z - a.z * b.y,
         a.z * b.x - a.x * b.z,

@@ -8,6 +8,46 @@ pub(super) fn run() {
     backflip_and_long_jump_arithmetic();
     combo_counts_and_expires();
     landing_caps_the_horizontal_vector_after_per_axis_air_control();
+    executable_2d_start_direction();
+}
+
+#[cfg_attr(test, test)]
+fn executable_2d_start_direction() {
+    let Some(path) = std::env::var_os("PJV_AIR_2D_CASES") else {
+        return;
+    };
+    let cases: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let vec = |v: &serde_json::Value| {
+        Vec3::new(
+            v[0].as_f64().unwrap() as f32,
+            v[1].as_f64().unwrap() as f32,
+            v[2].as_f64().unwrap() as f32,
+        )
+    };
+    assert!(!cases.as_array().unwrap().is_empty());
+    for (i, case) in cases.as_array().unwrap().iter().enumerate() {
+        let mut air = AirMove {
+            dir: vec(&case["direction"]),
+            side: vec(&case["side"]),
+            ..AirMove::default()
+        };
+        air.verticalize_start_direction(vec(&case["lock"]));
+        let got: Vec<_> = air
+            .dir
+            .to_array()
+            .into_iter()
+            .chain(air.side.to_array())
+            .map(f32::to_bits)
+            .collect();
+        let want: Vec<_> = case["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| (x.as_f64().unwrap() as f32).to_bits())
+            .collect();
+        assert_eq!(got, want, "original air projection {i}");
+    }
 }
 
 #[cfg_attr(test, test)]

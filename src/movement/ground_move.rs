@@ -161,6 +161,20 @@ impl Default for GroundMove {
     }
 }
 impl GroundMove {
+    /// Run2D setup 0x47db84..0x47dc40: plain constructor flags; PlayerConst
+    /// stores 0x4385c8 (min3/max10), 0x4382f4 (brake10/stick60).
+    /// Threshold multiplier1.3 is 0x187fcb0 at 0x47dc18; border10 at 0x47dc2c.
+    pub fn two_d() -> Self {
+        Self {
+            ramp: false,
+            drift: false,
+            min_speed: 3.,
+            brake_speed: 10. * 1.3,
+            brake_frames: 10,
+            stick_brake_frames: 60,
+            ..Self::default()
+        }
+    }
     /// Sand's setup: ordinary speed/brake constants, no run ramp or drift.
     pub fn sand() -> Self {
         Self {

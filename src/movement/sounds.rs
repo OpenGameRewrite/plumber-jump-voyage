@@ -14,7 +14,7 @@ impl Player {
             // A whole-body sub clip (the dive's stand-up) takes the legs over.
             // PlayerSeCtrl::update 0x463064 vetoes the new full-body carry throw.
             // Existing cap paths retain their established sound routing.
-            stepping: matches!(self.anim.name, "Move" | "MoveMoon")
+            stepping: self.is_run_cycle()
                 && self.sub_anim.is_none()
                 && !self
                     .model_sub()

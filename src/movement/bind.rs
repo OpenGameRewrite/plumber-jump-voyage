@@ -18,9 +18,9 @@ const MOVE_IN_STEPS: u32 = 12;
 /// different dimensions (`mov w9, #0x32` at 0x25c4ac) and from 60 otherwise (`mov w8, #0x3c` at 0x25c4a8).
 const IN_STEPS_BETWEEN_DIMENSIONS: u32 = 50;
 const IN_STEPS_SAME_DIMENSION: u32 = 60;
-/// The Body sensor of the player (sphere radius and centre height above the feet). GUESS
-/// (not yet traced to the sensor registration code): the values are what the recorder logged
-/// for the registered sensor (`game.dimension_sensors.csv`, Mario Body: 50, 75 above the feet).
+/// Original PlayerActorHakoniwa.szs / InitSensor.byml Body Radius/Y.
+/// initPlayer loads that actor archive at 0x41b384, then retains its Body sensor
+/// in the bind keeper path (getHitSensor at 0x41b430, keeper constructor at 0x41bcd0).
 const BODY_RADIUS: f32 = 50.;
 const BODY_HEIGHT: f32 = 75.;
 

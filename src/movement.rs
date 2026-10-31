@@ -297,6 +297,8 @@ pub(crate) mod pole_pose;
 pub(crate) mod pose_math;
 #[path = "movement/rolling.rs"]
 mod rolling;
+#[path = "movement/run_2d.rs"]
+mod run_2d;
 #[path = "movement/run_cycle.rs"]
 mod run_cycle;
 #[path = "movement/slide_control.rs"]
@@ -547,12 +549,14 @@ pub mod clip {
     pub fn loop_length_2d(name: &str) -> Option<f32> {
         match name {
             "Wait" => Some(60.),
+            // PlayerAnimation2D Move visibility action, converter sample count15.
+            "Move" => Some(14.),
             _ => None,
         }
     }
     pub fn loop_slack_2d(name: &str) -> f32 {
         match name {
-            "Wait" => 1.,
+            "Wait" | "Move" => 1.,
             _ => 0.,
         }
     }
@@ -1309,6 +1313,7 @@ pub struct Player {
     raw_stick: Vec2,
     input_2d: input_2d::Input2D,
     input_2d_frame: Option<input_2d::Frame>,
+    ground_2d: GroundMove,
     slope: f32,
     /// The ledge hang in progress (`PlayerStateWallCatch`), and where the
     /// collider stood (cm) after the last step of it.
@@ -1590,6 +1595,7 @@ impl Default for Player {
             raw_stick: Vec2::ZERO,
             input_2d: input_2d::Input2D::default(),
             input_2d_frame: None,
+            ground_2d: GroundMove::two_d(),
             slope: 0.,
             catch: WallCatchControl::default(),
             catch_collider_at: None,
@@ -2047,7 +2053,11 @@ impl Player {
     fn move_animation(&self) -> &'static str {
         // PlayerAnimControlRun constructor (0x42c5b4) selects the slot from
         // initPlayer's IsMoon; ActionAnimCtrl supplies its RunMoon layer.
-        if self.is_moon { "MoveMoon" } else { "Move" }
+        if self.is_moon && !self.model_2d() {
+            "MoveMoon"
+        } else {
+            "Move"
+        }
     }
 
     pub fn flat_speed(&self) -> f32 {
@@ -2302,7 +2312,7 @@ impl Player {
     /// The clip frame a trace row shows: the animator's counter, which for the
     /// run cycle is the previous pose moved on, not wrapped.
     pub fn shown_frame(&self) -> f32 {
-        if matches!(self.anim.name, "Move" | "MoveMoon") {
+        if self.is_run_cycle() {
             self.cycle.shown
         } else {
             self.anim.frame
@@ -2312,6 +2322,9 @@ impl Player {
     /// keeper has changed to 2D.
     pub fn model_2d(&self) -> bool {
         self.dimension.is_2d
+    }
+    pub fn is_run_cycle(&self) -> bool {
+        !self.model_2d() && matches!(self.anim.name, "Move" | "MoveMoon")
     }
     /// Length of a clip that loops, in the model that is on screen: the 8-bit model's own
     /// action lengths (`PlayerAnimation2D`, as converted: Wait is 60 frames) replace the 3D
@@ -2329,6 +2342,16 @@ impl Player {
             return clip::loop_slack_2d(name);
         }
         clip::loop_slack(name)
+    }
+    pub fn held_length_of(&self, name: &str) -> Option<u32> {
+        if self.model_2d() {
+            // PlayerAnimation2D's original visibility actions: converter frame count6.
+            return match name {
+                "Jump" | "Fall" | "Brake" => Some(5),
+                _ => clip::held_length(name),
+            };
+        }
+        clip::held_length(name)
     }
     /// Frames the animator blends between two actions. The 8-bit model's actions only
     /// toggle visibility, so nothing is blended on screen. (UNVERIFIED against the 2D
@@ -2866,6 +2889,10 @@ impl Player {
     }
     /// The game's name for the state the player is in.
     pub fn nerve_name(&self) -> crate::game_names::Nerve {
+        if self.model_2d() && matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+        {
+            return crate::game_names::known("Run/Run2D");
+        }
         if self.spin_fall && self.mode == Move::Fall {
             return crate::game_names::known("SpinCap/Fall");
         }
@@ -2925,7 +2952,7 @@ impl Player {
             self.anim.frame = self.press.frozen_frame;
             return;
         }
-        if matches!(self.anim.name, "Move" | "MoveMoon") {
+        if matches!(self.anim.name, "Move" | "MoveMoon") && !self.model_2d() {
             // The dive's landing clip covers the legs for a while; the run's
             // pose does not move under it.
             if self.sub_anim.is_some_and(|s| s.name == "RollingStandUp") {
@@ -2950,7 +2977,7 @@ impl Player {
                 self.anim.frame += self.anim.rate + std::mem::take(&mut self.anim_rate_change);
             }
             // A jump clip that has played out holds a frame past its end.
-            if let Some(length) = clip::held_length(self.anim.name) {
+            if let Some(length) = self.held_length_of(self.anim.name) {
                 self.anim.frame = self.anim.frame.min(length as f32 + 1.);
             }
             if let Some(length) = self.loop_len(self.anim.name) {
@@ -3525,7 +3552,7 @@ impl Player {
             stick: self.raw_stick,
             view: self
                 .view
-                .unwrap_or_else(|| move_input::locked_view(self.camera_yaw)),
+                .unwrap_or_else(|| move_input::locked_view(self.camera_yaw.to_degrees())),
             position: self.position_cm(),
             velocity: self.v,
             actor_side: pose.side(),
@@ -3659,7 +3686,9 @@ impl Player {
             self.start_squat();
             return true;
         }
-        if self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw {
+        if !self.model_2d()
+            && (self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw)
+        {
             let kind = self.throw_kind(o);
             // A throw press with the cap still out is refused and stays buffered
             // (`PlayerJudgePreInputCapThrow`: only `recordJudgeAndReset` after a throw empties it), so
@@ -3711,6 +3740,8 @@ impl Player {
                 self.land_snap = self.flat_land_snap(scene);
             }
             self.stand(o);
+        } else if self.model_2d() {
+            self.run_2d_step(o);
         } else if self.run_nerve == RunNerve::WallPush {
             self.wall_push_step(o);
         } else {
@@ -3730,6 +3761,11 @@ impl Player {
     /// Standing: the stick starts the run (the start-run judge), which is a
     /// new nerve, chosen now and moving from its first step.
     fn stand(&mut self, o: &Orders) {
+        if self.model_2d() && self.grounded {
+            // exeWait -> waitGround 0x5656ec..0x565700 rebounds with three
+            // zero coefficients. A grounded 2D Wait has no Land child to stop it.
+            self.set_h(Vec3::ZERO);
+        }
         if self.rotating_ground && self.wait.steps == 0 && self.grounded && self.clip() == "Wait" {
             // exeWait calls waitGround before its actor judges (0x48e0e8).
             // On entry from Land its remaining normal pull is raw velocity,
@@ -4473,7 +4509,11 @@ impl Player {
         self.max_air_speed = self.speed_h().clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
         self.grounded = false;
         self.pre_jump = 0;
-        self.events.push(Fx::Jump(mode));
+        // startHitReactionLandJumpIfLanding receives the model-2D flag at
+        // 0x470bdc and suppresses the ordinary 3D landing/jump reaction.
+        if !self.model_2d() {
+            self.events.push(Fx::Jump(mode));
+        }
     }
     /// Hand a jump of the shared family to its air control, as the jump
     /// state's first step does (`PlayerActionAirMoveControl::setup`): the
@@ -4489,6 +4529,10 @@ impl Player {
             0
         };
         let mut takeoff = takeoff_of(mode, extend, power, gravity);
+        if self.model_2d() && mode == Move::Jump {
+            // exeJump 0x472830..0x472840 selects NormalMaxSpeed2D as base speed.
+            takeoff.base_speed = 10.;
+        }
         if self.force_run.is_active()
             && matches!(mode, Move::Jump | Move::DoubleJump | Move::TripleJump)
         {
@@ -4611,7 +4655,8 @@ impl Player {
     /// A jump that ends on the ground counts toward the combo, or ends it
     /// (`PlayerStateJump::tryCountUpContinuousJump`).
     fn count_jump_combo(&mut self) {
-        if !self.combo_kept {
+        // tryCountUpContinuousJump 0x471f7c..0x471fa8 clears for 2D models.
+        if self.model_2d() || !self.combo_kept {
             self.combo.clear(t::CONTINUOUS_JUMP_TIMER);
             return;
         }
@@ -4656,6 +4701,10 @@ impl Player {
         pose_math::dot(side, -view[2]) < 0.
     }
     fn standard_jump_clip(&self) -> &'static str {
+        // PlayerStateJump::exeJump's 2D model branch at 0x472674.
+        if self.model_2d() {
+            return "Jump";
+        }
         if self.side_faces_camera() {
             "Jump"
         } else {
@@ -4668,7 +4717,7 @@ impl Player {
     fn start_standard_jump(&mut self) {
         self.pre_jump = 0;
         let kind = self.pick_jump_kind();
-        let (mode, clip, power_min, power_max, gravity) = match kind {
+        let (mode, clip, mut power_min, mut power_max, gravity) = match kind {
             2 => (
                 Move::TripleJump,
                 "Jump3",
@@ -4691,10 +4740,18 @@ impl Player {
                 self.constants.jump_gravity,
             ),
         };
+        let (speed_min, speed_max) = if self.model_2d() && self.dimension.in_area {
+            // calcJumpPowerMin/Max and BorderSpeedMin/Max: 0x471cdc..0x471e84.
+            // Border getters0x43d02c/0x43d034 read PlayerConst's 12/18 values.
+            power_min = self.constants.jump_power_min2d_area;
+            power_max = self.constants.jump_power_max2d_area;
+            (12., 18.)
+        } else {
+            (t::NORMAL_MIN, t::NORMAL_MAX)
+        };
         // The power follows the speed along the facing.
         let forward = self.v.dot(self.facing).abs();
-        let power =
-            air_move::jump_power(forward, t::NORMAL_MIN, t::NORMAL_MAX, power_min, power_max);
+        let power = air_move::jump_power(forward, speed_min, speed_max, power_min, power_max);
         let (clip, power, gravity) = if self.force_run.is_active() {
             ("JumpDashFast", 18., self.constants.jump_gravity_force_run)
         } else {
@@ -5001,6 +5058,10 @@ impl Player {
             back: t::JUMP_ACCEL_BACK,
             turn: t::JUMP_ACCEL_TURN,
         };
+        if let Some(frame) = &self.input_2d_frame {
+            // Shared Jump/Fall call this before every air update (0x4729b4/0x46b498).
+            self.air.verticalize_start_direction(frame.lock);
+        }
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
         self.turn_in_air(push);
@@ -5870,6 +5931,28 @@ impl Player {
 
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders) {
+        if self.model_2d()
+            && matches!(
+                self.mode,
+                Move::Fall | Move::Jump | Move::DoubleJump | Move::TripleJump
+            )
+        {
+            // Wait::appear 0x48c93c..0x48c968 skips Land for a 2D model.
+            // startHitReactionLandIfLanding 0x56a3ec also rejects that model.
+            self.v.y = self.touchdown_speed;
+            self.jump_air(o);
+            if self.actor_name() == "Jump" {
+                self.count_jump_combo();
+            }
+            self.air_for = None;
+            self.land_frames = 0;
+            if self.is_move() {
+                self.go(Move::Run, "Move");
+            } else {
+                self.go(Move::Idle, "Wait");
+            }
+            return;
+        }
         if self.mode == Move::Fall && !self.is_just_land() {
             // A continuing floor contact enters Wait directly; only a fresh
             // landing chooses the Land child (PlayerStateWait::appear).

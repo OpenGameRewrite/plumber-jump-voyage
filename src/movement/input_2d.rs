@@ -160,23 +160,15 @@ fn axis_rotation(from: Vec3, to: Vec3, axis: Vec3) -> Quat {
     Quat::from_xyzw(sine * axis.x, sine * axis.y, sine * axis.z, cosf(half))
 }
 
-// The two inlined quaternion products in calcHoldMoveInput2D associate their sums
-// differently. Retain each order instead of using the SIMD quaternion operation.
-fn rotate(v: Vec3, q: Quat, second: bool) -> Vec3 {
+// The inlined quaternion products retain these parentheses; avoid the SIMD
+// quaternion operation, whose arithmetic has a different association.
+fn rotate(v: Vec3, q: Quat) -> Vec3 {
     let x = (q.y * v.z - q.z * v.y) + q.w * v.x;
     let y = q.w * v.y + (q.z * v.x - q.x * v.z);
     let z = q.w * v.z + (q.x * v.y - q.y * v.x);
     let w = (-v.x * q.x - q.y * v.y) - q.z * v.z;
-    let out_x = if second {
-        q.y * z + (q.w * x - q.z * y)
-    } else {
-        (q.w * x - q.z * y) + q.y * z
-    };
-    let out_y = if second {
-        q.z * x + q.w * y
-    } else {
-        q.z * x + y * q.w
-    };
+    let out_x = q.y * z + (q.w * x - q.z * y);
+    let out_y = q.z * x + q.w * y;
     Vec3::new(
         out_x - q.x * w,
         (out_y - z * q.x) - w * q.y,
@@ -197,7 +189,7 @@ impl Input2D {
             cross(self.up, up)
         };
         let rotation = axis_rotation(self.up, up, normalize(axis));
-        let mut mapped = self.mapped_axes.map(|v| rotate(v, rotation, false));
+        let mut mapped = self.mapped_axes.map(|v| rotate(v, rotation));
         let lock = camera_lock(frame);
         if is_parallel_direction(self.lock, lock, PARALLEL) {
             if dot(self.lock, lock) < 0. {
@@ -205,7 +197,7 @@ impl Input2D {
             }
         } else {
             let rotation = axis_rotation(self.lock, lock, normalize(cross(self.lock, lock)));
-            mapped = mapped.map(|v| rotate(v, rotation, true));
+            mapped = mapped.map(|v| rotate(v, rotation));
         }
         dominant(self.mapped_stick, mapped.map(normalize))
     }

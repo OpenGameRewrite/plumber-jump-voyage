@@ -48,13 +48,34 @@ does not have) is therefore a replay input like the camera pose: `TraceFile` rea
 `Orders::camera_interpolating`. No other pipe or movement field is read from a
 recording.
 
-Not ported: 2D input (`PlayerInput::updateInput2D`, `calcHoldMoveInput2D`),
-`PlayerStateRun2D`, 2D Fall/Jump, the return trip through the upright pipe, the
-8-bit model's own skeleton bind pose and joint translations (row of the model switch
-and the DokanOut clip), moving or switched areas and the disk collider's moving parts.
-The four wave16 fixtures therefore remain REFUSED and no environment exemption exists;
-`2d-jump-short` rows before the 2D run match an unqualified raw diagnostic except the
-model-switch row's animation counter and the 8-bit joints' placeholder positions.
+`movement/input_2d.rs` implements the ordinary controller's 2D camera axes,
+held basis and ground memory (`updateInput2D` / `calcHoldMoveInput2D`). Optional
+`PJV_INPUT_2D_CASES` checks sequences against the original executable with synthetic
+actor, camera, collision and pad inputs. `movement/run_2d.rs` implements the Run
+child with its own plain ground control, held-Action dash and `Move` rate. The
+shared Jump/Fall control projects its start direction off the area lock
+(`PJV_AIR_2D_CASES` checks that operation), uses the 2D jump powers/speed borders
+and enters Wait directly on landing. `Move` is a single 2D action rather than the
+3D run-cycle blend. The renderer and headless replay receive the same external
+camera-interpolation flag.
+
+The camera flag is explicitly part of the external camera contract: a player's
+pipe controller asks the camera director whether its requested interpolation is
+still active. Camera pose samples alone do not determine that director state
+(the source also reads poser configuration and the prior camera). The replay
+therefore supplies the recorded boolean alongside camera pose; it does not claim
+to reproduce the director. This exception supplies no pipe phase, transform,
+duration or player movement state. A replay without camera evidence cannot
+establish the original camera wait timing.
+
+Still unported: dedicated 2D Brake/Turn, suspended/separate-controller input,
+airborne side-snap pose variants, the return trip through the upright pipe,
+the installed Mario2D model and its skeleton/action integration, moving or
+switched areas and the disk collider's moving parts. The ordinary 3D model is
+still rendered after the dimension change; its pose is not 8-bit presentation.
+The converter's existing generic `--all-animations` and `--curves-only` modes
+can export Mario2D and PlayerAnimation2D; no hand-authored replacement is needed.
+All four wave16 fixtures remain REFUSED and no environment exemption exists.
 
 ## CapTrampoline spin jump
 

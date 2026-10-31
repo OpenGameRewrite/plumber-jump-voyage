@@ -1196,7 +1196,7 @@ mod imported {
                     })
                     .collect(),
             }
-        } else if matches!(anim.name, "Move" | "MoveMoon") {
+        } else if p.is_run_cycle() {
             let cycle = p.run_cycle();
             let phase = ((cycle.phase + cycle.rate * ahead) / 60.).rem_euclid(1.);
             let clips = cycle

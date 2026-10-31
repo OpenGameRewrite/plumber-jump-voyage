@@ -216,7 +216,7 @@ impl Pose {
                 .collect(),
             };
         }
-        if !matches!(a.name, "Move" | "MoveMoon") {
+        if !p.is_run_cycle() {
             return Self {
                 slot: a.name,
                 partial: Vec::new(),
@@ -232,7 +232,8 @@ impl Pose {
                         name => p.model_frame().unwrap_or_else(|| {
                             // (The model is one rate change ahead of the counter.)
                             let frame = a.frame + p.anim_rate_change();
-                            clip::held_length(name).map_or(frame, |length| frame.min(length as f32))
+                            p.held_length_of(name)
+                                .map_or(frame, |length| frame.min(length as f32))
                                 - p.loop_len(name)
                                     .filter(|length| frame >= *length)
                                     .unwrap_or(0.)
@@ -670,7 +671,7 @@ impl Recorder {
         // whose pose still shows t - 1 (SpinCapStart's frame 8 and 11 sounds
         // were logged at shown frames 7 and 10; frame-0 sounds in the first
         // row), which is the frame the controller holds after its step.
-        let shown = if matches!(p.anim.name, "Move" | "MoveMoon") {
+        let shown = if p.is_run_cycle() {
             p.shown_frame()
         } else if p.model_switch_row() {
             0.
@@ -899,7 +900,7 @@ impl Recorder {
             (Some(s), _) => num(sub_frame(&s)),
             (None, Some((_, frame))) => num(frame),
             (None, None) if self.last_sub.is_empty() => String::new(),
-            (None, None) if matches!(p.anim.name, "Move" | "MoveMoon") => num(p.run_cycle().phase),
+            (None, None) if p.is_run_cycle() => num(p.run_cycle().phase),
             (None, None) => num(pose.layers.first().map_or(p.anim.frame, |l| l.frame)),
         });
         cells.num(info.camera_yaw_deg);
@@ -916,8 +917,12 @@ impl Recorder {
         cells.num(v.x.hypot(v.z));
         cells.text(&layers.join("|"));
         // Only the run cycle's length is known (its 60-frame phase).
-        if matches!(p.anim.name, "Move" | "MoveMoon") {
+        if p.is_run_cycle() {
             cells.num(60.);
+        } else if p.model_2d()
+            && let Some(length) = p.loop_len(p.anim.name)
+        {
+            cells.num(length);
         } else {
             cells.empty();
         }
