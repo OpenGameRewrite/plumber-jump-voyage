@@ -559,13 +559,15 @@ pub mod clip {
             _ => None,
         }
     }
-    pub fn loop_slack_2d(name: &str) -> f32 {
-        // Guess: this counter proxy retains one rate-one update past the
-        // visibility resource length. updateSync (0x42d170) explains the
-        // counter/pose lead; variable-rate wrap ordering still needs the
-        // original visibility frame-controller contract. Not a dash guarantee.
+    /// How far past its length the 8-bit loop's counter runs before it wraps. Without a
+    /// sub animation `PlayerAnimator::updateAnimFrame` (0x42a214, flag +0x1a2 set by
+    /// startSubAnim 0x42a74c, cleared by endSubAnim 0x42a898) calls
+    /// `PlayerAnimFrameCtrl::updateSync` (0x42d170): counter = the model action's own
+    /// frame plus its rate. The model's loop wraps at its length, so the counter leads
+    /// the pose by the action rate and reads the length for one row.
+    pub fn loop_slack_2d(name: &str, rate: f32) -> f32 {
         match name {
-            "Wait" | "Move" => 1.,
+            "Wait" | "Move" => rate,
             _ => 0.,
         }
     }
@@ -2365,7 +2367,7 @@ impl Player {
     /// screen (the 8-bit Wait shows its 60 for a row).
     pub fn loop_slack_of(&self, name: &str) -> f32 {
         if self.model_2d() {
-            return clip::loop_slack_2d(name);
+            return clip::loop_slack_2d(name, self.anim.rate);
         }
         clip::loop_slack(name)
     }
@@ -2630,9 +2632,7 @@ impl Player {
                 // copyAnimLocal starts the counter again while carrying the
                 // prior model's action pose (0x42c1cc..0x42c250).
                 self.anim.frame
-            } else if (self.puppet_synced_row() || self.switch_sync_row)
-                && self.anim.name == name
-            {
+            } else if (self.puppet_synced_row() || self.switch_sync_row) && self.anim.name == name {
                 frame - self.anim.rate
             } else {
                 frame

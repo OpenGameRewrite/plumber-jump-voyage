@@ -183,9 +183,7 @@ impl Dokan {
             return None;
         }
         let mut position = self.local_offset(Vec3::new(0., 290., 0.));
-        position.x += 0.;
         position.y += -100.;
-        position.z += 0.;
         Some((position, quat_front_up(self.up(), Vec3::Y)))
     }
 
