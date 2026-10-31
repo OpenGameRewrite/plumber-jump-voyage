@@ -266,6 +266,7 @@ mod surface_run;
 use damage::Damage;
 use damage_fire::FireControl;
 pub use stain::Soot;
+pub mod cap_hanger;
 #[path = "movement/ground_move.rs"]
 pub(crate) mod ground_move;
 #[path = "movement/ground_pose.rs"]
@@ -991,6 +992,10 @@ pub enum Fx {
     CapWallHit(f32),
     /// An exported actor accepted the cap's `CapReflectCollide`: its hit reaction.
     CapReflect,
+    /// A hanger accepted the cap's `CapStartLockOn` (`帽子セット`).
+    CapLockOn,
+    /// The cap's lock-on ended and it returns (`帽子戻し`).
+    CapLockReturn,
     Catch,
     /// The cap was trampled: its first step in the trample nerve.
     CapBounce,
@@ -1148,6 +1153,7 @@ pub struct Player {
     pub rocket: rocket_flower::RocketFlowers,
     pub trampolines: Vec<cap_trampoline::Trampoline>,
     pub signboards: Vec<sign_board::SignBoard>,
+    pub cap_hangers: Vec<cap_hanger::CapHanger>,
     spin_flower: spin_flower::SpinFlower,
     hip_drop_reflect: bool,
     surface_run: surface_run::SurfaceRun,
@@ -1501,6 +1507,7 @@ impl Default for Player {
             rocket: default(),
             trampolines: default(),
             signboards: default(),
+            cap_hangers: default(),
             spin_flower: default(),
             hip_drop_reflect: false,
             surface_run: default(),
@@ -2788,8 +2795,11 @@ impl Player {
                 length,
                 active: true,
             };
-            // A clip just started under a sub animation holds its first frame.
-            self.anim_skip = frame == 0. && s.anim.is_some_and(|(_, frame)| frame == 0.);
+            // A clip just started under a sub animation holds its first frame; the clip may start
+            // under a sub animation already in progress (the area clip under a catch), then the
+            // row where the nerve's step restarts is the one that started it.
+            let first_frame = s.anim.is_some_and(|(_, clip_frame)| clip_frame == 0.);
+            self.anim_skip = first_frame && (frame == 0. || s.sub_steps == Some(0));
         } else {
             self.anim_skip = false;
         }
@@ -2826,6 +2836,17 @@ impl Player {
             // The same clip keeps playing from one injected row to the next.
             if let Some(previous) = &previous {
                 cap.continue_clip(previous);
+            }
+            // A cap in a lock-on is attached to the hanger nearest to it: the hanger's own state
+            // (it may have released this very frame) does not say which one it is.
+            if moment.nerve == crate::cap::CapNerve::LockOn
+                && let Some((index, hanger)) = self.cap_hangers.iter().enumerate().min_by(|a, b| {
+                    (a.1.relative - moment.spot)
+                        .length_squared()
+                        .total_cmp(&(b.1.relative - moment.spot).length_squared())
+                })
+            {
+                cap.restore_lock_on(index, hanger.relative, moment);
             }
             self.cap_serial = cap.clip_serial();
             self.cap = Some(cap);
@@ -3292,6 +3313,12 @@ impl Player {
             self.trampoline_sensor_phase(scene);
             for sign in &mut self.signboards {
                 sign.tick();
+            }
+            let player = self.position_cm();
+            for hanger in &mut self.cap_hangers {
+                let distance =
+                    Vec2::new(player.x - hanger.relative.x, player.z - hanger.relative.z).length();
+                hanger.tick(o.throw_held, distance);
             }
         }
         self.cap_sensor_phase(&o);
@@ -5761,6 +5788,17 @@ impl Player {
             self.throwing.up = None;
             return;
         }
+        let hangers: Vec<crate::cap::HangerView> = self
+            .cap_hangers
+            .iter()
+            .map(|hanger| crate::cap::HangerView {
+                target: hanger.relative,
+                body: hanger.relative + Vec3::Y * hanger.body_offset,
+                body_radius: hanger.body_radius,
+                waiting: hanger.waiting(),
+                keeps: hanger.keeps(),
+            })
+            .collect();
         let Some(cap) = &mut self.cap else {
             return;
         };
@@ -5785,6 +5823,7 @@ impl Player {
             hold,
             mesh: scene.mesh.as_deref(),
             water: Some(scene.water_areas()),
+            hangers: &hangers,
         };
         let moments = cap.update(&world);
         self.cap_serial = cap.clip_serial();
@@ -5801,6 +5840,11 @@ impl Player {
                     };
                     self.events.push(Fx::ThrowVoice(voice));
                 }
+                CapEvent::LockedOn(index) => {
+                    self.cap_hangers[index].start();
+                    self.events.push(Fx::CapLockOn);
+                }
+                CapEvent::LockReturn => self.events.push(Fx::CapLockReturn),
                 CapEvent::Reflected(index) => {
                     self.signboards[index].reflect();
                     self.events.push(Fx::CapReflect);

@@ -327,6 +327,15 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
             cap: true,
             name: "CapBounceHit",
         }],
+        // `HackCap::prepareLockOn` raises the cap-set reaction; `tryReturn` the return's.
+        Fx::CapLockOn => vec![Cue::Reaction {
+            cap: true,
+            name: "帽子セット",
+        }],
+        Fx::CapLockReturn => vec![Cue::Reaction {
+            cap: true,
+            name: "Return",
+        }],
         Fx::CapReturn => vec![Cue::Reaction {
             cap: true,
             name: "ReturnFromStay",

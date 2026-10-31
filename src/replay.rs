@@ -940,6 +940,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     if let Some(mesh) = &course.mesh {
         player.trampolines = mesh.trampolines.clone();
         player.signboards = mesh.signboards.clone();
+        player.cap_hangers = mesh.cap_hangers.clone();
     }
     let mut recorder = Recorder::new(
         options.table.clone(),
@@ -980,7 +981,8 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let mut rows = Vec::with_capacity(script.frame_count());
     let mut previous: Vec<&str> = Vec::new();
     let spans: Vec<&Span> = script.frames().collect();
-    let mut collision_history = std::collections::VecDeque::new();
+    let mut collision_history: std::collections::VecDeque<(usize, _, u32)> =
+        std::collections::VecDeque::new();
     let mut previous_moving_scene = None;
     for (frame, span) in spans.iter().copied().enumerate() {
         if let Some(game) = options.lockstep
@@ -1034,10 +1036,13 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                 // step, with the clip, the impulse and the sounds, is still to
                 // come, and a snapshot cannot hold that. Choose it again from
                 // the row before, with that frame's input.
-                if let Some((_, collision)) =
-                    collision_history.iter().find(|(row, _)| *row == last - 1)
+                if let Some((_, collision, jump_held)) =
+                    collision_history.iter().find(|entry| entry.0 == last - 1)
                 {
                     player.restore_collision(collision);
+                    // The button's hold count is hidden state a snapshot cannot hold: the
+                    // jump's extension window reads it in the first step of this re-choice.
+                    player.restore_jump_held_frames(*jump_held);
                 }
                 player.inject(&snapshot_with_geometry(game, last - 1, &course));
                 if let Some(hint) = game.look_hint(last - 1) {
@@ -1183,7 +1188,11 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         }
         rows.push(recorder.record(&info, &mut player));
         if options.lockstep.is_some() {
-            collision_history.push_back((frame, player.collision_state()));
+            collision_history.push_back((
+                frame,
+                player.collision_state(),
+                player.jump_held_frames(),
+            ));
             if collision_history.len() > 2 {
                 collision_history.pop_front();
             }

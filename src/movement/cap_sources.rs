@@ -8,6 +8,11 @@ impl Player {
         self.signboards
             .iter()
             .map(sign_board::SignBoard::diagnostic)
+            .chain(
+                self.cap_hangers
+                    .iter()
+                    .map(cap_hanger::CapHanger::diagnostic),
+            )
             .collect::<Vec<_>>()
             .join("|")
     }

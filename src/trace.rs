@@ -1830,6 +1830,25 @@ impl TraceFile {
             } else {
                 0.
             },
+            after_lock_on: nerve == CapNerve::Return && {
+                let mut first = row;
+                while first > 0 && self.cell(first - 1, "cap_state") == Some("Return") {
+                    first -= 1;
+                }
+                first > 0 && self.cell(first - 1, "cap_state") == Some("LockOn")
+            },
+            anchor: {
+                // The row before the lock-on run began: the position `followTarget` blends from.
+                let mut first = row;
+                while first > 0 && self.cell(first - 1, "cap_state") == Some("LockOn") {
+                    first -= 1;
+                }
+                if first > 0 {
+                    self.cap_spot(first - 1).unwrap_or(spot)
+                } else {
+                    spot
+                }
+            },
         })
     }
     /// The spin throw state at a row: whether the cap is still the spin attack

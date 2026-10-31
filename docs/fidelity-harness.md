@@ -243,6 +243,35 @@ queries to other actors. The cap's Eye overlaps with the sign's LookAt, the hang
 reaction objects are accepted under that proof; the global Rebound/LockOn flag is unchanged for
 any other run. Side files only validate.
 
+## Cappy lock-on (CapHanger)
+
+`tools/export-cap-sources.py` adds `cap_hangers` (placement, InitSensor Body, INITIAL pending
+Wait) beside `signboards`. `movement/cap_hanger.rs` owns the hook: `CapStartLockOn` is accepted in
+Wait, `CapKeepLockOn` while it keeps, and `exeKeep` appears its configured coins (the helper only
+succeeds on a multiple of ten, `0x556444`, three in all) before it releases when the keep input
+is let go after step 20, or past step 1200 or 1500 units from the player. Letting go before the
+quota is generated takes the original's failure reactions, which are not ported (the native
+`cap_source` diagnostic names it `unported_early_release`).
+
+The cap's side is `cap.rs`: its Attack sensor (radius 100, raised 20) overlapping the hanger's
+Body in `Throw`/`ThrowBrake` selects `LockOn` in that same frame (`prepareLockOn`). `followTarget`
+blends the saved start matrix to the target with weight 0.25 per interpolation step (counter
+4), the second counter runs to 10, and the hat's start action begins only after the
+interpolation; the primary cap action idles (the visible equipment hat plays
+`CapPointHookStart`/`Wait`). A refused `CapKeepLockOn` is `tryReturn`: ignore-cancel refused,
+cancel accepted, collision off for three steps, then `Return` and the catch. Lockstep puts a cap
+in a lock-on back at its recorded blend and attaches it to the nearest exported hanger.
+
+`tools/cap_sources.py` accepts the lock-on only for Sand scenario 1 with the exact obj4377
+placement and sensors, one accepted `CapStartLockOn`/`InitCapTarget` from the cap's Attack
+sensor, a keep answered every execution until one refusal followed by the `tryReturn` messages,
+the three coin helper calls on the first execution of each tenth step, and the lock-on
+counters on every sample. The hanger's Eye and Attack overlaps are accepted only under that proof.
+
+Lockstep re-chooses a state that a row shows at step 0 from the row before; the jump button's
+hold count (hidden state the extension window reads) is kept with the collision history for it,
+and a clip that started under a sub animation already in progress holds its first frame.
+
 ## Flower carry and sensor push
 
 An export can include `carry_objects`: original linked flower placements, their

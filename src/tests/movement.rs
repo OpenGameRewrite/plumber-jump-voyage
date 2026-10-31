@@ -1144,6 +1144,8 @@ fn cap_bounce() {
             velocity: Vec3::ZERO,
             speed: 32.,
             return_speed: 0.,
+            anchor: Vec3::ZERO,
+            after_lock_on: false,
         });
         p.cap = Some(cap);
         // The cap reads the button as the frame before left it.

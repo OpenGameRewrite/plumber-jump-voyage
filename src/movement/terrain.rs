@@ -65,6 +65,15 @@ impl Player {
         }
     }
 
+    /// The frames the jump button has been held, for the lockstep re-choice of a state.
+    pub(crate) fn jump_held_frames(&self) -> u32 {
+        self.jump_held_frames
+    }
+
+    pub(crate) fn restore_jump_held_frames(&mut self, frames: u32) {
+        self.jump_held_frames = frames;
+    }
+
     pub(crate) fn restore_collision(&mut self, state: &CollisionState) {
         self.collider = state.collider.clone();
         self.touched = state.touched.clone();

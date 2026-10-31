@@ -32,6 +32,7 @@ fn the_throw_down_rolls_along_the_floor() {
         hold: false,
         mesh: None,
         water: None,
+        hangers: &[],
     };
     let at = |cap: &Cap| cap.pos / UNIT;
     // Row 74: the start, the drop onto the floor and the clip the start began.
@@ -96,6 +97,7 @@ fn the_spiral_circles_the_player() {
             hold: false,
             mesh: None,
             water: None,
+            hangers: &[],
         };
         assert!(cap.update(&world).is_empty());
         let (found, name, clip) = spot(&cap);
@@ -133,6 +135,8 @@ fn the_catch_is_the_sensor_contact() {
             velocity: Vec3::new(0., 0., -80.),
             speed: 32.,
             return_speed: 80.,
+            anchor: Vec3::ZERO,
+            after_lock_on: false,
         });
         cap
     };
@@ -141,6 +145,7 @@ fn the_catch_is_the_sensor_contact() {
         hold: false,
         mesh: None,
         water: None,
+        hangers: &[],
     };
     // 220 away it comes to about 140 from the body in this frame: touching.
     assert!(returning(220.).update(&world).contains(&CapEvent::Caught));
@@ -179,6 +184,7 @@ fn straight_throw_matches_the_recording() {
         hold: false,
         mesh: None,
         water: None,
+        hangers: &[],
     };
     let z = |cap: &Cap| cap.pos.z / UNIT;
     assert!((z(&cap) - 182.).abs() < 1e-3 && (cap.pos.y / UNIT - 70.).abs() < 1e-3);
@@ -252,6 +258,7 @@ fn a_wall_at_an_angle_turns_the_cap() {
         hold: false,
         mesh: Some(&mesh),
         water: None,
+        hangers: &[],
     };
     let mut hits = 0;
     let mut deepest = f32::MIN;
@@ -296,6 +303,7 @@ fn the_return_after_a_trample_leaves_along_the_cap_pose() {
         hold: true,
         mesh: None,
         water: None,
+        hangers: &[],
     };
     while cap.state_name() != "ThrowStay" {
         cap.update(&world);

@@ -134,6 +134,7 @@ pub struct TriangleMesh {
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
     pub trampolines: Vec<crate::movement::cap_trampoline::Trampoline>,
     pub signboards: Vec<crate::movement::sign_board::SignBoard>,
+    pub cap_hangers: Vec<crate::movement::cap_hanger::CapHanger>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     pub force_areas: Vec<crate::movement::external_velocity::ForceArea>,
@@ -552,6 +553,11 @@ impl TriangleMesh {
             mesh.look_sensors
                 .extend(look_sensors_of_source(source, sign.position, origin)?);
             mesh.signboards.push(sign);
+        }
+        for source in root["cap_hangers"].as_array().into_iter().flatten() {
+            let mut hanger = crate::movement::cap_hanger::CapHanger::load(source)?;
+            hanger.relative = mesh.relative_vec(hanger.position);
+            mesh.cap_hangers.push(hanger);
         }
         for source in root["cap_trampolines"].as_array().into_iter().flatten() {
             mesh.trampolines

@@ -209,6 +209,7 @@ fn begin(
         player.init_flower_seed(mesh);
         player.trampolines = mesh.trampolines.clone();
         player.signboards = mesh.signboards.clone();
+        player.cap_hangers = mesh.cap_hangers.clone();
     }
     driver.phase = Phase::Loading;
     time.pause();

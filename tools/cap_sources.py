@@ -10,7 +10,8 @@ environment flag stays in force for every other run.
 import struct
 from collections import defaultdict
 
-ID_NERVE = {'SignBoardNormal': '1d30278'}
+ID_NERVE = {'SignBoardNormal': '1d30278', 'CapHanger': '1ce0b60'}
+HANGER_SENSORS = [{'Name': 'Body', 'Radius': 60., 'Type': 'MapObj', 'Y': 25.}]
 SIGN_SENSORS = [{'MaxCount': 0, 'Name': 'Collision', 'Radius': 0., 'Type': 'CollisionParts'},
                 {'Name': 'LookAt', 'Radius': 125., 'Type': 'LookAt', 'Y': 150.}]
 # Perception queries every object with a Body/LookAt sensor answers for the player's and the cap's
@@ -23,6 +24,11 @@ EYE_HOSTS = {('ReactionObject', 'Body', '12'), ('CapHanger', 'Body', '12'), ('Si
 # receiver id, receiver sensor). The cap and Mario exchange these on every throw/catch.
 CAP_PROTOCOL = {('PlayerDisregard', 'Eye', 'HackCap', 'Catch'), ('PlayerDisregard', 'Eye', 'HackCap', 'Trample'),
                 ('PlayerCapCatch', 'Body', 'HackCap', 'Catch')}
+# The hanger's answers (`CapHanger::receiveMsg` 0x235684) to what the cap's Attack sensor sends it,
+# by message: the accepted answers.
+HANGER_ANSWERS = {'CapAttackStayRolling': '0', 'CapCancelLockOn': '1', 'CapIgnoreCancelLockOn': '0',
+                  'CapIgnoreCollisionCheck': '1', 'CapItemGet': '0', 'CapKeepLockOn': '01', 'CapReflect': '0',
+                  'CapStartLockOn': '1', 'InitCapTarget': '1', 'StartHack': '0'}
 
 
 def short(message):
@@ -36,25 +42,31 @@ def position_bits(placement):
 
 class Evidence:
     def __init__(self, geometry, cap, collider, sources, messages, rewrite, rows, preroll):
-        self.frames, self.rebound, self.error = set(), set(), None
-        self.signs, self.perceived = {}, set()
+        self.frames, self.rebound, self.lockon, self.attack, self.error = set(), set(), set(), set(), None
+        self.reflect = self.keeps = self.start = self.probes = None
         try:
             self.verify(geometry, cap, collider, sources, messages, rewrite, rows, preroll)
         except (ValueError, KeyError, TypeError, IndexError, StopIteration, struct.error) as error:
-            self.frames, self.rebound, self.signs = set(), set(), {}
+            self.frames, self.rebound, self.lockon, self.attack = set(), set(), set(), set()
             self.error = str(error)
 
     def verify(self, geometry, cap, collider, sources, messages, rewrite, rows, preroll):
         if not (geometry and cap and collider and sources and messages and rewrite and rows):
             return
-        signs = geometry.get('signboards', [])
+        signs, hangers = geometry.get('signboards', []), geometry.get('cap_hangers', [])
         if (geometry['stage'], geometry['scenario']) != ('SandWorldHomeStage', 1) or not signs:
             return
-        ids = self.check_signs(signs)
+        sign_ids, hanger_ids = self.check_signs(signs), self.check_hangers(hangers)
+        ids = sign_ids + hanger_ids
+        placements = {s['placement']['Id']: s['placement'] for s in signs + hangers}
         samples, initial = self.sample_rows(sources, ids)
         for identity in ids:
-            if (initial[identity]['pending_n'], initial[identity]['current_n'], initial[identity]['step']) != (ID_NERVE['SignBoardNormal'], '0', '0'):
+            nerve = ID_NERVE['CapHanger' if identity in hanger_ids else 'SignBoardNormal']
+            if (initial[identity]['pending_n'], initial[identity]['current_n'], initial[identity]['step']) != (nerve, '0', '0'):
                 raise ValueError(f'{identity} INITIAL phase')
+            if identity in hanger_ids and (initial[identity]['quota'], initial[identity]['generated'],
+                                          initial[identity]['item_type']) != ('3', '0', '0'):
+                raise ValueError(f'{identity} INITIAL items')
         first, last = min(min(s) for s in samples.values()), max(max(s) for s in samples.values())
         own = {identity: (samples[identity][first]['actor'], samples[identity][first]['generation'])
                for identity in ids}
@@ -63,18 +75,24 @@ class Evidence:
                 r = samples[identity][f]
                 if ((r['actor'], r['generation']) != own[identity] or r['zone'] or r['registry_dropped'] != '0'
                         or r['dead'] != '0' or r['clipped'] != '0'
-                        or r['pos_bits'] != position_bits(signs_by_id(signs)[identity]['placement'])):
+                        or r['pos_bits'] != position_bits(placements[identity])
+                        or (identity in hanger_ids and (r['quota'], r['item_type']) != ('3', '0'))):
                     raise ValueError(f'{identity} identity/state {f}')
+
         # Native lifecycle against the recorded one, frame by frame.
+        def record(identity, f):
+            r = samples[identity][f]
+            if identity in hanger_ids:
+                return f"{identity}/{r['current_n_name']}/{r['step']}/{r['generated']}"
+            return f"{identity}/{int(r['current_n_name'] == 'Reaction')}/{r['step']}"
         for f, row in rewrite.items():
-            if f < first or f > last:
-                continue
-            want = '|'.join(f"{identity}/{int(samples[identity][f]['current_n_name'] == 'Reaction')}/{samples[identity][f]['step']}"
-                            for identity in ids)
-            if row.get('cap_source') != want:
+            if first <= f <= last and row.get('cap_source') != '|'.join(record(i, f) for i in ids):
                 raise ValueError(f'native source {f}')
-        self.verify_messages(messages, ids, own)
-        self.verify_rebound(messages, cap, collider, ids)
+        self.verify_messages(messages, sign_ids, hanger_ids, own)
+        if hanger_ids:
+            self.verify_lock_on(messages, cap, hanger_ids[0])
+        else:
+            self.verify_rebound(messages, cap, collider)
         self.frames = {f for f in rewrite if first <= f <= last}
 
     @staticmethod
@@ -90,7 +108,23 @@ class Evidence:
             ids.append(p['Id'])
         if ids != ['obj454']:
             raise ValueError('sign set')
-        return sorted(ids)
+        return ids
+
+    @staticmethod
+    def check_hangers(hangers):
+        ids = []
+        for source in hangers:
+            p = source['placement']
+            if (p['UnitConfigName'] != 'CapHanger' or p['IsLinkDest'] or p['IsConnectToCollision'] or p['Links']
+                    or p['ItemType'] != 'Coin' or p['AppearItemNum'] != 3 or p['SensorRadius'] != 60.
+                    or p['Scale'] != dict(X=1., Y=1., Z=1.) or p['Rotate'] != dict(X=0., Y=90., Z=0.)
+                    or p['Translate'] != dict(X=-4800., Y=327.65618896484375, Z=-19150.)
+                    or source['sensors'] != HANGER_SENSORS or source['initial_phase'] != 'WaitPending'):
+                raise ValueError('unsupported hanger placement/sensors')
+            ids.append(p['Id'])
+        if ids not in ([], ['obj4377']):
+            raise ValueError('hanger set')
+        return ids
 
     @staticmethod
     def sample_rows(rows, ids):
@@ -111,16 +145,17 @@ class Evidence:
             raise ValueError('missing source rows')
         return samples, initial
 
-    def verify_messages(self, messages, ids, own):
-        """Only the ordered reflect, the rejected lock-on probes and perception queries occur."""
-        accepted = []
+    def verify_messages(self, messages, sign_ids, hanger_ids, own):
+        """Only the ordered reflect/lock-on protocol, rejected probes and perception queries occur."""
+        accepted, start, keeps, probes = [], [], [], []
         for r in messages:
             if r['kind'] != 'send_after':
                 continue
             msg = short(r['message_type'])
             route = (msg, r['sender_sensor'], r['receiver_id'], r['receiver_sensor'])
-            if r['receiver_id'] in ids:
-                identity = (r['receiver_actor'], r['receiver_generation'])
+            if r['receiver_id'] in own and own[r['receiver_id']][1] != r['receiver_generation']:
+                raise ValueError(f"source generation {r['receiver_id']}")
+            if r['receiver_id'] in sign_ids:
                 if msg == 'CapReflectCollide':
                     if r['answer'] == '1':
                         accepted.append(r)
@@ -132,10 +167,29 @@ class Evidence:
                         raise ValueError('source perception answer')
                 else:
                     raise ValueError(f'unproved source message {msg}')
-                if own[r['receiver_id']][1] != r['receiver_generation']:
-                    raise ValueError(f'source generation {identity}')
+            elif r['receiver_id'] in hanger_ids:
+                sender = (r['sender_id'], r['sender_sensor'])
+                if msg in HANGER_ANSWERS:
+                    if r['answer'] not in HANGER_ANSWERS[msg] or (msg != 'StartHack' and sender != ('HackCap', 'Attack')):
+                        raise ValueError(f'hanger answer {msg}')
+                    if msg == 'CapStartLockOn':
+                        start.append(r)
+                    elif msg == 'CapKeepLockOn':
+                        keeps.append(r)
+                    elif msg in ('CapIgnoreCancelLockOn', 'CapCancelLockOn'):
+                        probes.append(r)
+                elif msg in PERCEPTION:
+                    if msg != 'TargetMarkerPosition' and r['answer'] != '0':
+                        raise ValueError('hanger perception')
+                else:
+                    raise ValueError(f'unproved hanger message {msg}')
             elif r['answer'] == '1' and msg not in PERCEPTION and route not in CAP_PROTOCOL:
                 raise ValueError(f'unproved accepted message {msg}')
+        if hanger_ids:
+            self.keeps, self.start, self.probes = keeps, start, probes
+            if accepted or len(start) != 1:
+                raise ValueError('lock-on start count')
+            return
         if len(accepted) != 1:
             raise ValueError('accepted reflect count')
         r = accepted[0]
@@ -144,7 +198,45 @@ class Evidence:
             raise ValueError('reflect identity')
         self.reflect = int(r['frame'])
 
-    def verify_rebound(self, messages, cap, collider, ids):
+    def verify_lock_on(self, messages, cap, identity):
+        """CapStartLockOn/InitCapTarget accepted once, kept every execution, refused once, then tryReturn."""
+        start = self.start[0]
+        if (start['sender_id'], start['sender_sensor'], start['receiver_sensor'], start['cap_current_n_name'],
+                start['answer']) != ('HackCap', 'Attack', 'Body', 'Throw', '1'):
+            raise ValueError('start identity')
+        first = int(start['frame'])
+        targets = [r for r in messages if r['kind'] == 'send_after' and short(r['message_type']) == 'InitCapTarget'
+                   and r['answer'] == '1' and r['receiver_id'] == identity]
+        if len(targets) != 1 or int(targets[0]['frame']) != first:
+            raise ValueError('InitCapTarget')
+        kept = sorted(int(r['frame']) for r in self.keeps if r['answer'] == '1')
+        refused = [r for r in self.keeps if r['answer'] == '0']
+        if len(refused) != 1 or kept != list(range(first, int(refused[0]['frame']))):
+            raise ValueError('keep sequence')
+        end = int(refused[0]['frame'])
+        # The refusal is followed by tryReturn: ignore-cancel refused, cancel accepted, Return pending.
+        answers = sorted((short(r['message_type']), r['answer'], int(r['frame'])) for r in self.probes)
+        if answers != [('CapCancelLockOn', '1', end), ('CapIgnoreCancelLockOn', '0', end)]:
+            raise ValueError('tryReturn messages')
+        tries = [r for r in messages if r['kind'] == 'try_return_after' and r['preroll'] == '0']
+        if len(tries) != 1 or (int(tries[0]['frame']), tries[0]['answer'], tries[0]['cap_pending_n_name']) != (end, '1', 'Return'):
+            raise ValueError('tryReturn result')
+        # The multi-coin helper succeeds on the first execution of each tenth step.
+        coins = sorted(int(r['frame']) for r in messages if r['kind'] == 'multi_coin_after'
+                       and r['answer'] == '1' and r['preroll'] == '0')
+        if coins != [first, first + 10, first + 20]:
+            raise ValueError('coin cadence')
+        samples = {int(r['frame']): r for r in cap if r['kind'] == 'sample' and r['preroll'] == '0'}
+        for f in range(first, end):
+            r = samples[f]
+            if (r['current_n_name'] != 'LockOn' or r['target_id'] != identity
+                    or int(r['counter584']) != min(f - first + 1, 4) or int(r['counter580']) != min(f - first + 1, 10)):
+                raise ValueError(f'lock-on counters {f}')
+        self.lockon = set(range(first, end))
+        self.attack = {int(r['frame']) for r in messages if r['kind'] == 'send_after'
+                       and short(r['message_type']) == 'CapItemGet' and r['receiver_id'] == identity}
+
+    def verify_rebound(self, messages, cap, collider):
         """exeRebound: four consecutive executions, zero velocity after each, Return scheduled by the last."""
         runs = defaultdict(dict)
         for r in messages:
@@ -171,16 +263,19 @@ class Evidence:
             raise ValueError('rebound sample frames')
 
     def reason(self, frame, text):
-        return text.startswith('Cappy Rebound') and frame in self.rebound and frame in self.frames
+        if frame not in self.frames:
+            return False
+        return ((text.startswith('Cappy Rebound') and frame in self.rebound)
+                or (text.startswith('Cappy LockOn') and frame in self.lockon))
 
     def contact(self, frame, c):
-        return (frame in self.frames and c['who'] == 'cap' and c['kind'] == 'a' and not c['message']
-                and not c['answer'] and (c['self'], c['self_type']) == ('Eye', '0')
-                and (c['host_class'], c['other'], c['other_type']) in EYE_HOSTS)
-
-
-def signs_by_id(signs):
-    return {s['placement']['Id']: s for s in signs}
+        if frame not in self.frames or c['who'] != 'cap' or c['kind'] != 'a' or c['message'] or c['answer']:
+            return False
+        host = (c['host_class'], c['other'], c['other_type'])
+        if (c['self'], c['self_type']) == ('Eye', '0'):
+            return host in EYE_HOSTS
+        # The cap's Attack overlap with the hanger is the one that sends its protocol on this frame.
+        return (c['self'], c['self_type']) == ('Attack', '4') and host == ('CapHanger', 'Body', '12') and frame in self.attack
 
 
 def fixture():
@@ -194,7 +289,7 @@ def fixture():
     base = dict(zone='', actor='6', generation='6', registry_dropped='0', dead='0', clipped='0', pos_bits=bits)
     sources = [dict(base, frame='-2147483648', preroll='0', kind='init', id='obj454', current_n='0',
                     pending_n=ID_NERVE['SignBoardNormal'], step='0', current_n_name='')]
-    rewrite, rows, native = {}, {}, {}
+    rewrite, rows = {}, {}
     for f in range(0, 16):
         reacting = 2 <= f <= 12
         step = f - 1 if reacting else f if f < 2 else f - 13
@@ -226,7 +321,7 @@ def self_check():
     args = fixture()
     evidence = Evidence(*args)
     assert evidence.frames == set(range(16)) and evidence.rebound == {2, 3, 4, 5}, evidence.error
-    for change in ('stage', 'answer', 'sender', 'wall', 'rebound', 'message', 'placement'):
+    for change in ('stage', 'answer', 'sender', 'wall', 'rebound', 'message', 'placement', 'hanger'):
         bad = deepcopy(args)
         if change == 'stage':
             bad[0]['scenario'] = 2
@@ -240,15 +335,29 @@ def self_check():
             bad[4][5]['velocity_bits'] = '40000000,0,0'
         elif change == 'message':
             bad[4].append(dict(bad[4][0], frame='9', message_type='rs::SensorMsgPlayerAttackSpinAttack'))
+        elif change == 'hanger':
+            # A hanger placement that is not the recorded obj4377 is refused, whatever the rest says.
+            bad[0]['cap_hangers'] = [dict(placement=dict(UnitConfigName='CapHanger', Id='obj1', IsLinkDest=False,
+                                                         IsConnectToCollision=False, Links={}, ItemType='Coin',
+                                                         AppearItemNum=3, SensorRadius=60.,
+                                                         Scale=dict(X=1., Y=1., Z=1.), Rotate=dict(X=0., Y=90., Z=0.),
+                                                         Translate=dict(X=0., Y=0., Z=0.)),
+                                          sensors=HANGER_SENSORS, initial_phase='WaitPending')]
         else:
             bad[0]['signboards'][0]['placement']['Translate']['X'] = -4799.
         assert not Evidence(*bad).frames, change
     contact = dict(who='cap', kind='a', message='', answer='', self='Eye', self_type='0',
                    host_class='SignBoard', other='LookAt', other_type='18')
     ok = Evidence(None, None, None, None, None, {}, {}, {})
-    ok.frames = {4}
+    ok.frames, ok.attack, ok.lockon = {4}, {4}, {4}
     assert ok.contact(4, contact) and not ok.contact(5, contact)
     assert not ok.contact(4, dict(contact, other='Body')) and not ok.contact(4, dict(contact, who='player'))
+    attack = dict(contact, self='Attack', self_type='4', host_class='CapHanger', other='Body', other_type='12')
+    assert ok.contact(4, attack) and not ok.contact(5, attack)
+    ok.attack = set()
+    assert not ok.contact(4, attack)
+    assert ok.reason(4, 'Cappy LockOn (hit/captured something)') and not ok.reason(5, 'Cappy LockOn')
+    assert not ok.reason(4, 'Cappy Hack')
 
 
 if __name__ == '__main__':

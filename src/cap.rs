@@ -58,6 +58,18 @@ mod param {
 /// Where the cap appears, in front of the thrown-from point
 /// (`HackCap::exeThrowStart` sets the position that far along the throw).
 const START_DISTANCE: f32 = 150.;
+/// The cap's `Attack` sensor (`PlayerFunction::initCapModelActor` 0x4464a4): radius 100, raised 20.
+const ATTACK_SENSOR_RADIUS: f32 = 100.;
+const ATTACK_SENSOR_HEIGHT: f32 = 20.;
+/// `followTarget`: the interpolation runs 4 steps with weight 0.25 each; the other counter stops at 10.
+const LOCK_ON_INTERPOLATION_STEPS: u32 = 4;
+const LOCK_ON_WEIGHT: f32 = 0.25;
+const LOCK_ON_COUNTER_LIMIT: u32 = 10;
+/// `tryReturn` (0x3fd438): an ordinary target (`CapTargetInfo::_78` false) turns the cap's collision
+/// off for three steps; the other kind (0x3fd40c) for 1800, not ported.
+const RETURN_COLLISION_DELAY: i32 = 3;
+/// `CapPointHookStart` runs 11 frames (`MarioCapAnimation`).
+const LOCK_ON_START_ACTION_FRAMES: u32 = 11;
 /// Height of the player's head above the feet (`rs::getPlayerHeadPos`
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
@@ -184,6 +196,8 @@ pub enum CapNerve {
     /// player, which these single-player scenarios never exercise (GUESS: not modelled).
     Trample,
     Rebound,
+    /// `exeLockOn`: the cap attached to a target (`CapHanger`), see `LockOn`.
+    LockOn,
     Return,
 }
 impl CapNerve {
@@ -199,6 +213,7 @@ impl CapNerve {
             "TrampleReturn" => Self::TrampleReturn,
             "Trample" => Self::Trample,
             "Rebound" => Self::Rebound,
+            "LockOn" => Self::LockOn,
             "Return" => Self::Return,
             _ => return None,
         })
@@ -215,6 +230,7 @@ impl CapNerve {
             Self::TrampleReturn => "TrampleReturn",
             Self::Trample => "Trample",
             Self::Rebound => "Rebound",
+            Self::LockOn => "LockOn",
             Self::Return => "Return",
         }
     }
@@ -231,6 +247,11 @@ pub struct Moment {
     pub velocity: Vec3,
     pub speed: f32,
     pub return_speed: f32,
+    /// Where the cap was the row before its lock-on began (the saved matrix `followTarget`
+    /// blends from).
+    pub anchor: Vec3,
+    /// The return run began after a lock-on (its collision is off for the first steps).
+    pub after_lock_on: bool,
 }
 
 /// What the player hands the cap when it throws (`HackCap::startThrow`).
@@ -277,6 +298,10 @@ pub enum CapEvent {
     WallHit(f32),
     /// Accepted CapReflectCollide: index of the exported SignBoardNormal.
     Reflected(usize),
+    /// An accepted `CapStartLockOn`: index of the exported CapHanger.
+    LockedOn(usize),
+    /// A rejected `CapKeepLockOn` made the cap return (`tryReturn`).
+    LockReturn,
     /// The cap began to skim the water's surface (the reaction `水面移動`, its effect and sound).
     WaterFly,
     /// The cap began to rest on the water's surface (the reaction `水面待機`).
@@ -298,6 +323,41 @@ pub struct CapWorld<'a> {
     /// The water areas of the stage (`HackCap::updateWaterArea` asks them), when there are any
     /// to ask.
     pub water: Option<&'a WaterAreas>,
+    /// The exported hangers the cap can lock onto.
+    pub hangers: &'a [HangerView],
+}
+
+/// What the cap needs of an exported `CapHanger` (centimetres, start-relative).
+#[derive(Clone, Copy, Debug)]
+pub struct HangerView {
+    /// The actor's position: the target matrix's translation.
+    pub target: Vec3,
+    /// The Body sensor.
+    pub body: Vec3,
+    pub body_radius: f32,
+    /// Accepts `CapStartLockOn` (Wait) / `CapKeepLockOn` (Keep).
+    pub waiting: bool,
+    pub keeps: bool,
+}
+
+/// The cap's attachment to a target (`prepareLockOn`, `followTarget`, `exeLockOn`).
+#[derive(Clone, Copy, Debug)]
+struct LockOn {
+    index: usize,
+    /// The saved matrix: where the cap was when the target accepted it.
+    from: Vec3,
+    target: Vec3,
+    /// Counter `+0x584`: the target interpolation, approaching 4 by one a step.
+    interpolation: u32,
+    /// Counter `+0x580`: approaching 10 by one a step.
+    counter: u32,
+    /// The target's start action began (delayed while the cap still interpolates).
+    started: bool,
+    /// Steps since the start action began.
+    age: u32,
+    /// The target accepted the start in this very frame, so it keeps the cap in this frame's
+    /// first execution before its own update shows the Keep nerve.
+    fresh: bool,
 }
 
 /// What the cap keeps of the water (`HackCap::updateWaterArea`).
@@ -398,6 +458,13 @@ pub struct Cap {
     /// A throw put back mid-flight (lockstep) has no collider history: the move of the row before
     /// it, from this spot with this velocity, is replayed when a source needs the contact.
     contact_probe: Option<(Vec3, Vec3)>,
+    lock_on: Option<LockOn>,
+    /// A cap put back into a lock-on (or the return after it) keeps the collider of the row before:
+    /// the collision is off meanwhile, so the history is the throw's.
+    carry_collider: bool,
+    /// `tryReturn` turned the collision off for `+0x290` steps (`al::offCollide`); the return's
+    /// executions count it down and turn it back on at zero (0x407030).
+    collision_off_steps: i32,
     water: CapWater,
 }
 impl Cap {
@@ -484,6 +551,9 @@ impl Cap {
             wall_memory: Vec3::ZERO,
             wall_last_frame: false,
             contact_probe: None,
+            lock_on: None,
+            carry_collider: false,
+            collision_off_steps: 0,
             water: CapWater::default(),
         };
         if rolled {
@@ -613,6 +683,9 @@ impl Cap {
         if before.action == self.action {
             self.action_frame = before.action_frame;
         }
+        if self.carry_collider {
+            self.collider = before.collider.clone();
+        }
         if matches!(self.nerve, CapNerve::Rebound | CapNerve::Return)
             && matches!(before.action, "ReboundStart" | "ReboundEnd")
         {
@@ -630,6 +703,11 @@ impl Cap {
         self.return_speed = moment.return_speed;
         self.phase = phase_of(moment.nerve);
         self.returning = moment.nerve == CapNerve::Return;
+        self.carry_collider = moment.nerve == CapNerve::LockOn
+            || moment.nerve == CapNerve::Return && moment.after_lock_on;
+        if moment.nerve == CapNerve::Return && moment.after_lock_on {
+            self.collision_off_steps = (RETURN_COLLISION_DELAY - moment.step as i32).max(0);
+        }
         if moment.nerve == CapNerve::Throw && moment.velocity.length() > NEAR_ZERO {
             // The throw cruises at its speed along its front; a blocked move shows a shorter
             // step in the row, never a slower throw.
@@ -662,6 +740,7 @@ impl Cap {
             (CapNerve::Trample | CapNerve::TrampleReturn, step) => ("Trample", step - 1),
             (CapNerve::Rebound, 0) => (self.flight_clip(), 0),
             (CapNerve::Rebound, step) => ("ReboundStart", step - 1),
+            (CapNerve::LockOn, step) => (self.flight_clip(), step),
             (CapNerve::Return, 0) => (stay(self.left), 0),
             (CapNerve::Return, step) => (flying(self.kind, self.air, self.left), step - 1),
         };
@@ -674,6 +753,31 @@ impl Cap {
             if moment.nerve == CapNerve::Return && moment.step > 0 {
                 self.pose.stand_facing(self.front);
             }
+        }
+    }
+    /// Put a cap into a recorded lock-on (lockstep): the hanger it keeps and the counters the
+    /// recorded step implies. The row's position already is the blend of the step.
+    pub fn restore_lock_on(&mut self, index: usize, target: Vec3, moment: &Moment) {
+        let step = moment.step;
+        let started = step > LOCK_ON_INTERPOLATION_STEPS;
+        let age = step.saturating_sub(LOCK_ON_INTERPOLATION_STEPS + 1);
+        self.lock_on = Some(LockOn {
+            index,
+            from: moment.anchor,
+            target,
+            interpolation: step.min(LOCK_ON_INTERPOLATION_STEPS),
+            counter: step.min(LOCK_ON_COUNTER_LIMIT),
+            started,
+            age,
+            fresh: false,
+        });
+        if started {
+            self.action = "NoAction";
+            self.action_frame = if age > LOCK_ON_START_ACTION_FRAMES {
+                age - LOCK_ON_START_ACTION_FRAMES - 1
+            } else {
+                age
+            };
         }
     }
     /// Run one frame: the current nerve, then the collider's move. Returns
@@ -703,6 +807,13 @@ impl Cap {
             self.step = 0;
             self.phase = CapPhase::Stay;
         }
+        // `HackCap::attackSensor` runs in the sensor phase before the nerve: an accepted lock-on
+        // takes the nerve over for this very frame.
+        if matches!(self.nerve, CapNerve::Throw | CapNerve::ThrowBrake)
+            && let Some(index) = self.try_start_lock_on(world)
+        {
+            events.push(CapEvent::LockedOn(index));
+        }
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events, world),
             CapNerve::ThrowBrake => self.throw_brake(&mut events, world),
@@ -712,9 +823,12 @@ impl Cap {
             CapNerve::ThrowStay => self.throw_stay(world, &mut events),
             CapNerve::Trample | CapNerve::TrampleReturn => self.trample(&mut events),
             CapNerve::Rebound => self.rebound(),
+            CapNerve::LockOn => self.lock_on(world, &mut events),
             CapNerve::Return => self.go_back(head, world, &mut events),
         };
         self.step += 1;
+        // `prepareLockOn` stops the actor's collision: the nerve places the cap itself.
+        let attached = self.nerve == CapNerve::LockOn;
         if let Some(next) = next {
             self.nerve = next;
             self.step = 0;
@@ -722,7 +836,9 @@ impl Cap {
             self.returning = next == CapNerve::Return;
         }
         self.control_water_effects();
-        self.advance(world.mesh);
+        if !attached {
+            self.advance(world.mesh);
+        }
         // The sensors touch where the cap has come to.
         if self.nerve == CapNerve::Return
             && ((self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
@@ -736,7 +852,7 @@ impl Cap {
     /// stops at the surfaces it meets, otherwise the move is free.
     fn advance(&mut self, mesh: Option<&TriangleMesh>) {
         match mesh {
-            Some(mesh) => {
+            Some(mesh) if self.collision_off_steps == 0 => {
                 // A cap that rolls turns its collision shape with its pose.
                 let tilt = self.rolling.map(|_| self.pose.read_back());
                 let out = self
@@ -750,7 +866,8 @@ impl Cap {
                     self.spot += self.velocity;
                 }
             }
-            None => {
+            // (Without a stage, or with the collision turned off, the move is free.)
+            _ => {
                 self.spot += self.velocity;
                 // No stage: the floor is the plane the player stood on, and a rolling cap rests
                 // on it by the collider's radius.
@@ -842,6 +959,78 @@ impl Cap {
                 events.push(CapEvent::Reflected(index));
                 return Some(CapNerve::Rebound);
             }
+        }
+        None
+    }
+
+    /// `HackCap::attackSensor` against an exported hanger (0x4076fc): the cap's Attack sensor (a
+    /// sphere of 100 raised 20, `PlayerFunction::initCapModelActor`) strictly overlapping the hanger's
+    /// Body and a hanger in Wait that accepts `CapStartLockOn` (`prepareLockOn` 0x3fbe40). The hanger
+    /// accepts `CapIgnoreCollisionCheck` (0x2356c8), so the wall and ceiling arrow between the two
+    /// sensors (0x4078d0) is never asked.
+    fn try_start_lock_on(&mut self, world: &CapWorld) -> Option<usize> {
+        let attack = self.spot + Vec3::Y * ATTACK_SENSOR_HEIGHT;
+        let (index, hanger) = world.hangers.iter().enumerate().find(|(_, h)| {
+            h.waiting
+                && (h.body - attack).length_squared()
+                    < (ATTACK_SENSOR_RADIUS + h.body_radius).powi(2)
+        })?;
+        // The cap stops, enables only the trample sensor and starts the lock-on nerve.
+        self.velocity = Vec3::ZERO;
+        self.lock_on = Some(LockOn {
+            index,
+            from: self.spot,
+            target: hanger.target,
+            interpolation: 0,
+            counter: 0,
+            started: false,
+            age: 0,
+            fresh: true,
+        });
+        self.nerve = CapNerve::LockOn;
+        self.step = 0;
+        self.phase = phase_of(CapNerve::LockOn);
+        Some(index)
+    }
+
+    /// `HackCap::exeLockOn` (0x3fe8c0) with `followTarget` (0x3fd7ec): the interpolation counter
+    /// approaches 4 and blends the saved matrix toward the target with weight 0.25 per counter,
+    /// the other counter approaches 10, the target's start action waits for the interpolation, and
+    /// a target that no longer keeps the cap sends it home (`tryReturn` 0x3fd2e8).
+    fn lock_on(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
+        let mut lock = self.lock_on?;
+        let interpolating = lock.interpolation < LOCK_ON_INTERPOLATION_STEPS;
+        if interpolating {
+            lock.interpolation += 1;
+            let weight = LOCK_ON_WEIGHT * lock.interpolation as f32;
+            self.spot = lock.from + (lock.target - lock.from) * weight;
+        } else {
+            self.spot = lock.target;
+        }
+        self.pos = self.spot * UNIT;
+        lock.counter = (lock.counter + 1).min(LOCK_ON_COUNTER_LIMIT);
+        if !interpolating {
+            if !lock.started {
+                // The hat's start action begins; the cap's own action goes idle.
+                lock.started = true;
+                self.play("NoAction");
+            } else {
+                lock.age += 1;
+                // `isActionEnd` of the start action is tested before the clip advances.
+                if lock.age == LOCK_ON_START_ACTION_FRAMES + 1 {
+                    self.play("NoAction");
+                }
+            }
+        }
+        let kept = lock.fresh || world.hangers.get(lock.index).is_some_and(|h| h.keeps);
+        lock.fresh = false;
+        self.lock_on = Some(lock);
+        // Each execution asks the target to keep the cap; a refusal returns it.
+        if !kept {
+            self.lock_on = None;
+            self.collision_off_steps = RETURN_COLLISION_DELAY;
+            events.push(CapEvent::LockReturn);
+            return Some(CapNerve::Return);
         }
         None
     }
@@ -1185,6 +1374,9 @@ impl Cap {
         world: &CapWorld,
         events: &mut Vec<CapEvent>,
     ) -> Option<CapNerve> {
+        if self.collision_off_steps > 0 {
+            self.collision_off_steps -= 1;
+        }
         self.update_water_area(world, events);
         if self.step == 0 {
             // `tryStartActionIfNotPlaying`: a cap coming out of the spiral keeps its clip.
@@ -1287,9 +1479,11 @@ fn phase_of(nerve: CapNerve) -> CapPhase {
         | CapNerve::ThrowRolling
         | CapNerve::ThrowRollingBrake
         | CapNerve::ThrowSpiral => CapPhase::Out,
-        CapNerve::ThrowStay | CapNerve::Trample | CapNerve::TrampleReturn | CapNerve::Rebound => {
-            CapPhase::Stay
-        }
+        CapNerve::ThrowStay
+        | CapNerve::Trample
+        | CapNerve::TrampleReturn
+        | CapNerve::Rebound
+        | CapNerve::LockOn => CapPhase::Stay,
         CapNerve::Return => CapPhase::Return,
     }
 }
@@ -1334,7 +1528,9 @@ fn stay(left: bool) -> &'static str {
 /// flying loop 12).
 fn clip_shape(name: &str) -> (u32, bool) {
     // MarioCapAnimation original clip lengths (cap-clips source inventory).
-    if name == "ReboundStart" {
+    if name == "NoAction" {
+        (17, false)
+    } else if name == "ReboundStart" {
         (3, false)
     } else if name == "ReboundEnd" {
         (7, false)
