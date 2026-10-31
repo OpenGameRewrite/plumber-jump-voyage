@@ -23,6 +23,7 @@ const FIGURE_JOINT: &str = "MarioDot";
 
 /// The 8-bit joints in the file's order (parents before their children) with their pose
 /// relative to their parent for a clip at a frame.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn locals(clip: &str, frame: f32) -> Option<Vec<(&'static str, Sample)>> {
     let curves = Curves::installed_2d()?;
     let clip = curves.clip(clip)?;
@@ -34,13 +35,23 @@ pub fn locals(clip: &str, frame: f32) -> Option<Vec<(&'static str, Sample)>> {
 /// The joints' world matrices, in the file's order, for a clip at a frame under the actor's
 /// matrix.
 pub fn world_pose(actor: &Mat34, clip: &str, frame: f32) -> Option<Vec<(&'static str, Mat34)>> {
-    let curves = Curves::installed_2d()?;
+    compose(Curves::installed_2d()?, actor, clip, frame)
+}
+
+fn compose<'a>(
+    curves: &'a Curves,
+    actor: &Mat34,
+    clip: &str,
+    frame: f32,
+) -> Option<Vec<(&'a str, Mat34)>> {
+    let clip = curves.clip(clip)?;
     let mut worlds: Vec<Mat34> = Vec::with_capacity(curves.joint_count());
     let mut named = Vec::with_capacity(curves.joint_count());
-    for (joint, (name, sample)) in locals(clip, frame)?.into_iter().enumerate() {
+    for joint in 0..curves.joint_count() {
+        let local = local_matrix(&curves.pose(clip, joint, frame)?);
         let above = curves.parent(joint).map_or(*actor, |parent| worlds[parent]);
-        worlds.push(mul34(&above, &local_matrix(&sample)));
-        named.push((name, worlds[joint]));
+        worlds.push(mul34(&above, &local));
+        named.push((curves.joint_name(joint)?, worlds[joint]));
     }
     Some(named)
 }
@@ -66,6 +77,32 @@ struct Action {
     tracks: BTreeMap<String, Vec<bool>>,
 }
 
+impl Action {
+    /// The action's length in frames and whether it loops there. The tracks carry a sample per
+    /// frame including the last, so the length is one less.
+    fn length(&self) -> Option<(u32, bool)> {
+        let samples = self.tracks.values().map(Vec::len).max()?;
+        Some((u32::try_from(samples.checked_sub(1)?).ok()?, self.looping))
+    }
+
+    /// Whether a part joint shows on a frame: both the figure joint above all parts and the
+    /// part's own track must be on. A looping action wraps; a held one keeps its last sample.
+    fn shows(&self, frame: u32, joint: &str) -> Option<bool> {
+        let shown = |track: &str| {
+            let samples = self.tracks.get(track)?;
+            let last = samples.len().checked_sub(1)?;
+            let frame = frame as usize;
+            let at = if self.looping && last > 0 {
+                frame % last
+            } else {
+                frame.min(last)
+            };
+            Some(samples[at])
+        };
+        Some(shown(FIGURE_JOINT)? && shown(joint)?)
+    }
+}
+
 #[derive(Deserialize)]
 struct Extras {
     expressions: BTreeMap<String, Action>,
@@ -88,31 +125,15 @@ fn actions() -> Option<&'static BTreeMap<String, Action>> {
         .as_ref()
 }
 
-/// The length of an action in frames, the animator's counter, and whether it loops there. The
-/// visibility tracks carry a sample per frame including the last, so the length is one less.
+/// The length of an action in frames (the animator's counter runs it) and whether it loops there.
 pub fn action_length(action: &str) -> Option<(u32, bool)> {
-    let action = actions()?.get(action)?;
-    let samples = action.tracks.values().map(Vec::len).max()?;
-    Some((u32::try_from(samples.checked_sub(1)?).ok()?, action.looping))
+    actions()?.get(action)?.length()
 }
 
-/// Whether a part joint shows on a frame of an action: both the figure joint above all parts and
-/// the part's own track must be on. A looping action wraps; a held one keeps its last sample.
+/// Whether a part joint shows on a frame of an action (see `Action::shows`).
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn joint_visible(action: &str, frame: u32, joint: &str) -> Option<bool> {
-    let action = actions()?.get(action)?;
-    let shown = |track: &str| {
-        let samples = action.tracks.get(track)?;
-        let last = samples.len().checked_sub(1)?;
-        let frame = frame as usize;
-        let at = if action.looping && last > 0 {
-            frame % last
-        } else {
-            frame.min(last)
-        };
-        Some(samples[at])
-    };
-    Some(shown(FIGURE_JOINT)? && shown(joint)?)
+    actions()?.get(action)?.shows(frame, joint)
 }
 
 /// How many frames the 8-bit skeleton's clip lasts (the archive's own count), e.g. the
@@ -120,4 +141,11 @@ pub fn joint_visible(action: &str, frame: u32, joint: &str) -> Option<bool> {
 #[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
 pub fn clip_frames(clip: &str) -> Option<f32> {
     Some(Curves::installed_2d()?.clip(clip)?.frames())
+}
+
+#[path = "tests/model_2d.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

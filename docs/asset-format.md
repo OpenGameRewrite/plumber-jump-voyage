@@ -57,7 +57,9 @@ and falls back to the baked tracks otherwise. Write it with `python tools/conver
 | Channel | `u32` keys; 0 is a constant (`f32` value), otherwise per key `f32` frame and `f32` c0, c1, c2, c3 |
 
 Between a key and the next, `t` runs from 0 to 1 and the value is `((c3 t + c2) t + c1) t + c0`;
-before the first key and after the last it is that key's value. Joints and clips the file does
+before the first key and after the last it is that key's value. The 8-bit model has its own file of the same format, `assets/local/Mario2D.curves.bin`
+(`convert-outfits.py --model-2d`): its 11 joints and the clips of PlayerAnimation2D.
+Joints and clips the file does
 not mention (the finger and face joints, which the converter poses from other archives) keep
 their baked tracks.
 

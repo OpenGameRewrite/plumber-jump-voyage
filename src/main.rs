@@ -78,6 +78,7 @@ fn main() {
         cap::self_check();
         cap_joint::self_check();
         clip_curves::self_check();
+        model_2d::self_check();
         geometry::self_check();
         skeleton_pose::self_check();
         collider::self_check();

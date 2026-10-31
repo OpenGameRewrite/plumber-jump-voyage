@@ -91,23 +91,46 @@ geometry export for matching captures.
 **8-bit presentation facts.** Counter and pose follow the model without a sub
 animation (`PlayerAnimator::updateAnimFrame` 0x42a214 -> `updateSync` 0x42d170,
 counter = action frame + rate), so Wait/Move loops read their length for one row.
-Mario2D/PlayerAnimation2D carry no AnimInterp resource (interpolation 0). Jump/Fall
-visibility actions are 5 frames while their skeletal clips are 1 frame, so the pose
-layer holds frame 1 (`layer_hold_length_of`) as the counter runs on.
+Mario2D/PlayerAnimation2D carry no AnimInterp resource (interpolation 0), so the
+8-bit skeleton is posed by the animator's one clip (`trace::clip_2d`), never by the
+3D blend. Two lengths are kept apart and both come from the installed files
+(`src/model_2d.rs`): the visibility actions' length (the animator's counter; the
+GLB's `extras.expressions`, samples minus one) and the skeletal clip's own length
+(`Mario2D.curves.bin`). Jump/Fall/JumpTrample are 5 frames as actions but 1 frame
+as skeletal clips, so the pose layer holds frame 1 (`layer_hold_length_of`) as the
+counter runs on.
 
-Strict status: movement, state, collision, events, effects, sounds, anim counter and
-layers match for all four fixtures in free replay; only `bones` fails there (the
-8-bit joints need the unintegrated Mario2D skeleton). Camera-fed lockstep also shows
-the run-start layer/bone reconstruction residual of rows 23-33 that every lockstep
-run with a run start shows.
+The 8-bit skeleton (AllRoot, MarioDot, MarioDot00..08, identity bind pose) is
+`Mario2D.curves.bin`, installed with `tools/convert-outfits.py --model-2d` (use a
+curves-capable `--adapter local/converter/convert-curves.exe`), together with
+`Mario2D.glb` (geometry without clips plus the 20 visibility actions). The pipe
+clips slide the joints along the mouth (DokanSideIn/DokanOut/DokanIn), which is
+what the trace's `bones` column shows while the model is hidden in the pipe.
+
+Strict status: all four fixtures PASS strictly in free replay (0 excluded frames,
+0 failing columns). Camera-fed lockstep still fails `anim_layers` and `bones` in
+rows 23-33, the run-start reconstruction residual of the 3D body that every
+lockstep run with a run start shows (see "Known lockstep residuals").
+
+Windowed game: `src/model_2d_view.rs` shows the 8-bit model while the keeper is 2D,
+placed by the actor's pose matrix (side, up, front axes: facing flips as the pose
+does, no lean or turning ease), posed from the curves and showing one sprite at a
+time by the visibility track of the current action (a hidden figure joint hides all
+parts); the body under the pivot is hidden meanwhile. The pipe actors' models
+(`DokanChange2D`, the flat `Dokan2D`; `convert-outfits.py --object NAME --romfs ...`)
+are drawn static at the stage export's matrices by `src/pipe_view.rs`.
+Fidelity limits: the placeholder scene has no Cascade scenery or 2D floor; the pipe
+actor's own animation and its Type variant choice (the two Dokan2D meshes are mirror
+images; the first is drawn) are not reproduced; the palette texture is sampled with
+nearest filtering and the BodyMT colour gain 1.3 (`uniform0_mul_color`) is applied
+as a plain multiplier, both presentation choices not verified against the original
+renderer; costumes other than the classic Mario have 2D models of their own that are
+not installed (the classic 8-bit model is shown for all outfits); no recording of the
+original game's 2D section exists to compare screenshots with.
 
 Still unported: dedicated 2D Brake/Turn, suspended/separate-controller input,
-airborne side-snap pose variants, the installed Mario2D model and its skeleton/action
-integration, moving or switched areas and the disk collider's moving parts. The ordinary
-3D model is still rendered after the dimension change; its pose is not 8-bit
-presentation. The converter's existing generic `--all-animations` and `--curves-only`
-modes can export Mario2D and PlayerAnimation2D; no hand-authored replacement is needed.
-All four wave16 fixtures FAIL strictly on `bones` (and the lockstep residual) only.
+airborne side-snap pose variants, moving or switched areas and the disk collider's
+moving parts.
 
 ## CapTrampoline spin jump
 

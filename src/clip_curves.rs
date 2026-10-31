@@ -154,7 +154,7 @@ impl Curves {
         Self::parse(&bytes)
     }
 
-    fn parse(bytes: &[u8]) -> Option<Curves> {
+    pub(crate) fn parse(bytes: &[u8]) -> Option<Curves> {
         let mut file = Reader(bytes);
         if file.bytes(MAGIC.len())? != MAGIC {
             return None;
@@ -321,7 +321,7 @@ fn euler_xyz_quaternion([x, y, z]: [f64; 3]) -> [f64; 4] {
 }
 
 #[path = "tests/clip_curves.rs"]
-mod checks;
+pub(crate) mod checks;
 
 pub fn self_check() {
     checks::run();

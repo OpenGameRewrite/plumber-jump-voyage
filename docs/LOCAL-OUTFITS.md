@@ -88,6 +88,18 @@ python tools/convert-outfits.py --curves
 This creates `assets/local/Mario.curves.bin` and changes nothing else. Run it again after
 adding clips.
 
+The 8-bit Mario of the 2D sections (a separate rig with its own clips) and the stage
+pipes are converted the same way, into new files that change nothing already installed:
+
+```sh
+python tools/convert-outfits.py --adapter local/converter/convert-curves.exe --model-2d
+python tools/convert-outfits.py --adapter local/converter/convert-curves.exe --romfs "path/to/romfs" --object Dokan2D --object DokanChange2D
+```
+
+`--model-2d` writes `assets/local/Mario2D.glb` and `assets/local/Mario2D.curves.bin`
+(`--object` writes `assets/local/objects/NAME.glb`; its RomFS must hold that
+object's archive). The game shows them when a recording enters a 2D area.
+
 ## Add movement sounds
 
 ```sh

@@ -6,6 +6,7 @@ pub(super) fn run() {
     euler_angles_turn_about_x_first_then_y_then_z();
     a_compensated_joint_is_stored_over_its_parents_scale();
     a_damaged_file_is_refused();
+    a_joint_a_clip_leaves_alone_keeps_its_bind_pose();
 }
 
 fn channel() -> Channel {
@@ -158,4 +159,68 @@ fn a_damaged_file_is_refused() {
     assert!(Curves::parse(&good[..good.len() - 1]).is_none());
     assert!(Curves::parse(b"not a curve file").is_none());
     assert!(Curves::parse(&[]).is_none());
+}
+
+/// Two joints with bind translations (1, 2, 3) and (0, 5, 0); the one clip, `Hold` of one frame,
+/// animates only the second joint's z translation (a constant 7).
+pub(crate) fn file_with_bind_pose() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&2u32.to_le_bytes());
+    for (name, parent, translation) in [("Root", -1i32, [1f32, 2., 3.]), ("Part", 0, [0., 5., 0.])]
+    {
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&parent.to_le_bytes());
+        out.push(0);
+        let bind = [
+            translation[0],
+            translation[1],
+            translation[2],
+            0.,
+            0.,
+            0.,
+            1.,
+            1.,
+            1.,
+            1.,
+        ];
+        for value in bind {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(b"Hold");
+    out.extend_from_slice(&1f32.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.push(1);
+    for channel in 0..CHANNELS {
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let value = match channel {
+            0..=2 | 6 => 1f32,
+            9 => 7.,
+            _ => 0.,
+        };
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+#[cfg_attr(test, test)]
+fn a_joint_a_clip_leaves_alone_keeps_its_bind_pose() {
+    let curves = Curves::parse(&file_with_bind_pose()).expect("a well formed file");
+    let clip = curves.clip("Hold").unwrap();
+    assert_eq!(clip.frames(), 1.);
+    // The animated joint takes the clip's translation (its channels are constants).
+    let part = curves.pose(clip, 1, 0.).unwrap();
+    assert_eq!(part.translation, [0., 0., 7.]);
+    // The one the clip does not mention is at its bind pose, whatever the frame.
+    let root = curves.pose(clip, 0, 3.).unwrap();
+    assert_eq!(root.translation, [1., 2., 3.]);
+    assert_eq!(root.rotation, [0., 0., 0., 1.]);
+    assert_eq!(root.scale, [1., 1., 1.]);
+    assert_eq!(curves.parent(1), Some(0));
+    assert_eq!(curves.parent(0), None);
 }
