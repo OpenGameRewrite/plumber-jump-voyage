@@ -13,6 +13,9 @@
 //! rolling throw, the lock-on, the attack on what it hits), its floor reactions, the stick
 //! steering of a throw in progress and the throws of the motion controls (`DoubleUp`,
 //! `ThrowAppend`, `Rethrow`) have no counterpart yet.
+//! The ordinary SignBoardNormal reflection and four-execution zero-velocity Rebound
+//! are ported (0x401914, 0x406c0c). `redirect()` remains an invented flick
+//! shortcut; this round deliberately leaves it unchanged.
 //!
 //! The cap is a separate actor that updates before the player in the same
 //! frame. It runs its current nerve once per frame and then its collider moves
@@ -180,6 +183,7 @@ pub enum CapNerve {
     /// like the other one here; the original lets it chain back into `ThrowStay` for a second
     /// player, which these single-player scenarios never exercise (GUESS: not modelled).
     Trample,
+    Rebound,
     Return,
 }
 impl CapNerve {
@@ -194,6 +198,7 @@ impl CapNerve {
             "ThrowStay" => Self::ThrowStay,
             "TrampleReturn" => Self::TrampleReturn,
             "Trample" => Self::Trample,
+            "Rebound" => Self::Rebound,
             "Return" => Self::Return,
             _ => return None,
         })
@@ -209,6 +214,7 @@ impl CapNerve {
             Self::ThrowStay => "ThrowStay",
             Self::TrampleReturn => "TrampleReturn",
             Self::Trample => "Trample",
+            Self::Rebound => "Rebound",
             Self::Return => "Return",
         }
     }
@@ -269,6 +275,8 @@ pub enum CapEvent {
     /// reaction, its effect and the sound `HitCol`, which is louder the
     /// squarer the hit (the cosine of the angle).
     WallHit(f32),
+    /// Accepted CapReflectCollide: index of the exported SignBoardNormal.
+    Reflected(usize),
     /// The cap began to skim the water's surface (the reaction `水面移動`, its effect and sound).
     WaterFly,
     /// The cap began to rest on the water's surface (the reaction `水面待機`).
@@ -387,6 +395,9 @@ pub struct Cap {
     /// whether the collider found a wall in the previous frame.
     wall_memory: Vec3,
     wall_last_frame: bool,
+    /// A throw put back mid-flight (lockstep) has no collider history: the move of the row before
+    /// it, from this spot with this velocity, is replayed when a source needs the contact.
+    contact_probe: Option<(Vec3, Vec3)>,
     water: CapWater,
 }
 impl Cap {
@@ -472,6 +483,7 @@ impl Cap {
             collider: PlayerCollider::for_cap(),
             wall_memory: Vec3::ZERO,
             wall_last_frame: false,
+            contact_probe: None,
             water: CapWater::default(),
         };
         if rolled {
@@ -601,6 +613,12 @@ impl Cap {
         if before.action == self.action {
             self.action_frame = before.action_frame;
         }
+        if matches!(self.nerve, CapNerve::Rebound | CapNerve::Return)
+            && matches!(before.action, "ReboundStart" | "ReboundEnd")
+        {
+            self.action = before.action;
+            self.action_frame = before.action_frame;
+        }
     }
     /// Put the cap into a recorded moment (lockstep).
     pub fn resume(&mut self, moment: &Moment) {
@@ -612,6 +630,14 @@ impl Cap {
         self.return_speed = moment.return_speed;
         self.phase = phase_of(moment.nerve);
         self.returning = moment.nerve == CapNerve::Return;
+        if moment.nerve == CapNerve::Throw && moment.velocity.length() > NEAR_ZERO {
+            // The throw cruises at its speed along its front; a blocked move shows a shorter
+            // step in the row, never a slower throw.
+            self.contact_probe = Some((
+                moment.spot - moment.velocity,
+                moment.velocity.normalize() * moment.speed,
+            ));
+        }
         // The throw's speed fixes how long it cruises and how hard it brakes.
         self.speed = moment.speed;
         let brake_frames = param::BRAKE_FRAMES as f32;
@@ -634,6 +660,8 @@ impl Cap {
             (CapNerve::ThrowStay, step) => (stay(self.left), step - 1),
             (CapNerve::Trample | CapNerve::TrampleReturn, 0) => (stay(self.left), 0),
             (CapNerve::Trample | CapNerve::TrampleReturn, step) => ("Trample", step - 1),
+            (CapNerve::Rebound, 0) => (self.flight_clip(), 0),
+            (CapNerve::Rebound, step) => ("ReboundStart", step - 1),
             (CapNerve::Return, 0) => (stay(self.left), 0),
             (CapNerve::Return, step) => (flying(self.kind, self.air, self.left), step - 1),
         };
@@ -661,6 +689,11 @@ impl Cap {
         let head = world.player / UNIT + Vec3::Y * HEAD_HEIGHT;
         let body = world.player / UNIT + Vec3::Y * CATCH_CENTER_HEIGHT;
         let mut events = Vec::new();
+        if let (Some((from, velocity)), Some(mesh)) = (self.contact_probe.take(), world.mesh)
+            && !mesh.signboards.is_empty()
+        {
+            self.collider.collide_tilted(mesh, from, velocity, 0., None);
+        }
         // (The grounding effect's emit call is made by the steps that roll on a surface.)
         if let Some(rolling) = self.rolling.as_mut() {
             rolling.called = false;
@@ -678,6 +711,7 @@ impl Cap {
             CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT),
             CapNerve::ThrowStay => self.throw_stay(world, &mut events),
             CapNerve::Trample | CapNerve::TrampleReturn => self.trample(&mut events),
+            CapNerve::Rebound => self.rebound(),
             CapNerve::Return => self.go_back(head, world, &mut events),
         };
         self.step += 1;
@@ -776,12 +810,54 @@ impl Cap {
         if self.step == 0 {
             events.push(CapEvent::Thrown);
         }
+        // exeThrow 0x401834 checks the preceding collider before wall sliding.
+        if let Some(next) = self.reflect_collision(world.mesh, events) {
+            return Some(next);
+        }
         self.wall_reaction(events);
         self.follow_terrain(world.mesh);
         self.pose.face_back_along(self.front);
         self.change_throw_param_in_water(world, events);
         self.velocity = scale_except_direction(self.front, self.velocity, ACROSS_DAMPING);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
+    }
+
+    fn reflect_collision(
+        &self,
+        mesh: Option<&TriangleMesh>,
+        events: &mut Vec<CapEvent>,
+    ) -> Option<CapNerve> {
+        let mesh = mesh?;
+        // tryCollideReflectReaction 0x401914: ground, wall, then ceiling.
+        for contact in [
+            &self.collider.floor,
+            &self.collider.wall,
+            &self.collider.ceiling,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let object = mesh.triangles[contact.triangle as usize].object as usize;
+            if let Some(index) = mesh.signboards.iter().position(|s| s.object == object) {
+                events.push(CapEvent::Reflected(index));
+                return Some(CapNerve::Rebound);
+            }
+        }
+        None
+    }
+
+    fn rebound(&mut self) -> Option<CapNerve> {
+        // exeRebound 0x406c48..0x406dc8: ordinary single play. The entry
+        // sample retains Throw velocity; only this nerve's first execution clears it.
+        if self.step == 0 {
+            self.play("ReboundStart");
+            self.rolling = None;
+            self.spiral_side = 0.;
+            self.capcatch = false;
+            self.velocity = Vec3::ZERO;
+        }
+        // 0x406f00..0x406f28 compares step>=3, independent of animation end.
+        (self.step >= 3).then_some(CapNerve::Return)
     }
     /// `HackCap::exeThrowRolling`: roll along the surface at the throw's speed for the steps the
     /// distance allows, then brake.
@@ -885,6 +961,9 @@ impl Cap {
     /// `HackCap::exeThrowBrake`: take a tenth of the speed off each frame; the
     /// cap stays where it has stopped.
     fn throw_brake(&mut self, events: &mut Vec<CapEvent>, world: &CapWorld) -> Option<CapNerve> {
+        if let Some(next) = self.reflect_collision(world.mesh, events) {
+            return Some(next);
+        }
         self.wall_reaction(events);
         self.follow_terrain(world.mesh);
         self.pose.face_back_along(self.front);
@@ -1109,7 +1188,10 @@ impl Cap {
         self.update_water_area(world, events);
         if self.step == 0 {
             // `tryStartActionIfNotPlaying`: a cap coming out of the spiral keeps its clip.
-            let action = if self.spiral_side != 0. {
+            let action = if self.action == "ReboundStart" {
+                // exeReturn 0x406f74..0x406f98.
+                "ReboundEnd"
+            } else if self.spiral_side != 0. {
                 "FlyingWaitSpiral"
             } else {
                 thrown(Throw::Forward, self.air, self.left)
@@ -1205,7 +1287,9 @@ fn phase_of(nerve: CapNerve) -> CapPhase {
         | CapNerve::ThrowRolling
         | CapNerve::ThrowRollingBrake
         | CapNerve::ThrowSpiral => CapPhase::Out,
-        CapNerve::ThrowStay | CapNerve::Trample | CapNerve::TrampleReturn => CapPhase::Stay,
+        CapNerve::ThrowStay | CapNerve::Trample | CapNerve::TrampleReturn | CapNerve::Rebound => {
+            CapPhase::Stay
+        }
         CapNerve::Return => CapPhase::Return,
     }
 }
@@ -1249,7 +1333,12 @@ fn stay(left: bool) -> &'static str {
 /// (`MarioCapAnimation`: the flying clips run 11 frames, the stay's loop 9, the continuous throw's
 /// flying loop 12).
 fn clip_shape(name: &str) -> (u32, bool) {
-    if name.starts_with("Stay") {
+    // MarioCapAnimation original clip lengths (cap-clips source inventory).
+    if name == "ReboundStart" {
+        (3, false)
+    } else if name == "ReboundEnd" {
+        (7, false)
+    } else if name.starts_with("Stay") {
         (9, true)
     } else if name.starts_with("FlyingWaitCapCatch") {
         // The continuous throw's flying clip loops (12 frames, recorded: cap-throw-triple).

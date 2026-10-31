@@ -208,6 +208,7 @@ fn begin(
     if let Some(mesh) = course.mesh.as_deref() {
         player.init_flower_seed(mesh);
         player.trampolines = mesh.trampolines.clone();
+        player.signboards = mesh.signboards.clone();
     }
     driver.phase = Phase::Loading;
     time.pause();

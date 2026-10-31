@@ -37,6 +37,7 @@ from rocket_flower import Evidence as RocketEvidence
 from coin_chameleon import Evidence as CoinChameleonEvidence
 from pukupuku import Evidence as PukupukuEvidence
 from carry_objects import Evidence as CarryEvidence, mario_answer
+from cap_sources import Evidence as CapSourceEvidence
 from cap_trampoline import Evidence as TrampolineEvidence
 from collections import OrderedDict
 from dimension import Evidence as DimensionEvidence
@@ -219,7 +220,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, cap_samples=None, cap_collider=None, cap_sources=None, cap_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -247,6 +248,7 @@ class Judge:
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
         self._trampoline = TrampolineEvidence(geometry, trampolines, spin_player, spin_messages, rewrite_rows, game_rows, preroll or {})
+        self._cap_sources = CapSourceEvidence(geometry, cap_samples, cap_collider, cap_sources, cap_messages, rewrite_rows, game_rows, preroll or {})
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
         # KickStone's deterministic port stops before the first unseeded global RNG
         # consumer. Absence of later Mario contacts cannot certify the frozen source.
@@ -492,6 +494,9 @@ class Judge:
             self._floor_height(f, reason)
         elif reason.startswith("horizontal displacement differs"):
             self._displacement(f, reason)
+        elif self._cap_sources.reason(f, reason):
+            v.accept(f, "exported SignBoardNormal Rebound",
+                     "accepted CapReflectCollide of obj454, ordered four-step zero-velocity exeRebound, verified collider identity")
         else:
             v.refuse(f, reason)
 
@@ -587,6 +592,9 @@ class Judge:
                 continue
             if self._rocket.contact(f, c, self.rows, self.preroll, self._start):
                 v.accept(f, "exported RocketFlower equipment", "placement-bound sensors and independently reproduced pickup, watcher phase, refresh and expiry")
+                continue
+            if self._cap_sources.contact(f, c):
+                v.accept(f, "exported SignBoardNormal perception", "stage/scenario-bound sign/hanger placements, original sensors, ordered source lifecycle and only whitelisted perception queries")
                 continue
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
@@ -853,6 +861,8 @@ def self_check():
     check_dimension()
     from cap_trampoline import self_check as check_trampoline
     check_trampoline()
+    from cap_sources import self_check as check_cap_sources
+    check_cap_sources()
     check_geysers()
     from grab_ceil import self_check as check_grabceil
     check_grabceil()

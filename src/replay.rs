@@ -939,6 +939,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     seed_rocket_flowers(&mut player, script, recorded)?;
     if let Some(mesh) = &course.mesh {
         player.trampolines = mesh.trampolines.clone();
+        player.signboards = mesh.signboards.clone();
     }
     let mut recorder = Recorder::new(
         options.table.clone(),

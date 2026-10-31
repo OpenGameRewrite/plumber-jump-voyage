@@ -321,6 +321,12 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         // `HackCap::exeThrowStay` starts a level sound on every step, and the
         // stay's end raises the reaction for the return from it.
         Fx::CapStay => vec![Cue::CapPlay("PgStayLv")],
+        // The reaction an accepted CapReflectCollide asks of the cap
+        // (`rs::requestHitReactionToAttacker`: 帽子反射ヒット).
+        Fx::CapReflect => vec![Cue::Reaction {
+            cap: true,
+            name: "CapBounceHit",
+        }],
         Fx::CapReturn => vec![Cue::Reaction {
             cap: true,
             name: "ReturnFromStay",

@@ -226,6 +226,7 @@ pub type ControllerState = (
 mod abyss;
 mod actor_collider;
 mod bind;
+mod cap_sources;
 pub mod cap_trampoline;
 pub mod carry;
 #[path = "movement/console_libm.rs"]
@@ -301,6 +302,7 @@ mod rolling;
 mod run_2d;
 #[path = "movement/run_cycle.rs"]
 mod run_cycle;
+pub mod sign_board;
 #[path = "movement/slide_control.rs"]
 mod slide_control;
 #[path = "movement/slope_slide.rs"]
@@ -987,6 +989,8 @@ pub enum Fx {
     CapReturn,
     /// The cap turned along a wall; the number is how square the hit was.
     CapWallHit(f32),
+    /// An exported actor accepted the cap's `CapReflectCollide`: its hit reaction.
+    CapReflect,
     Catch,
     /// The cap was trampled: its first step in the trample nerve.
     CapBounce,
@@ -1143,6 +1147,7 @@ pub struct Player {
     force_run: force_run::ForceRun,
     pub rocket: rocket_flower::RocketFlowers,
     pub trampolines: Vec<cap_trampoline::Trampoline>,
+    pub signboards: Vec<sign_board::SignBoard>,
     spin_flower: spin_flower::SpinFlower,
     hip_drop_reflect: bool,
     surface_run: surface_run::SurfaceRun,
@@ -1495,6 +1500,7 @@ impl Default for Player {
             force_run: force_run::ForceRun::default(),
             rocket: default(),
             trampolines: default(),
+            signboards: default(),
             spin_flower: default(),
             hip_drop_reflect: false,
             surface_run: default(),
@@ -2645,7 +2651,10 @@ impl Player {
                 self.step_phase = frame;
             }
         }
-        self.pull = if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn) {
+        // (`exeSpinGround` pulls with the ground control's gravity like the run states do.)
+        self.pull = if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
+            || self.mode == Move::Throw && self.grounded
+        {
             GRAVITY_MOVE
         } else {
             t::GRAVITY
@@ -3281,6 +3290,9 @@ impl Player {
         self.query_equipment_force_run();
         if advance_sources {
             self.trampoline_sensor_phase(scene);
+            for sign in &mut self.signboards {
+                sign.tick();
+            }
         }
         self.cap_sensor_phase(&o);
         self.puku_sensor_phase(scene);
@@ -5789,6 +5801,13 @@ impl Player {
                     };
                     self.events.push(Fx::ThrowVoice(voice));
                 }
+                CapEvent::Reflected(index) => {
+                    self.signboards[index].reflect();
+                    self.events.push(Fx::CapReflect);
+                    // MarioCapCommonInfo/ActorHitReactionCtrl.byml, 帽子反射ヒット:
+                    // IsStopSceneForHitEffect with StopSceneFrame 2.
+                    self.rocket.request_scene_stop(2);
+                }
                 CapEvent::WallHit(strength) => self.events.push(Fx::CapWallHit(strength)),
                 CapEvent::Staying => self.events.push(Fx::CapStay),
                 CapEvent::WaterFly => self.events.push(Fx::CapWaterFly),
@@ -5816,6 +5835,12 @@ impl Player {
                     // starts before this frame's advance.
                     self.catch_clip = self.clip_of_catch();
                     if self.catch_clip == "CatchCap" {
+                        // The skip after `startAction` belongs to a main clip that began under
+                        // a sub animation; one that began without (the area idle after a
+                        // throw) is not held by the sub the catch starts now.
+                        if !self.sub.active {
+                            self.anim_skip = false;
+                        }
                         self.start_sub("CatchCap", 10., -1.);
                         // movement starts the partial too (0x41de54 -> 0x41deac).
                         // It survives an early endSubAnim when Run interrupts the catch.

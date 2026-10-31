@@ -26,7 +26,7 @@ use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Column names, in file order.
-pub const COLUMNS: [&str; 71] = [
+pub const COLUMNS: [&str; 72] = [
     "frame",
     "px",
     "py",
@@ -101,6 +101,7 @@ pub const COLUMNS: [&str; 71] = [
     "trampoline_source",
     "dimension_keeper",
     "dokan_source",
+    "cap_source",
 ];
 
 /// One clip contributing to the pose.
@@ -1091,6 +1092,7 @@ impl Recorder {
         cells.text(&p.trampoline_diagnostic());
         cells.text(&p.dimension_diagnostic);
         cells.text(&p.dokan_diagnostic());
+        cells.text(&p.cap_source_diagnostic());
         cells.finish()
     }
 }

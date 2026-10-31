@@ -42,6 +42,12 @@ pub struct RocketFlowers {
 }
 
 impl RocketFlowers {
+    /// A hit reaction flagged `IsStopSceneForHitEffect` stops the scene for its `StopSceneFrame`
+    /// ticks (`SceneStopCtrl`): the effect clock runs them on the next frame.
+    pub fn request_scene_stop(&mut self, ticks: u32) {
+        self.pending_stop = ticks;
+    }
+
     fn equip(&mut self, index: usize) {
         if self.equipped.len() == 3 {
             let old = self.equipped.remove(0);

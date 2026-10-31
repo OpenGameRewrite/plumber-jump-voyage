@@ -133,6 +133,7 @@ pub struct TriangleMesh {
     pub candle_fire: Vec<Vec3>,
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
     pub trampolines: Vec<crate::movement::cap_trampoline::Trampoline>,
+    pub signboards: Vec<crate::movement::sign_board::SignBoard>,
     pub geysers: Vec<crate::movement::sand_geyser::SandGeyserSource>,
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     pub force_areas: Vec<crate::movement::external_velocity::ForceArea>,
@@ -183,6 +184,31 @@ fn look_sensors_from_export(
             })
         })
         .collect()
+}
+
+/// The `LookAt` sensors of an exported source actor: its InitSensor entries, offset in Y from
+/// the placement (the sensors the look-at holder of the player and the cap query).
+fn look_sensors_of_source(
+    source: &serde_json::Value,
+    position: Vec3,
+    origin: [f64; 3],
+) -> Result<Vec<crate::movement::look_at::LookSensor>, String> {
+    let host = source["placement"]["UnitConfig"]["DisplayName"]
+        .as_str()
+        .ok_or("source host")?;
+    let mut sensors = Vec::new();
+    for sensor in source["sensors"].as_array().into_iter().flatten() {
+        if sensor["Type"] != "LookAt" {
+            continue;
+        }
+        let at = position + Vec3::Y * sensor["Y"].as_f64().unwrap_or(0.) as f32;
+        sensors.extend(look_sensors_from_export(
+            &serde_json::json!([{"host": host, "name": sensor["Name"], "type": 18,
+                "radius": sensor["Radius"], "position": [at.x, at.y, at.z]}]),
+            origin,
+        ));
+    }
+    Ok(sensors)
 }
 
 fn cell_of(v: f32) -> i32 {
@@ -520,6 +546,13 @@ impl TriangleMesh {
             ),
             origin,
         ));
+        for source in root["signboards"].as_array().into_iter().flatten() {
+            let objects = root["objects"].as_array().ok_or("sign objects")?;
+            let sign = crate::movement::sign_board::SignBoard::load(source, objects)?;
+            mesh.look_sensors
+                .extend(look_sensors_of_source(source, sign.position, origin)?);
+            mesh.signboards.push(sign);
+        }
         for source in root["cap_trampolines"].as_array().into_iter().flatten() {
             mesh.trampolines
                 .push(crate::movement::cap_trampoline::Trampoline::load(source)?);

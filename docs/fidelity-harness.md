@@ -210,6 +210,39 @@ remain outside this port. Installed Mario/Cappy models need no modification.
 Rendered replay uses the same source but has no trampoline mesh or original stage
 presentation; native movement PASS does not establish lighting/material/audio parity.
 
+## Cappy rebound (SignBoardNormal)
+
+`tools/export-cap-sources.py` adds the original SignBoardNormal placement, its InitSensor
+and InitCollision data and the INITIAL pending Wait to a local collision export (the
+`signboards` key). The sign's collision comes from the archive of its object name
+(`al::initActor` loads `SignBoardNormal`; the placement's `ModelName` only picks the visible
+arrow model), so the stage export reads it when the model name has no archive of its own.
+`movement/sign_board.rs` owns the receiver: `SignBoard::receiveMsg` accepts
+`CapReflectCollide` for every board that is not `SignBoardNormalWall` and plays its Reaction clip
+(11 frames in `SignBoardNormal.bfres`) before returning to Wait.
+
+The cap's side is `cap.rs`: `exeThrow` and `exeThrowBrake` ask the ground, wall and ceiling
+collision of the preceding movement (`tryCollideReflectReaction`) before any wall reaction;
+an accepting actor selects `Rebound`. `exeRebound` runs four executions: the first clears the
+throw's curve values and starts `ReboundStart`, all four keep the zero velocity and the last
+schedules `Return`, which restarts the clip as `ReboundEnd`. There is no Mario impulse and no
+ballistic bounce, and the entry sample still shows the throw's velocity. The other throw
+nerves call the same query; only these two are ported. The accepted reflect asks the cap's
+`帽子反射ヒット` reaction (hit effect and `HitColStatic`; install the sound with
+`extract-sounds.py --add-cap-reaction 帽子反射ヒット`), which stops the scene for two ticks
+(`MarioCapCommonInfo/ActorHitReactionCtrl.byml`): effects age through them while movement
+samples stay consecutive. A cap put back into a throw (lockstep) has no collider history, so
+its previous move is replayed once to find the contact when the stage has exported signs.
+
+`tools/cap_sources.py` accepts the run only for Sand scenario 1, the exact obj454 placement and
+sensors, the recorded actor lifecycle equal to the native `cap_source` diagnostic on every frame,
+one accepted `CapReflectCollide` from the cap's Attack sensor to obj454's Collision, four
+consecutive `exeRebound` observations with zero velocity after each and `Return` scheduled by
+the last, the wall hit of the preceding movement naming obj454, and only whitelisted perception
+queries to other actors. The cap's Eye overlaps with the sign's LookAt, the hanger's Body and the
+reaction objects are accepted under that proof; the global Rebound/LockOn flag is unchanged for
+any other run. Side files only validate.
+
 ## Flower carry and sensor push
 
 An export can include `carry_objects`: original linked flower placements, their

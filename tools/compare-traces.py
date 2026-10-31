@@ -597,7 +597,7 @@ def exported_look_hosts(game_path, geometry_path):
         return None
     hosts = {sensor["host"] for sensor in geometry.get("look_sensors", [])} | {source["host"] for source in geometry.get("rocket_flowers", [])}
     hosts.update(source["placement"]["UnitConfig"]["DisplayName"]
-                 for source in geometry.get("cap_trampolines", []))
+                 for key in ("cap_trampolines", "signboards") for source in geometry.get(key, []))
     if geometry.get("pukupuku", {}).get("id") == "obj473":
         hosts.add(geometry["pukupuku"]["host"])
     return hosts
@@ -662,7 +662,7 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
                             evidence["geyser_messages"] = list(csv.DictReader(message_file))
                     with open(seed_path, encoding="utf8") as seed_file:
                         evidence["geyser_seed"] = json.load(seed_file)
-                for key, suffix in (("dimensions", "dimension.csv"), ("dimension_sensors", "dimension_sensors.csv"), ("dimension_events", "dimension_events.csv"), ("trampolines", "trampolines.csv"), ("spin_player", "spin_player.csv"), ("spin_messages", "spin_messages.csv"), ("carry_objects", "carry_objects.csv"), ("carry_mario", "carry_mario.csv"), ("carry_messages", "carry_messages.csv"), ("rotors", "rotors.csv"), ("rotor_messages", "rotor_messages.csv"), ("rolling", "rolling.csv"), ("force_areas", "force_areas.csv"), ("pukupuku", "pukupuku.csv"), ("press_parts", "press_parts.csv"), ("press_mario", "press_mario.csv"), ("grabceil_bars", "grabceil_bars.csv"), ("grabceil_messages", "grabceil_messages.csv"), ("rocket_flowers", "rocket_flowers.csv"), ("rocket_watcher", "rocket_watcher.csv"), ("ceiling_check", "ceiling_check.csv")):
+                for key, suffix in (("dimensions", "dimension.csv"), ("dimension_sensors", "dimension_sensors.csv"), ("dimension_events", "dimension_events.csv"), ("trampolines", "trampolines.csv"), ("cap_samples", "cap.csv"), ("cap_collider", "cap_collider.csv"), ("cap_sources", "cap_sources.csv"), ("cap_messages", "cap_messages.csv"), ("spin_player", "spin_player.csv"), ("spin_messages", "spin_messages.csv"), ("carry_objects", "carry_objects.csv"), ("carry_mario", "carry_mario.csv"), ("carry_messages", "carry_messages.csv"), ("rotors", "rotors.csv"), ("rotor_messages", "rotor_messages.csv"), ("rolling", "rolling.csv"), ("force_areas", "force_areas.csv"), ("pukupuku", "pukupuku.csv"), ("press_parts", "press_parts.csv"), ("press_mario", "press_mario.csv"), ("grabceil_bars", "grabceil_bars.csv"), ("grabceil_messages", "grabceil_messages.csv"), ("rocket_flowers", "rocket_flowers.csv"), ("rocket_watcher", "rocket_watcher.csv"), ("ceiling_check", "ceiling_check.csv")):
                     side = os.path.join(os.path.dirname(game_path), "game." + suffix)
                     if os.path.isfile(side):
                         with open(side, encoding="utf8") as source:
