@@ -6,6 +6,7 @@ pub struct Trampoline {
     pub id: String,
     pub position: Vec3,
     pub moon: bool,
+    pub continue_open: bool,
     pub phase: u8,
     pub step: i32,
     pub cooldown: i32,
@@ -16,16 +17,17 @@ pub struct Trampoline {
 impl Trampoline {
     pub fn load(source: &serde_json::Value) -> Result<Self, String> {
         let p = &source["placement"];
-        if source["initial_phase"] != "OpenPending"
-            || p["UnitConfigName"] != "CapTrampoline"
-            || p["IsContinueOpen"] != true
+        if !matches!(
+            source["initial_phase"].as_str(),
+            Some("OpenPending" | "WaitPending")
+        ) || p["UnitConfigName"] != "CapTrampoline"
             || p["IsConnectToCollision"] != false
             || p["IsLinkDest"] != false
             || p["Scale"] != serde_json::json!({"X":1.,"Y":1.,"Z":1.})
             || p["Rotate"]["X"] != 0.
             || p["Rotate"]["Z"].as_f64() != Some(0.)
         {
-            return Err("unsupported connected/closed trampoline".into());
+            return Err("unsupported connected trampoline".into());
         }
         let component = |axis: &str| {
             p["Translate"][axis]
@@ -37,11 +39,18 @@ impl Trampoline {
             id: p["Id"].as_str().ok_or("trampoline id")?.into(),
             position: Vec3::new(component("X")?, component("Y")?, component("Z")?),
             moon: p["IsMoon"].as_bool().ok_or("trampoline moon")?,
-            phase: 1,
-            step: -1,
+            continue_open: p["IsContinueOpen"]
+                .as_bool()
+                .ok_or("trampoline open flag")?,
+            phase: u8::from(source["initial_phase"] == "OpenPending"),
+            step: if source["initial_phase"] == "OpenPending" {
+                -1
+            } else {
+                0
+            },
             cooldown: 0,
             close_counter: 300,
-            initial: true,
+            initial: source["initial_phase"] == "OpenPending",
         })
     }
 
@@ -53,6 +62,25 @@ impl Trampoline {
         pose_math::squared_length(delta) < 160. * 160.
             && vector_lib::length(velocity) >= min_speed
             && pose_math::dot(velocity, delta) >= 0.
+    }
+
+    // receiveMsg 0x24362c..0x2436ec: Wait/CapHit Reflect. InitSensor
+    // supplies Foot 40/Y40 and CapHit 110/Y60; HitSensor uses strict overlap.
+    fn receive_hip_drop_reflect(&mut self, feet: Vec3) -> bool {
+        let foot = feet + Vec3::Y * 40.;
+        let cap_hit = self.position + Vec3::Y * 60.;
+        if self.phase != 0
+            || self.cooldown > 0
+            || pose_math::squared_length(foot - cap_hit) >= 150. * 150.
+            || foot.y <= cap_hit.y - 100.
+        {
+            return false;
+        }
+        self.cooldown = 10; // 0x2436c0
+        self.close_counter = 300; // 0x2436d8
+        self.phase = 3; // OpenStart, 0x2436e0..0x2436e8
+        self.step = -1;
+        true
     }
 
     fn power(&self) -> f32 {
@@ -73,6 +101,16 @@ impl Trampoline {
         if self.step < 0 {
             self.step = 0;
         }
+        // OpenStart15 (original CapTrampoline action metadata), exeOpenStart
+        // 0x243a54..0x243a78 tests its end and selects Open.
+        if self.phase == 3 && self.step == 15 {
+            self.phase = 1;
+            self.step = -1;
+        }
+        if self.phase == 1 && !self.continue_open && self.step >= 0 {
+            // exeOpen 0x243a88: finite opening consumes its close counter.
+            self.close_counter -= 1;
+        }
         // Jump's 19-frame action is tested after the animation update.
         if self.phase == 2 && self.step == 19 {
             self.phase = 1;
@@ -83,14 +121,47 @@ impl Trampoline {
 }
 
 impl Player {
+    fn request_hip_drop_reflect(&mut self) {
+        // attackSensor 0x427d80..0x427dc8: attack trigger3, request type6.
+        // Jump::appear 0x4713d8..0x471404, PlayerConst.cpp:216-217:
+        // TrampleHipDropJumpPower35 / Gravity1.5 / extension0.
+        // PlayerActorHakoniwa/ActorHitReactionCtrl.byml, StompHit:
+        // IsStopSceneForHitEffect=true, StopSceneFrame=2.
+        // SceneStopCtrl receives delay2 (HitReactionKeeper::start 0x90cb80..0x90cb8c);
+        // its update 0x9cf150 spends the delay before the two stopped ticks.
+        // Replay steps count player movements; the stopped scene has no player step.
+        self.pick_jump_kind();
+        self.events.push(Fx::HipDropReflectHit);
+        self.jump_with(
+            Move::Jump,
+            None,
+            self.constants.trample_hip_drop_jump_power,
+            self.constants.trample_hip_drop_gravity,
+            |p| p.jump_extend = false,
+        );
+        self.hip_drop_reflect = true;
+        self.nerve.deferred = false;
+        self.nerve.renewed = false;
+        self.nerve.actor = "Jump";
+        self.nerve.step = 0;
+        self.sensor_restart = true;
+    }
     pub(super) fn trampoline_sensor_phase(&mut self, scene: &Course) {
         let feet = scene.in_water_frame(self.position_cm());
         let velocity = self.v;
         let mut request = None;
+        let mut reflect = false;
+        let hip_drop = self.mode == Move::GroundPound && self.clip() == "HipDrop";
         for source in &mut self.trampolines {
             if source.accepts(feet, velocity, 1.45) {
                 request = Some(source.power());
                 source.launch(true);
+            }
+            // attackSensor precedes the player's send: the open source wins.
+            let received = hip_drop && source.receive_hip_drop_reflect(feet);
+            reflect |= received;
+            if received {
+                continue; // receive happens after this source's movement this frame
             }
             if source.initial {
                 // The exported INITIAL pending nerve has not executed at the
@@ -99,6 +170,9 @@ impl Player {
             } else {
                 source.tick();
             }
+        }
+        if reflect {
+            self.request_hip_drop_reflect();
         }
         if let Some(power) = request {
             self.request_spin_flower(power);
@@ -131,10 +205,56 @@ impl Player {
 
 pub(super) fn self_check() {
     checks::attack_preempts_hip_drop_and_obeys_strict_contact_boundaries();
+    checks::closed_reflect_opens_once_and_launches_the_shared_jump();
 }
 
 mod checks {
     use super::*;
+
+    #[cfg_attr(test, test)]
+    pub(super) fn closed_reflect_opens_once_and_launches_the_shared_jump() {
+        let mut source = Trampoline {
+            id: "closed".into(),
+            position: Vec3::ZERO,
+            moon: false,
+            continue_open: false,
+            phase: 0,
+            step: 1,
+            cooldown: 0,
+            close_counter: 300,
+            initial: false,
+        };
+        assert!(!source.receive_hip_drop_reflect(Vec3::Y * -80.));
+        assert!(!source.receive_hip_drop_reflect(Vec3::new(150., 20., 0.)));
+        assert!(source.receive_hip_drop_reflect(Vec3::Y * 73.));
+        assert_eq!((source.phase, source.step, source.cooldown), (3, -1, 10));
+        assert!(!source.receive_hip_drop_reflect(Vec3::Y * 73.));
+        for _ in 0..16 {
+            source.tick();
+        }
+        assert_eq!(
+            (
+                source.phase,
+                source.step,
+                source.cooldown,
+                source.close_counter
+            ),
+            (1, 0, 0, 300)
+        );
+        source.tick();
+        assert_eq!(source.close_counter, 299);
+        let mut player = Player {
+            mode: Move::GroundPound,
+            v: Vec3::NEG_Y * 45.,
+            ..default()
+        };
+        player.request_hip_drop_reflect();
+        player.begin_step();
+        assert_eq!(player.mode, Move::Jump);
+        assert_eq!(player.v.y, 35.);
+        assert_eq!(player.gravity, 1.5);
+        assert!(!player.jump_extend);
+    }
 
     #[cfg_attr(test, test)]
     pub(super) fn attack_preempts_hip_drop_and_obeys_strict_contact_boundaries() {
@@ -142,6 +262,7 @@ mod checks {
             id: "test".into(),
             position: Vec3::ZERO,
             moon: false,
+            continue_open: true,
             phase: 1,
             step: 20,
             cooldown: 0,

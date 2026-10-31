@@ -993,6 +993,8 @@ pub enum Fx {
     CapTrampleHit,
     /// Pukupuku accepted ObjHipDrop and requested the attacker's hit reaction.
     PoundHit,
+    /// Accepted land ObjHipDropReflect (SensorMsgFunction.cpp: tryGetHitReactionForMsg).
+    HipDropReflectHit,
     /// The stay began while the button is held: the reaction it raises.
     CapStayStart,
     /// Equipment started a forced run (the reaction `強制走り開始`).
@@ -1140,6 +1142,7 @@ pub struct Player {
     pub rocket: rocket_flower::RocketFlowers,
     pub trampolines: Vec<cap_trampoline::Trampoline>,
     spin_flower: spin_flower::SpinFlower,
+    hip_drop_reflect: bool,
     surface_run: surface_run::SurfaceRun,
     damage: Damage,
     life: damage_life::LifeControl,
@@ -1491,6 +1494,7 @@ impl Default for Player {
             rocket: default(),
             trampolines: default(),
             spin_flower: default(),
+            hip_drop_reflect: false,
             surface_run: default(),
             damage: Damage::default(),
             life: damage_life::LifeControl::default(),
@@ -4530,6 +4534,7 @@ impl Player {
         gravity: f32,
         then: impl FnOnce(&mut Player) + Send + Sync + 'static,
     ) {
+        self.hip_drop_reflect = false;
         self.pre_jump = 0;
         let requested_clip = anim.into();
         // Only special requests author a clip in appear. The ordinary jump selects its side
@@ -4660,6 +4665,7 @@ impl Player {
         let (extend, mut gravity) = match self.mode {
             Move::DoubleJump => (t::EXTEND_FRAMES, self.constants.jump_gravity2nd),
             Move::TripleJump => (t::EXTEND_FRAMES, self.constants.jump_gravity3rd),
+            Move::Jump if self.hip_drop_reflect => (0, self.constants.trample_hip_drop_gravity),
             Move::Jump => (t::EXTEND_FRAMES, self.constants.jump_gravity),
             Move::CapBounce => (0, self.constants.trample_high_gravity),
             Move::CatchJump => (0, self.constants.jump_gravity_cap_catch),
@@ -4738,6 +4744,7 @@ impl Player {
     fn update_combo_counters(&mut self) {
         let nerve = self.actor_name();
         if nerve != "Jump" {
+            self.hip_drop_reflect = false;
             self.combo
                 .update(matches!(nerve, "Wait" | "Run"), t::CONTINUOUS_JUMP_TIMER);
         }
