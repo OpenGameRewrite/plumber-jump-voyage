@@ -227,6 +227,13 @@ def self_check():
                 contact.replace("o=Bind:20", "o=Other:20")]:
         assert judge_run({0: dict(game[0], contacts=bad)}, native, listed, **evidence).refused
     assert judge_run(game, {0: dict(native[0], dimension_keeper="")}, listed, **evidence).refused
+    # The native pipe diagnostics must agree with the recorded puppet and sensor state.
+    for source in ("bound=0;hidden=1;collider=1;sensors=1", "bound=0;hidden=0;collider=0;sensors=1",
+                   "bound=0;hidden=0;collider=1;sensors=0", "bound=1;hidden=0;collider=1;sensors=1",
+                   ""):
+        assert judge_run(game, {0: dict(native[0], dokan_source=source)}, listed, **evidence).refused
+    assert judge_run(game, native, listed, **dict(
+        evidence, dimensions=[dict(sample, puppet_source_id="obj418")])).refused
     assert judge_run(game, native, listed, **dict(evidence, dimension_sensors=sensors + sensors[:1])).refused
     assert judge_run(game, native, listed, **dict(evidence, dimensions=[sample, sample])).refused
     end = contact.replace("k=a", "k=r").replace("m=;r=", "m=al::SensorMsgBindEnd;r=1")
