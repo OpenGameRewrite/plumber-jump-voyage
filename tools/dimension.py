@@ -104,7 +104,8 @@ class Evidence:
             source = sources[int(bound)] if bound and bound.isdecimal() and int(bound) < len(sources) else "none"
             if (source != d.get("puppet_source_id") or
                     any(pipe.get(k) != d.get(v) for k, v in
-                        [("hidden", "hidden"), ("collider", "collision_enabled"), ("sensors", "sensors_enabled")])):
+                        [("hidden", "hidden"), ("collider", "collision_enabled")])
+                    or pipe.get("sensors") != self.body_valid(f)):
                 continue
             if (d.get("dropped") != "0" or d.get("registry_dropped") != "0"
                     or d.get("keeper_present") != "1" or native.get("flags") != flags
@@ -123,6 +124,12 @@ class Evidence:
         # still belongs to the proved bind episode for that final update.
         self.bound.update(f for f in self.frames
                           if rewrite[f].get("state") == "Bind/EndFall" and f - 1 in self.bound)
+
+    def body_valid(self, f):
+        # The puppet's own sensor flag has no stable meaning outside a bind; the
+        # recorded validity of Mario's body-class sensor (3D or 2D) is the evidence.
+        valid = [self.sensors.get((f, "Mario", name), {}).get("valid") for name in ("Body", "2DBody")]
+        return "1" if "1" in valid else "0"
 
     def contact(self, f, c):
         if f not in self.frames or c["who"] != "player" or c["host_class"] != "Dokan":
@@ -192,7 +199,7 @@ def self_check():
                       collision="gcode=Ground")}
     sample = dict(frame="0", dropped="0", registry_dropped="0", keeper_present="1", model2d="0",
                   filter_is_2donly="0", shape_is_2dnormal="0", binding="1", puppet_source_id="obj419",
-                  hidden="0", collision_enabled="1", sensors_enabled="1")
+                  hidden="0", collision_enabled="1")
     sample.update(dict(zip(FLAGS, ("0", "0", "1", "0", "0", "0"))))
     sensors = [dict(frame=str(f), id=id_, sensor=name, actor=actor, radius=str(radius),
                     valid="1", centre_x="0", centre_y="0", centre_z="0")
