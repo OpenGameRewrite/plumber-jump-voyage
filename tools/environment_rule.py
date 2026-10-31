@@ -39,6 +39,7 @@ from pukupuku import Evidence as PukupukuEvidence
 from carry_objects import Evidence as CarryEvidence, mario_answer
 from cap_trampoline import Evidence as TrampolineEvidence
 from collections import OrderedDict
+from dimension import Evidence as DimensionEvidence
 
 # ---- what the probe logs --------------------------------------------------------------------------
 
@@ -218,7 +219,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -291,6 +292,9 @@ class Judge:
                 for f in force_frames:
                     v.refuse(f, "external force lacks independently reproduced obj2386 volume/force evidence")
         self._scripted = {}
+        self._dimension = DimensionEvidence(geometry, dimensions, dimension_sensors,
+                                            dimension_events, rewrite_rows, game_rows)
+        self._scripted.update({f: "exported Cascade obj419/418 linked-pipe bind" for f in self._dimension.bound})
         self._candles = []
         self._start = start
         if geometry and start is not None and v.geometry_replay:
@@ -564,6 +568,9 @@ class Judge:
         for c in parse_contacts(self.rows[f].get("contacts")):
             host = c["host"]
             where = f" ({c['self']}:{c['self_type']} vs {c['other']}:{c['other_type']}" + (f", {c['host_class']}" if c["host_class"] else "") + ")"
+            if self._dimension.contact(f, c):
+                v.accept(f, "exported Cascade linked pipes", "scenario 1 obj419/418, obj420/421 placement, typed sensors/messages and independently simulated dimension/bind")
+                continue
             if (c['host_class'] == 'PaintObj' and self._paint_floor is not None
                     and host == self._paint_floor[0]):
                 if self._paint_contact(f, c):
@@ -842,6 +849,8 @@ def self_check():
     from sand_geyser import self_check as check_geysers
     from key_move_parts import self_check as check_key_parts
     check_key_parts()
+    from dimension import self_check as check_dimension
+    check_dimension()
     from cap_trampoline import self_check as check_trampoline
     check_trampoline()
     check_geysers()
