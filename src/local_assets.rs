@@ -208,7 +208,11 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CastsOwnShadow>()
         .add_systems(Update, colors);
     #[cfg(feature = "local-assets")]
-    imported::plugin(app);
+    {
+        imported::plugin(app);
+        crate::model_2d_view::plugin(app);
+        crate::pipe_view::plugin(app);
+    }
 }
 fn colors(
     settings: Res<crate::input::Settings>,

@@ -954,7 +954,7 @@ pub fn animate(
 ) {
     let dt = time.delta_secs().clamp(1e-4, 0.05);
     let (p, mut t, mut visibility) = p.into_inner();
-    *visibility = if p.damage_hidden() {
+    *visibility = if p.damage_hidden() || p.puppet_hidden() {
         Visibility::Hidden
     } else {
         Visibility::Inherited

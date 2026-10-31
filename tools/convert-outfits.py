@@ -83,6 +83,7 @@ def main():
     p.add_argument('--add-clip',action='append',help='Convert this Mario clip (repeatable) and append it to the installed Mario file; nothing else changes')
     p.add_argument('--curves',action='store_true',help='Write assets/local/Mario.curves.bin: the original curves of every clip the installed Mario.glb holds (nothing else changes)')
     p.add_argument('--model-2d',action='store_true',help='Install the 8-bit Mario (Mario2D) as assets/local/Mario2D.glb (model and its visibility actions) and assets/local/Mario2D.curves.bin (its skeleton and the original curves of PlayerAnimation2D); nothing already installed changes')
+    p.add_argument('--object',action='append',help='Convert the model of this original object archive (e.g. Dokan2D, DokanChange2D; repeatable; --romfs must hold its ObjectData archive) to assets/local/objects/NAME.glb; nothing already installed changes')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the converter working files (DAE, glTF, PNG)')
     p.add_argument('--self-check',action='store_true')
     a=p.parse_args()
@@ -161,6 +162,23 @@ def main():
             shutil.copyfile(scratch/name,extract.ROOT/'assets/local'/name)
         print('Wrote assets/local/Mario2D.glb and assets/local/Mario2D.curves.bin')
         if not a.keep_intermediates:shutil.rmtree(scratch,ignore_errors=True)
+        return
+    if a.object:
+        # Scenery actors the game draws where a stage places them (the pipes): the model alone,
+        # without clips, in the object's own units, at the same place for every stage.
+        target=extract.ROOT/'assets/local/objects';target.mkdir(parents=True,exist_ok=True)
+        for name in a.object:
+            if not name.isalnum():raise ValueError(f'Invalid object name {name}')
+            files=archive(a.romfs/'ObjectData'/f'{name}.szs')
+            scratch=exports/f'_object_{name}';scratch.mkdir(exist_ok=True)
+            source=scratch/f'{name}.bfres';source.write_bytes(files[f'{name}.bfres'])
+            output=scratch/f'{name}.glb'
+            with output.with_suffix('.log').open('w',encoding='utf-8') as f:result=subprocess.run([str(a.adapter.resolve()),str(source),str(output),'--geometry-only'],stdout=f,stderr=subprocess.STDOUT)
+            if result.returncode:raise ValueError(f'{name} conversion failed; details in {output.with_suffix(".log")}')
+            packer.pack(output.with_suffix('.gltf'))
+            shutil.copyfile(output,target/f'{name}.glb')
+            print(f'Wrote assets/local/objects/{name}.glb')
+            if not a.keep_intermediates:shutil.rmtree(scratch,ignore_errors=True)
         return
     if a.curves:
         # The game evaluates the clips' curves between frames; the converter writes them

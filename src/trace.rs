@@ -657,19 +657,14 @@ impl Recorder {
     }
 
     /// The `bones` cell while the 8-bit model is the one on screen: AllRoot, MarioDot and the
-    /// MarioDot00..08 joints, posed by the clip the animator shows. The model has no fades (see
-    /// `Player::interp_frames_of`), so only the current action's layer poses it, whatever the
-    /// 3D blend still remembers. Without the installed model the joints sit at the actor.
-    fn bones_cell_2d(&self, p: &Player) -> String {
-        let mut playing = Vec::new();
-        Self::push_pose(&mut playing, &self.blend.current, (1., 0.), 0, false);
-        let posed = playing
-            .first()
-            .and_then(|layer| model_2d::world_pose(&p.pose_matrix(), layer.clip, layer.frame));
+    /// MarioDot00..08 joints, posed by the clip the animator shows. Without the installed model
+    /// the joints sit at the actor.
+    fn bones_cell_2d(p: &Player) -> String {
         let feet = p.pos / UNIT;
+        let posed = clip_2d(p, 0.)
+            .and_then(|(clip, frame)| model_2d::world_pose(&p.pose_matrix(), clip, frame));
         let joints = posed.unwrap_or_else(|| {
             JOINTS_2D
-                .into_iter()
                 .map(|name| {
                     let at_actor = [
                         [1., 0., 0., feet.x],
@@ -678,7 +673,7 @@ impl Recorder {
                     ];
                     (name, at_actor)
                 })
-                .collect()
+                .to_vec()
         });
         joints
             .iter()
@@ -1012,7 +1007,7 @@ impl Recorder {
         cells.text(&parts);
         let skeleton = self.posed_skeleton(p, covering, kept);
         cells.text(&if p.model_2d() {
-            self.bones_cell_2d(p)
+            Self::bones_cell_2d(p)
         } else {
             Self::bones_cell(skeleton.as_ref(), p)
         });
@@ -1098,6 +1093,15 @@ impl Recorder {
         cells.text(&p.dokan_diagnostic());
         cells.finish()
     }
+}
+
+/// The clip the 8-bit model's skeleton plays and the frame it shows `ahead` (a share of a step)
+/// past the last step. The model has no fades (see `Player::interp_frames_of`), so the
+/// animator's one clip poses it, whatever the 3D blend remembers.
+#[cfg_attr(not(feature = "local-assets"), allow(dead_code))]
+pub fn clip_2d(p: &Player, ahead: f32) -> Option<(&'static str, f32)> {
+    let layer = Pose::main_clips(p).layers.into_iter().next()?;
+    Some((layer.name, layer.frame + layer.rate * ahead))
 }
 
 /// The animation state behind the skeleton the windowed game draws: the same crossfade, sub

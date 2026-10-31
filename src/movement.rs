@@ -550,27 +550,6 @@ pub mod clip {
             _ => None,
         }
     }
-    /// Looping actions of the 8-bit model.
-    pub fn loop_length_2d(name: &str) -> Option<f32> {
-        match name {
-            "Wait" => Some(60.),
-            // PlayerAnimation2D Move visibility action, converter sample count15.
-            "Move" => Some(14.),
-            _ => None,
-        }
-    }
-    /// How far past its length the 8-bit loop's counter runs before it wraps. Without a
-    /// sub animation `PlayerAnimator::updateAnimFrame` (0x42a214, flag +0x1a2 set by
-    /// startSubAnim 0x42a74c, cleared by endSubAnim 0x42a898) calls
-    /// `PlayerAnimFrameCtrl::updateSync` (0x42d170): counter = the model action's own
-    /// frame plus its rate. The model's loop wraps at its length, so the counter leads
-    /// the pose by the action rate and reads the length for one row.
-    pub fn loop_slack_2d(name: &str, rate: f32) -> f32 {
-        match name {
-            "Wait" | "Move" => rate,
-            _ => 0.,
-        }
-    }
     /// How far past its length a looping clip's counter runs before it wraps
     /// (the layer's own frame wraps at the length): the side moves' counter
     /// reads 21.03 in the step after the clip loops and 2.08 in the next.
@@ -2359,38 +2338,50 @@ impl Player {
     /// ones.
     pub fn loop_len(&self, name: &str) -> Option<f32> {
         if self.model_2d() {
-            return clip::loop_length_2d(name);
+            return crate::model_2d::action_length(name)
+                .filter(|(_, looping)| *looping)
+                .map(|(frames, _)| frames as f32);
         }
         clip::loop_length(name)
     }
     /// How long a looping clip's counter shows its length before it wraps, in the model on
     /// screen (the 8-bit Wait shows its 60 for a row).
     pub fn loop_slack_of(&self, name: &str) -> f32 {
+        // How far past its length the 8-bit loop's counter runs before it wraps. Without a
+        // sub animation `PlayerAnimator::updateAnimFrame` (0x42a214, flag +0x1a2 set by
+        // startSubAnim 0x42a74c, cleared by endSubAnim 0x42a898) calls
+        // `PlayerAnimFrameCtrl::updateSync` (0x42d170): counter = the model action's own
+        // frame plus its rate. The model's loop wraps at its length, so the counter leads
+        // the pose by the action rate and reads the length for one row.
         if self.model_2d() {
-            return clip::loop_slack_2d(name, self.anim.rate);
+            return if self.loop_len(name).is_some() {
+                self.anim.rate
+            } else {
+                0.
+            };
         }
         clip::loop_slack(name)
     }
     pub fn held_length_of(&self, name: &str) -> Option<u32> {
         if self.model_2d() {
-            // PlayerAnimation2D's original visibility actions: converter frame count6.
-            return match name {
-                "Jump" | "Fall" | "Brake" => Some(5),
-                "DokanReady" => Some(54),
-                _ => clip::held_length(name),
-            };
+            // PlayerAnimation2D's visibility actions: the animator's counter runs their length.
+            return crate::model_2d::action_length(name)
+                .filter(|(_, looping)| !*looping)
+                .map(|(frames, _)| frames);
         }
         clip::held_length(name)
     }
     /// Last frame the pose layer shows of a held clip. The 8-bit model's Jump, Fall and
     /// JumpTrample skeletal clips are one frame long in the original PlayerAnimation2D
-    /// archive (converted SRT clips), while their visibility actions (the animator's
+    /// archive (the installed Mario2D curves), while their visibility actions (the animator's
     /// counter) are five frames long: the layer holds frame 1 as the counter runs on.
     pub fn layer_hold_length_of(&self, name: &str) -> Option<u32> {
-        if self.model_2d() && matches!(name, "Jump" | "Fall" | "JumpTrample") {
-            return Some(1);
+        let held = self.held_length_of(name)?;
+        if self.model_2d() {
+            let clip = crate::model_2d::clip_frames(name)?;
+            return Some(held.min(clip as u32));
         }
-        self.held_length_of(name)
+        Some(held)
     }
     /// The original Mario2D and PlayerAnimation2D archives have no AnimInterp
     /// resource. ModelAnimInterpInfoHolder initializes its default to zero

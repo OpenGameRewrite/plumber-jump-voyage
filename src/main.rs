@@ -32,8 +32,12 @@ mod legacy_assets;
 mod local_assets;
 mod look;
 mod model_2d;
+#[cfg(feature = "local-assets")]
+mod model_2d_view;
 mod movement;
 mod nerve;
+#[cfg(feature = "local-assets")]
+mod pipe_view;
 mod prism;
 mod replay;
 mod scripted_input;

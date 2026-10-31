@@ -227,6 +227,10 @@ impl Player {
     pub fn damage_hidden(&self) -> bool {
         self.damage.hidden
     }
+    /// A pipe's puppet controller has the model hidden (between the two ends of a trip).
+    pub fn puppet_hidden(&self) -> bool {
+        self.puppet_hidden
+    }
 
     /// Collision causes are consumed before the nerve runs, not during collision resolution.
     /// The floor/wall/ceiling code queries are distinct from a sensor's fire request.
