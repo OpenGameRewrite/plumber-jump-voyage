@@ -233,7 +233,7 @@ impl Pose {
                         name => p.model_frame().unwrap_or_else(|| {
                             // (The model is one rate change ahead of the counter.)
                             let frame = a.frame + p.anim_rate_change();
-                            p.held_length_of(name)
+                            p.layer_hold_length_of(name)
                                 .map_or(frame, |length| frame.min(length as f32))
                                 - p.loop_len(name)
                                     .filter(|length| frame >= *length)
@@ -715,6 +715,12 @@ impl Recorder {
             p.shown_frame()
         } else if p.model_switch_row() {
             0.
+        } else if p.switch_sync_row() {
+            // updateSync reads the model's action frame (the pose layer, held at its clip end).
+            let pose = p
+                .layer_hold_length_of(p.anim.name)
+                .map_or(p.anim.frame, |length| p.anim.frame.min(length as f32));
+            pose + p.anim.rate
         } else if p.puppet_synced_row() {
             // A pipe's puppet action: the first row shows the synced counter.
             p.anim.rate

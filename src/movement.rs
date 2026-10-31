@@ -1467,6 +1467,8 @@ pub struct Player {
     puppet_clip_pending: bool,
     /// The model changed this step: the new model's animator has not synced its counter yet.
     model_switch_row: bool,
+    /// The row after a bound model switch: the puppet's first updateSync.
+    switch_sync_row: bool,
     puppet_first_row: bool,
     bind_staged: Vec<usize>,
     bind_ready: Vec<usize>,
@@ -1677,6 +1679,7 @@ impl Default for Player {
             puppet_sensors: true,
             puppet_clip_pending: false,
             model_switch_row: false,
+            switch_sync_row: false,
             puppet_first_row: false,
             bind_staged: Vec::new(),
             bind_ready: Vec::new(),
@@ -2377,6 +2380,16 @@ impl Player {
         }
         clip::held_length(name)
     }
+    /// Last frame the pose layer shows of a held clip. The 8-bit model's Jump, Fall and
+    /// JumpTrample skeletal clips are one frame long in the original PlayerAnimation2D
+    /// archive (converted SRT clips), while their visibility actions (the animator's
+    /// counter) are five frames long: the layer holds frame 1 as the counter runs on.
+    pub fn layer_hold_length_of(&self, name: &str) -> Option<u32> {
+        if self.model_2d() && matches!(name, "Jump" | "Fall" | "JumpTrample") {
+            return Some(1);
+        }
+        self.held_length_of(name)
+    }
     /// The original Mario2D and PlayerAnimation2D archives have no AnimInterp
     /// resource. ModelAnimInterpInfoHolder initializes its default to zero
     /// (0x8028fc); missing AnimInterp returns without replacing it (0x802958),
@@ -2391,6 +2404,10 @@ impl Player {
     /// layer shows the synced frame (`PlayerModelChangerHakoniwa` restarts the action).
     pub fn model_switch_row(&self) -> bool {
         self.model_switch_row
+    }
+    /// The row after a bound model switch: the counter reads the synced frame.
+    pub fn switch_sync_row(&self) -> bool {
+        self.switch_sync_row
     }
     /// The first row of a clip a pipe's puppet action started (see `play_puppet_action`).
     pub fn puppet_synced_row(&self) -> bool {
@@ -2613,7 +2630,9 @@ impl Player {
                 // copyAnimLocal starts the counter again while carrying the
                 // prior model's action pose (0x42c1cc..0x42c250).
                 self.anim.frame
-            } else if self.puppet_synced_row() && self.anim.name == name {
+            } else if (self.puppet_synced_row() || self.switch_sync_row)
+                && self.anim.name == name
+            {
                 frame - self.anim.rate
             } else {
                 frame
@@ -2982,6 +3001,9 @@ impl Player {
     fn advance_clips(&mut self) {
         self.clip_wrapped = false;
         self.counter_wrapped = false;
+        if self.bound_to.is_some() && (self.model_switch_row || self.switch_sync_row) {
+            return;
+        }
         if self.is_dead()
             && self.death.kind == death::Kind::Press
             && (self.frame > 0 || self.mode == Move::Dead)
@@ -3187,6 +3209,11 @@ impl Player {
             self.dimension
                 .update(&mesh.dimension, mesh.to_game_vec(self.position_cm()));
             self.dimension_diagnostic = self.dimension.diagnostic(&mesh.dimension);
+            // copyAnimLocal restarts the new model's animator (PlayerAnimFrameCtrl::
+            // startAction: counter 0, first update skipped); while a puppet owns the
+            // clip, its updateSync (counter = action frame + rate) follows one row
+            // later, and the pose is not advanced in either row.
+            self.switch_sync_row = self.model_switch_row && self.bound_to.is_some();
             self.model_switch_row = self.dimension.change_2d || self.dimension.change_3d;
             if self.dimension.change_2d {
                 self.events.push(Fx::Change2D);
