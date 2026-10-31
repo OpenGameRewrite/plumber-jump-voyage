@@ -12,6 +12,7 @@ impl Player {
         // appear 0x470e9c..0x470fc4 clears +0xb4 for special requests;
         // tryCountUpContinuousJump 0x471f70..0x471fa8 clears on ground exit.
         self.combo_kept = false;
+        self.combo.clear(t::CONTINUOUS_JUMP_TIMER);
         self.spin_flower.power = power;
         self.go(Move::SpinFlower, "SpinJumpStart");
         // A sensor request changes the actor before its pre-movement nerve update.
@@ -86,8 +87,10 @@ mod checks {
             ..default()
         };
         p.combo_kept = true;
+        p.combo.count = 1;
         p.request_spin_flower(60.);
         assert!(!p.combo_kept);
+        assert_eq!(p.combo.count, 0);
         p.begin_step();
         p.spin_flower_step();
         assert_eq!(p.nerve_name().name, "Jump/JumpSpinFlower");
