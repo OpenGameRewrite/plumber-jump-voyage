@@ -38,7 +38,8 @@ pub fn world_pose(actor: &Mat34, clip: &str, frame: f32) -> Option<Vec<(&'static
     compose(Curves::installed_2d()?, actor, clip, frame)
 }
 
-fn compose<'a>(
+/// The world matrices of a curve file's joints for a clip at a frame under the actor's matrix.
+pub(crate) fn compose<'a>(
     curves: &'a Curves,
     actor: &Mat34,
     clip: &str,

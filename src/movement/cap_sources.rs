@@ -13,7 +13,57 @@ impl Player {
                     .iter()
                     .map(cap_hanger::CapHanger::diagnostic),
             )
+            .chain(
+                self.cap_switches
+                    .iter()
+                    .map(cap_switch::CapSwitch::diagnostic),
+            )
             .collect::<Vec<_>>()
             .join("|")
+    }
+
+    /// What the cap sees of every exported lock-on target: the hangers, then the switches (the
+    /// cap's event index counts them in that order).
+    pub(super) fn lock_targets(&self) -> Vec<crate::cap::LockTarget> {
+        let hangers = self
+            .cap_hangers
+            .iter()
+            .map(|hanger| crate::cap::LockTarget {
+                target: hanger.relative,
+                body: hanger.relative + Vec3::Y * hanger.body_offset,
+                body_radius: hanger.body_radius,
+                waiting: hanger.waiting(),
+                keeps: hanger.keeps(),
+                rotation: None,
+                start_action_frames: Some(cap_hanger::START_ACTION_FRAMES),
+            });
+        let switches = self
+            .cap_switches
+            .iter()
+            .map(|switch| crate::cap::LockTarget {
+                target: switch.target(),
+                body: switch.relative + Vec3::Y * switch.body_offset,
+                body_radius: switch.body_radius,
+                waiting: switch.waiting(),
+                keeps: switch.keeps(),
+                rotation: Some(switch.target_rotation()),
+                start_action_frames: None,
+            });
+        hangers.chain(switches).collect()
+    }
+
+    /// One execution of every lock-on target's nerve; a switch's activation stops the scene.
+    pub(super) fn tick_lock_on_sources(&mut self, keep_input: bool) {
+        let player = self.position_cm();
+        for hanger in &mut self.cap_hangers {
+            let distance =
+                Vec2::new(player.x - hanger.relative.x, player.z - hanger.relative.z).length();
+            hanger.tick(keep_input, distance);
+        }
+        for switch in &mut self.cap_switches {
+            if let Some(ticks) = switch.tick(player) {
+                self.rocket.request_scene_stop(ticks);
+            }
+        }
     }
 }

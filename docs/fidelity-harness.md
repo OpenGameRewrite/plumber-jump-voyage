@@ -272,6 +272,23 @@ Lockstep re-chooses a state that a row shows at step 0 from the row before; the 
 hold count (hidden state the extension window reads) is kept with the collision history for it,
 and a clip that started under a sub animation already in progress holds its first frame.
 
+### CapSwitchSave (not yet accepted)
+
+`movement/cap_switch.rs` ports `CapSwitch.cpp` from the exported placement (`cap_switches`: the
+archive's InitSensor, InitHackCap, hit reactions and the model's `PJVCURV1` curve file, written by
+`export-cap-sources.py --converter`): OffWait, OffWaitCapHold (`HitReaction`, then
+`HitReactionKeepFront` at the clip's end, 30 steps), HitReaction (the `起動` reaction stops the scene
+for its `StopSceneFrame` 5 ticks, then `HitReactionFront`) and OnWait. The cap follows the switch's
+`HatTarget` joint of the clip pose the previous update left, turned by the local rotation
+`exeOffWaitCapHold` sets (`(0, ±angle, 270)`, the angle between the actor's front and the way
+from Mario to the joint read one update earlier), and returns along that pose. In the strict free
+replay of the recording every cap column equals the game's; the verdict stays unaccepted because
+the geometry export of the scenario carries no `cap_switches` source and because of the residuals
+listed in `reports/handoff-wave18-port.md` (Mario's head look-at toward the switch's Body and the
+bricks of the room, an idle voice the game does not play under the catch). The linked door's camera
+demo (`RiseMapPartsHolder`) is not simulated: Mario's own clock does not run through it, and the
+validator compares OnWait's step only by nerve (the step counts world ticks).
+
 ## Flower carry and sensor push
 
 An export can include `carry_objects`: original linked flower placements, their

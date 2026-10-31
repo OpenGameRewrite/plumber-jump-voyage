@@ -68,8 +68,6 @@ const LOCK_ON_COUNTER_LIMIT: u32 = 10;
 /// `tryReturn` (0x3fd438): an ordinary target (`CapTargetInfo::_78` false) turns the cap's collision
 /// off for three steps; the other kind (0x3fd40c) for 1800, not ported.
 const RETURN_COLLISION_DELAY: i32 = 3;
-/// `CapPointHookStart` runs 11 frames (`MarioCapAnimation`).
-const LOCK_ON_START_ACTION_FRAMES: u32 = 11;
 /// Height of the player's head above the feet (`rs::getPlayerHeadPos`
 /// while standing): the point the cap returns to.
 const HEAD_HEIGHT: f32 = 110.;
@@ -323,14 +321,14 @@ pub struct CapWorld<'a> {
     /// The water areas of the stage (`HackCap::updateWaterArea` asks them), when there are any
     /// to ask.
     pub water: Option<&'a WaterAreas>,
-    /// The exported hangers the cap can lock onto.
-    pub hangers: &'a [HangerView],
+    /// The exported actors the cap can lock onto (hangers, switches).
+    pub targets: &'a [LockTarget],
 }
 
-/// What the cap needs of an exported `CapHanger` (centimetres, start-relative).
+/// What the cap needs of an exported lock-on target (centimetres, start-relative).
 #[derive(Clone, Copy, Debug)]
-pub struct HangerView {
-    /// The actor's position: the target matrix's translation.
+pub struct LockTarget {
+    /// The target matrix's translation (`CapTargetInfo`), as the actor poses it now.
     pub target: Vec3,
     /// The Body sensor.
     pub body: Vec3,
@@ -338,6 +336,12 @@ pub struct HangerView {
     /// Accepts `CapStartLockOn` (Wait) / `CapKeepLockOn` (Keep).
     pub waiting: bool,
     pub keeps: bool,
+    /// The rotation of the target matrix when the target turns the cap (the switch's joint); the
+    /// hanger's leaves the cap's pose as it was.
+    pub rotation: Option<Quat>,
+    /// The length of the target's start action when a wait action follows it (the hat goes on to
+    /// `CapPointHookWait`); `None` for a start action that ends in nothing (the switch's).
+    pub start_action_frames: Option<u32>,
 }
 
 /// The cap's attachment to a target (`prepareLockOn`, `followTarget`, `exeLockOn`).
@@ -685,6 +689,8 @@ impl Cap {
         }
         if self.carry_collider {
             self.collider = before.collider.clone();
+            // The pose the target gave the cap is what the return that follows leaves along.
+            self.pose = before.pose;
         }
         if matches!(self.nerve, CapNerve::Rebound | CapNerve::Return)
             && matches!(before.action, "ReboundStart" | "ReboundEnd")
@@ -757,14 +763,14 @@ impl Cap {
     }
     /// Put a cap into a recorded lock-on (lockstep): the hanger it keeps and the counters the
     /// recorded step implies. The row's position already is the blend of the step.
-    pub fn restore_lock_on(&mut self, index: usize, target: Vec3, moment: &Moment) {
+    pub fn restore_lock_on(&mut self, index: usize, view: &LockTarget, moment: &Moment) {
         let step = moment.step;
         let started = step > LOCK_ON_INTERPOLATION_STEPS;
         let age = step.saturating_sub(LOCK_ON_INTERPOLATION_STEPS + 1);
         self.lock_on = Some(LockOn {
             index,
             from: moment.anchor,
-            target,
+            target: view.target,
             interpolation: step.min(LOCK_ON_INTERPOLATION_STEPS),
             counter: step.min(LOCK_ON_COUNTER_LIMIT),
             started,
@@ -773,10 +779,9 @@ impl Cap {
         });
         if started {
             self.action = "NoAction";
-            self.action_frame = if age > LOCK_ON_START_ACTION_FRAMES {
-                age - LOCK_ON_START_ACTION_FRAMES - 1
-            } else {
-                age
+            self.action_frame = match view.start_action_frames {
+                Some(frames) if age > frames => age - frames - 1,
+                _ => age,
             };
         }
     }
@@ -970,7 +975,7 @@ impl Cap {
     /// sensors (0x4078d0) is never asked.
     fn try_start_lock_on(&mut self, world: &CapWorld) -> Option<usize> {
         let attack = self.spot + Vec3::Y * ATTACK_SENSOR_HEIGHT;
-        let (index, hanger) = world.hangers.iter().enumerate().find(|(_, h)| {
+        let (index, target) = world.targets.iter().enumerate().find(|(_, h)| {
             h.waiting
                 && (h.body - attack).length_squared()
                     < (ATTACK_SENSOR_RADIUS + h.body_radius).powi(2)
@@ -980,7 +985,7 @@ impl Cap {
         self.lock_on = Some(LockOn {
             index,
             from: self.spot,
-            target: hanger.target,
+            target: target.target,
             interpolation: 0,
             counter: 0,
             started: false,
@@ -999,6 +1004,11 @@ impl Cap {
     /// a target that no longer keeps the cap sends it home (`tryReturn` 0x3fd2e8).
     fn lock_on(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         let mut lock = self.lock_on?;
+        // The target matrix follows the actor's model: it is read again by every execution.
+        let view = world.targets.get(lock.index);
+        if let Some(view) = view {
+            lock.target = view.target;
+        }
         let interpolating = lock.interpolation < LOCK_ON_INTERPOLATION_STEPS;
         if interpolating {
             lock.interpolation += 1;
@@ -1009,6 +1019,9 @@ impl Cap {
         }
         self.pos = self.spot * UNIT;
         lock.counter = (lock.counter + 1).min(LOCK_ON_COUNTER_LIMIT);
+        if !interpolating && let Some(rotation) = view.and_then(|view| view.rotation) {
+            self.pose = CapPose::followed(rotation);
+        }
         if !interpolating {
             if !lock.started {
                 // The hat's start action begins; the cap's own action goes idle.
@@ -1017,12 +1030,15 @@ impl Cap {
             } else {
                 lock.age += 1;
                 // `isActionEnd` of the start action is tested before the clip advances.
-                if lock.age == LOCK_ON_START_ACTION_FRAMES + 1 {
+                if view
+                    .and_then(|view| view.start_action_frames)
+                    .is_some_and(|frames| lock.age == frames + 1)
+                {
                     self.play("NoAction");
                 }
             }
         }
-        let kept = lock.fresh || world.hangers.get(lock.index).is_some_and(|h| h.keeps);
+        let kept = lock.fresh || view.is_some_and(|h| h.keeps);
         lock.fresh = false;
         self.lock_on = Some(lock);
         // Each execution asks the target to keep the cap; a refusal returns it.

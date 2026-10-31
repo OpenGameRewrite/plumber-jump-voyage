@@ -40,6 +40,11 @@ impl CapPose {
         }
     }
 
+    /// The pose a lock-on target gives the cap (`CapTargetInfo` follow matrix, `al::updatePoseQuat`).
+    pub fn followed(rotation: Quat) -> Self {
+        Self::given(rotation)
+    }
+
     /// The pose `HackCap::startThrow` and `exeThrowStart` give a cap thrown along `front`: the cap
     /// faces back toward the thrower, upright.
     pub fn thrown_along(front: Vec3) -> Self {

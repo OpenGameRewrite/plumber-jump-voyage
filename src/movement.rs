@@ -267,6 +267,7 @@ use damage::Damage;
 use damage_fire::FireControl;
 pub use stain::Soot;
 pub mod cap_hanger;
+pub mod cap_switch;
 #[path = "movement/ground_move.rs"]
 pub(crate) mod ground_move;
 #[path = "movement/ground_pose.rs"]
@@ -1154,6 +1155,7 @@ pub struct Player {
     pub trampolines: Vec<cap_trampoline::Trampoline>,
     pub signboards: Vec<sign_board::SignBoard>,
     pub cap_hangers: Vec<cap_hanger::CapHanger>,
+    pub cap_switches: Vec<cap_switch::CapSwitch>,
     spin_flower: spin_flower::SpinFlower,
     hip_drop_reflect: bool,
     surface_run: surface_run::SurfaceRun,
@@ -1508,6 +1510,7 @@ impl Default for Player {
             trampolines: default(),
             signboards: default(),
             cap_hangers: default(),
+            cap_switches: default(),
             spin_flower: default(),
             hip_drop_reflect: false,
             surface_run: default(),
@@ -2837,16 +2840,17 @@ impl Player {
             if let Some(previous) = &previous {
                 cap.continue_clip(previous);
             }
-            // A cap in a lock-on is attached to the hanger nearest to it: the hanger's own state
+            // A cap in a lock-on is attached to the target nearest to it: the target's own state
             // (it may have released this very frame) does not say which one it is.
-            if moment.nerve == crate::cap::CapNerve::LockOn
-                && let Some((index, hanger)) = self.cap_hangers.iter().enumerate().min_by(|a, b| {
-                    (a.1.relative - moment.spot)
+            if moment.nerve == crate::cap::CapNerve::LockOn {
+                let targets = self.lock_targets();
+                if let Some((index, view)) = targets.iter().enumerate().min_by(|a, b| {
+                    (a.1.target - moment.spot)
                         .length_squared()
-                        .total_cmp(&(b.1.relative - moment.spot).length_squared())
-                })
-            {
-                cap.restore_lock_on(index, hanger.relative, moment);
+                        .total_cmp(&(b.1.target - moment.spot).length_squared())
+                }) {
+                    cap.restore_lock_on(index, view, moment);
+                }
             }
             self.cap_serial = cap.clip_serial();
             self.cap = Some(cap);
@@ -3314,12 +3318,7 @@ impl Player {
             for sign in &mut self.signboards {
                 sign.tick();
             }
-            let player = self.position_cm();
-            for hanger in &mut self.cap_hangers {
-                let distance =
-                    Vec2::new(player.x - hanger.relative.x, player.z - hanger.relative.z).length();
-                hanger.tick(o.throw_held, distance);
-            }
+            self.tick_lock_on_sources(o.throw_held);
         }
         self.cap_sensor_phase(&o);
         self.puku_sensor_phase(scene);
@@ -5788,17 +5787,7 @@ impl Player {
             self.throwing.up = None;
             return;
         }
-        let hangers: Vec<crate::cap::HangerView> = self
-            .cap_hangers
-            .iter()
-            .map(|hanger| crate::cap::HangerView {
-                target: hanger.relative,
-                body: hanger.relative + Vec3::Y * hanger.body_offset,
-                body_radius: hanger.body_radius,
-                waiting: hanger.waiting(),
-                keeps: hanger.keeps(),
-            })
-            .collect();
+        let targets = self.lock_targets();
         let Some(cap) = &mut self.cap else {
             return;
         };
@@ -5823,7 +5812,7 @@ impl Player {
             hold,
             mesh: scene.mesh.as_deref(),
             water: Some(scene.water_areas()),
-            hangers: &hangers,
+            targets: &targets,
         };
         let moments = cap.update(&world);
         self.cap_serial = cap.clip_serial();
@@ -5841,7 +5830,10 @@ impl Player {
                     self.events.push(Fx::ThrowVoice(voice));
                 }
                 CapEvent::LockedOn(index) => {
-                    self.cap_hangers[index].start();
+                    match self.cap_hangers.get_mut(index) {
+                        Some(hanger) => hanger.start(),
+                        None => self.cap_switches[index - self.cap_hangers.len()].start(),
+                    }
                     self.events.push(Fx::CapLockOn);
                 }
                 CapEvent::LockReturn => self.events.push(Fx::CapLockReturn),

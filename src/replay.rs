@@ -941,6 +941,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         player.trampolines = mesh.trampolines.clone();
         player.signboards = mesh.signboards.clone();
         player.cap_hangers = mesh.cap_hangers.clone();
+        player.cap_switches = mesh.cap_switches.clone();
     }
     let mut recorder = Recorder::new(
         options.table.clone(),

@@ -4,19 +4,34 @@
 
 Each id is a SignBoardNormal (`signboards`), CapHanger (`cap_hangers`) or CapSwitchSave
 (`cap_switches`) placement. The export keeps the placement, the object archive's InitSensor
-(and InitCollision) data and the pending nerve of the INITIAL record, which is proof that the
-actor has not executed yet. Runtime samples and message transcripts never initialize a replay.
+(and InitCollision) data (a switch also its InitHackCap, hit reactions and model curves) and the
+pending nerve of the INITIAL record, which is proof that the actor has not executed yet. Runtime samples and message transcripts never initialize a replay.
 """
 import argparse
 import csv
 import importlib.util
 import json
+import subprocess
+import tempfile
 from pathlib import Path
 
 # Pending nerve pointers of an actor's INITIAL record (main.bin vtable offsets of the 1.0.0
 # executable); a different value means the source already ran or is another class.
 INITIAL_NERVE = {'SignBoardNormal': '1d30278', 'CapHanger': '1ce0b60', 'CapSwitchSave': '1ce3e98'}
 KEYS = {'SignBoardNormal': 'signboards', 'CapHanger': 'cap_hangers', 'CapSwitchSave': 'cap_switches'}
+# `CapSwitch::init` loads the archive named CapSwitch whatever the placement's unit is called.
+ARCHIVE = {'CapSwitchSave': 'CapSwitch'}
+
+
+def model_curves(archive, converter):
+    """The actor's skeleton and the curves of all its clips as the converter's curve writer
+    stores them ("PJVCURV1", docs/asset-format.md), hex encoded."""
+    with tempfile.TemporaryDirectory() as folder:
+        model, curves = Path(folder) / 'model.bfres', Path(folder) / 'model.curves.bin'
+        model.write_bytes(next(v for k, v in archive.items() if k.endswith('.bfres')))
+        subprocess.run([str(converter), str(model), str(curves), str(model), '--curves-only', '--all-animations'],
+                       check=True, capture_output=True)
+        return curves.read_bytes().hex()
 
 
 def main():
@@ -25,6 +40,7 @@ def main():
     parser.add_argument('--romfs', type=Path, required=True)
     parser.add_argument('--initial', type=Path, required=True)
     parser.add_argument('--id', action='append', required=True)
+    parser.add_argument('--converter', type=Path, default=Path('local/converter/convert.exe'))
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location('outfits', Path(__file__).with_name('convert-outfits.py'))
     outfits = importlib.util.module_from_spec(spec)
@@ -47,9 +63,14 @@ def main():
                 or record['step'] != '0' or record['dead'] != '0' or record['clipped'] != '0'
                 or [float(record[f'pos_{a}']) for a in 'xyz'] != position):
             raise ValueError(f'{identity}: unsupported INITIAL source phase')
-        archive = outfits.archive(args.romfs / 'ObjectData' / (source + '.szs'))
+        archive = outfits.archive(args.romfs / 'ObjectData' / (ARCHIVE.get(source, source) + '.szs'))
         entry = dict(placement=placement, sensors=outfits.byml(archive['InitSensor.byml']),
                      initial_phase='WaitPending')
+        if source == 'CapSwitchSave':
+            # The cap follows the switch's HatTarget joint (`InitHackCap.byml`), which its clips animate.
+            entry['hack_cap'] = outfits.byml(archive['InitHackCap.byml'])
+            entry['hit_reactions'] = outfits.byml(archive['ActorHitReactionCtrl.byml'])
+            entry['curves'] = model_curves(archive, args.converter)
         if 'InitCollision.byml' in archive:
             entry['collision'] = outfits.byml(archive['InitCollision.byml'])
         root.setdefault(KEYS[source], []).append(entry)

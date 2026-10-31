@@ -10,10 +10,13 @@
 //!   step is past 20 (`0x235b78`), or when it still is held past step 1200 or when the player is
 //!   farther than 1500 horizontally (`0x187fd80`);
 //! * Release lasts until its step is past 10 (`0x235d8c`) and returns to Wait.
+//!
 //! The release before the quota is generated (a keep input let go early) takes the shine-failure
 //! reactions in the original and is not ported: the diagnostic reports it.
 use super::*;
 
+/// `CapPointHookStart` runs 11 frames (`MarioCapAnimation`); the hat then plays `CapPointHookWait`.
+pub const START_ACTION_FRAMES: u32 = 11;
 /// `exeRelease` waits for `isGreaterStep(10)`.
 const RELEASE_STEPS: i32 = 10;
 /// Past this step with the quota generated and the input let go the hanger releases.

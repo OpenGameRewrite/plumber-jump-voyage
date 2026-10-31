@@ -7,10 +7,11 @@ scheduler observations), `game.cap.csv` and `game.cap_collider.csv`. A run is ac
 exact stage, scenario, placements and message combinations below; the global Rebound/LockOn
 environment flag stays in force for every other run.
 """
+import re
 import struct
 from collections import defaultdict
 
-ID_NERVE = {'SignBoardNormal': '1d30278', 'CapHanger': '1ce0b60'}
+ID_NERVE = {'SignBoardNormal': '1d30278', 'CapHanger': '1ce0b60', 'CapSwitchSave': '1ce3e98'}
 HANGER_SENSORS = [{'Name': 'Body', 'Radius': 60., 'Type': 'MapObj', 'Y': 25.}]
 SIGN_SENSORS = [{'MaxCount': 0, 'Name': 'Collision', 'Radius': 0., 'Type': 'CollisionParts'},
                 {'Name': 'LookAt', 'Radius': 125., 'Type': 'LookAt', 'Y': 150.}]
@@ -19,7 +20,8 @@ SIGN_SENSORS = [{'MaxCount': 0, 'Name': 'Collision', 'Radius': 0., 'Type': 'Coll
 PERCEPTION = {'PlayerDisregard', 'PlayerDisregardHomingAttack', 'PlayerDisregardTargetMarker',
               'PlayerEyePriorityTarget', 'PlayerLookAtPosition', 'TargetMarkerPosition'}
 # Hosts the cap's Eye sensor overlaps without a message: (class, sensor, sensor type).
-EYE_HOSTS = {('ReactionObject', 'Body', '12'), ('CapHanger', 'Body', '12'), ('SignBoard', 'LookAt', '18')}
+EYE_HOSTS = {('ReactionObject', 'Body', '12'), ('CapHanger', 'Body', '12'), ('CapSwitch', 'Body', '12'),
+             ('SignBoard', 'LookAt', '18')}
 # Every accepted message of the run besides the source's own protocol: (message, sender sensor,
 # receiver id, receiver sensor). The cap and Mario exchange these on every throw/catch.
 CAP_PROTOCOL = {('PlayerDisregard', 'Eye', 'HackCap', 'Catch'), ('PlayerDisregard', 'Eye', 'HackCap', 'Trample'),
@@ -29,6 +31,14 @@ CAP_PROTOCOL = {('PlayerDisregard', 'Eye', 'HackCap', 'Catch'), ('PlayerDisregar
 HANGER_ANSWERS = {'CapAttackStayRolling': '0', 'CapCancelLockOn': '1', 'CapIgnoreCancelLockOn': '0',
                   'CapIgnoreCollisionCheck': '1', 'CapItemGet': '0', 'CapKeepLockOn': '01', 'CapReflect': '0',
                   'CapStartLockOn': '1', 'InitCapTarget': '1', 'StartHack': '0'}
+# The switch's (`CapSwitch::receiveMsg`): it does not answer `CapIgnoreCollisionCheck`, and keeps the cap
+# only while it holds it.
+SWITCH_ANSWERS = dict(HANGER_ANSWERS, CapIgnoreCollisionCheck='0')
+# The switch's lock-on matrix: the HatTarget joint of its own model; its activation reaction.
+SWITCH_PLACEMENT = dict(Translate=dict(X=-1550., Y=-900., Z=-13400.), Rotate=dict(X=0., Y=0., Z=0.),
+                        Scale=dict(X=1., Y=1., Z=1.))
+SWITCH_SENSORS = [{'Name': 'Body', 'Radius': 100., 'Type': 'MapObj', 'Y': 64.},
+                  {'MaxCount': 0, 'Name': 'Collision', 'Radius': 0., 'Type': 'CollisionParts'}]
 
 
 def short(message):
@@ -54,14 +64,18 @@ class Evidence:
         if not (geometry and cap and collider and sources and messages and rewrite and rows):
             return
         signs, hangers = geometry.get('signboards', []), geometry.get('cap_hangers', [])
-        if (geometry['stage'], geometry['scenario']) != ('SandWorldHomeStage', 1) or not signs:
+        switches = geometry.get('cap_switches', [])
+        if (geometry['stage'], geometry['scenario']) != ('SandWorldHomeStage', 1) or not (signs or switches):
             return
         sign_ids, hanger_ids = self.check_signs(signs), self.check_hangers(hangers)
-        ids = sign_ids + hanger_ids
-        placements = {s['placement']['Id']: s['placement'] for s in signs + hangers}
+        switch_ids = self.check_switches(switches)
+        lock_ids = hanger_ids + switch_ids
+        ids = sign_ids + hanger_ids + switch_ids
+        placements = {s['placement']['Id']: s['placement'] for s in signs + hangers + switches}
         samples, initial = self.sample_rows(sources, ids)
         for identity in ids:
-            nerve = ID_NERVE['CapHanger' if identity in hanger_ids else 'SignBoardNormal']
+            nerve = ID_NERVE['CapHanger' if identity in hanger_ids else
+                             'CapSwitchSave' if identity in switch_ids else 'SignBoardNormal']
             if (initial[identity]['pending_n'], initial[identity]['current_n'], initial[identity]['step']) != (nerve, '0', '0'):
                 raise ValueError(f'{identity} INITIAL phase')
             if identity in hanger_ids and (initial[identity]['quota'], initial[identity]['generated'],
@@ -84,13 +98,21 @@ class Evidence:
             r = samples[identity][f]
             if identity in hanger_ids:
                 return f"{identity}/{r['current_n_name']}/{r['step']}/{r['generated']}"
+            if identity in switch_ids:
+                # `exeOnWait` does nothing after its first step, and the step counts the world's ticks:
+                # the linked door's camera demo runs the switch while Mario's own clock stands still.
+                step = '*' if r['current_n_name'] == 'OnWait' else r['step']
+                return f"{identity}/{r['current_n_name']}/{step}"
             return f"{identity}/{int(r['current_n_name'] == 'Reaction')}/{r['step']}"
+
+        def native(text):
+            return re.sub(r'(obj\d+/OnWait)/\d+', r'\1/*', text) if switch_ids else text
         for f, row in rewrite.items():
-            if first <= f <= last and row.get('cap_source') != '|'.join(record(i, f) for i in ids):
+            if first <= f <= last and native(row.get('cap_source', '')) != '|'.join(record(i, f) for i in ids):
                 raise ValueError(f'native source {f}')
-        self.verify_messages(messages, sign_ids, hanger_ids, own)
-        if hanger_ids:
-            self.verify_lock_on(messages, cap, hanger_ids[0])
+        self.verify_messages(messages, sign_ids, hanger_ids, switch_ids, own)
+        if lock_ids:
+            self.verify_lock_on(messages, cap, lock_ids[0], bool(hanger_ids))
         else:
             self.verify_rebound(messages, cap, collider)
         self.frames = {f for f in rewrite if first <= f <= last}
@@ -106,7 +128,7 @@ class Evidence:
                     or source['initial_phase'] != 'WaitPending'):
                 raise ValueError('unsupported sign placement/sensors')
             ids.append(p['Id'])
-        if ids != ['obj454']:
+        if ids not in ([], ['obj454']):
             raise ValueError('sign set')
         return ids
 
@@ -124,6 +146,20 @@ class Evidence:
             ids.append(p['Id'])
         if ids not in ([], ['obj4377']):
             raise ValueError('hanger set')
+        return ids
+
+    @staticmethod
+    def check_switches(switches):
+        ids = []
+        for source in switches:
+            p = source['placement']
+            if (p['UnitConfigName'] != 'CapSwitchSave' or p['IsLinkDest'] or p['IsConnectToCollision']
+                    or p['IsNoReaction'] or list(p['Links']) != ['RiseParts'] or p['Id'] != 'obj2025'
+                    or any(p[k] != v for k, v in SWITCH_PLACEMENT.items())
+                    or source['sensors'] != SWITCH_SENSORS or source['initial_phase'] != 'WaitPending'
+                    or source['hack_cap']['JointName'] != 'HatTarget' or source['hack_cap']['LockOnOnly'] is not True):
+                raise ValueError('unsupported switch placement/sensors')
+            ids.append(p['Id'])
         return ids
 
     @staticmethod
@@ -145,7 +181,7 @@ class Evidence:
             raise ValueError('missing source rows')
         return samples, initial
 
-    def verify_messages(self, messages, sign_ids, hanger_ids, own):
+    def verify_messages(self, messages, sign_ids, hanger_ids, switch_ids, own):
         """Only the ordered reflect/lock-on protocol, rejected probes and perception queries occur."""
         accepted, start, keeps, probes = [], [], [], []
         for r in messages:
@@ -167,11 +203,12 @@ class Evidence:
                         raise ValueError('source perception answer')
                 else:
                     raise ValueError(f'unproved source message {msg}')
-            elif r['receiver_id'] in hanger_ids:
+            elif r['receiver_id'] in hanger_ids or r['receiver_id'] in switch_ids:
                 sender = (r['sender_id'], r['sender_sensor'])
-                if msg in HANGER_ANSWERS:
-                    if r['answer'] not in HANGER_ANSWERS[msg] or (msg != 'StartHack' and sender != ('HackCap', 'Attack')):
-                        raise ValueError(f'hanger answer {msg}')
+                answers = HANGER_ANSWERS if r['receiver_id'] in hanger_ids else SWITCH_ANSWERS
+                if msg in answers:
+                    if r['answer'] not in answers[msg] or (msg != 'StartHack' and sender != ('HackCap', 'Attack')):
+                        raise ValueError(f'lock-on target answer {msg}')
                     if msg == 'CapStartLockOn':
                         start.append(r)
                     elif msg == 'CapKeepLockOn':
@@ -185,7 +222,7 @@ class Evidence:
                     raise ValueError(f'unproved hanger message {msg}')
             elif r['answer'] == '1' and msg not in PERCEPTION and route not in CAP_PROTOCOL:
                 raise ValueError(f'unproved accepted message {msg}')
-        if hanger_ids:
+        if hanger_ids or switch_ids:
             self.keeps, self.start, self.probes = keeps, start, probes
             if accepted or len(start) != 1:
                 raise ValueError('lock-on start count')
@@ -198,7 +235,7 @@ class Evidence:
             raise ValueError('reflect identity')
         self.reflect = int(r['frame'])
 
-    def verify_lock_on(self, messages, cap, identity):
+    def verify_lock_on(self, messages, cap, identity, coins):
         """CapStartLockOn/InitCapTarget accepted once, kept every execution, refused once, then tryReturn."""
         start = self.start[0]
         if (start['sender_id'], start['sender_sensor'], start['receiver_sensor'], start['cap_current_n_name'],
@@ -222,9 +259,9 @@ class Evidence:
         if len(tries) != 1 or (int(tries[0]['frame']), tries[0]['answer'], tries[0]['cap_pending_n_name']) != (end, '1', 'Return'):
             raise ValueError('tryReturn result')
         # The multi-coin helper succeeds on the first execution of each tenth step.
-        coins = sorted(int(r['frame']) for r in messages if r['kind'] == 'multi_coin_after'
-                       and r['answer'] == '1' and r['preroll'] == '0')
-        if coins != [first, first + 10, first + 20]:
+        generated = sorted(int(r['frame']) for r in messages if r['kind'] == 'multi_coin_after'
+                           and r['answer'] == '1' and r['preroll'] == '0')
+        if generated != ([first, first + 10, first + 20] if coins else []):
             raise ValueError('coin cadence')
         samples = {int(r['frame']): r for r in cap if r['kind'] == 'sample' and r['preroll'] == '0'}
         for f in range(first, end):
@@ -275,7 +312,8 @@ class Evidence:
         if (c['self'], c['self_type']) == ('Eye', '0'):
             return host in EYE_HOSTS
         # The cap's Attack overlap with the hanger is the one that sends its protocol on this frame.
-        return (c['self'], c['self_type']) == ('Attack', '4') and host == ('CapHanger', 'Body', '12') and frame in self.attack
+        return ((c['self'], c['self_type']) == ('Attack', '4')
+                and host in {('CapHanger', 'Body', '12'), ('CapSwitch', 'Body', '12')} and frame in self.attack)
 
 
 def fixture():
