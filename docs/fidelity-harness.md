@@ -121,10 +121,14 @@ parts); the body under the pivot is hidden meanwhile. The pipe actors' models
 are drawn static at the stage export's matrices by `src/pipe_view.rs`.
 Fidelity limits: the placeholder scene has no Cascade scenery or 2D floor; the pipe
 actor's own animation and its Type variant choice (the two Dokan2D meshes are mirror
-images; the first is drawn) are not reproduced; the palette texture is sampled with
-nearest filtering and the BodyMT colour gain 1.3 (`uniform0_mul_color`) is applied
-as a plain multiplier, both presentation choices not verified against the original
-renderer; costumes other than the classic Mario have 2D models of their own that are
+  images; the first is drawn) are not reproduced. The palette sampler follows the
+  original `Mario2D.bfres` FMAT `BodyMT` sampler `_a0`: `ShrinkXY`, `ExpandXY` and
+  `Mipmap` are `Points`, U/V/W wrap is `Clamp`, and LOD is 0–13 with zero bias and
+  1:1 anisotropy. The renderer maps these to Bevy nearest filters, clamp-to-edge and
+  the same LOD bounds; no original BodyMT field sets Bevy reflectance, so its loaded
+  default applies. The BodyMT colour gain 1.3 (`uniform0_mul_color`) is applied as a
+  plain multiplier, which is not verified against the original renderer. Costumes
+  other than the classic Mario have 2D models of their own that are
 not installed (the classic 8-bit model is shown for all outfits); no recording of the
 original game's 2D section exists to compare screenshots with.
 

@@ -10,7 +10,11 @@
 //! The model is its own tree, apart from the body's: the 3D pose systems look for joints under
 //! their own roots (`local_assets::imported`) and never see these.
 use crate::{model_2d, movement::Player, trace, world::Pivot};
-use bevy::{camera::visibility::NoFrustumCulling, image::ImageSampler, prelude::*};
+use bevy::{
+    camera::visibility::NoFrustumCulling,
+    image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
+    prelude::*,
+};
 use std::collections::HashMap;
 
 const MODEL: &str = "local/Mario2D.glb";
@@ -131,22 +135,34 @@ fn find_nodes(
     model.ready = true;
 }
 
-/// The sprite colours come from a tiny palette texture, so a texel must show as itself: point
-/// sampling (a filter would blend neighbouring palette entries along the sprite edges). The
-/// material is matte and takes the original's colour gain. GUESS: the original sampler's filter
-/// was not read from the archive; point sampling is the only one that keeps a palette intact.
+/// The material takes BodyMT's colour gain, roughness, metalness and opacity.
 fn finish_material(material: &mut StandardMaterial, images: &mut Assets<Image>) {
     material.base_color = Color::linear_rgb(COLOR_GAIN, COLOR_GAIN, COLOR_GAIN);
     material.perceptual_roughness = 1.;
     material.metallic = 0.;
-    material.reflectance = 0.;
+    // BodyMT has no original field that sets Bevy's reflectance; retain the loaded default.
     material.alpha_mode = AlphaMode::Opaque;
     if let Some(mut image) = material
         .base_color_texture
         .as_ref()
         .and_then(|texture| images.get_mut(texture))
     {
-        image.sampler = ImageSampler::nearest();
+        // ObjectData/Mario2D.szs -> local/objects/Mario2D/Mario2D.bfres, FMAT BodyMT:
+        // shader samplers _a0/_u0 bind _a0, which samples the Mario2D diffuse texture.
+        // MatTexture.switchSampler (the converter's BFRES reader): ShrinkXY=Points,
+        // ExpandXY=Points, Mipmap=Points; WrapModeU/V/W=Clamp; MinLOD=0, MaxLOD=13,
+        // LODBias=0, MaxAnisotropic=Ratio_1_1. Bevy needs no bias or anisotropy override.
+        image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::ClampToEdge,
+            address_mode_v: ImageAddressMode::ClampToEdge,
+            address_mode_w: ImageAddressMode::ClampToEdge,
+            mag_filter: ImageFilterMode::Nearest,
+            min_filter: ImageFilterMode::Nearest,
+            mipmap_filter: ImageFilterMode::Nearest,
+            lod_min_clamp: 0.,
+            lod_max_clamp: 13.,
+            ..default()
+        });
     }
 }
 
