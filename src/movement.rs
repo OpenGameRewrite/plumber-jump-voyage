@@ -271,6 +271,8 @@ pub(crate) mod ground_move;
 pub(crate) mod ground_pose;
 #[path = "movement/hip_spring.rs"]
 pub(crate) mod hip_spring;
+#[path = "movement/input_2d.rs"]
+mod input_2d;
 #[path = "movement/joint_controls.rs"]
 pub(crate) mod joint_controls;
 #[path = "movement/joint_math.rs"]
@@ -1305,6 +1307,8 @@ pub struct Player {
     /// The stick as the pad reports it (y up), for the states that read it
     /// without the camera.
     raw_stick: Vec2,
+    input_2d: input_2d::Input2D,
+    input_2d_frame: Option<input_2d::Frame>,
     slope: f32,
     /// The ledge hang in progress (`PlayerStateWallCatch`), and where the
     /// collider stood (cm) after the last step of it.
@@ -1584,6 +1588,8 @@ impl Default for Player {
             stick: Vec3::ZERO,
             tilt: 0.,
             raw_stick: Vec2::ZERO,
+            input_2d: input_2d::Input2D::default(),
+            input_2d_frame: None,
             slope: 0.,
             catch: WallCatchControl::default(),
             catch_collider_at: None,
@@ -3155,6 +3161,7 @@ impl Player {
             o.direction = Vec2::new(input.x, input.z);
         }
         self.read_input(&o);
+        self.update_input_2d(scene);
         self.landing_speed = 0.;
         self.nerve.deferred = false;
         self.nerve.renewed = false;
@@ -3505,6 +3512,43 @@ impl Player {
             self.land_frames = self.land_frames.saturating_add(1);
         }
     }
+    fn update_input_2d(&mut self, scene: &Course) {
+        let active = self.dimension.is_2d && self.dimension.in_area;
+        let lock = scene.mesh.as_ref().map_or(Vec3::ZERO, |mesh| {
+            self.dimension
+                .lock(&mesh.dimension, mesh.to_game_vec(self.position_cm()))
+                .0
+        });
+        let pose = self.actor_pose();
+        let frame = input_2d::Frame {
+            active,
+            stick: self.raw_stick,
+            view: self
+                .view
+                .unwrap_or_else(|| move_input::locked_view(self.camera_yaw)),
+            position: self.position_cm(),
+            velocity: self.v,
+            actor_side: pose.side(),
+            actor_up: pose.up(),
+            actor_front: pose.front(),
+            lock,
+            up: self.mesh_ground.unwrap_or(pose_math::NEGATED_GRAVITY),
+            ground: self.grounded.then(|| {
+                (
+                    self.collider.ground_position(),
+                    self.mesh_ground.unwrap_or(Vec3::Y),
+                )
+            }),
+            just_landed: self.is_just_land(),
+        };
+        self.input_2d.update(&frame);
+        self.input_2d_frame = active.then_some(frame);
+        if let Some(frame) = &self.input_2d_frame {
+            let push = self.input_2d.move_input(frame, Vec3::Y);
+            self.tilt = pose_math::squared_length(push).sqrt();
+            self.stick = pose_math::try_normalize_or_zero(push).0;
+        }
+    }
     fn finish_frame(&mut self, scene: &Course) {
         self.update_combo_counters();
         // Original movement updates wetness before it records wet stain suppression.
@@ -3786,6 +3830,9 @@ impl Player {
     /// (`PlayerInput::calcMoveInput`): the camera's forward axis is tipped
     /// along the slope as the camera sees it, the side axis is across that.
     fn plane_stick(&self, up: Vec3) -> Vec3 {
+        if let Some(frame) = &self.input_2d_frame {
+            return self.input_2d.move_input(frame, up);
+        }
         if let Some(view) = &self.view {
             let input = self
                 .wall_along
@@ -6273,6 +6320,7 @@ pub fn self_check() {
     turn_control::self_check();
     ground_move::self_check();
     move_input::self_check();
+    input_2d::self_check();
     wall_along::self_check();
     wall_slide::self_check();
     pose_math::self_check();
