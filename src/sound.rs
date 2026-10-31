@@ -73,6 +73,8 @@ struct Ctx<'a, 'w, 's> {
     volume: f32,
     speed: f32,
     footwear: Option<&'a str>,
+    model_2d: bool,
+    model_audio: bool,
 }
 impl Ctx<'_, '_, '_> {
     /// Start one named sound of a group. Loops are tagged so they can stop.
@@ -88,7 +90,7 @@ impl Ctx<'_, '_, '_> {
         held: bool,
         t: &mut Tracker,
     ) {
-        let group = self.sounds.table.group(cap);
+        let group = self.sounds.table.action_group(cap, self.model_audio);
         // Outfits with their own footwear use its foot sounds when present.
         let worn = self.footwear.and_then(|f| {
             let name = if f == "Metal" {
@@ -164,13 +166,15 @@ impl Ctx<'_, '_, '_> {
         carried: &[String],
         t: &mut Tracker,
     ) {
-        let group = self.sounds.table.group(cap);
+        let group = self.sounds.table.action_group(cap, self.model_2d);
+        self.model_audio = !cap && self.model_2d;
         for play in group.triggered(name, from, to, replay) {
             if from < 0. && carried.contains(&play) {
                 continue;
             }
             self.start(cap, &play, Some(tag), t);
         }
+        self.model_audio = false;
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -205,6 +209,8 @@ fn play(
         volume: settings.volume,
         speed: p.move_speed,
         footwear: sounds.table.footwear.get(outfit).map(String::as_str),
+        model_2d: p.model_2d(),
+        model_audio: false,
     };
     // Animation-driven sounds, with loops ending when their clip does.
     let advance = t.cursor.advance(
@@ -217,7 +223,7 @@ fn play(
     let carried = if advance.restarted {
         ctx.sounds
             .table
-            .group(false)
+            .action_group(false, p.model_2d())
             .continuing(advance.previous, p.anim.name)
     } else {
         Vec::new()

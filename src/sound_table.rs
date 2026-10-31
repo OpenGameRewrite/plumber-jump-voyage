@@ -62,9 +62,62 @@ impl Table {
         std::fs::read(crate::local_assets::asset_dir().join("local/sounds/player.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Self>(&b).ok())
+            .map(|mut table| {
+                // Mario.byml ActionInfoList: the 3D side emergence selected at
+                // 0x25c878 schedules Land and LandMat at StartFrame=52.
+                // Older installations may have the clip without its audio entry.
+                table
+                    .mario
+                    .actions
+                    .entry("DokanSideOut".into())
+                    .or_insert_with(|| {
+                        ["Land", "LandMat"]
+                            .into_iter()
+                            .map(|play| Trigger {
+                                play: play.into(),
+                                frame: 52.,
+                                once: false,
+                            })
+                            .collect()
+                    });
+                table
+            })
     }
     pub fn group(&self, cap: bool) -> &Group {
         if cap { &self.cap } else { &self.mario }
+    }
+    /// Model audio is distinct from the player actor's reaction keeper.
+    /// initMarioModelActor2D (1.0.0 0x4455cc) loads Mario2D/InitAudio.byml,
+    /// SeUserName=MarioDot. SeDataBase/MarioDot.byml has just one action entry:
+    /// Jump, unset StartFrame, IsOneTime=true; its WsDpJump2D layer has DelayFrame=1.
+    /// Keep this small action contract available without installing the 2D assets.
+    pub fn action_group(&self, cap: bool, model_2d: bool) -> &Group {
+        if cap || !model_2d {
+            return self.group(cap);
+        }
+        static DOT: std::sync::OnceLock<Group> = std::sync::OnceLock::new();
+        DOT.get_or_init(|| Group {
+            actions: BTreeMap::from([(
+                "Jump".into(),
+                vec![Trigger {
+                    play: "Jump".into(),
+                    frame: 0.,
+                    once: true,
+                }],
+            )]),
+            plays: BTreeMap::from([(
+                "Jump".into(),
+                Play {
+                    layers: vec![Layer {
+                        resource: "WsDpJump2D".into(),
+                        delay: 1,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        })
     }
 }
 pub fn curve(c: Option<[f32; 4]>, input: f32) -> f32 {
@@ -115,7 +168,15 @@ impl Group {
     }
     /// Plays a reaction starts.
     pub fn reaction_plays(&self, name: &str) -> Vec<String> {
-        self.reactions.get(name).cloned().unwrap_or_default()
+        self.reactions.get(name).cloned().unwrap_or_else(|| {
+            // Mario.byml's model-change reaction; available before its optional
+            // RcWsdChange3D waveform is installed. No substitute sound is played.
+            if matches!(name, "3D変身" | "3D変身[SEのみ]") {
+                vec!["HrOut2DArea".into()]
+            } else {
+                Vec::new()
+            }
+        })
     }
     /// Plays an action schedules between two frames of its clip; a negative
     /// `from` means the clip is just starting. `replay` marks the scan after a
@@ -202,6 +263,11 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
         })],
         Fx::Crushed => reaction("CrushDeath"),
         Fx::Change2D => reaction("2D変身"),
+        Fx::Change3D { bound } => reaction(if bound {
+            "3D変身[SEのみ]"
+        } else {
+            "3D変身"
+        }),
         Fx::PoundHit => reaction("PoundHit"),
         Fx::Abyss => vec![Cue::Play("FallDown"), Cue::Play("vDeadFallDown")],
         Fx::RecoveryDamage => reaction("BubbleDamage"),

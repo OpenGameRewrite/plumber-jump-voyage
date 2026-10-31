@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Column names, in file order.
-pub const COLUMNS: [&str; 70] = [
+pub const COLUMNS: [&str; 71] = [
     "frame",
     "px",
     "py",
@@ -99,6 +99,7 @@ pub const COLUMNS: [&str; 70] = [
     "carry_source",
     "trampoline_source",
     "dimension_keeper",
+    "dokan_source",
 ];
 
 /// One clip contributing to the pose.
@@ -287,6 +288,7 @@ pub struct FrameInfo {
 /// Turns the player after each step into a row of cells.
 pub struct Recorder {
     table: Option<Table>,
+    model_2d: bool,
     cursor: AnimCursor,
     /// Where the cap's clip stands, for the sounds its frames start.
     cap_cursor: AnimCursor,
@@ -348,6 +350,7 @@ impl Recorder {
     pub fn new(table: Option<Table>, library: Option<Library>, floor: Option<String>) -> Self {
         Self {
             table,
+            model_2d: false,
             right_hand: true,
             stage: None,
             effects: library.map(|library| Tracker::new(library).on_floor(floor)),
@@ -415,13 +418,44 @@ impl Recorder {
         events: &mut Vec<String>,
         mix: &mut Vec<String>,
     ) {
+        self.play_from((cap, false), name, speed, events, mix);
+    }
+    fn play_from(
+        &self,
+        (cap, model): (bool, bool),
+        name: &str,
+        speed: f32,
+        events: &mut Vec<String>,
+        mix: &mut Vec<String>,
+    ) {
         // The game marks a sound of Cappy's own audio keeper with `@cap`.
         events.push(format!(
             "{}:{name}{}",
             if is_voice(name) { "voice" } else { "se" },
-            if cap { "@cap" } else { "" }
+            if cap {
+                "@cap"
+            } else if model {
+                "@model"
+            } else {
+                ""
+            }
         ));
         if self.table.is_none() {
+            return;
+        }
+        if model
+            && self.table.as_ref().is_some_and(|table| {
+                table
+                    .action_group(cap, true)
+                    .plays
+                    .get(name)
+                    .and_then(|play| play.layers.first())
+                    .is_some_and(|layer| layer.delay > 0)
+            })
+        {
+            // AudioKeeper logs a delayed request before a player exists to supply
+            // gain/pitch. DelayFrame is table data, not an observed jump offset.
+            mix.push(format!("{name}/{}/", num(0.)));
             return;
         }
         // The game logs one request per sound, however many layers answer it;
@@ -431,7 +465,12 @@ impl Recorder {
             .table
             .as_ref()
             .and_then(|table| {
-                let layer = table.group(cap).plays.get(name)?.layers.first()?;
+                let layer = table
+                    .action_group(cap, model)
+                    .plays
+                    .get(name)?
+                    .layers
+                    .first()?;
                 let resource = table.resources.get(&layer.resource)?;
                 // Random variation is left at its middle (volume at its loudest).
                 let mut draws = [0.5, 0.5, 0.].into_iter();
@@ -468,13 +507,13 @@ impl Recorder {
         mix: &mut Vec<String>,
     ) {
         if let Some(table) = &self.table {
-            let group = table.group(cap);
+            let group = table.action_group(cap, self.model_2d);
             let carried = group.continuing(previous, name);
             for play in group.triggered(name, from, to, replay) {
                 if from < 0. && carried.contains(&play) {
                     continue;
                 }
-                self.play(cap, &play, speed, events, mix);
+                self.play_from((cap, !cap && self.model_2d), &play, speed, events, mix);
             }
         }
     }
@@ -661,6 +700,7 @@ impl Recorder {
     /// Row of cells (in `COLUMNS` order) for the state after a step. The
     /// player's pending events are consumed.
     pub fn record(&mut self, info: &FrameInfo, p: &mut Player) -> Vec<String> {
+        self.model_2d = p.model_2d();
         let fxs: Vec<Fx> = std::mem::take(&mut p.events);
         let speed = p.move_speed;
         let mut events = Vec::new();
@@ -1010,6 +1050,7 @@ impl Recorder {
         cells.text(&p.carry_diagnostic());
         cells.text(&p.trampoline_diagnostic());
         cells.text(&p.dimension_diagnostic);
+        cells.text(&p.dokan_diagnostic());
         cells.finish()
     }
 }

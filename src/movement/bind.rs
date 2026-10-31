@@ -1,5 +1,5 @@
 //! Mario bound to a pipe: `PlayerStateBind` plus the pipe's `DokanPuppetController`
-//! (SMO 1.0.0 0x4671dc / 0x25b2f0..0x25c504) for the ordinary 3D side entrance.
+//! (SMO 1.0.0 0x4671dc / 0x25b2f0..0x25cb9c), linked side/upright 2D pair.
 //!
 //! Frame order, as the recorded scheduler phases show it: the pipe's sensor message
 //! reaches Mario before his update; the pipe actor (nerve, then `control`, which steps the
@@ -23,6 +23,9 @@ const IN_STEPS_SAME_DIMENSION: u32 = 60;
 /// in the bind keeper path (getHitSensor at 0x41b430, keeper constructor at 0x41bcd0).
 const BODY_RADIUS: f32 = 50.;
 const BODY_HEIGHT: f32 = 75.;
+/// Same InitSensor resource's 2DBody, selected by syncForm (0x443b54).
+const BODY_RADIUS_2D: f32 = 60.;
+const BODY_HEIGHT_2D: f32 = 60.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Controller {
@@ -35,6 +38,7 @@ pub(super) enum Controller {
 /// `Dokan`'s own nerves along the trip (the pipe actor owns the controller).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ActorNerve {
+    Wait,
     ReadyBind,
     In,
     WaitCameraInterpolate,
@@ -56,6 +60,7 @@ pub(super) struct DokanActor {
     target: [f32; 12],
     /// The controller's finished flag (+0xa0): the pipe actor warps on its next nerve step.
     in_done: bool,
+    out_done: bool,
     /// Mario is bound to this pipe's controller (`+0x18` puppet pointer).
     bound: bool,
 }
@@ -63,7 +68,7 @@ pub(super) struct DokanActor {
 impl DokanActor {
     fn ready() -> Self {
         Self {
-            actor: ActorNerve::ReadyBind,
+            actor: ActorNerve::Wait,
             actor_step: 0,
             next_actor: None,
             controller: Controller::Wait,
@@ -72,6 +77,7 @@ impl DokanActor {
             saved: [0.; 12],
             target: [0.; 12],
             in_done: false,
+            out_done: false,
             bound: false,
         }
     }
@@ -109,7 +115,7 @@ impl Player {
     /// starts the bind. The sensor pair list is two updates old: the director tests the
     /// positions of the end of the previous frame, the callbacks collect during the next
     /// frame's sensor update, and Mario's following update sends the message.
-    pub(super) fn dokan_sensor_phase(&mut self, scene: &Course) {
+    pub(super) fn dokan_sensor_phase(&mut self, scene: &Course, o: &Orders) {
         let ready = std::mem::take(&mut self.bind_ready);
         if self.bound_to.is_some() || self.is_dead() || self.recovering() {
             return;
@@ -120,8 +126,12 @@ impl Player {
         let (front, velocity) = (self.actor_pose().front(), self.units_per_frame());
         for index in ready {
             // The controller refuses while it holds a puppet (judge 0x25b320).
+            let pipe = &mesh.dokans[index];
+            let upright = self.pipes[index].actor == ActorNerve::ReadyBind
+                && pipe.accepts_upright_bind(self.model_2d(), o.crouch);
             if !self.pipes[index].bound
-                && mesh.dokans[index].accepts_side_bind(feet, front, velocity)
+                && pipe.is_2d == self.model_2d()
+                && (upright || pipe.accepts_side_bind(feet, front, velocity))
             {
                 self.start_dokan_bind(mesh, index);
                 return;
@@ -133,13 +143,42 @@ impl Player {
     pub(super) fn dokan_sensor_trail(&mut self, scene: &Course) {
         self.bind_ready = std::mem::take(&mut self.bind_staged);
         let Some(mesh) = &scene.mesh else { return };
-        let body = mesh.to_game_vec(self.position_cm()) + Vec3::Y * BODY_HEIGHT;
+        // PlayerFloorTouch moves an unbound upright pipe from Wait to ReadyBind
+        // (0x257aa4..0x257c04); ReadyBind waits while the same floor is touched
+        // (0x257db8..0x257e3c). No position radius or cooldown substitutes for it.
+        for (index, pipe) in mesh.dokans.iter().enumerate() {
+            if pipe.direction != dokan::Direction::Up || self.pipes[index].bound {
+                continue;
+            }
+            let on_pipe = self.grounded
+                && self.ground_part.is_some()
+                && self.ground_part == pipe.collision_part;
+            match (self.pipes[index].actor, on_pipe) {
+                (ActorNerve::Wait, true) => {
+                    self.pipes[index].next_actor = Some(ActorNerve::ReadyBind)
+                }
+                (ActorNerve::ReadyBind, false) => {
+                    self.pipes[index].next_actor = Some(ActorNerve::Wait)
+                }
+                _ => {}
+            }
+        }
+        if self.bound_to.is_some() {
+            self.bind_staged.clear();
+            return;
+        }
+        let (radius, height) = if self.model_2d() {
+            (BODY_RADIUS_2D, BODY_HEIGHT_2D)
+        } else {
+            (BODY_RADIUS, BODY_HEIGHT)
+        };
+        let body = mesh.to_game_vec(self.position_cm()) + self.actor_pose().up() * height;
         self.bind_staged = mesh
             .dokans
             .iter()
             .enumerate()
             .filter(|(_, dokan)| {
-                let reach = BODY_RADIUS + dokan.bind_radius();
+                let reach = radius + dokan.bind_radius();
                 let offset = body - dokan.bind_center();
                 offset.dot(offset) < reach * reach
             })
@@ -150,7 +189,10 @@ impl Player {
     /// `DokanPuppetController::startBind` (0x25b6f0) for the side entrance.
     fn start_dokan_bind(&mut self, mesh: &crate::geometry::TriangleMesh, source: usize) {
         let dokan = &mesh.dokans[source];
-        let Some(target) = dokan.side_entry_target() else {
+        let Some(target) = dokan
+            .side_entry_target()
+            .or_else(|| dokan.upright_2d_entry(self.actor_pose().front()))
+        else {
             return;
         };
         // calcMoveMtxSide 0x25be70..0x25bed0: the saved pose is Mario's own front, up and
@@ -166,6 +208,7 @@ impl Player {
         pipe.target = target;
         pipe.bound = true;
         pipe.in_done = false;
+        pipe.out_done = false;
         // `Dokan::receiveMsg` BindInit: the pipe actor enters In, the controller MoveIn.
         pipe.actor = ActorNerve::In;
         pipe.actor_step = 0;
@@ -174,12 +217,13 @@ impl Player {
         pipe.step = 0;
         pipe.next_controller = None;
         self.bound_to = Some(source);
+        self.puppet_collision = true;
+        self.puppet_sensors = true;
         // PlayerStateBind::appear (0x467288): the velocity is cleared and the bind nerve runs.
         // The state is entered before this update's nerve step runs; the clip the player
         // was playing goes on until the controller starts the pipe's own (startPlayerPuppet
         // only ends the sub animation).
         self.v = Vec3::ZERO;
-        self.grounded = false;
         self.nerve.clear();
         self.nerve.actor = "Bind";
         self.nerve.step = 0;
@@ -195,8 +239,9 @@ impl Player {
         if matches!(self.anim.name, "Move" | "MoveMoon") {
             self.cycle.move_on_without_control();
         }
-        self.v = Vec3::ZERO;
-        self.grounded = false;
+        if !self.puppet_collision {
+            self.v = Vec3::ZERO;
+        }
     }
 
     /// `PlayerStateBind::exeEndFall` (0x4675b0): the air control keeps falling; once the
@@ -256,6 +301,11 @@ impl Player {
                 // Dokan::exeOut first step: `DokanPuppetController::out`.
                 self.pipes[index].next_controller = Some(Controller::Out);
             }
+            ActorNerve::Out if self.pipes[index].out_done && step >= 85 => {
+                // Ordinary non-Moon Out releases its actor/camera after step85
+                // (0x258158..0x25816c), independently of puppet action completion.
+                self.pipes[index].next_actor = Some(ActorNerve::Wait);
+            }
             _ => {}
         }
         self.pipes[index].actor_step += 1;
@@ -264,12 +314,21 @@ impl Player {
     /// `DokanPuppetController::warp` for an upright 2D destination (0x25b928): the player is
     /// reset to the mouth, the keeper validated for 2D.
     fn warp_to(&mut self, destination: &Dokan, mesh: &crate::geometry::TriangleMesh) {
-        let Some((position, pose)) = destination.upright_2d_exit() else {
+        let Some((position, pose)) = destination
+            .upright_2d_exit()
+            .or_else(|| destination.side_exit())
+        else {
             return;
         };
         // PuppetFunction2D3D::validate2DPuppet: the keeper becomes valid.
-        self.dimension.valid = true;
+        if destination.is_2d {
+            self.dimension.valid = true;
+        } else {
+            // endKeepOn2DPuppet, 0x25b974 -> 0x56f1ac -> 0x45fb2c.
+            self.dimension.keep_2d = false;
+        }
         self.pos = mesh.relative_vec(position) * UNIT;
+        self.collider_end = None;
         self.set_pose(pose);
     }
 
@@ -283,13 +342,24 @@ impl Player {
             Controller::Wait => {}
             Controller::MoveIn => {
                 if step == 0 {
-                    self.play_puppet_action("DokanSideIn");
+                    self.puppet_collision = false;
+                    self.puppet_sensors = false;
+                    self.grounded = false;
+                    self.play_puppet_action(if mesh.dokans[index].is_2d {
+                        "DokanReady"
+                    } else {
+                        "DokanSideIn"
+                    });
                 }
                 let rate = ease_out((step as f32 / MOVE_IN_STEPS as f32).clamp(0., 1.));
                 let (axes, position) =
                     blend_matrix(&self.pipes[index].saved, &self.pipes[index].target, rate);
                 self.set_puppet_pose(mesh, position, axes[2], axes[1]);
                 if step >= MOVE_IN_STEPS {
+                    if mesh.dokans[index].direction == dokan::Direction::Up {
+                        // exeMoveIn starts DokanIn before changing nerve (0x25c350..0x25c37c).
+                        self.play_puppet_action("DokanIn");
+                    }
                     self.pipes[index].next_controller = Some(Controller::In);
                 }
             }
@@ -317,10 +387,26 @@ impl Player {
                         self.set_pose(pose);
                     }
                     self.puppet_hidden = false;
-                    self.play_puppet_action("DokanOut");
+                    self.play_puppet_action(if Self::destination_of(mesh, index).is_2d {
+                        "DokanOut"
+                    } else {
+                        "DokanSideOut"
+                    });
+                }
+                let destination_2d = Self::destination_of(mesh, index).is_2d;
+                let length = if destination_2d {
+                    clip::DOKAN_OUT
+                } else {
+                    clip::DOKAN_SIDE_OUT
+                };
+                if !destination_2d && step >= length - 1 {
+                    // getPuppetAnimFrameMax()-1, 0x25c944..0x25c998;
+                    // original constructed velocity (0,-2,-0), no gravity timer.
+                    self.puppet_collision = true;
+                    self.v = Vec3::new(0., -2., -0.);
                 }
                 // isPuppetActionEnd: the clip has played to its last frame.
-                if step > 0 && self.anim_done(clip::DOKAN_OUT) {
+                if step > 0 && self.anim_done(length) {
                     self.end_dokan_bind(mesh, index);
                 }
             }
@@ -330,6 +416,21 @@ impl Player {
 
     /// `rs::endBindAndPuppetNull` with the 2D mouth's fall velocity (0x25c9a0..0x25cb70).
     fn end_dokan_bind(&mut self, mesh: &crate::geometry::TriangleMesh, index: usize) {
+        if !Self::destination_of(mesh, index).is_2d {
+            // Side destination: endBindOnGroundAndPuppetNull (0x25cb40).
+            self.bound_to = None;
+            self.puppet_collision = false;
+            self.puppet_hidden = false;
+            self.puppet_sensors = true;
+            self.pipes[index].bound = false;
+            self.pipes[index].out_done = true;
+            self.pipes[index].next_controller = Some(Controller::Wait);
+            // The bind state's EndWait adds its gravity, then Mario selects
+            // Wait during this update; its clip starts on the following one.
+            self.mode = Move::BindFall;
+            self.frame = 0;
+            return;
+        }
         let at = Self::destination_of(mesh, index).position();
         let gravity = mesh
             .dimension
@@ -341,8 +442,10 @@ impl Player {
         self.mode = Move::BindFall;
         self.frame = 0;
         self.puppet_hidden = false;
+        self.puppet_sensors = true;
         let pipe = &mut self.pipes[index];
         pipe.bound = false;
+        pipe.out_done = true;
         pipe.next_controller = Some(Controller::Wait);
         self.bound_to = None;
     }
@@ -355,6 +458,20 @@ impl Player {
             Move::BindFall => Some(self.frame),
             _ => None,
         }
+    }
+
+    /// Source ownership/lifecycle evidence, separate from presentation columns.
+    pub fn dokan_diagnostic(&self) -> String {
+        if self.pipes.is_empty() {
+            return String::new();
+        }
+        format!(
+            "bound={};hidden={};collider={};sensors={}",
+            self.bound_to.map_or_else(String::new, |i| i.to_string()),
+            u8::from(self.puppet_hidden),
+            u8::from(self.bound_to.is_none() || self.puppet_collision),
+            u8::from(self.bound_to.is_none() || self.puppet_sensors)
+        )
     }
 
     /// `rs::startPuppetAction`: the clip starts with the player's next update; the counter
@@ -375,5 +492,98 @@ impl Player {
     ) {
         self.pos = mesh.relative_vec(position) * UNIT;
         self.set_pose(quat_front_up(front, up));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upright_entry_requires_ready_dimension_squat_and_unbound_controller() {
+        let areas = dimension::DimensionAreas::from_export(&serde_json::json!([{
+            "id":"area", "name":"2DMoveArea", "shape":"AreaCubeBase",
+            "matrix":[1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.,0.],
+            "scale":[1.,1.,1.],"args":{"SurfaceDistance":5.}
+        }]));
+        let pipe = Dokan::load(&serde_json::json!({
+            "placement":{"Id":"up", "UnitConfigName":"Dokan2D", "IsConnectToCollision":false,
+                "IsNoSnap":false,"IsMoon":false,"IsExitOnly":false,"Scale":{"X":1.,"Y":1.,"Z":1.}},
+            "destination_id":"side", "raw_matrix":[1.,0.,0.,0.,0.,1.,0.,20.,0.,0.,1.,0.],
+            "sensors":[{"Name":"Bind","Radius":100.,"Y":125.}]
+        }), &areas).unwrap();
+        let mut mesh = crate::geometry::TriangleMesh::default();
+        mesh.dokans.push(pipe);
+        let scene = Course {
+            mesh: Some(std::sync::Arc::new(mesh)),
+            ..Default::default()
+        };
+        let mut player = Player::default();
+        player.dimension.is_2d = true;
+        player.ensure_pipes(1);
+        let down = Orders {
+            crouch: true,
+            ..Default::default()
+        };
+        for (ready, crouch, model) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            player.pipes[0].actor = if ready {
+                ActorNerve::ReadyBind
+            } else {
+                ActorNerve::Wait
+            };
+            player.dimension.is_2d = model;
+            player.bind_ready = vec![0];
+            player.dokan_sensor_phase(
+                &scene,
+                &Orders {
+                    crouch,
+                    ..Default::default()
+                },
+            );
+            assert!(player.bound_to.is_none());
+        }
+        player.dimension.is_2d = true;
+        player.pipes[0].actor = ActorNerve::ReadyBind;
+        player.bind_ready = vec![0];
+        player.dokan_sensor_phase(&scene, &down);
+        assert_eq!(player.bound_to, Some(0));
+        assert_eq!(player.mode, Move::Bind);
+        assert_eq!(player.pipes[0].controller, Controller::MoveIn);
+        player.pipes[0].step = 7;
+        player.bind_ready = vec![0];
+        player.dokan_sensor_phase(&scene, &down);
+        assert_eq!(
+            player.pipes[0].step, 7,
+            "a held down input must not restart an owned puppet"
+        );
+    }
+
+    #[test]
+    fn puppet_and_model_switch_snapshots_preserve_the_pose_counter() {
+        let mut player = Player::default();
+        player.start_clip("DokanSideIn");
+        player.puppet_first_row = true;
+        player.inject(&Snapshot {
+            mode: Some(Move::Bind),
+            anim: Some(("DokanSideIn", 1.)),
+            ..Default::default()
+        });
+        assert_eq!(player.anim.frame, 0.);
+        player.begin_step();
+        assert_eq!(player.anim.frame, 1.);
+        player.model_switch_row = true;
+        player.anim.frame = 56.;
+        player.inject(&Snapshot {
+            mode: Some(Move::Bind),
+            anim: Some(("DokanSideIn", 0.)),
+            ..Default::default()
+        });
+        assert_eq!(player.anim.frame, 56.);
+        player.begin_step();
+        assert_eq!(player.anim.frame, 57.);
     }
 }

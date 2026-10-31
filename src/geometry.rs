@@ -400,6 +400,9 @@ impl TriangleMesh {
                 ));
             }
             object_part.push(Some(mesh.parts.len() as u32));
+            if let Some(pipe) = mesh.dokans.iter_mut().find(|p| object["id"] == p.id) {
+                pipe.collision_part = Some(mesh.parts.len());
+            }
             mesh.parts.push(frame);
         }
         // The raw prisms, by "<object model>#<sub-model>": thickness and rows of

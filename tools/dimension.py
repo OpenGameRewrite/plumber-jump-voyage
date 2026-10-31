@@ -4,7 +4,6 @@ The camera director boolean is the separately declared external camera input.
 No visual column, movement error or unknown physical contact is waived here.
 """
 import math
-import struct
 
 STAGE = "WaterfallWorldHomeStage"
 PIPES = {"obj419": ("Dokan", "土管", "obj418", 80., 120.),
@@ -99,6 +98,14 @@ class Evidence:
             d, r = samples.get(f, {}), rewrite.get(f, {})
             flags = "/".join(d.get(k, "") for k in FLAGS)
             native = pairs(r.get("dimension_keeper", ""))
+            pipe = pairs(r.get("dokan_source", ""))
+            sources = [s["placement"]["Id"] for s in geometry["dokans"]]
+            bound = pipe.get("bound")
+            source = sources[int(bound)] if bound and bound.isdecimal() and int(bound) < len(sources) else "none"
+            if (source != d.get("puppet_source_id") or
+                    any(pipe.get(k) != d.get(v) for k, v in
+                        [("hidden", "hidden"), ("collider", "collision_enabled"), ("sensors", "sensors_enabled")])):
+                continue
             if (d.get("dropped") != "0" or d.get("registry_dropped") != "0"
                     or d.get("keeper_present") != "1" or native.get("flags") != flags
                     or d.get("model2d") != d.get("is2d")
@@ -181,9 +188,11 @@ def self_check():
     contact = f"k=a;w=player;s=Body:1;o=Bind:20;h={host};c=Dokan;m=;r=;actor=7"
     game = {0: dict(frame="0", state="Bind/Bind", contacts=contact)}
     native = {0: dict(state="Bind/Bind", dimension_keeper="flags=0/0/1/0/0/0;current=;last=",
+                      dokan_source="bound=0;hidden=0;collider=1;sensors=1",
                       collision="gcode=Ground")}
     sample = dict(frame="0", dropped="0", registry_dropped="0", keeper_present="1", model2d="0",
-                  filter_is_2donly="0", shape_is_2dnormal="0", binding="1", puppet_source_id="obj419")
+                  filter_is_2donly="0", shape_is_2dnormal="0", binding="1", puppet_source_id="obj419",
+                  hidden="0", collision_enabled="1", sensors_enabled="1")
     sample.update(dict(zip(FLAGS, ("0", "0", "1", "0", "0", "0"))))
     sensors = [dict(frame=str(f), id=id_, sensor=name, actor=actor, radius=str(radius),
                     valid="1", centre_x="0", centre_y="0", centre_z="0")

@@ -323,7 +323,7 @@ fn tick(
     let cap_anim = p.cap.as_ref().map(|c| cap_clip(c, effects.right_hand));
     let code = code_driven(&p);
     let changes = effects.triggers.evaluate(&Frame {
-        anim: p.anim.name,
+        anim: p.model_effect_action(),
         serial: p.anim.serial,
         frame: p.effect_frame(),
         cap_anim,

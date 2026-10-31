@@ -204,3 +204,17 @@ fn layer_levels() {
     let (quiet, _) = layer.levels(resource, 0., || 0.);
     assert!((quiet - 0.25).abs() < 1e-6, "speed scales the gain");
 }
+
+#[test]
+fn mario_dot_uses_its_own_action_audio() {
+    let table = super::Table::default();
+    let dot = table.action_group(false, true);
+    assert_eq!(dot.triggered("Jump", -1., 0., false), ["Jump"]);
+    assert!(dot.triggered("Jump", -1., 0., true).is_empty());
+    assert!(dot.triggered("Wait", -1., 0., false).is_empty());
+    let layer = &dot.plays["Jump"].layers[0];
+    assert_eq!(layer.resource, "WsDpJump2D");
+    assert_eq!(layer.delay, 1);
+    assert!(std::ptr::eq(table.action_group(false, false), &table.mario));
+    assert!(std::ptr::eq(table.action_group(true, true), &table.cap));
+}

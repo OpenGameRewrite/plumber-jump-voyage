@@ -4,6 +4,7 @@ pub(super) fn run() {
     side_bind_judge_follows_the_original_gates();
     original_mouth_and_puppet_pose_operations();
     executable_entry_cases();
+    executable_return_cases();
 }
 
 /// `judgeMsgBindStart` (0x25b2f0) side branch: speed along the pipe's up axis above 0.4,
@@ -119,4 +120,47 @@ fn original_mouth_and_puppet_pose_operations() {
     assert!(flat.side_entry_target().is_none());
     source["placement"]["IsNoSnap"] = true.into();
     assert!(Dokan::load(&source, &areas).is_err());
+}
+
+#[cfg_attr(test, test)]
+fn executable_return_cases() {
+    let Some(path) = std::env::var_os("PJV_DOKAN_RETURN_CASES") else {
+        return;
+    };
+    let cases: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert!(!cases.as_array().unwrap().is_empty());
+    for (index, case) in cases.as_array().unwrap().iter().enumerate() {
+        let values = |v: &serde_json::Value| {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_f64().unwrap() as f32)
+                .collect::<Vec<_>>()
+        };
+        let matrix: [f32; 12] = values(&case["matrix"]).try_into().unwrap();
+        let front: [f32; 3] = values(&case["front"]).try_into().unwrap();
+        let pipe = Dokan {
+            id: "up".into(),
+            destination_id: "side".into(),
+            is_2d: true,
+            direction: Direction::Up,
+            matrix,
+            bind_radius: 100.,
+            bind_offset: Vec3::new(0., 125., 0.),
+            collision_part: None,
+        };
+        let expected = values(&case["target"])
+            .into_iter()
+            .map(f32::to_bits)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pipe.upright_2d_entry(front.into())
+                .unwrap()
+                .map(f32::to_bits)
+                .as_slice(),
+            expected,
+            "original upright-entry case {index}"
+        );
+    }
 }

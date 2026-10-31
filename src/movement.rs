@@ -447,6 +447,8 @@ fn upper_catch_last(clip: &str) -> i32 {
 pub mod clip {
     /// The pipe's out clip (`DokanOut`): the controller waits for its last frame.
     pub const DOKAN_OUT: u32 = 21;
+    /// Original converted Mario/PlayerAnimation DokanSideOut skeletal length.
+    pub const DOKAN_SIDE_OUT: u32 = 58;
     pub const HIP_DROP_START: u32 = 24;
     pub const HIP_DROP_LAND: u32 = 44;
     pub const ROLLING_START: u32 = 6;
@@ -499,6 +501,9 @@ pub mod clip {
             // The pipe clips (the converted originals' frame counts).
             "DokanSideIn" => Some(56),
             "DokanOut" => Some(DOKAN_OUT),
+            "DokanIn" => Some(54),
+            "DokanReady" => Some(4),
+            "DokanSideOut" => Some(DOKAN_SIDE_OUT),
             _ => None,
         }
     }
@@ -555,6 +560,10 @@ pub mod clip {
         }
     }
     pub fn loop_slack_2d(name: &str) -> f32 {
+        // Guess: this counter proxy retains one rate-one update past the
+        // visibility resource length. updateSync (0x42d170) explains the
+        // counter/pose lead; variable-rate wrap ordering still needs the
+        // original visibility frame-controller contract. Not a dash guarantee.
         match name {
             "Wait" | "Move" => 1.,
             _ => 0.,
@@ -946,6 +955,10 @@ pub enum Fx {
     Crushed,
     /// The dimension keeper changed to 2D: Mario's `2D変身` hit reaction.
     Change2D,
+    /// Model changer's exit reaction, 0x45dff0..0x45dff8 (3D変身).
+    Change3D {
+        bound: bool,
+    },
     CarryStart,
     CarryThrow,
     Land {
@@ -1449,6 +1462,8 @@ pub struct Player {
     pipes: Vec<bind::DokanActor>,
     bound_to: Option<usize>,
     puppet_hidden: bool,
+    puppet_collision: bool,
+    puppet_sensors: bool,
     puppet_clip_pending: bool,
     /// The model changed this step: the new model's animator has not synced its counter yet.
     model_switch_row: bool,
@@ -1658,6 +1673,8 @@ impl Default for Player {
             pipes: Vec::new(),
             bound_to: None,
             puppet_hidden: false,
+            puppet_collision: false,
+            puppet_sensors: true,
             puppet_clip_pending: false,
             model_switch_row: false,
             puppet_first_row: false,
@@ -2130,6 +2147,7 @@ impl Player {
                     | Move::FireDead
                     | Move::Press
                     | Move::Dead
+                    | Move::Bind
                     | Move::BindFall
             )
             && (self.v.y == 0. || self.v.y == -self.pull)
@@ -2323,6 +2341,11 @@ impl Player {
     pub fn model_2d(&self) -> bool {
         self.dimension.is_2d
     }
+    /// Mario2D has no effect user/table in EffectDataBase (init at 0x4455cc).
+    /// Actor hit reactions retain their own PlayerHitReactionHakoniwa keeper.
+    pub fn model_effect_action(&self) -> &'static str {
+        if self.model_2d() { "" } else { self.anim.name }
+    }
     pub fn is_run_cycle(&self) -> bool {
         !self.model_2d() && matches!(self.anim.name, "Move" | "MoveMoon")
     }
@@ -2348,14 +2371,16 @@ impl Player {
             // PlayerAnimation2D's original visibility actions: converter frame count6.
             return match name {
                 "Jump" | "Fall" | "Brake" => Some(5),
+                "DokanReady" => Some(54),
                 _ => clip::held_length(name),
             };
         }
         clip::held_length(name)
     }
-    /// Frames the animator blends between two actions. The 8-bit model's actions only
-    /// toggle visibility, so nothing is blended on screen. (UNVERIFIED against the 2D
-    /// action table beyond the Wait recorded after the pipe.)
+    /// The original Mario2D and PlayerAnimation2D archives have no AnimInterp
+    /// resource. ModelAnimInterpInfoHolder initializes its default to zero
+    /// (0x8028fc); missing AnimInterp returns without replacing it (0x802958),
+    /// and a missing transition returns that default (0x802f6c).
     pub fn interp_frames_of(&self, to: &str, from: &str) -> u32 {
         if self.model_2d() {
             return 0;
@@ -2581,6 +2606,18 @@ impl Player {
             self.resume_wall_slide(s);
         }
         if let Some((name, frame)) = s.anim {
+            // A puppet-started action's first sample is updateSync's counter
+            // (0x42d170), one rate ahead of its model pose. Injection must restore
+            // the pose counter, otherwise the following update advances it twice.
+            let frame = if self.model_switch_row && self.anim.name == name {
+                // copyAnimLocal starts the counter again while carrying the
+                // prior model's action pose (0x42c1cc..0x42c250).
+                self.anim.frame
+            } else if self.puppet_synced_row() && self.anim.name == name {
+                frame - self.anim.rate
+            } else {
+                frame
+            };
             if let Some(clockwise) = spin::clip_is_clockwise(name) {
                 self.spin_clockwise = clockwise;
             }
@@ -3153,6 +3190,13 @@ impl Player {
             self.model_switch_row = self.dimension.change_2d || self.dimension.change_3d;
             if self.dimension.change_2d {
                 self.events.push(Fx::Change2D);
+            } else if self.dimension.change_3d {
+                self.events.push(Fx::Change3D {
+                    bound: self.bound_to.is_some(),
+                });
+                // Dimension helper's change-out path, 0x420cd4..0x420d14.
+                self.dimension.invalidate();
+                self.dimension_diagnostic = self.dimension.diagnostic(&mesh.dimension);
             }
         }
         self.note_frame_start_for_joints();
@@ -3230,7 +3274,7 @@ impl Player {
         self.update_carry(&o, advance_sources);
         self.flower_sensor_phase(scene);
         if advance_sources {
-            self.dokan_sensor_phase(scene);
+            self.dokan_sensor_phase(scene, &o);
         }
         self.begin_step();
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
@@ -3255,9 +3299,9 @@ impl Player {
         self.update_sand_affect(scene);
         self.finish_carry_release(scene);
         let moved = self.v;
-        if self.mode != Move::Bind {
+        if self.mode != Move::Bind || self.puppet_collision {
             self.collide(&o, scene);
-            if self.mode == Move::BindFall {
+            if matches!(self.mode, Move::Bind | Move::BindFall) {
                 // The puppet fall keeps the velocity the air control gave it; the
                 // collision response does not clear it.
                 self.v = moved;

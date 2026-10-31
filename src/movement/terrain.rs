@@ -274,6 +274,7 @@ impl Player {
                     | Move::FireFall
                     | Move::FireDead
                     | Move::Dead
+                    | Move::Bind
             )
             && (self.v.y == 0. || self.v.y == -self.pull)
         {

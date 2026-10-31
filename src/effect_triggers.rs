@@ -693,7 +693,7 @@ impl Tracker {
         let cap_anim = p.cap.as_ref().map(|c| cap_clip(c, self.right_hand));
         let code = code_driven(p);
         let changes = self.triggers.evaluate(&Frame {
-            anim: p.anim.name,
+            anim: p.model_effect_action(),
             serial: p.anim.serial,
             frame,
             cap_anim,

@@ -1,7 +1,7 @@
 //! Linked stationary Dokan placement and puppet poses, SMO 1.0.0.
 //! Nerve/camera/bind execution is not implied by loading these source poses.
 use super::dimension::{DimensionAreas, DimensionKeeper};
-use super::pose_math::{dot, make_mtx_up_front, quat_front_up, quat_to_axes};
+use super::pose_math::{dot, make_mtx_front_up, make_mtx_up_front, quat_front_up, quat_to_axes};
 use super::vector_lib::{is_near_zero, parallelize_vec};
 use bevy::prelude::{Quat, Vec3};
 
@@ -20,6 +20,7 @@ pub struct Dokan {
     pub direction: Direction,
     pub matrix: [f32; 12],
     pub bind_radius: f32,
+    pub collision_part: Option<usize>,
     bind_offset: Vec3,
 }
 
@@ -112,6 +113,7 @@ impl Dokan {
             direction,
             matrix,
             bind_radius,
+            collision_part: None,
             bind_offset: Vec3::new(component("X"), component("Y"), component("Z")),
         })
     }
@@ -150,6 +152,41 @@ impl Dokan {
 
     pub fn bind_radius(&self) -> f32 {
         self.bind_radius
+    }
+    /// Upright branch of judgeMsgBindStart, 0x25b3b8..0x25b3d4. The caller
+    /// checks active player sensor, pipe ReadyBind nerve, dimension and puppet lock.
+    pub fn accepts_upright_bind(&self, model_2d: bool, squat: bool) -> bool {
+        self.direction == Direction::Up && self.is_2d == model_2d && squat
+    }
+
+    /// calcMoveMtxUp's 2D branch (0x25bd44..0x25bdec); helper 0x25cf40
+    /// uses local Y=200. The target front retains Mario's side of the pipe.
+    pub fn upright_2d_entry(&self, player_front: Vec3) -> Option<[f32; 12]> {
+        if !self.is_2d || self.direction != Direction::Up {
+            return None;
+        }
+        let mut front = self.side();
+        if dot(player_front, front) < 0. {
+            front = -front;
+        }
+        Some(matrix_from_axes(
+            make_mtx_front_up(front, self.up()),
+            self.local_offset(Vec3::new(0., 200., 0.)),
+        ))
+    }
+
+    /// Ordinary side destination in warp, 0x25bc5c..0x25bca8: local Y=290
+    /// (constructed at 0x25bc5c), world Y=-100 (0x187fd5c). The pose uses
+    /// the pipe's up as front and world up (0x25ba7c..0x25bb94).
+    pub fn side_exit(&self) -> Option<(Vec3, Quat)> {
+        if self.is_2d || self.direction != Direction::Side {
+            return None;
+        }
+        let mut position = self.local_offset(Vec3::new(0., 290., 0.));
+        position.x += 0.;
+        position.y += -100.;
+        position.z += 0.;
+        Some((position, quat_front_up(self.up(), Vec3::Y)))
     }
 
     pub fn position(&self) -> Vec3 {
