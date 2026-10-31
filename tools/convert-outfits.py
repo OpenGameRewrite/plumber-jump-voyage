@@ -82,6 +82,7 @@ def main():
     p.add_argument('--repack',action='store_true',help='Repack existing conversions (needs --keep-intermediates on the earlier run)')
     p.add_argument('--add-clip',action='append',help='Convert this Mario clip (repeatable) and append it to the installed Mario file; nothing else changes')
     p.add_argument('--curves',action='store_true',help='Write assets/local/Mario.curves.bin: the original curves of every clip the installed Mario.glb holds (nothing else changes)')
+    p.add_argument('--model-2d',action='store_true',help='Install the 8-bit Mario (Mario2D) as assets/local/Mario2D.glb (model and its visibility actions) and assets/local/Mario2D.curves.bin (its skeleton and the original curves of PlayerAnimation2D); nothing already installed changes')
     p.add_argument('--keep-intermediates',action='store_true',help='Keep the converter working files (DAE, glTF, PNG)')
     p.add_argument('--self-check',action='store_true')
     a=p.parse_args()
@@ -132,6 +133,35 @@ def main():
         """The converter arguments that bring in Mario's body, finger and facial clips."""
         return [str(model('PlayerAnimation')),'--hand-l='+str(model('PlayerAnimationHandL')),'--hand-r='+str(model('PlayerAnimationHandR'))]+[
             '--'+part.lower()+'='+str(model('PlayerAnimation'+part)) for part in ('Eye','Face','Head')]
+    if a.model_2d:
+        # The 8-bit model is a separate skeleton (AllRoot, MarioDot and MarioDot00..08) with its
+        # own clips, so it gets files of its own instead of joining Mario's. The model is
+        # converted without clips: the game poses it from the original curves (like Mario's) and
+        # shows its parts with the original visibility actions, which the GLB carries.
+        # Needs a curves-capable adapter (convert-curves.exe), as `--curves` does.
+        scratch=exports/'_model2d';scratch.mkdir(exist_ok=True)
+        output=scratch/'Mario2D.glb'
+        body,animation=str(model('Mario2D')),str(model('PlayerAnimation2D'))
+        def convert(*options):
+            with output.with_suffix('.log').open('a',encoding='utf-8') as f:
+                result=subprocess.run([str(a.adapter.resolve()),body,str(output),animation,*options],stdout=f,stderr=subprocess.STDOUT)
+            if result.returncode:raise ValueError(f'8-bit model conversion failed; details in {output.with_suffix(".log")}')
+        output.with_suffix('.log').unlink(missing_ok=True)
+        convert('--geometry-only')
+        # The visibility actions come from the animation archive; this run rewrites the
+        # expressions file the geometry run left empty.
+        convert('--expressions-only','--head='+animation)
+        packer.pack(output.with_suffix('.gltf'))
+        curves=scratch/'Mario2D.curves.bin'
+        output=curves
+        convert('--curves-only','--all-animations')
+        if curves.read_bytes()[:8] != b'PJVCURV1':
+            raise ValueError('Adapter did not write skeletal curves; select a curves-capable --adapter (tools/build-converter.ps1)')
+        for name in ('Mario2D.glb','Mario2D.curves.bin'):
+            shutil.copyfile(scratch/name,extract.ROOT/'assets/local'/name)
+        print('Wrote assets/local/Mario2D.glb and assets/local/Mario2D.curves.bin')
+        if not a.keep_intermediates:shutil.rmtree(scratch,ignore_errors=True)
+        return
     if a.curves:
         # The game evaluates the clips' curves between frames; the converter writes them
         # exactly as stored, for the clips the installed Mario.glb already has.

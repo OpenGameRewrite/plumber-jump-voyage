@@ -14,8 +14,9 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// The curve file next to the model.
+/// The curve file next to the model, and the 8-bit model's (its own skeleton and clips).
 const FILE: &str = "local/Mario.curves.bin";
+const FILE_2D: &str = "local/Mario2D.curves.bin";
 const MAGIC: &[u8; 8] = b"PJVCURV1";
 /// Scale xyz, rotation xyzw, translation xyz.
 const CHANNELS: usize = 10;
@@ -72,12 +73,20 @@ struct JointInfo {
     parent: Option<usize>,
     /// Segment scale compensation: the file stores the joint's scale over its parent's.
     compensated: bool,
-    bind_scale: [f32; 3],
+    bind: Sample,
 }
 
 /// The curves of one clip, a record per joint that the clip animates.
 pub struct Clip {
+    /// The clip's length in frames, as the archive states it.
+    frames: f32,
     records: Vec<Option<Record>>,
+}
+
+impl Clip {
+    pub fn frames(&self) -> f32 {
+        self.frames
+    }
 }
 
 /// A joint's local pose in a clip at a frame.
@@ -130,12 +139,19 @@ impl Curves {
     /// The installation's curves, read once; `None` without the file or when it is damaged.
     pub fn installed() -> Option<&'static Curves> {
         static CURVES: OnceLock<Option<Curves>> = OnceLock::new();
-        CURVES
-            .get_or_init(|| {
-                let bytes = std::fs::read(crate::local_assets::asset_dir().join(FILE)).ok()?;
-                Self::parse(&bytes)
-            })
-            .as_ref()
+        CURVES.get_or_init(|| Self::read(FILE)).as_ref()
+    }
+
+    /// The 8-bit model's curves (`Mario2D.curves.bin`): its skeleton and the clips of
+    /// PlayerAnimation2D, read once; `None` without the file.
+    pub fn installed_2d() -> Option<&'static Curves> {
+        static CURVES: OnceLock<Option<Curves>> = OnceLock::new();
+        CURVES.get_or_init(|| Self::read(FILE_2D)).as_ref()
+    }
+
+    fn read(file: &str) -> Option<Curves> {
+        let bytes = std::fs::read(crate::local_assets::asset_dir().join(file)).ok()?;
+        Self::parse(&bytes)
     }
 
     fn parse(bytes: &[u8]) -> Option<Curves> {
@@ -150,24 +166,29 @@ impl Curves {
             let name = file.text()?;
             let parent = usize::try_from(file.i32()?).ok().filter(|p| *p < index);
             let compensated = file.u8()? != 0;
-            // The bind pose: translation, rotation, scale (only the scale is used).
+            // The bind pose: translation, rotation, scale.
             let mut bind = [0.; 10];
             for value in &mut bind {
                 *value = file.f32()?;
             }
+            let bind = bind.map(f64::from);
             by_name.entry(name.clone()).or_insert(index);
             joints.push(JointInfo {
                 name,
                 parent,
                 compensated,
-                bind_scale: [bind[7], bind[8], bind[9]],
+                bind: Sample {
+                    translation: [bind[0], bind[1], bind[2]],
+                    rotation: [bind[3], bind[4], bind[5], bind[6]],
+                    scale: [bind[7], bind[8], bind[9]],
+                },
             });
         }
         let clip_count = file.u32()? as usize;
         let mut clips = HashMap::new();
         for _ in 0..clip_count {
             let name = file.text()?;
-            let _frames = file.f32()?;
+            let frames = file.f32()?;
             let record_count = file.u32()? as usize;
             let mut records: Vec<Option<Record>> = (0..joints.len()).map(|_| None).collect();
             for _ in 0..record_count {
@@ -199,7 +220,7 @@ impl Curves {
                     channels: channels.try_into().ok()?,
                 });
             }
-            clips.insert(name, Clip { records });
+            clips.insert(name, Clip { frames, records });
         }
         Some(Curves {
             joints,
@@ -250,8 +271,20 @@ impl Curves {
     pub fn scale(&self, clip: &Clip, joint: usize, frame: f32) -> [f64; 3] {
         match self.sample(clip, joint, frame) {
             Some(sample) => sample.scale,
-            None => self.joints[joint].bind_scale.map(f64::from),
+            None => self.joints[joint].bind.scale,
         }
+    }
+
+    /// The joint's local pose in the clip at a frame: what the clip animates, or the bind pose
+    /// of a joint it leaves alone.
+    pub fn pose(&self, clip: &Clip, joint: usize, frame: f32) -> Option<Sample> {
+        self.sample(clip, joint, frame)
+            .or_else(|| self.joints.get(joint).map(|info| info.bind))
+    }
+
+    /// The joint's parent (the file lists parents before their children).
+    pub fn parent(&self, joint: usize) -> Option<usize> {
+        self.joints.get(joint)?.parent
     }
 
     /// The pose as `Mario.glb` stores it: the same translation and rotation, and for a joint with

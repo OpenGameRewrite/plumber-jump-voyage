@@ -31,6 +31,7 @@ mod input;
 mod legacy_assets;
 mod local_assets;
 mod look;
+mod model_2d;
 mod movement;
 mod nerve;
 mod prism;

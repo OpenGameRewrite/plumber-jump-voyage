@@ -13,6 +13,7 @@ use crate::{
     game_columns::{collision_cell, counters_cell, counters_from_game, triggers_cell},
     game_names::state_from_nerve,
     local_assets::{Blend, Posed, interp_frames, looping},
+    model_2d,
     movement::{
         Anim, FPS, Fx, Move, Player, RunHint, Snapshot, UNIT, clip,
         look_at::{LookHint, LookSensor},
@@ -271,6 +272,21 @@ impl Pose {
         self.slot
     }
 }
+
+/// The 8-bit model's joints, in its file's order.
+const JOINTS_2D: [&str; 11] = [
+    "AllRoot",
+    "MarioDot",
+    "MarioDot00",
+    "MarioDot01",
+    "MarioDot02",
+    "MarioDot03",
+    "MarioDot04",
+    "MarioDot05",
+    "MarioDot06",
+    "MarioDot07",
+    "MarioDot08",
+];
 
 /// What the replay fed the player this frame.
 pub struct FrameInfo {
@@ -624,18 +640,6 @@ impl Recorder {
     /// The `bones` cell: every joint's position (cm, replay frame) as the probe prints them,
     /// and the actor itself.
     fn bones_cell(skeleton: Option<&Matrices>, p: &Player) -> String {
-        if p.model_2d() {
-            // The 8-bit model (Mario2D): AllRoot and the MarioDot joints, whose animation
-            // only toggles visibility, so every joint sits at the actor.
-            let feet = p.pos / UNIT;
-            return ["AllRoot", "MarioDot"]
-                .into_iter()
-                .map(str::to_string)
-                .chain((0..=8).map(|i| format!("MarioDot{i:02}")))
-                .map(|name| format!("{name}:{}/{}/{}", num(feet.x), num(feet.y), num(feet.z)))
-                .collect::<Vec<_>>()
-                .join("|");
-        }
         let Some(skeleton) = skeleton else {
             return String::new();
         };
@@ -650,6 +654,37 @@ impl Recorder {
         let feet = p.pos / UNIT;
         items.push(format!("Mario:{}", at(feet.x, feet.y, feet.z)));
         items.join("|")
+    }
+
+    /// The `bones` cell while the 8-bit model is the one on screen: AllRoot, MarioDot and the
+    /// MarioDot00..08 joints, posed by the clip the animator shows. The model has no fades (see
+    /// `Player::interp_frames_of`), so only the current action's layer poses it, whatever the
+    /// 3D blend still remembers. Without the installed model the joints sit at the actor.
+    fn bones_cell_2d(&self, p: &Player) -> String {
+        let mut playing = Vec::new();
+        Self::push_pose(&mut playing, &self.blend.current, (1., 0.), 0, false);
+        let posed = playing
+            .first()
+            .and_then(|layer| model_2d::world_pose(&p.pose_matrix(), layer.clip, layer.frame));
+        let feet = p.pos / UNIT;
+        let joints = posed.unwrap_or_else(|| {
+            JOINTS_2D
+                .into_iter()
+                .map(|name| {
+                    let at_actor = [
+                        [1., 0., 0., feet.x],
+                        [0., 1., 0., feet.y],
+                        [0., 0., 1., feet.z],
+                    ];
+                    (name, at_actor)
+                })
+                .collect()
+        });
+        joints
+            .iter()
+            .map(|(name, m)| format!("{name}:{}/{}/{}", num(m[0][3]), num(m[1][3]), num(m[2][3])))
+            .collect::<Vec<_>>()
+            .join("|")
     }
 
     /// The head's cells: the animated head joint with the look-at turned on it, and what the
@@ -976,7 +1011,11 @@ impl Recorder {
             .int(looping(p.anim.name) as i64 | (matches!(p.anim.name, "Move" | "MoveMoon")) as i64);
         cells.text(&parts);
         let skeleton = self.posed_skeleton(p, covering, kept);
-        cells.text(&Self::bones_cell(skeleton.as_ref(), p));
+        cells.text(&if p.model_2d() {
+            self.bones_cell_2d(p)
+        } else {
+            Self::bones_cell(skeleton.as_ref(), p)
+        });
         let cap = p.cap_row();
         cells.text(cap.as_ref().map_or("", |c| c.state));
         for axis in 0..3 {
