@@ -106,17 +106,10 @@ const TRAMPLE_FRAMES: u32 = 15;
 const TRAMPLE_MAX_VERTICAL: f32 = 70.;
 const TRAMPLE_MAX_HORIZONTAL: f32 = 200.;
 /// The cap's `Trample` hit sensor (`PlayerFunction::initCapModelActor` 0x446678): a sphere of
-/// 300 around local (0,20,0), turned with the cap's pose. The swimmer's foot message is tested
-/// against exactly this.
+/// 300 around local (0,20,0), turned with the cap's pose. The foot sensor's trample message is
+/// tested against exactly this.
 const TRAMPLE_SENSOR_RADIUS: f32 = 300.;
 const TRAMPLE_SENSOR_Y: f32 = 20.;
-/// The grounded jump (the `TrampleReturn` recordings) is tested against a point 20 centimetres
-/// *below* the cap instead. That direction is a reading of the cap-bounce recordings, not of
-/// the code: the run is first trampled in the frame the foot comes within the vertical limit of
-/// such a point, while one above the cap would be reached some frames earlier or not at all
-/// (GUESS: the recorded jump belongs to the receiver's touch-jump branch, whose own geometry
-/// is not ported).
-const GROUNDED_TRAMPLE_SENSOR_Y: f32 = -20.;
 /// The player's foot sensor (`PlayerActorHakoniwa/InitSensor`: `Foot`).
 pub const FOOT_SENSOR_RADIUS: f32 = 40.;
 pub const FOOT_SENSOR_Y: f32 = 40.;
@@ -158,13 +151,32 @@ const RETURN_EASE_FRAMES: f32 = 10.;
 /// takes it (`PlayerActorHakoniwa::attackSensor`, the cap's catch message):
 /// `CatchCap` standing, `CatchCapJumpParts` in the air, `CatchCapParts` on the
 /// ground in any other state. The lengths are those of the cap's own clips
-/// (`MarioCapAnimation`: `CatchCap` 5, `CatchCapParts` 2, `CatchCapJumpParts` 3).
+/// (`MarioCapAnimation`: `CatchCap` 5, `CatchCapParts` 2, `CatchCapJumpParts` 3, and
+/// `JumpCapCatch` 2, which `HackCap::startCatch` plays for the air catch's pop).
 pub fn catch_frames(clip: &str) -> u32 {
     match clip {
         "CatchCapJumpParts" => 3,
-        "CatchCapParts" => 2,
+        "CatchCapParts" | "JumpCapCatch" => 2,
         _ => 5,
     }
+}
+
+/// One of the player's `Type: Player` hit sensors in the form the actor is in
+/// (`PlayerActorHakoniwa/InitSensor.byml`): centre in centimetres, radius.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayerSensor {
+    pub center: Vec3,
+    pub radius: f32,
+}
+/// What `HackCap::receiveMsg` asks of the player's side for `PlayerCapTouchJump`.
+#[derive(Clone, Copy, Debug)]
+pub struct TouchJumpGate {
+    /// `PlayerInput::isHoldSpinCap`.
+    pub hold: bool,
+    /// `PlayerCapActionHistory::mIsCapJumpPossible`.
+    pub jump_possible: bool,
+    /// `PlayerWallActionHistory::mIsJumpStored`.
+    pub wall_jump_stored: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,26 +620,11 @@ impl Cap {
     /// vertically and 200 horizontally; the cap then stands still and returns
     /// (the nerve is entered when it next updates). `jump_possible` is
     /// `PlayerCapActionHistory`'s flag: one cap jump per time on the ground.
-    ///
-    /// `nerve` is the trample nerve the cap goes into: [`CapNerve::Trample`] for the foot
-    /// sensor's message (the swimmer's), [`CapNerve::TrampleReturn`] for the grounded jump
-    /// the recordings show (reached through the touch-jump branch of the receiver; the
-    /// rewrite still runs it through this sensor test, GUESS).
-    pub fn take_trample(
-        &mut self,
-        foot: Vec3,
-        hold: bool,
-        jump_possible: bool,
-        nerve: CapNerve,
-    ) -> bool {
+    pub fn take_trample(&mut self, foot: Vec3, hold: bool, jump_possible: bool) -> bool {
         if self.nerve != CapNerve::ThrowStay || self.trampled.is_some() || !hold || !jump_possible {
             return false;
         }
-        let sensor = if nerve == CapNerve::Trample {
-            self.spot + self.pose.world_axis(Vec3::Y * TRAMPLE_SENSOR_Y)
-        } else {
-            self.spot + Vec3::Y * GROUNDED_TRAMPLE_SENSOR_Y
-        };
+        let sensor = self.spot + self.pose.world_axis(Vec3::Y * TRAMPLE_SENSOR_Y);
         let between = foot - sensor;
         let reach = (TRAMPLE_SENSOR_RADIUS + FOOT_SENSOR_RADIUS).powi(2);
         let above = between.try_normalize().map_or(0., |dir| dir.y);
@@ -638,7 +635,39 @@ impl Cap {
         {
             return false;
         }
-        self.trampled = Some(nerve);
+        self.trampled = Some(CapNerve::Trample);
+        true
+    }
+    /// `HackCap::receiveMsg` for `PlayerCapTouchJump` on the `Catch` sensor (0x407eb8..0x407f38,
+    /// gates 0x4082dc..0x408414): any non-foot `Player` sensor of the player that touches the
+    /// cap's `Catch` sphere (the sender, `PlayerActorHakoniwa::attackSensor` 0x428028, tests every
+    /// such sensor against every cap sensor; only the `Catch` one answers this message).
+    /// The cap takes it while it hovers (`ThrowStay`) with the throw button held
+    /// (`isEnableCapTouchJumpInput`, ordinary play), when no wall jump is stored in
+    /// `PlayerWallActionHistory` and the history still allows a cap jump. It then goes into the
+    /// nerve the recordings name `TrampleReturn`: the ordinary hover state answers false to
+    /// `isEnableKeepStayTouchJump` and `isEnableTouchJumpTransWarp` (0x40be18, 0x40be8c).
+    ///
+    /// Not ported: the stay-wall-hit window (`+0x530`/`+0x534`, set by `stayWallHit` 0x4098b4
+    /// when the hovering cap meets a wall) lets the message through only while the player is off
+    /// the ground (0x4083d8..0x408418), and `+0x294` is a counter that converges to zero and has no
+    /// writer in the HackCap code. The cap's stay-wall reaction itself is not ported.
+    pub fn take_touch_jump(&mut self, sensors: &[PlayerSensor], gate: TouchJumpGate) -> bool {
+        if self.nerve != CapNerve::ThrowStay
+            || self.trampled.is_some()
+            || !gate.hold
+            || !gate.jump_possible
+            || gate.wall_jump_stored
+        {
+            return false;
+        }
+        let touches = sensors.iter().any(|sensor| {
+            (sensor.center - self.spot).length() < CATCH_SENSOR_RADIUS + sensor.radius
+        });
+        if !touches {
+            return false;
+        }
+        self.trampled = Some(CapNerve::TrampleReturn);
         true
     }
     /// The clip the throw's flight plays.

@@ -291,10 +291,6 @@ impl AirMove {
     pub fn cancel_extend(&mut self) {
         self.extend_frames = 0;
     }
-    /// Change the gravity (a cap catch's pop is lighter).
-    pub fn set_gravity(&mut self, gravity: f32) {
-        self.gravity = gravity;
-    }
     /// One frame of air control. `input` is the stick as a world-space push
     /// (length up to 1); `held` whether the jump button is down.
     pub fn update(&mut self, v: &mut Vec3, input: Vec3, held: bool, steer: &Steering) {

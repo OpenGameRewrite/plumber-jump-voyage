@@ -93,6 +93,12 @@ impl Player {
         !(away > 0. && !lib::is_near_zero_value(away, 0.001))
     }
 
+    /// `rs::isOnGroundLessAngle` (0x5699bc): on the ground, not moving away from it, and the
+    /// ground flatter than `degrees`.
+    pub(super) fn is_on_ground_less_angle(&self, degrees: f32) -> bool {
+        self.is_on_ground_by(self.v) && self.ground_within(degrees)
+    }
+
     /// The ground is flatter than the angle (`!` of the polygon test that the three
     /// `rs::isOnGroundSlopeSlide*` and `isOnGroundForceSlideCode` make).
     fn ground_within(&self, degrees: f32) -> bool {

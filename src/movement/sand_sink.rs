@@ -184,7 +184,7 @@ impl Player {
             Move::SandWait
         });
         self.nerve.renewed = true;
-        self.cap_jump_possible = true;
+        self.restore_cap_actions();
     }
     fn sand_ground_appear(&mut self) {
         let up = self.collided_ground_normal();

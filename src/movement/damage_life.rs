@@ -61,7 +61,7 @@ impl Player {
         self.life.up = self.ground_normal_or_up();
         self.life.no_down = false;
         self.life.poison = poison;
-        self.cap_jump_possible = true;
+        self.restore_cap_actions();
         if self.is_dead() {
             self.v = Vec3::ZERO;
             self.mode = Move::DamageDead;

@@ -226,7 +226,9 @@ pub type ControllerState = (
 mod abyss;
 mod actor_collider;
 mod bind;
+mod cap_catch_pop;
 mod cap_sources;
+mod cap_touch;
 pub mod cap_trampoline;
 pub mod carry;
 #[path = "movement/console_libm.rs"]
@@ -587,6 +589,8 @@ pub mod clip {
     pub const RUN_START: u32 = 30;
     pub const BRAKE: u32 = 5;
     pub const JUMP_CAP_LEAP_FROG: u32 = 36;
+    /// `JumpCapCatchAir` plays this clip (`ActionAnimCtrl.byml` alias).
+    pub const JUMP_CAP_CATCH_COMMON: u32 = 27;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -653,6 +657,8 @@ pub enum Move {
     Swim,
     CapBounce,
     CatchJump,
+    /// `PlayerStateCapCatchPop`: the pop after a cap caught in the air.
+    CapCatchPop,
     Throw,
     /// `PlayerStateBind`: a pipe's puppet controller owns the pose.
     Bind,
@@ -661,7 +667,7 @@ pub enum Move {
 }
 impl Move {
     /// Every state, for mapping names back to states.
-    pub const ALL: [Move; 62] = [
+    pub const ALL: [Move; 63] = [
         Self::Idle,
         Self::Walk,
         Self::Run,
@@ -721,6 +727,7 @@ impl Move {
         Self::Swim,
         Self::CapBounce,
         Self::CatchJump,
+        Self::CapCatchPop,
         Self::Throw,
         Self::Bind,
         Self::BindFall,
@@ -775,6 +782,7 @@ impl Move {
             Self::Swim => "Swim",
             Self::CapBounce => "Cap jump",
             Self::CatchJump => "Catch jump",
+            Self::CapCatchPop => "Cap catch pop",
             Self::Throw => "Cap throw",
             Self::Bind | Self::BindFall => "Bind",
         }
@@ -1303,6 +1311,13 @@ pub struct Player {
     quick_turn: u32,
     catch_window: u32,
     cap_jump_possible: bool,
+    /// `PlayerCapActionHistory`'s byte at `+0x39`: the air catch's pop is still possible.
+    cap_pop_possible: bool,
+    /// The pop's first step restarts the cap's catch with `JumpCapCatch`; the cap's next update
+    /// starts it.
+    cap_catch_restart: bool,
+    /// Frames of the cap's catch restarted by the pop (`HackCap::startCatch`, clip `JumpCapCatch`).
+    pop_catch: Option<i32>,
     dive_possible: bool,
     gravity: f32,
     jump_extend: bool,
@@ -1601,6 +1616,9 @@ impl Default for Player {
             quick_turn: 0,
             catch_window: 0,
             cap_jump_possible: true,
+            cap_pop_possible: true,
+            cap_catch_restart: false,
+            pop_catch: None,
             dive_possible: true,
             gravity: PlayerConstants::NORMAL.gravity_air,
             jump_extend: false,
@@ -2275,6 +2293,13 @@ impl Player {
                 state: cap.state_name(),
                 pos: cap.pos,
                 clip: cap.clip(),
+            });
+        }
+        if self.pop_catch.is_some() {
+            return Some(CapRow {
+                state: "Catch",
+                pos: self.prev,
+                clip: "JumpCapCatch",
             });
         }
         if let Some(frames) = self.catching {
@@ -3151,6 +3176,12 @@ impl Player {
         }
         self.refresh_cap_jump(first_step);
     }
+    /// `PlayerCapActionHistory::clearLandLimit`: the cap jump and the air catch's pop are both
+    /// possible again.
+    fn restore_cap_actions(&mut self) {
+        self.cap_jump_possible = true;
+        self.cap_pop_possible = true;
+    }
     /// A cap jump is possible again (`PlayerCapActionHistory::
     /// clearLandLimitStandAngle` and `clearLandLimit`): the first step of the
     /// ground nerves on level ground, every step of the spin throw's ground
@@ -3165,6 +3196,16 @@ impl Player {
             _ => false,
         };
         self.cap_jump_possible |= restored;
+        // Every `clearLand*`/`clearWallAirLimit` sets the pop's byte too; the callers that gate
+        // their cap-jump part on ground flatness still reach it (`exeWait` 0x422480 ...).
+        let pop_restored = match self.actor_name() {
+            "Wait" | "Squat" | "Run" | "Rolling" => first_step,
+            "WallAir" => first_step,
+            _ => restored,
+        };
+        if pop_restored {
+            self.cap_pop_possible = true;
+        }
     }
     fn set_h(&mut self, h: Vec3) {
         self.v.x = h.x;
@@ -3588,6 +3629,7 @@ impl Player {
             Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
             Move::SpinFlower => self.spin_flower_step(),
+            Move::CapCatchPop => self.cap_catch_pop_step(o),
             _ => self.air(o),
         }
         // The jump states ask for the `DiveInWater` clip at the end of their steps
@@ -4710,6 +4752,7 @@ impl Player {
             Move::Jump => (t::EXTEND_FRAMES, self.constants.jump_gravity),
             Move::CapBounce => (0, self.constants.trample_high_gravity),
             Move::CatchJump => (0, self.constants.jump_gravity_cap_catch),
+            Move::CapCatchPop => (0, self.constants.cap_catch_pop_gravity),
             Move::SpinJump => (0, self.constants.spin_jump_gravity),
             Move::WallJump => (0, self.constants.wall_jump_gravity),
             _ => (0, self.constants.jump_gravity),
@@ -5238,7 +5281,7 @@ impl Player {
             "RollingJump" => Some(28),
             "JumpHipDrop" => Some(46),
             "JumpCapLeapFrog" => Some(clip::JUMP_CAP_LEAP_FROG),
-            "JumpCapCatchCommon" => Some(27),
+            "JumpCapCatchCommon" => Some(clip::JUMP_CAP_CATCH_COMMON),
             n if n.starts_with("SpinCapAirStart") => Some(clip::throw(n)),
             _ => None,
         };
@@ -5768,6 +5811,16 @@ impl Player {
             self.catching =
                 (frames <= crate::cap::catch_frames(self.catch_clip) as i32).then_some(frames);
         }
+        if let Some(frames) = self.pop_catch {
+            let frames = frames + 1;
+            self.pop_catch =
+                (frames <= crate::cap::catch_frames("JumpCapCatch") as i32).then_some(frames);
+        }
+        // The pop's first step started the cap's catch; the cap's nerve runs it from this frame.
+        if std::mem::take(&mut self.cap_catch_restart) {
+            self.catching = None;
+            self.pop_catch = Some(0);
+        }
         if std::mem::take(&mut self.cap_put_on) {
             self.cap = None;
         }
@@ -5937,45 +5990,47 @@ impl Player {
             .filter(|frame| *frame >= 0)
             .map(|frame| (self.catch_clip, frame as f32))
     }
-    /// `PlayerJudgeCapCatchPop::judge`, asked by `tryChangeNerveFromAir`: in the
-    /// catch window (`PlayerCounterAfterCapCatch::isCapCatch`), with the cap
-    /// back on the head and no ground under the feet, a jump press pops the
-    /// player up (`PlayerStateCapCatchPop`: `CapCatchPopPower`, then
-    /// `CapCatchPopGravity`). Without the press the catch leaves the jump alone
-    /// (recorded: cap-catch-air). The pop's clip and state label are guesses.
+    /// `PlayerJudgeCapCatchPop::judge`, asked by `tryChangeNerveFromAir` (see
+    /// `cap_catch_pop.rs`): the pop is its own nerve. Without the press the catch leaves the jump
+    /// alone (recorded: cap-catch-air). No recording presses jump in the catch window.
     fn try_cap_catch_pop(&mut self, o: &Orders) -> bool {
-        if self.catch_window == 0 || !o.jump || self.grounded || !self.mode.airborne_jump() {
+        if !self.mode.airborne_jump() || !self.judge_cap_catch_pop(o) {
             return false;
         }
-        self.catch_window = 0;
-        self.v.y = t::CAP_CATCH_POP_POWER;
-        self.gravity = self.constants.cap_catch_pop_gravity;
-        self.air.set_gravity(self.constants.cap_catch_pop_gravity);
-        self.play("JumpCapCatchCommon");
+        self.start_cap_catch_pop();
         true
     }
     /// The hit sensors' phase of the frame, after the cap moved and before the
-    /// player does: the foot sensor against the hovering cap's `Trample` sensor
-    /// (`PlayerActorHakoniwa::attackSensor` and `HackCap::receiveMsg`), found
-    /// with the player where the last frame left him. When the cap takes the
-    /// trample the jump nerve restarts inside this frame's update, so the
-    /// jump's first step is this frame's.
+    /// player does, with the player where the last frame left him: the foot
+    /// sensor against the hovering cap's `Trample` sensor, then the body sensors
+    /// against its `Catch` sensor (the touch jump, `cap_touch.rs`). The foot is
+    /// asked first; the original answers the first pair its sensor director
+    /// visits, whose order is not read. When the cap takes either the jump
+    /// nerve restarts inside this frame's update, so the jump's first step is
+    /// this frame's.
     fn cap_sensor_phase(&mut self, o: &Orders) {
-        if !self.can_trample() {
+        if self.cap.is_none() {
             return;
         }
-        let Some(cap) = &mut self.cap else {
+        if self.foot_trample_phase(o) {
             return;
+        }
+        self.cap_touch_jump_phase(o);
+    }
+    /// `PlayerActorHakoniwa::attackSensor` for the foot sensor
+    /// (`rs::sendMsgPlayerCapTrample`, 0x427f10), answered by `HackCap::receiveMsg` on its
+    /// `Trample` sensor. Returns whether the cap took it.
+    fn foot_trample_phase(&mut self, o: &Orders) -> bool {
+        if !self.can_trample() {
+            return false;
+        }
+        let Some(cap) = &mut self.cap else {
+            return false;
         };
         let foot = self.pos / UNIT + Vec3::Y * crate::cap::FOOT_SENSOR_Y;
         let swimming = self.mode == Move::Swim;
-        let nerve = if swimming {
-            crate::cap::CapNerve::Trample
-        } else {
-            crate::cap::CapNerve::TrampleReturn
-        };
-        if !cap.take_trample(foot, o.throw_held, self.cap_jump_possible, nerve) {
-            return;
+        if !cap.take_trample(foot, o.throw_held, self.cap_jump_possible) {
+            return false;
         }
         if swimming {
             // `attackSensor` 0x427f34: the accepted PlayerCapTrample raises the foot's hit
@@ -5986,7 +6041,7 @@ impl Player {
             self.swim.attack.trample = true;
             self.own_cap_trample = true;
             self.events.push(Fx::CapTrampleHit);
-            return;
+            return true;
         }
         self.cap_jump_possible = false;
         self.trample_jump();
@@ -5997,6 +6052,7 @@ impl Player {
         self.nerve.step = 0;
         self.nerve.actor = "Jump";
         self.sensor_restart = true;
+        true
     }
     /// The actor nerve was restarted by a hit sensor in this frame and has run
     /// its first step already.
@@ -6119,7 +6175,8 @@ impl Player {
         }
         // The jump state's last frame: its air control still steers, and a jump
         // that ends on the ground counts toward the combo (a fall does not).
-        let air_step_ran = self.mode.uses_air_control() && self.air_for == Some(self.mode);
+        let air_step_ran = (self.mode.uses_air_control() || self.mode == Move::CapCatchPop)
+            && self.air_for == Some(self.mode);
         if air_step_ran {
             let mut v = self.v;
             let steer = air_move::Steering {
@@ -6133,7 +6190,10 @@ impl Player {
                 self.air.limit_landing_speed(&mut v);
             }
             self.set_h(v);
-            self.facing = self.air.turn_facing(self.facing, push);
+            // (`exePop` only updates the air control; the jump state turns the actor itself.)
+            if self.mode != Move::CapCatchPop {
+                self.facing = self.air.turn_facing(self.facing, push);
+            }
         }
         if self.actor_name() == "Jump" {
             self.count_jump_combo();
@@ -6169,7 +6229,7 @@ impl Player {
         if self.mode == Move::Dive {
             // `exeHeadSliding` clears the cap jump limit on every step it has
             // the ground (`clearLandLimitStandAngle`), the landing step included.
-            self.cap_jump_possible = true;
+            self.restore_cap_actions();
         }
         self.gravity = self.constants.gravity_air;
         self.hard_land = self.fall.distance >= t::LONG_FALL
@@ -6511,6 +6571,8 @@ impl Player {
     }
 }
 
+#[path = "tests/cap_touch.rs"]
+mod cap_touch_checks;
 #[path = "tests/movement.rs"]
 mod checks;
 #[path = "tests/ledge.rs"]
@@ -6529,6 +6591,7 @@ pub fn self_check() {
     recovery_dead::self_check();
     stain::self_check();
     checks::run();
+    cap_touch_checks::run();
     spin_checks::run();
     wall_air_checks::run();
     ledge_checks::run();

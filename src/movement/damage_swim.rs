@@ -9,7 +9,7 @@ impl Player {
         self.nerve.step = 0;
         self.frame = 0;
         self.life.no_down = false;
-        self.cap_jump_possible = true;
+        self.restore_cap_actions();
         if self.is_dead() {
             self.v = Vec3::ZERO;
             self.mode = Move::DamageSwimDead;

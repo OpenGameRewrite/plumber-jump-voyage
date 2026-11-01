@@ -51,6 +51,7 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         Move::DoubleJump | Move::TripleJump => known("Jump/Jump"),
         Move::PoundJump => guessed("Jump/Jump"),
         Move::CapBounce | Move::CatchJump => guessed("Jump/Jump"),
+        Move::CapCatchPop => known("CapCatchPop/Pop"),
         Move::LongJump => known("LongJump/Jump"),
         Move::Backflip => known("Jump/JumpBack"),
         Move::Sideflip => known("Jump/JumpTurn"),
