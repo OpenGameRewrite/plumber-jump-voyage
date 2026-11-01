@@ -243,9 +243,11 @@ impl GroundMove {
         skate: bool,
     ) {
         let border = self.border;
-        self.brake_counter = if skate {
+        self.brake_counter = if skate || self.brake_counter >= border {
             // Keep the controller's hidden hold: appear may already fill it
             // when a fast roll/landing chooses Run, regardless of clip age.
+            // updateNormalMove only clears a sub-border counter (0x417dbc..0x417dcc);
+            // a recorded clip age must not undo calcInitBrakeOnCounter (0x416be8).
             self.brake_counter.max((steps as i32).min(border))
         } else if speed > self.brake_speed {
             (steps as i32).min(border)

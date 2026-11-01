@@ -3,6 +3,21 @@ use super::*;
 pub(super) fn run() {
     the_exes_ground_move_agrees_bit_for_bit();
     skate_keeps_signed_inertia_and_forces_reversal();
+    a_full_appearance_counter_survives_lockstep_clip_age();
+}
+
+#[cfg_attr(test, test)]
+fn a_full_appearance_counter_survives_lockstep_clip_age() {
+    let mut control = GroundMove::default();
+    control.reset(Vec3::Z * 20., Vec3::Z, Vec3::Y);
+    let full = control.brake_counter;
+    assert!(full > 0);
+    control.resume(10., 1, 0., Vec3::ZERO, 0., false);
+    assert_eq!(control.brake_counter, full);
+    // A new appearance owns the reset; a slow start is not a full counter.
+    control.reset(Vec3::ZERO, Vec3::Z, Vec3::Y);
+    control.resume(1., 1, 0., Vec3::ZERO, 0., false);
+    assert_eq!(control.brake_counter, 0);
 }
 
 #[cfg_attr(test, test)]
