@@ -108,7 +108,7 @@ impl Player {
             self.set_swim_nerve(SwimNerve::ReflectDownFall);
             return;
         }
-        if self.try_change_hip_drop_land(o) {
+        if self.try_change_hip_drop_land() {
             return;
         }
         if o.throw_pressed {
@@ -129,14 +129,22 @@ impl Player {
         }
     }
 
-    /// `PlayerStateSwim::tryChangeHipDropLand`: on the ground (and not still diving into it
-    /// with the button held) the dive lands.
-    fn try_change_hip_drop_land(&mut self, o: &Orders) -> bool {
+    /// `PlayerStateSwim::tryChangeHipDropLand` (0x48a9dc): on the ground the dive lands, except
+    /// while `ECollisionTrigger 1` and the held hip-drop button are both set (0x48aa14..0x48aa24
+    /// return false and leave the counters alone).
+    ///
+    /// Not ported: the trigger's only producer. `PlayerActorHakoniwa::sendCollisionMsg`
+    /// (0x4274a0) clears the collision triggers each update and sets trigger 1 at 0x4276c0 when
+    /// a sensor in the collider's ground hit list accepts `al::sendMsgPlayerHipDrop` (after
+    /// `HipDropDemoTrigger` and `HipDropSwitch` were refused), while a state that enables the
+    /// hip-drop attack is active (swim: 0x484f14). The port has no ground-hit sensor receiving
+    /// that message; its Pukupuku and trampoline hip-drop hits arrive through the foot attack
+    /// sensor and raise `EAttackSensorTrigger 3` (`swim.attack.hip_drop_hit`), a different
+    /// bitset. So trigger 1 is always clear here, and the gate is not substituted by an input.
+    fn try_change_hip_drop_land(&mut self) -> bool {
         if !self.is_on_ground_by(self.v) {
             return false;
         }
-        // (`ECollisionTrigger 1` is not ported; with the button held it would refuse.)
-        let _ = o;
         self.swim.land_steps += 1;
         self.swim.slow_steps += 1;
         self.swim_wait_ground(k::GRAVITY, k::GRAVITY, 1., 0.);

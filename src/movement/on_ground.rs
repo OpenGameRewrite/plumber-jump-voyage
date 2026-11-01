@@ -14,6 +14,13 @@ pub(super) enum GroundNerve {
 }
 
 impl Player {
+    /// `rs::isOnGroundRunAngle` (0x56989c): a collided floor the velocity is not leaving
+    /// (the same departing test as `rs::isOnGround`), then the speed-dependent run angle
+    /// of 0x569734 that `fire_run_angle_contact` evaluates, with the just-land axis.
+    pub(super) fn is_on_ground_run_angle(&self) -> bool {
+        self.is_on_ground_by(self.v) && self.fire_run_angle_contact()
+    }
+
     /// Original order, including the stand-up gate before buffered jump.
     pub(super) fn ground_nerve(&mut self, o: &Orders, scene: &Course) -> GroundNerve {
         // +0x488 StartWaterSurfaceRun, then +0x410 InWater (0x42185c..0x421880).
@@ -26,8 +33,11 @@ impl Player {
         }
         // +0x1d0 PlayerCounterForceRun: positive uses isOnGround (0x568788),
         // otherwise isOnGroundRunAngle (0x56989c); 0x421884..0x4218b4.
-        let on_ground = self.is_on_ground_by(self.v)
-            && (self.force_run.is_active() || self.fire_run_angle_contact());
+        let on_ground = if self.force_run.is_active() {
+            self.is_on_ground_by(self.v)
+        } else {
+            self.is_on_ground_run_angle()
+        };
         if !on_ground {
             self.go(Move::Fall, "Fall");
             return GroundNerve::Changed;

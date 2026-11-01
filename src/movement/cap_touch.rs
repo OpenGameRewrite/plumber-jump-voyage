@@ -124,7 +124,9 @@ impl Player {
     /// `JumpCapLeapFrog` clip, no extension, and the velocity dropped when the stick is not
     /// pushed. The air control starts from the velocity left.
     fn leap_frog_jump(&mut self) {
-        self.combo_kept = true;
+        // `appear` decides the combo flag (+0xb4) for every request but 1, 13 and 16, before
+        // the request's own take-off (0x470e58..0x470fc4): request 8 takes the combo's path.
+        self.pick_jump_kind();
         let pushing = self.is_move();
         self.jump_with(
             Move::CapBounce,

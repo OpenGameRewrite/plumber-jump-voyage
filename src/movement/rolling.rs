@@ -545,11 +545,11 @@ impl Player {
         self.long_jump_air(o);
         self.roll_control(false);
     }
-    /// The roll's jump came down with crouch held on ground the roll can go
-    /// on over (`rs::isOnGroundRunAngle`). Guess: only the flat-ground end of
-    /// that test, whose angle limit depends on the speed, is ported.
+    /// The roll's jump came down with crouch held on ground the roll can go on over
+    /// (`exeJump` 0x47be48: ZL held and `rs::isOnGroundRunAngle`, whose angle limit
+    /// depends on the speed).
     pub(super) fn roll_goes_on_after_jump(&self, crouch: bool) -> bool {
-        crouch && self.ground_flatter_than(t::STAND_ANGLE_MIN)
+        crouch && self.is_on_ground_run_angle()
     }
     /// The roll goes on in its landing nerve with the charge full and the
     /// frame count at the restart interval (`exeJump`; the landing reaction is

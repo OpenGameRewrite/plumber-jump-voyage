@@ -1113,6 +1113,10 @@ struct ThrowControl {
     /// The state in progress began in the air (`exeSpinAir` instead of
     /// `exeSpinGround`): the ground judges never ask about it.
     in_air: bool,
+    /// An air-started state has been on the ground since (`PlayerStateSpinCap` byte +0x78 is set
+    /// by `appear` for an air start and cleared by `control` on `rs::isOnGround`, and stays
+    /// clear): the actor then restores the cap actions in every step.
+    ground_seen: bool,
     /// The direction the cap leaves along, fixed on the state's first step.
     dir: Option<Vec3>,
     /// The up axis the cap is handed with it, when it is not the world's (the swim's cap throw on
@@ -3197,22 +3201,35 @@ impl Player {
     /// A cap jump is possible again (`PlayerCapActionHistory::
     /// clearLandLimitStandAngle` and `clearLandLimit`): the first step of the
     /// ground nerves on level ground, every step of the spin throw's ground
-    /// state and of the pound, and the first step of the climbing and swimming
-    /// ones.
+    /// state and of the pound, and the first step of the climbing, swimming
+    /// and bound ones.
+    ///
+    /// The cap jump's byte (+0x38) is set by `clearLandLimit` always, but by
+    /// `clearLandLimitStandAngle` (0x42ddd8) only on `rs::isOnGroundLessAngle`; the pop's byte
+    /// (+0x39) is set by every one of these calls. The pop therefore follows the callers' own
+    /// guards: the ground nerves' first step (`exeWait` 0x422480, `exeSquat`, `exeRun`,
+    /// `exeRolling`), every `exeSpinCap` step while its state byte +0x78 is clear (0x4239cc..
+    /// 0x4239d8: ground start, or the ground touched since), every `exeHipDrop` step with a
+    /// collided ground (0x424bb8..0x424bc4), and the first step of `exeWallAir` (0x424590),
+    /// `exeWallCatch`, `exeGrabCeil`, `exePoleClimb`, `exeSwim`, `exeBind` (0x426ca4). Not
+    /// ported: `exeRise` (0x4259ac), whose water-exit state does not exist here.
     fn refresh_cap_jump(&mut self, first_step: bool) {
-        let restored = match self.actor_name() {
+        let name = self.actor_name();
+        if name == "SpinCap" && self.is_on_ground_by(self.v) {
+            self.throwing.ground_seen = true;
+        }
+        let restored = match name {
             "Wait" | "Squat" | "Run" | "Rolling" => self.grounded && first_step,
             "SpinCap" => self.grounded,
             "HipDrop" => self.grounded,
-            "WallCatch" | "PoleClimb" | "GrabCeil" | "Swim" => first_step,
+            "WallCatch" | "PoleClimb" | "GrabCeil" | "Swim" | "Bind" => first_step,
             _ => false,
         };
         self.cap_jump_possible |= restored;
-        // Every `clearLand*`/`clearWallAirLimit` sets the pop's byte too; the callers that gate
-        // their cap-jump part on ground flatness still reach it (`exeWait` 0x422480 ...).
-        let pop_restored = match self.actor_name() {
-            "Wait" | "Squat" | "Run" | "Rolling" => first_step,
-            "WallAir" => first_step,
+        let pop_restored = match name {
+            "Wait" | "Squat" | "Run" | "Rolling" | "WallAir" => first_step,
+            "SpinCap" => !self.throwing.in_air || self.throwing.ground_seen,
+            "HipDrop" => self.is_collided_ground(),
             _ => restored,
         };
         if pop_restored {
@@ -5565,6 +5582,7 @@ impl Player {
         self.throwing.kind = Some(kind);
         self.throwing.up = None;
         self.throwing.in_air = air;
+        self.throwing.ground_seen = false;
         let name = throw_clip(
             kind,
             air,
@@ -6124,7 +6142,9 @@ impl Player {
     /// player's speed kept when the stick is pushed, scaled down when he was
     /// still rising, and dropped when it is not.
     fn trample_jump(&mut self) {
-        self.combo_kept = true;
+        // The combo flag (+0xb4) is decided by `appear` for every request but 1, 13 and 16
+        // (0x470e58..0x470fc4): request 11 takes the combo's path, as the ordinary jump does.
+        self.pick_jump_kind();
         let clip = if self.side_faces_camera() {
             "Jump"
         } else {
