@@ -6,6 +6,8 @@ pub(super) fn run() {
     the_touch_jump_keeps_the_gates_of_the_receiver();
     level_ground_does_not_spend_the_cap_jump();
     the_pop_follows_its_judge();
+    the_pop_requires_the_catch_nerve_and_byte();
+    the_touch_sender_checks_the_air_spin_step_window();
     the_pop_is_its_own_state();
 }
 
@@ -162,6 +164,7 @@ fn falling_after_a_catch() -> Player {
         ..default()
     };
     p.catch_window = t::CAP_CATCH_WINDOW;
+    p.cap_catched = true; // A previous PlayerCapCatch set +0x2a3; the cap is now in Hide.
     p
 }
 fn jump_press() -> Orders {
@@ -198,6 +201,116 @@ fn the_pop_follows_its_judge() {
     let mut p = falling_after_a_catch();
     p.step(&Orders::default(), &scene);
     assert_ne!(p.mode, Move::CapCatchPop, "a jump press");
+}
+
+/// isCatched (0x3fe6b8) tests the nerve AND +0x2a3, including when no flight cap exists.
+#[cfg_attr(test, test)]
+fn the_pop_requires_the_catch_nerve_and_byte() {
+    let mut p = falling_after_a_catch();
+    assert!(p.judge_cap_catch_pop(&jump_press()), "Hide after a catch");
+    p.cap_catched = false;
+    assert!(!p.judge_cap_catch_pop(&jump_press()), "Hide without +0x2a3");
+    p.catching = Some(0);
+    assert!(
+        !p.judge_cap_catch_pop(&jump_press()),
+        "Catch without +0x2a3"
+    );
+    p.cap_catched = true;
+    assert!(p.judge_cap_catch_pop(&jump_press()), "Catch with +0x2a3");
+    p.winding = true;
+    assert!(
+        !p.judge_cap_catch_pop(&jump_press()),
+        "SpinAttack during Catch"
+    );
+    p.winding = false;
+    p.launch = Some(p.throw_launch(Throw::Forward, false));
+    assert!(!p.judge_cap_catch_pop(&jump_press()), "ThrowStart");
+    p.launch = None;
+    for name in [
+        "Throw",
+        "ThrowBrake",
+        "ThrowRolling",
+        "ThrowRollingBrake",
+        "ThrowSpiral",
+        "ThrowStay",
+        "Trample",
+        "TrampleReturn",
+        "Rebound",
+        "LockOn",
+        "Return",
+    ] {
+        let mut cap = hovering(Vec3::Z);
+        cap.nerve = CapNerve::from_name(name).unwrap();
+        p.cap = Some(cap);
+        assert!(!p.judge_cap_catch_pop(&jump_press()), "{name} with +0x2a3");
+    }
+    p.cap_put_on = true;
+    assert!(
+        p.judge_cap_catch_pop(&jump_press()),
+        "forcePutOn selects Hide"
+    );
+    p.cap_catched = false;
+    assert!(
+        !p.judge_cap_catch_pop(&jump_press()),
+        "Hide still needs +0x2a3"
+    );
+
+    // Exercise the real return -> catch -> pop path, including the catch's arrival frame.
+    let mut p = falling_after_a_catch();
+    p.cap_catched = false;
+    p.catch_window = 0;
+    let mut cap = hovering(p.pos / UNIT + Vec3::Y * 110.);
+    cap.nerve = CapNerve::Return;
+    p.cap = Some(cap);
+    p.step(&jump_press(), &floor());
+    assert!(p.cap_catched);
+    assert_eq!(p.catching, Some(-1));
+    assert_eq!(p.mode, Move::CapCatchPop);
+
+    let mut p = falling_after_a_catch();
+    p.start_throw(Throw::Forward);
+    p.step(&Orders::default(), &floor());
+    assert!(!p.cap_catched, "startSpinAttack clears +0x2a3");
+    let mut p = falling_after_a_catch();
+    p.resume_cap(&Snapshot::default());
+    assert!(!p.cap_catched, "a Hide snapshot does not expose +0x2a3");
+    p.resume_cap(&Snapshot {
+        catching: Some(0),
+        ..default()
+    });
+    assert!(p.cap_catched, "a Catch snapshot establishes +0x2a3");
+}
+
+/// isSpinAttackAir (0x481e40) asks SpinAir/SpinAirSeparate's step <=22, not all air throws.
+#[cfg_attr(test, test)]
+fn the_touch_sender_checks_the_air_spin_step_window() {
+    for (step, allowed) in [(0, false), (21, false), (22, false), (23, true), (40, true)] {
+        let mut p = standing_with_cap(Vec3::new(0., 75., 100.));
+        p.mode = Move::Throw;
+        p.throwing.in_air = true;
+        p.frame = step;
+        p.nerve.step = 100; // The actor clock must not replace the SpinCap state clock.
+        assert_eq!(p.touch_jump_possible(), allowed, "SpinAir step {step}");
+        p.cap_touch_jump_phase(&held());
+        assert_eq!(
+            p.mode == Move::CapBounce,
+            allowed,
+            "sensor phase step {step}"
+        );
+    }
+    let mut p = standing_with_cap(Vec3::new(0., 75., 100.));
+    p.mode = Move::Throw;
+    p.throwing.in_air = false;
+    assert!(p.touch_jump_possible(), "SpinGround");
+    p.throwing.in_air = true;
+    p.mode = Move::Fall;
+    p.spin_fall = true;
+    assert!(p.touch_jump_possible(), "SpinCap/Fall");
+    p.mode = Move::Jump;
+    assert!(p.touch_jump_possible(), "the SpinCap state was killed");
+    p.mode = Move::Throw;
+    p.nerve.queue_clip("SpinCapAirStart");
+    assert!(p.touch_jump_possible(), "SpinCap has not appeared yet");
 }
 
 /// `exePop`: its first step ends the sub animation, starts `JumpCapCatchCommon`, sets the air

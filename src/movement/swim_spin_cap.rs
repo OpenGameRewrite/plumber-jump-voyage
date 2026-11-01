@@ -107,6 +107,7 @@ impl Player {
         self.start_clip(self.throw_clip);
         // The cap is the spin attack from this step (the trace shows it from the next).
         self.winding = true;
+        self.cap_catched = false; // HackCap::startSpinAttack (0x3fc59c), byte +0x2a3.
         self.winding_age = 0;
         let (mut dir, has_direction) = pose_math::try_normalize_or_zero(self.plane_stick(up));
         if !has_direction {

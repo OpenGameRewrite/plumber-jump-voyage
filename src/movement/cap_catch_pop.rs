@@ -14,8 +14,18 @@ impl Player {
             && self.catch_window > 0
             && self.cap_pop_possible
             && !self.is_collided_ground()
-            && (self.cap.is_none() || self.cap_put_on)
+            && self.is_equip_cap_catched()
             && o.jump
+    }
+
+    /// `HackCap::isCatched` (0x3fe6b8): Catch or Hide AND byte +0x2a3. `CapNerve`
+    /// in cap.rs represents only flight nerves, so a live `cap` never qualifies. Catch and
+    /// Hide live in the player's catch counters / absent cap; winding and a queued launch
+    /// instead mean SpinAttack / ThrowStart, even when no flight actor exists yet.
+    fn is_equip_cap_catched(&self) -> bool {
+        let catch_or_hide = self.cap_put_on // forcePutOn immediately selects Hide (0x3fce58).
+            || self.cap.is_none() && !self.winding && self.launch.is_none();
+        catch_or_hide && self.cap_catched
     }
 
     /// The actor takes the `CapCatchPop` nerve; its first step comes next frame like any

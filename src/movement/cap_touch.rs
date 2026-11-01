@@ -64,10 +64,22 @@ impl Player {
         ) {
             return false;
         }
-        if self.mode == Move::Throw && self.throwing.in_air {
+        if self.is_spin_attack_air() {
             return false;
         }
         !self.is_collided_ground() || self.ceiling.enable_stand_up
+    }
+
+    /// `PlayerStateSpinCap::isSpinAttackAir` (0x481e40): not killed, nerve SpinAir
+    /// (table 0x1d7ff70 +0x20) or SpinAirSeparate (+0x18), and isLessEqualStep(22).
+    /// The port implements SpinAir as Throw/in_air; separate-player nerves are unported.
+    /// A pending first-step clip has not appeared yet (appear clears the killed byte at
+    /// 0x481980). `frame` is the state's step, independently of the actor's `nerve.step`.
+    fn is_spin_attack_air(&self) -> bool {
+        self.mode == Move::Throw
+            && self.throwing.in_air
+            && self.nerve.pending_clip().is_none()
+            && self.frame <= 22
     }
 
     /// The hit sensors' answer to the hovering cap's `Catch` sphere in this frame, with the

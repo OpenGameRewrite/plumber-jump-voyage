@@ -1213,6 +1213,9 @@ pub struct Player {
     /// the last frame's sensor phase: the frame is still reported with the
     /// cap, which is gone from the next one.
     cap_put_on: bool,
+    /// `HackCap` byte +0x2a3, tested by `isCatched` (0x3fe6b8). The constructor clears it;
+    /// a catch/forcePutOn sets it, and startSpinAttack clears it independently of the nerve.
+    cap_catched: bool,
     /// The last number given to a clip start of the cap (they count on).
     cap_serial: u32,
     /// The cap is Mario's spin attack, waiting for the throw frame
@@ -1552,6 +1555,7 @@ impl Default for Player {
             cap: None,
             launch: None,
             cap_put_on: false,
+            cap_catched: false,
             upper_cleared: false,
             throw_held_before: false,
             cap_serial: 0,
@@ -2811,6 +2815,10 @@ impl Player {
         self.winding_age = 0;
         let continued_catch = self.catching.is_some() && s.catching.is_some();
         self.catching = s.catching;
+        // Catch rows establish +0x2a3 (receiveMsg 0x408b2c). A hidden cap in a snapshot
+        // does not expose that byte: refuse the pop until an actual catch establishes it.
+        self.cap_catched =
+            s.catching.is_some() && !s.throw.is_some_and(|hint| hint.winding || hint.launch);
         if !continued_catch {
             self.catch_clip = self.clip_of_catch();
         }
@@ -5575,6 +5583,8 @@ impl Player {
                 p.air_for = Some(Move::Throw);
             }
             p.winding = true;
+            // HackCap::startSpinAttack (0x3fc59c) clears +0x2a3 as well as setting its nerve.
+            p.cap_catched = false;
             p.winding_age = 0;
             p.spin_ik = false;
             p.throw_clip = name;
@@ -5907,6 +5917,9 @@ impl Player {
                 CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
                 CapEvent::Caught => {
+                    // receiveMsg's PlayerCapCatch accept (0x408b2c..0x408b34); forcePutOn
+                    // also sets this byte (0x3fce6c), even when the player skips the reaction.
+                    self.cap_catched = true;
                     self.cap_water_left = cap.water_effects();
                     self.catch_window = t::CAP_CATCH_WINDOW;
                     if !self.catch_reacts() {
