@@ -95,6 +95,12 @@ impl Player {
                 self.start_squat();
             }
             GroundNerve::Run => {
+                // Run::appear raises its landing reaction before the ground
+                // control changes velocity (0x47e898), including SandJump exits.
+                if self.is_just_land() && !self.model_2d() {
+                    self.note_velocity_at_run_choice(self.v);
+                    self.events.push(Fx::Land { hard: false });
+                }
                 self.pull = GRAVITY_MOVE;
                 self.run_appear(self.is_just_land());
                 // GroundMove::appear writes tangent minus normal*GravityMove
