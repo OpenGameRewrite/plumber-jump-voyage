@@ -20,11 +20,12 @@ use crate::model_2d::compose;
 use crate::skeleton_pose::IDENTITY;
 use std::sync::Arc;
 
-/// `exeOffWaitCapHold` asks for the hit reaction at this step (`al::isGreaterEqualStep`).
+/// `exeOffWaitCapHold` asks for the hit reaction at step 30 (`CapSwitch.cpp:146`).
 const HOLD_STEPS: i32 = 30;
-/// The follow matrix's local rotation about Z while the cap is held (`exeOffWaitCapHold`).
+/// The follow matrix's local rotation about Z while the cap is held (`CapSwitch.cpp:139`).
 const FOLLOW_ROLL_DEGREES: f32 = 270.;
-/// `al::isNearZero`'s default tolerance.
+/// `al::isNearZero`'s default `0.001f` tolerance (`MathUtil.h`); the source tests the normalized
+/// HatTarget-to-player vector, so this is only a zero-direction check, not a distance threshold.
 const NEAR_ZERO: f32 = 0.001;
 const HIT_REACTION: &str = "HitReaction";
 const KEEP_CLIP: &str = "HitReactionKeepFront";
@@ -285,15 +286,16 @@ impl CapSwitch {
     /// front and the way from Mario to the joint, turned about Y to the side Mario is on.
     fn hold_rotation(&self, hit: Vec3) -> Vec3 {
         let way = hit - self.player;
-        let angle = if way.length() < NEAR_ZERO {
-            0.
-        } else {
-            Vec3::Z
-                .dot(way.normalize())
-                .clamp(-1., 1.)
-                .acos()
-                .to_degrees()
-        };
+        let angle =
+            if crate::movement::vector_lib::is_near_zero(pose_math::normalize(way), NEAR_ZERO) {
+                0.
+            } else {
+                Vec3::Z
+                    .dot(way.normalize())
+                    .clamp(-1., 1.)
+                    .acos()
+                    .to_degrees()
+            };
         // `al::isLeftTarget`: the actor's side axis (X) against the way from the actor to Mario.
         let left = Vec3::X.dot(self.player - self.relative) > 0.;
         Vec3::new(0., if left { -angle } else { angle }, FOLLOW_ROLL_DEGREES)
