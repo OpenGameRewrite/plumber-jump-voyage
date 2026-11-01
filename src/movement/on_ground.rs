@@ -105,7 +105,7 @@ impl Player {
                 self.run_appear(self.is_just_land());
                 // GroundMove::appear writes tangent minus normal*GravityMove
                 // (0x416b1c..0x416b5c). Store its pull separately like stand().
-                self.v.y = 0.;
+                self.v.y = if self.grounded { 0. } else { -GRAVITY_MOVE };
                 // calcInitBrakeOnCounter (0x416be8), rather than assuming a
                 // full brake counter even when the previous state stopped.
                 let up = self.collided_ground_normal();
@@ -258,6 +258,11 @@ mod tests {
             p.ground_nerve(&o, &scene),
             GroundNerve::Run,
             "surface-run precedes the absent-ground Fall branch"
+        );
+        p.set_nerve_on_ground(&o, &scene);
+        assert_eq!(
+            p.v.y, -GRAVITY_MOVE,
+            "an airborne surface Run keeps the raw pull"
         );
 
         let mut p = grounded();
