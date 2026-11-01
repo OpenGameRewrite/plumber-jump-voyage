@@ -1261,7 +1261,7 @@ pub struct Player {
     pub distance: f32,
     pub checkpoint: Vec3,
     pub hard_land: bool,
-    /// Child Run ended; exeRun dispatches after the child update (0x423014).
+    /// A completed ground child asks its actor to dispatch after its update.
     ground_state_ended: bool,
     pub wall: Vec3,
     pub hitstop: f32,
@@ -4343,14 +4343,14 @@ impl Player {
                 false
             } else {
                 self.set_h(Vec3::ZERO);
-                self.end_run();
+                self.end_ground_child();
                 true
             }
         } else if steer.pivot {
             self.switch(Move::Turn, "TurnPoint", |p| p.enter_nerve(RunNerve::Pivot));
             false
         } else if steer.stopped {
-            self.end_run();
+            self.end_ground_child();
             true
         } else {
             false
@@ -4401,8 +4401,11 @@ impl Player {
         self.mode == Move::Turn
             || matches!(self.mode, Move::Walk | Move::Run) && self.run_nerve == RunNerve::WallPush
     }
-    /// Child kill is observed by exeRun after updateNerveState (0x423008..0x423014).
-    fn end_run(&mut self) {
+    /// Child completion is observed after updateNerveState (0x959968): Run
+    /// 0x423014, WallCatch 0x424830/0x424a50, PoleClimb 0x424b4c.
+    /// Keep this update result separate from the child object's persistent dead
+    /// byte, which can outlive the active NerveStateCtrl child (0x959a90).
+    fn end_ground_child(&mut self) {
         self.ground_state_ended = true;
         self.nerve.deferred = true;
     }
@@ -4512,7 +4515,7 @@ impl Player {
         } else if deep && step >= t::BRAKE_TURN_START {
             self.switch(Move::Turn, "Turn", |p| p.enter_nerve(RunNerve::Turn));
         } else if step >= t::BRAKE_FRAMES as u32 {
-            self.end_run();
+            self.end_ground_child();
         }
     }
     fn turn_step(&mut self, _step: u32) {
@@ -4564,7 +4567,7 @@ impl Player {
             if self.pivot.has_input {
                 self.switch(Move::Walk, "Move", |p| p.enter_nerve(RunNerve::Run));
             } else {
-                self.end_run();
+                self.end_ground_child();
             }
         }
     }

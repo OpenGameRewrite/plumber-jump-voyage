@@ -644,10 +644,6 @@ impl Player {
     /// nerve), then the nerve's step count moves on (a nerve that was chosen
     /// in the step starts its own count at the next one).
     pub(super) fn wall_catch(&mut self, o: &Orders, scene: &Course) {
-        // NerveStateCtrl::updateCurrentState (0x959968) reports no completion
-        // after tryEndCurrentState (0x959a90) removed the child. Its persistent dead
-        // byte is not another completion event (notably after snapshot injection).
-        let child_was_active = !self.catch.killed;
         let mesh = scene.catch_mesh();
         let mesh = mesh.as_deref();
         let chosen = self.catch.chosen;
@@ -662,9 +658,6 @@ impl Player {
         }
         if self.catch.chosen == chosen {
             self.catch.steps += 1;
-        }
-        if child_was_active && self.catch.killed {
-            self.set_nerve_on_ground(o, scene); // exeWallCatch 0x424830 / 0x424a50.
         }
     }
 
@@ -1008,6 +1001,7 @@ impl Player {
     /// ground takes over (`setNerveOnGround`).
     fn end_climb(&mut self) {
         self.catch.killed = true;
+        self.end_ground_child();
     }
 
     /// The first step of `Jump` sets the climb jump off; the nerve is the
@@ -1059,8 +1053,8 @@ impl Player {
         self.grounded = false;
         self.catch.nerve = CatchNerve::EndFall;
         self.catch.killed = true;
+        self.end_ground_child();
         self.fall_after_ledge = Some(self.facing);
-        self.go(Move::Fall, "Fall");
         self.start_clip("Fall");
         self.interpolation_cleared = true;
     }

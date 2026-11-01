@@ -126,7 +126,7 @@ impl Player {
                 self.defer(Move::Walk, "Move", |_| {});
             } else {
                 // The state ends and the actor chooses the wait state.
-                self.end_run();
+                self.end_ground_child();
                 return;
             }
         }

@@ -56,7 +56,7 @@ impl Player {
             // Dedicated Brake/Turn execution remains outside this bounded port.
             self.switch(Move::Skid, "Brake", |p| p.enter_nerve(RunNerve::Brake));
         } else if steer.stopped {
-            self.end_run();
+            self.end_ground_child();
         } else {
             self.ground_actions(o);
         }
