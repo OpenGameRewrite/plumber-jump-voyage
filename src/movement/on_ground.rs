@@ -76,9 +76,10 @@ impl Player {
             return GroundNerve::Run;
         }
         if !self.is_carry() && o.crouch && !self.force_run.is_active() && !force_land {
-            // JustLand, then actor LongJump (+0x78): only that combination
-            // bypasses cutVerticalVelocityGroundNormal (0x421a6c..0x421a90).
-            if !self.is_just_land() || self.mode != Move::LongJump {
+            // cutVerticalVelocityGroundNormal runs only on a just-land entry
+            // from any actor nerve but LongJump (+0x78); other Squat entries
+            // keep their velocity (0x421a6c..0x421a90).
+            if self.is_just_land() && self.mode != Move::LongJump {
                 self.cut_velocity_ground_normal();
             }
             return GroundNerve::Squat;
@@ -212,10 +213,21 @@ mod tests {
         p.ground_contact = 1;
         let incoming = p.v;
         assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Squat);
-        assert_eq!(p.v, incoming, "just-land LongJump alone skips the cut");
+        assert_eq!(p.v, incoming, "just-land LongJump skips the cut");
         p.ground_contact = 2;
         assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Squat);
-        assert_eq!(p.v, Vec3::new(0., -3., 0.));
+        assert_eq!(
+            p.v, incoming,
+            "a Squat entry without just-land keeps its velocity"
+        );
+        p.mode = Move::Fall;
+        p.ground_contact = 1;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Squat);
+        assert_eq!(
+            p.v,
+            Vec3::new(0., -3., 0.),
+            "just-land from another nerve cuts"
+        );
 
         let mut p = grounded();
         p.fall.distance = t::LONG_FALL;
