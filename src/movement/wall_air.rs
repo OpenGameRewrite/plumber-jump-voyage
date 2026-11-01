@@ -380,9 +380,9 @@ impl Player {
 
     /// One step of `PlayerStateWallAir::exeSlide`: the slide state's nerve,
     /// then the pre-input jump.
-    pub(super) fn wall_slide(&mut self, o: &Orders) {
+    pub(super) fn wall_slide(&mut self, o: &Orders, scene: &Course) {
         if !self.follow_wall_normal() {
-            self.end_wall_slide(o);
+            self.end_wall_slide(o, scene);
             return;
         }
         match self.wall_air.nerve {
@@ -446,12 +446,12 @@ impl Player {
 
     /// The state is over (the wall was left): take the speed into the wall
     /// off, remember where, and let the actor choose what follows.
-    pub(super) fn end_wall_slide(&mut self, o: &Orders) {
+    pub(super) fn end_wall_slide(&mut self, o: &Orders, scene: &Course) {
         self.leave_wall_slide();
         if self.grounded {
-            self.land(o);
+            self.land(o, scene);
         } else {
-            self.go(Move::Fall, "Fall");
+            self.set_nerve_on_ground(o, scene); // exeWallAir 0x4245b8.
         }
     }
 

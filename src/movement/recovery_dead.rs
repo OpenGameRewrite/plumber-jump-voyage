@@ -225,7 +225,7 @@ impl Player {
                     self.recovery.area_active = false;
                     self.damage.invalid = self.damage.invalid.max(120);
                     self.recovery.push_invalid = 120;
-                    self.land(o);
+                    self.land(o, _scene);
                 }
             }
             _ => unreachable!(),

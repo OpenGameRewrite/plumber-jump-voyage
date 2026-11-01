@@ -260,6 +260,14 @@ impl Player {
         if self.nerve.deferred || !self.pole_judge_applies() {
             return;
         }
+        self.ground_pole_climb(o, scene);
+    }
+
+    /// Direct judge/setup in setNerveOnGround (0x421938..0x421974).
+    pub(super) fn ground_pole_climb(&mut self, o: &Orders, scene: &Course) {
+        if self.is_carry() {
+            return;
+        }
         let Some(mesh) = scene.catch_mesh() else {
             return;
         };
@@ -508,6 +516,9 @@ impl Player {
         if self.pole.chosen == chosen {
             self.pole.steps += 1;
         }
+        if self.pole.killed {
+            self.set_nerve_on_ground(o, scene); // exePoleClimb 0x424b4c.
+        }
     }
 
     /// The nerve changes to `nerve` at the end of the step (`al::setNerve`):
@@ -557,7 +568,6 @@ impl Player {
             self.reset_collision();
         }
         self.pole.killed = true;
-        self.hold_to_ground();
     }
 
     fn exe_pole_start(&mut self, o: &Orders, mesh: Option<&TriangleMesh>) {

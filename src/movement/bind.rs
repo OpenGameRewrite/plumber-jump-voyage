@@ -246,11 +246,11 @@ impl Player {
 
     /// `PlayerStateBind::exeEndFall` (0x4675b0): the air control keeps falling; once the
     /// fall has reached the ground the player's wait state takes over.
-    pub(super) fn bind_fall_state(&mut self) {
+    pub(super) fn bind_fall_state(&mut self, o: &Orders, scene: &Course) {
         self.v.y -= self.constants.gravity_air;
         self.v.y = self.v.y.max(-t::FALL_MAX);
         if self.grounded {
-            self.go(Move::Idle, "Wait");
+            self.set_nerve_on_ground(o, scene); // exeBind 0x426da8.
         }
     }
 

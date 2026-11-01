@@ -1857,7 +1857,7 @@ fn forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump() {
         ..default()
     });
     p.touchdown_speed = -40.;
-    p.land(&Orders::default());
+    p.land(&Orders::default(), &Course::default());
     assert_eq!(p.mode, Move::Roll);
     assert_eq!(p.v.y, -40.);
     assert_eq!(p.v.z, -t::ROLL_START);

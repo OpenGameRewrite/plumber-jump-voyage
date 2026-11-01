@@ -167,27 +167,6 @@ impl Player {
             self.slerp_pose_up(Vec3::Y, 1., 0.);
         }
     }
-    fn damage_end_on_ground(&mut self, o: &Orders) {
-        if !self.grounded {
-            self.go(Move::Fall, "Fall");
-        } else if self.pre_jump > 0 {
-            self.ground_jump(o);
-        } else if self.is_move() {
-            self.run_appear(true);
-            self.go(Move::Run, "Move");
-        } else if o.crouch {
-            self.start_squat();
-        } else {
-            self.go(
-                Move::Idle,
-                if self.damage.hp == 1 {
-                    "DamageWait"
-                } else {
-                    "Wait"
-                },
-            );
-        }
-    }
     pub(super) fn damage_life_step(&mut self, o: &Orders, scene: &Course) {
         if !self.is_dead() && self.fire_throws(o) {
             return;
@@ -243,7 +222,7 @@ impl Player {
             _ => unreachable!(),
         }
         if ended {
-            self.damage_end_on_ground(o);
+            self.set_nerve_on_ground(o, scene); // exeDamage 0x425f04.
         } else if self.is_in_water(scene, swim::ACTOR_JUDGE) {
             if self.mode == Move::DamageLand {
                 self.start_swim(scene);

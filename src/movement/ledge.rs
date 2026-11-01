@@ -659,6 +659,9 @@ impl Player {
         if self.catch.chosen == chosen {
             self.catch.steps += 1;
         }
+        if self.catch.killed {
+            self.set_nerve_on_ground(o, scene); // exeWallCatch 0x424830 / 0x424a50.
+        }
     }
 
     // ---- Following the snap ------------------------------------------------
@@ -1001,7 +1004,6 @@ impl Player {
     /// ground takes over (`setNerveOnGround`).
     fn end_climb(&mut self) {
         self.catch.killed = true;
-        self.hold_to_ground();
     }
 
     /// The first step of `Jump` sets the climb jump off; the nerve is the
@@ -1059,23 +1061,7 @@ impl Player {
         self.interpolation_cleared = true;
     }
 
-    /// `setNerveOnGround` for a body that stands where a hold (ledge or pole) ended: the run when the
-    /// stick pushes, else the standing state; a jump pressed goes on.
-    pub(super) fn hold_to_ground(&mut self) {
-        self.dive_possible = true;
-        self.gravity = self.constants.gravity_air;
-        self.air_for = None;
-        if self.grounded && self.tilt > 0.05 {
-            self.run_frames = t::BRAKE_ON_COUNTER;
-            self.v.y = -GRAVITY_MOVE;
-            self.pull = GRAVITY_MOVE;
-            self.go(Move::Run, "Move");
-        } else if self.grounded {
-            self.go(Move::Idle, "Wait");
-        } else {
-            self.go(Move::Fall, "Fall");
-        }
-    }
+
 }
 
 #[cfg(test)]

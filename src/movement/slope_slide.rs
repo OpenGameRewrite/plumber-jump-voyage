@@ -123,9 +123,9 @@ impl Player {
     /// the forced slide in `slope-slide-forced-jump`). GUESS: the roll's start below, which
     /// stands in for the actor's roll judges (`PlayerJudgeForceRolling` and the others come
     /// first in the executable); no recording covers it.
-    pub(super) fn slope_slide(&mut self, o: &Orders) {
+    pub(super) fn slope_slide(&mut self, o: &Orders, scene: &Course) {
         if self.slope_slide_step() {
-            self.end_slope_slide(o);
+            self.set_nerve_on_ground(o, scene); // exeSlope 0x4235e4.
             return;
         }
         if self.try_force_rolling() {
@@ -213,25 +213,5 @@ impl Player {
         false
     }
 
-    /// The state killed itself: `setNerveOnGround` picks what the ground allows. GUESS: only
-    /// the outcomes the controller has are chosen (the floor that still forces the slide, a
-    /// buffered jump, the squat, the run and standing), in the order of the other ground
-    /// landings; the recordings end the slide on the flat once, never.
-    fn end_slope_slide(&mut self, o: &Orders) {
-        if self.on_ground_force_slide_code(self.v) {
-            self.start_slope_slide();
-        } else if self.pre_input_jump_judges() {
-            self.pre_jump = 0;
-            self.ground_jump(o);
-        } else if o.crouch {
-            self.start_squat();
-        } else if self.is_move() {
-            self.run_frames = t::BRAKE_ON_COUNTER;
-            self.pull = GRAVITY_MOVE;
-            self.run_appear(false);
-            self.go(Move::Run, "Move");
-        } else {
-            self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
-        }
-    }
+
 }

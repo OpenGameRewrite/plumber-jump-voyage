@@ -249,6 +249,7 @@ pub mod grab_ceil;
 mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
+mod on_ground;
 mod ground_inertia;
 mod grow_seed;
 pub mod key_move_parts;
@@ -1260,6 +1261,8 @@ pub struct Player {
     pub distance: f32,
     pub checkpoint: Vec3,
     pub hard_land: bool,
+    /// Child Run ended; exeRun dispatches after the child update (0x423014).
+    ground_state_ended: bool,
     pub wall: Vec3,
     pub hitstop: f32,
     pub events: Vec<Fx>,
@@ -1577,6 +1580,7 @@ impl Default for Player {
             distance: 0.,
             checkpoint: SPAWN,
             hard_land: false,
+            ground_state_ended: false,
             wall: Vec3::ZERO,
             hitstop: 0.,
             events: Vec::new(),
@@ -3490,9 +3494,9 @@ impl Player {
                 self.appear_sand_sink();
             } else {
                 if self.mode == Move::GrabCeil {
-                    self.grab_ceil_step(o);
+                    self.grab_ceil_step(o, _scene);
                 } else {
-                    self.land(o);
+                    self.land(o, _scene);
                 }
             }
         }
@@ -3517,9 +3521,9 @@ impl Player {
     /// The actor's fall judge (`PlayerJudgeSpeedCheckFall::judge`), asked by
     /// the standing, running and squatting nerves after their own step and
     /// after the jump they allow: a ground nerve that has run on without
-    /// ground for more than four steps hands over to the fall. Only the run
-    /// is recorded (walking and running off a terrace); the other ground
-    /// states are assumed to ask the same judge.
+    /// ground for more than four steps hands over to the fall. Actor +0x458
+    /// is consumed by Wait 0x422560, Squat 0x422af0 and Run 0x423384;
+    /// each consumer keeps its own position after its child update.
     fn judge_fall(&mut self) {
         if !(self.start_surface_run()
             || self.surface_run.result && matches!(self.mode, Move::Walk | Move::Run))
@@ -3595,14 +3599,14 @@ impl Player {
             Move::Skid | Move::Turn => self.brake(o),
             Move::SquatBrake | Move::Crouch | Move::Crawl => self.squat(o),
             Move::GroundSpin => self.ground_spin(o),
-            Move::Throw => self.throw_state(o),
+            Move::Throw => self.throw_state(o, scene),
             Move::GroundPound => self.hip_drop(o),
             Move::PoundLand => self.hip_drop_land(o),
             Move::Roll => self.roll(o),
-            Move::RollEnd => self.roll_stand_up_step(o),
+            Move::RollEnd => self.roll_stand_up_step(o, scene),
             Move::RollJump => self.roll_jump_step(o),
             Move::Dive => self.head_sliding(o, scene),
-            Move::SlopeSlide => self.slope_slide(o),
+            Move::SlopeSlide => self.slope_slide(o, scene),
             Move::BurnJump | Move::BurnBounce | Move::FireRun | Move::FireFall | Move::FireDead => {
                 self.damage_fire_step(o, scene)
             }
@@ -3614,12 +3618,12 @@ impl Player {
             | Move::DamageLandWater
             | Move::DamageSwimDead => self.damage_swim_step(o, scene),
             Move::SandWait | Move::SandRun | Move::SandPivot | Move::SandJump | Move::SandDead => {
-                self.sand_step(o)
+                self.sand_step(o, scene)
             }
-            Move::SandGeyser => self.sand_geyser_step(scene),
+            Move::SandGeyser => self.sand_geyser_step(o, scene),
             Move::Press => self.press_step(),
             Move::Bind => self.bind_state(),
-            Move::BindFall => self.bind_fall_state(),
+            Move::BindFall => self.bind_fall_state(o, scene),
             Move::Dead => {}
             Move::AbyssFall => self.abyss_fall(),
             Move::RecoveryStart | Move::RecoveryTravel | Move::RecoveryFall => {
@@ -3630,15 +3634,19 @@ impl Player {
             Move::Sideflip => self.turn_jump_air(o),
             Move::WallJump => self.wall_jump(o),
             mode if mode.uses_air_control() => self.jump_air(o),
-            Move::WallSlide => self.wall_slide(o),
+            Move::WallSlide => self.wall_slide(o, scene),
             Move::Ledge => self.wall_catch(o, scene),
             Move::Pole => self.pole_climb(o, scene),
-            Move::GrabCeil => self.grab_ceil_step(o),
+            Move::GrabCeil => self.grab_ceil_step(o, scene),
             Move::Swim => self.swim(o, scene),
             Move::SpinDrop => self.spin_drop(o),
             Move::SpinFlower => self.spin_flower_step(),
-            Move::CapCatchPop => self.cap_catch_pop_step(o),
+            Move::CapCatchPop => self.cap_catch_pop_step(o, scene),
             _ => self.air(o),
+        }
+        if std::mem::take(&mut self.ground_state_ended) {
+            self.nerve.deferred = false;
+            self.set_nerve_on_ground(o, scene);
         }
         // The jump states ask for the `DiveInWater` clip at the end of their steps
         // (`tryChangeDiveInWaterAnim` in `exeJump`, `exeJumpTurn`).
@@ -4374,11 +4382,10 @@ impl Player {
         self.mode == Move::Turn
             || matches!(self.mode, Move::Walk | Move::Run) && self.run_nerve == RunNerve::WallPush
     }
-    /// The run state dies and the actor chooses the standing state.
+    /// Child kill is observed by exeRun after updateNerveState (0x423008..0x423014).
     fn end_run(&mut self) {
-        // The standing state's first step leaves no speed over from the run (a
-        // braking run that is cut short stops dead).
-        self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
+        self.ground_state_ended = true;
+        self.nerve.deferred = true;
     }
     /// The original's run cycle: weights and pace by speed and tilt, and the
     /// footfalls the pose passes.
@@ -4602,17 +4609,6 @@ impl Player {
         );
         false
     }
-    fn end_burn(&mut self) {
-        if self.ground_lost < 5 {
-            self.run_frames = t::BRAKE_ON_COUNTER;
-            // exeDamageFire routes a completed child into Run; its first
-            // execution starts Move even when the run immediately ends in Wait.
-            self.go(Move::Run, "Move");
-        } else {
-            self.go(Move::Fall, "Fall");
-        }
-    }
-
     // ---- Jumps ------------------------------------------------------------
     /// Take off into a jump state. The take-off itself (the impulse, the
     /// sounds, the dust) is the state's first step, so it happens next frame;
@@ -5641,7 +5637,7 @@ impl Player {
     }
     /// The throw state (`PlayerStateSpinCap`): `exeSpinGround` on the ground,
     /// `exeSpinAir` in the air.
-    fn throw_state(&mut self, o: &Orders) {
+    fn throw_state(&mut self, o: &Orders, scene: &Course) {
         let kind = self.throwing.kind.unwrap_or(Throw::Forward);
         let air = !self.grounded;
         let step = self.frame;
@@ -5656,12 +5652,12 @@ impl Player {
         if air {
             self.spin_air(o, step);
         } else {
-            self.spin_ground(o, step);
+            self.spin_ground(o, step, scene);
         }
     }
     /// `PlayerStateSpinCap::exeSpinGround` and the actor's cancels
     /// (`PlayerActorHakoniwa::exeSpinCap`).
-    fn spin_ground(&mut self, o: &Orders, step: u32) {
+    fn spin_ground(&mut self, o: &Orders, step: u32, scene: &Course) {
         // `updateSpinGroundNerve`: the spin brakes the momentum for its first
         // frames; from then on the state's ground move control steers, from
         // the speed the player has (and so moves off at once when the stick
@@ -5707,14 +5703,7 @@ impl Player {
         } else if o.crouch {
             self.start_squat();
         } else if self.anim_done(clip::throw(self.anim.name)) {
-            // The state ends when its clip has, once the cap is away
-            // (`exeSpinGround`), and the actor picks the next state
-            // (`setNerveOnGround`): the run when the stick is held.
-            if self.tilt >= STICK_DEADZONE {
-                self.go(Move::Walk, "Move");
-            } else {
-                self.go(Move::Idle, "Wait");
-            }
+            self.set_nerve_on_ground(o, scene); // exeSpinCap 0x423b18.
         }
     }
     /// `PlayerStateSpinCap::exeSpinAir`: the small hang, the cap leaving on
@@ -6132,7 +6121,7 @@ impl Player {
     }
 
     // ---- Landing and collision ------------------------------------------------
-    fn land(&mut self, o: &Orders) {
+    fn land(&mut self, o: &Orders, scene: &Course) {
         if self.model_2d()
             && matches!(
                 self.mode,
@@ -6148,18 +6137,14 @@ impl Player {
             }
             self.air_for = None;
             self.land_frames = 0;
-            if self.is_move() {
-                self.go(Move::Run, "Move");
-            } else {
-                self.go(Move::Idle, "Wait");
-            }
+            self.set_nerve_on_ground(o, scene);
             return;
         }
         if self.mode == Move::Fall && !self.is_just_land() {
             // A continuing floor contact enters Wait directly; only a fresh
             // landing chooses the Land child (PlayerStateWait::appear).
             self.jump_air(o);
-            self.go(Move::Idle, "Wait");
+            self.set_nerve_on_ground(o, scene); // exeFall 0x425410.
             return;
         }
         if self.mode == Move::WallSlide {
@@ -6236,7 +6221,6 @@ impl Player {
         if !rolls {
             (self.v, self.facing) = flown;
         }
-        let speed = self.speed_h();
         self.land_frames = 0;
         self.dive_possible = true;
         if self.mode == Move::Dive {
@@ -6318,15 +6302,19 @@ impl Player {
                 // vetoed), then the wait state. So a stick held at touchdown
                 // runs first and the run state starts the crouch one step
                 // later.
-                if self.pre_jump > 0 {
-                    // A jump pressed just before landing goes straight on.
+                use on_ground::GroundNerve;
+                let choice = self.ground_nerve(o, scene);
+                if matches!(choice, GroundNerve::Changed) {
+                    return;
+                }
+                if matches!(choice, GroundNerve::Jump) {
                     self.ground_jump(o);
-                } else if !self.hard_land && self.tilt > 0.05 && speed > 0.5 {
+                } else if matches!(choice, GroundNerve::Run) {
                     self.run_frames = t::BRAKE_ON_COUNTER;
                     self.pull = GRAVITY_MOVE;
                     self.run_appear(true);
                     self.go(Move::Run, "Move");
-                } else if !self.hard_land && o.crouch {
+                } else if matches!(choice, GroundNerve::Squat) {
                     self.start_squat();
                 } else if self.hard_land {
                     // `PlayerStateWait::appear` with the force-land judge true

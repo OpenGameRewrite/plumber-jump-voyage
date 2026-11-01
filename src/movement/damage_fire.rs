@@ -294,7 +294,7 @@ impl Player {
             self.v = parallel + (self.v - parallel) * scale;
         }
     }
-    pub(super) fn damage_fire_step(&mut self, o: &Orders, _scene: &Course) {
+    pub(super) fn damage_fire_step(&mut self, o: &Orders, scene: &Course) {
         let dead = self.is_dead();
         if dead && self.frame == 0 {
             self.soot.record_damage_fire_dead();
@@ -339,7 +339,7 @@ impl Player {
                 if self.ground_lost >= 5 {
                     self.fire_choose(Move::FireFall);
                 } else if self.frame >= 60 {
-                    self.end_burn();
+                    self.set_nerve_on_ground(o, scene); // exeDamageFire 0x4265a0.
                 }
             }
             Move::FireFall => {
@@ -382,7 +382,7 @@ impl Player {
         self.soot.record_damage_fire();
         if matches!(self.mode, Move::FireRun | Move::FireFall) {
             if self.fire.frames >= 60 {
-                self.end_burn();
+                self.set_nerve_on_ground(o, scene); // exeDamageFire 0x4265a0.
             }
             self.fire.frames += 1;
         }
@@ -397,7 +397,7 @@ impl Player {
             self.start_throw(Throw::Spin);
         } else if self.mode != Move::BurnJump && self.grounded && self.material_puddle {
             self.events.push(Fx::Quenched);
-            self.end_burn();
+            self.set_nerve_on_ground(o, scene); // exeDamageFire 0x4265a0.
         } else if self.mode == Move::FireRun && self.pre_jump > 0 {
             self.ground_jump(o);
         }

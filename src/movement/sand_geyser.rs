@@ -192,7 +192,7 @@ impl Player {
             }
         }
     }
-    pub(super) fn sand_geyser_step(&mut self, scene: &Course) {
+    pub(super) fn sand_geyser_step(&mut self, o: &Orders, scene: &Course) {
         let absolute = scene.in_water_frame(self.position_cm());
         if let Some((host, target, speed)) = self.geyser.sender.take()
             && (target - absolute.y >= 0. || (target - absolute.y).abs() < 0.001)
@@ -211,7 +211,7 @@ impl Player {
             // saved pre-integration pose is retained. Its carry sweep corrects against
             // the moving Top first, then its own sweep integrates this exit impulse.
             self.v = Vec3::Y * 30.;
-            self.go(Move::Fall, "Fall");
+            self.set_nerve_on_ground(o, scene); // exeSandGeyser 0x425978.
         }
     }
 }
@@ -302,10 +302,10 @@ mod checks {
         p.receive_sand_geyser();
         assert_eq!(p.mode, Move::SandGeyser);
         assert!(p.geyser.next_sender.is_none());
-        p.sand_geyser_step(&scene);
+        p.sand_geyser_step(&Orders::default(), &scene);
         assert_eq!(p.v, Vec3::Y * 20.);
         assert!(p.geyser.sender.is_none());
-        p.sand_geyser_step(&scene);
+        p.sand_geyser_step(&Orders::default(), &scene);
         assert_eq!((p.mode, p.v), (Move::Fall, Vec3::Y * 30.));
 
         // A plane at an arbitrary height: no measured game correction is an input.

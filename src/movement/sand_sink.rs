@@ -226,7 +226,7 @@ impl Player {
         }
         self.anim.rate = rate;
     }
-    pub(super) fn sand_step(&mut self, o: &Orders) {
+    pub(super) fn sand_step(&mut self, o: &Orders, scene: &Course) {
         let rate = joint_math::calc_rate01(self.sand.depth + self.sand.surface_offset, 0., HEIGHT);
         match self.mode {
             Move::SandDead => {
@@ -355,25 +355,12 @@ impl Player {
         // PlayerActorHakoniwa::exeSandSink asks after the child's step.
         if self.mode == Move::SandJump {
             if self.grounded && self.is_on_ground_by(self.v) && !self.judge_sand_sink() {
-                self.sand_end_ground();
+                self.set_nerve_on_ground(o, scene); // exeSandSink 0x4257dc.
             }
         } else if !self.is_on_ground_by(self.v) {
             self.go(Move::Fall, "Fall");
         } else if !self.judge_sand_sink() && !self.try_force_slope_slide() {
-            self.sand_end_ground();
-        }
-    }
-    fn sand_end_ground(&mut self) {
-        if self.is_just_land() {
-            self.events.push(Fx::Land { hard: false });
-        }
-        if self.is_move() {
-            self.go(Move::Walk, "Move");
-            self.v =
-                pose_math::along_vector_normal_h(self.v, Vec3::Y, self.collided_ground_normal())
-                    - self.collided_ground_normal() * GRAVITY_MOVE;
-        } else {
-            self.go(Move::Idle, "Wait");
+            self.set_nerve_on_ground(o, scene); // exeSandSink 0x4257dc.
         }
     }
     fn sand_jump(&mut self, o: &Orders) {

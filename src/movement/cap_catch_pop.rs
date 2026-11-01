@@ -50,7 +50,7 @@ impl Player {
     /// `exePop` after its first step: the air control, then the state ends when the clip has
     /// ended and the nerve has run 30 steps; the actor then chooses its ground-or-air nerve
     /// again (`setNerveOnGround`). A landing is the generic landing step's.
-    pub(super) fn cap_catch_pop_step(&mut self, o: &Orders) {
+    pub(super) fn cap_catch_pop_step(&mut self, o: &Orders, scene: &Course) {
         let steer = air_move::Steering {
             front: t::JUMP_ACCEL_FRONT,
             back: t::JUMP_ACCEL_BACK,
@@ -60,7 +60,7 @@ impl Player {
         self.air.update(&mut self.v, push, o.jump_held, &steer);
         let clip_ended = self.anim_done(clip::JUMP_CAP_CATCH_COMMON);
         if clip_ended && self.state_frames() >= CAP_CATCH_POP_MIN_STEPS {
-            self.go(Move::Fall, "Fall");
+            self.set_nerve_on_ground(o, scene); // exeCapCatchPop 0x424528.
         }
     }
 }

@@ -598,7 +598,7 @@ impl Player {
         }
         if !self.is_in_water(scene, SWIM_JUDGE) {
             self.try_reaction_water_out(scene);
-            self.leave_swim(o);
+            self.set_nerve_on_ground(o, scene); // exeSwim 0x425ca8.
             return;
         }
         // Still in the water: a cap throw may start (the state's nerves decide whether it can).
@@ -623,17 +623,6 @@ impl Player {
             p.jump_extend = false;
             p.arm_air_control(Move::Jump, power, p.constants.jump_gravity);
         });
-    }
-
-    /// The player is out of the water (`setNerveOnGround`): GUESS, no recording ends a swim
-    /// outside of a jump; the ground states the controller has are chosen the way the other
-    /// landings choose them.
-    pub(super) fn leave_swim(&mut self, _o: &Orders) {
-        if self.is_collided_ground() {
-            self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
-        } else {
-            self.go(Move::Fall, "Fall");
-        }
     }
 
     // ---- PlayerStateSwim -------------------------------------------------------------------

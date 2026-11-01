@@ -316,6 +316,14 @@ impl Player {
         {
             return;
         }
+        self.ground_grab_ceil(scene);
+    }
+
+    /// Direct judge/setup in setNerveOnGround (0x421978..0x4219ac).
+    pub(super) fn ground_grab_ceil(&mut self, scene: &Course) {
+        if self.is_carry() {
+            return;
+        }
         let Some(mesh) = scene.catch_mesh() else {
             return;
         };
@@ -485,7 +493,7 @@ impl Player {
         self.defer(Move::GrabCeil, clip, |_| {});
     }
 
-    pub(super) fn grab_ceil_step(&mut self, o: &Orders) {
+    pub(super) fn grab_ceil_step(&mut self, o: &Orders, scene: &Course) {
         let nerve = self.grab_ceil.nerve;
         let chosen = self.grab_ceil.chosen;
         let first = self.grab_ceil.steps == 0;
@@ -541,7 +549,7 @@ impl Player {
             if self.grounded {
                 self.grab_ceil.bar = None;
                 self.v.y = -t::GRAVITY;
-                self.land(o);
+                self.land(o, scene);
             } else {
                 self.air_actions(o);
             }

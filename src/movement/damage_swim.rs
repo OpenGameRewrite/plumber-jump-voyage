@@ -122,7 +122,7 @@ impl Player {
             if end_in_water {
                 self.start_swim_after_damage(scene, o.jump && self.damage_swim_cancel());
             } else {
-                self.leave_swim(o);
+                self.set_nerve_on_ground(o, scene); // exeDamageSwim 0x4262e8.
             }
         }
     }

@@ -593,30 +593,12 @@ impl Player {
     }
     /// `exeStandUp`: slide on the roll's momentum while standing, then hand
     /// the actor back (`setNerveOnGround`).
-    pub(super) fn roll_stand_up_step(&mut self, o: &Orders) {
+    pub(super) fn roll_stand_up_step(&mut self, o: &Orders, scene: &Course) {
         self.inertia_slide(t::ROLL_BRAKE, 0., 0., 0.);
         if self.anim_done(clip::ROLLING_STAND_UP) {
-            self.end_roll(o);
+            self.set_nerve_on_ground(o, scene); // exeRolling 0x4237a4.
         }
     }
-    /// The roll is over: the actor picks what the ground allows next.
-    fn end_roll(&mut self, o: &Orders) {
-        if self.pre_jump > 0 {
-            self.ground_jump(o);
-        } else if o.crouch {
-            self.start_squat();
-        } else if self.is_move() || self.auto_run_skate() {
-            self.run_frames = t::BRAKE_ON_COUNTER;
-            self.pull = GRAVITY_MOVE;
-            // GroundMove::appear replaces the stand-up's old vertical pull.
-            self.v.y = 0.;
-            self.go(Move::Run, "Move");
-        } else {
-            self.wait_state_appears_after_roll(self.v);
-            self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
-        }
-    }
-
     /// `PlayerStateRolling::control`, after the nerve has run.
     fn roll_control(&mut self, pressed: bool) {
         let grounded = self.is_on_ground();
