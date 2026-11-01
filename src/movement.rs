@@ -249,11 +249,11 @@ pub mod grab_ceil;
 mod grab_ceil_find;
 #[path = "movement/ground.rs"]
 mod ground;
-mod on_ground;
 mod ground_inertia;
 mod grow_seed;
 pub mod key_move_parts;
 pub mod kick_stone;
+mod on_ground;
 mod press;
 pub mod pukupuku;
 mod push_receiver;
@@ -3601,7 +3601,7 @@ impl Player {
             Move::GroundSpin => self.ground_spin(o),
             Move::Throw => self.throw_state(o, scene),
             Move::GroundPound => self.hip_drop(o),
-            Move::PoundLand => self.hip_drop_land(o),
+            Move::PoundLand => self.hip_drop_land(o, scene),
             Move::Roll => self.roll(o),
             Move::RollEnd => self.roll_stand_up_step(o, scene),
             Move::RollJump => self.roll_jump_step(o),
@@ -3893,8 +3893,22 @@ impl Player {
     }
     /// The standing or running state (the original's wait and run nerves).
     fn run(&mut self, o: &Orders, scene: &Course) {
-        if self.mode == Move::Idle && self.clip() == "SquatEnd" && !self.judge_enable_stand_up() {
-            self.stand_up_blocked();
+        if self.mode == Move::Idle && self.clip() == "SquatEnd" {
+            // exeStandUp runs waitGround before testing clearance, StartRun
+            // and clip completion; its actor dispatches a killed child.
+            self.wait_pose();
+            if !self.judge_enable_stand_up() {
+                self.stand_up_blocked();
+            } else if self.ground_start_run() || self.anim_done(clip::SQUAT_END) {
+                self.v.y = if self.grounded {
+                    -t::GRAVITY
+                } else {
+                    (self.v.y - t::GRAVITY).max(-t::FALL_MAX)
+                };
+                self.set_nerve_on_ground(o, scene); // exeSquat 0x422ae4.
+            } else {
+                self.stand(o);
+            }
         } else if self.mode == Move::Idle {
             // Every nerve of the standing state settles the pose first; the
             // judges that leave it (the run, the jump) come after.
@@ -4609,6 +4623,17 @@ impl Player {
         );
         false
     }
+    /// Completed DamageFire child: direct Run unless SpeedCheckFall judges
+    /// (0x4264e0..0x426534). Only puddle cancellation uses setNerveOnGround.
+    fn end_burn(&mut self) {
+        if self.ground_lost < 5 {
+            self.run_frames = t::BRAKE_ON_COUNTER;
+            self.go(Move::Run, "Move");
+        } else {
+            self.go(Move::Fall, "Fall");
+        }
+    }
+
     // ---- Jumps ------------------------------------------------------------
     /// Take off into a jump state. The take-off itself (the impulse, the
     /// sounds, the dust) is the state's first step, so it happens next frame;
@@ -5378,7 +5403,7 @@ impl Player {
     fn pound_jump_permitted(&self) -> bool {
         (t::HIP_DROP_JUMP_BEGIN..=t::HIP_DROP_JUMP_END).contains(&(self.frame + 1))
     }
-    fn hip_drop_land(&mut self, o: &Orders) {
+    fn hip_drop_land(&mut self, o: &Orders, scene: &Course) {
         // The landing keeps the ground pull of the walking states
         // (`rs::waitGround` with `GravityMove`).
         self.set_h(Vec3::ZERO);
@@ -5427,7 +5452,9 @@ impl Player {
             self.ground_jump(o);
             return;
         }
-        if can_move && (self.tilt > 0.1 || o.crouch) || self.anim_done(clip::HIP_DROP_LAND) {
+        if self.anim_done(clip::HIP_DROP_LAND) {
+            self.set_nerve_on_ground(o, scene); // exeHipDrop 0x424c48.
+        } else if can_move && (self.tilt > 0.1 || o.crouch) {
             if o.crouch {
                 self.start_squat();
             } else {
@@ -6256,35 +6283,10 @@ impl Player {
                 });
                 return;
             }
-            // The spin jump's drop (the `JumpSpinGroundDownFall` nerve, ZL held) ends on the
-            // ground: `PlayerActorHakoniwa::exeJump` sets action trigger 11 for
-            // `isEndJumpDownFallLand`, which makes `PlayerJudgeForceLand` true, so no run or
-            // squat starts and the wait state appears in its `LandStiffen` nerve. That nerve
-            // plays `LandDownFall` after a drop and raises no landing reaction.
-            Move::SpinDrop => {
-                self.go(Move::Idle, "LandDownFall");
-                return;
-            }
             // Holding crouch turns the momentum into a real roll; otherwise a
             // dive lands in its forward roll and stands up.
             Move::Dive | Move::LongJump if rolls => self.start_roll(RollStart::Landing),
             Move::RollJump if rolls => self.roll_land_from_jump(),
-            // With the stick held the dive lands straight into the run, which
-            // plays the roll's stand-up as an overlay on its legs.
-            Move::Dive if self.is_move() => {
-                self.run_frames = t::BRAKE_ON_COUNTER;
-                // The run state pulls to the floor from the step it is chosen.
-                self.pull = GRAVITY_MOVE;
-                self.run_appear(true);
-                self.go(Move::Run, "Move");
-                self.cycle_restart_in = 2;
-                self.sub_anim = Some(Anim {
-                    name: "RollingStandUp",
-                    serial: self.anim.serial.wrapping_add(7),
-                    frame: 2.,
-                    rate: 0.6,
-                });
-            }
             // The roll raises its own landing reaction when it has flown long
             // enough (`PlayerStateRolling::control`).
             Move::Roll => return,
@@ -6314,49 +6316,20 @@ impl Player {
                     self.pull = GRAVITY_MOVE;
                     self.run_appear(true);
                     self.go(Move::Run, "Move");
+                    if mode == Move::Dive {
+                        self.cycle_restart_in = 2;
+                        self.sub_anim = Some(Anim {
+                            name: "RollingStandUp",
+                            serial: self.anim.serial.wrapping_add(7),
+                            frame: 2.,
+                            rate: 0.6,
+                        });
+                    }
                 } else if matches!(choice, GroundNerve::Squat) {
                     self.start_squat();
-                } else if self.hard_land {
-                    // `PlayerStateWait::appear` with the force-land judge true
-                    // keeps the velocity along the floor and raises no landing
-                    // reaction; the `LandStiffen` nerve's first step stops the
-                    // player and raises the high-fall one.
-                    self.change(Move::Idle, "LandStiffen", |p| {
-                        p.set_h(Vec3::ZERO);
-                        p.events.push(Fx::Land { hard: true });
-                    });
-                    return;
                 } else {
-                    // The landing clip depends on the clip the jump was playing
-                    // (`PlayerStateWait::exeLand`); landing stops the player.
-                    let anim = match self.clip() {
-                        "JumpTurn" => "LandTurn",
-                        "JumpBroad" => "LandRolling",
-                        "Jump3" => "LandJump3",
-                        _ => "Land",
-                    };
-                    // (The triple jump's landing gives the body no sway.)
-                    if anim != "LandJump3" {
-                        self.wait_state_appears_after_landing(arrival);
-                    }
-                    // Wait::appear (0x48c824) sets the arrival's horizontal
-                    // velocity along the new floor before adding Gravity.
-                    // Keep its horizontal part in the ground-state storage;
-                    // ground_following supplies the normal pull.
-                    let up = self.ground_normal_or_up();
-                    if up != Vec3::Y {
-                        // The slope Land path keeps full velocity until its
-                        // snap step. Flat Land retains its existing stop.
-                        let along = along_vector_normal_h(arrival, Vec3::Y, up);
-                        self.set_h(along);
-                        self.v.y = 0.;
-                        self.pull = t::GRAVITY;
-                    }
-                    self.change(Move::Idle, anim, |p| {
-                        if p.grounded {
-                            p.set_h(Vec3::ZERO);
-                        }
-                    });
+                    self.appear_ground_wait(arrival);
+                    return;
                 }
             }
         }
@@ -6366,6 +6339,52 @@ impl Player {
                 hard: self.hard_land,
             });
         }
+    }
+    /// PlayerStateWait::appear (0x48c824..0x48c968): ForceLand before
+    /// JustLand; shared consumers retain the established Land entry/pose.
+    pub(super) fn appear_ground_wait(&mut self, arrival: Vec3) {
+        if self.mode == Move::SpinDrop {
+            self.go(Move::Idle, "LandDownFall");
+            return;
+        }
+        if self.force_land_on_ground() {
+            self.change(Move::Idle, "LandStiffen", |p| {
+                p.set_h(Vec3::ZERO);
+                p.events.push(Fx::Land { hard: true });
+            });
+            return;
+        }
+        // The landing clip depends on the clip the jump was playing
+        // (`PlayerStateWait::exeLand`); landing stops the player.
+        let anim = match self.clip() {
+            "JumpTurn" => "LandTurn",
+            "JumpBroad" => "LandRolling",
+            "Jump3" => "LandJump3",
+            _ => "Land",
+        };
+        // (The triple jump's landing gives the body no sway.)
+        if anim != "LandJump3" {
+            self.wait_state_appears_after_landing(arrival);
+        }
+        // Wait::appear (0x48c824) sets the arrival's horizontal
+        // velocity along the new floor before adding Gravity.
+        // Keep its horizontal part in the ground-state storage;
+        // ground_following supplies the normal pull.
+        let up = self.ground_normal_or_up();
+        if up != Vec3::Y {
+            // The slope Land path keeps full velocity until its
+            // snap step. Flat Land retains its existing stop.
+            let along = along_vector_normal_h(arrival, Vec3::Y, up);
+            self.set_h(along);
+            self.v.y = 0.;
+            self.pull = t::GRAVITY;
+        }
+        self.change(Move::Idle, anim, |p| {
+            if p.grounded {
+                p.set_h(Vec3::ZERO);
+            }
+        });
+        self.events.push(Fx::Land { hard: false });
     }
     fn collide(&mut self, o: &Orders, scene: &Course) {
         // DeadFire disables movement collision; retain the last contact report.

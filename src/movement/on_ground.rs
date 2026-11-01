@@ -3,6 +3,7 @@
 //! existing appear/first-step code still owns its animation and movement.
 use super::*;
 
+#[derive(Debug, PartialEq)]
 pub(super) enum GroundNerve {
     Wait,
     Run,
@@ -39,7 +40,8 @@ impl Player {
             self.start_slope_slide();
             return GroundNerve::Changed;
         }
-        if self.try_force_rolling() {
+        if self.on_ground_force_rolling() {
+            self.start_forced_rolling();
             return GroundNerve::Changed;
         }
         // +0x450 SandSink, +0x498 PoleClimb, +0x408 GrabCeil, in that order
@@ -49,12 +51,10 @@ impl Player {
             self.appear_sand_sink();
             return GroundNerve::Changed;
         }
-        self.ground_pole_climb(o, scene);
-        if self.nerve.deferred {
+        if self.ground_pole_climb(o, scene) {
             return GroundNerve::Changed;
         }
-        self.ground_grab_ceil(scene);
-        if self.nerve.deferred {
+        if self.ground_grab_ceil(scene) {
             return GroundNerve::Changed;
         }
         // +0x3e8 EnableStandUp, then judgeAndResetReturnTrue(+0x4a0)
@@ -72,10 +72,7 @@ impl Player {
         // gates (judge 0x45b784). +0x480 StartSquat, then cached ForceLand
         // (+0x3f0) vetoes it (0x421a1c..0x421a68).
         let force_land = self.force_land_on_ground();
-        if self.is_collided_ground()
-            && (self.force_run.is_active()
-                || !force_land && (self.is_move() || self.auto_run_skate()))
-        {
+        if self.ground_start_run() {
             return GroundNerve::Run;
         }
         if !self.is_carry() && o.crouch && !self.force_run.is_active() && !force_land {
@@ -98,26 +95,48 @@ impl Player {
                 self.start_squat();
             }
             GroundNerve::Run => {
-                self.run_frames = t::BRAKE_ON_COUNTER;
                 self.pull = GRAVITY_MOVE;
-                self.run_appear(false);
+                self.run_appear(self.is_just_land());
+                // GroundMove::appear writes tangent minus normal*GravityMove
+                // (0x416b1c..0x416b5c). Store its pull separately like stand().
+                self.v.y = 0.;
+                // calcInitBrakeOnCounter (0x416be8), rather than assuming a
+                // full brake counter even when the previous state stopped.
+                let up = self.collided_ground_normal();
+                self.ground
+                    .reset(self.velocity_in_plane(up), self.pose_axes().1, up);
+                self.run_frames = self.ground.brake_counter as u32;
                 self.go(Move::Run, "Move");
             }
             GroundNerve::Wait => {
                 if from == Move::RollEnd {
                     self.wait_state_appears_after_roll(self.v);
                 }
-                self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
+                if self.force_land_on_ground() || self.is_just_land() && !self.model_2d() {
+                    self.appear_ground_wait(self.v);
+                } else {
+                    self.change(Move::Idle, "Wait", |p| p.set_h(Vec3::ZERO));
+                }
             }
         }
+    }
+
+    /// PlayerJudgeStartRun::judge (0x45b784), shared with Squat's StandUp child.
+    pub(super) fn ground_start_run(&self) -> bool {
+        self.is_collided_ground()
+            && (self.force_run.is_active()
+                || !self.force_land_on_ground() && (self.is_move() || self.auto_run_skate()))
     }
 
     /// ForceLand: LongFall (0x45a004) or action trigger 11 (0x4595dc).
     /// Bind/hack and nonvertical-gravity compositions retain their existing
     /// port limits; do not manufacture a bind/hack sensor from a movement mode.
-    fn force_land_on_ground(&self) -> bool {
+    pub(super) fn force_land_on_ground(&self) -> bool {
         self.mode == Move::SpinDrop
-            || !self.is_dead() && !self.model_2d() && self.fall.distance >= t::LONG_FALL
+            || !self.is_dead()
+                && !self.model_2d()
+                && self.bound_to.is_none()
+                && self.fall.distance >= t::LONG_FALL
     }
 
     /// rs::cutVerticalVelocityGroundNormal (0x55ea50..0x55eaa0) calls
@@ -132,5 +151,117 @@ impl Player {
         if self.is_carry() {
             self.carry.reconstruction_release_unavailable = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grounded() -> Player {
+        Player {
+            grounded: true,
+            ground_contact: 2,
+            v: Vec3::new(10., -3., 0.),
+            ..default()
+        }
+    }
+
+    #[test]
+    fn original_priority_and_velocity_cut() {
+        let scene = Course::default();
+        let crouch = Orders {
+            crouch: true,
+            ..default()
+        };
+        let mut p = grounded();
+        p.grounded = false;
+        p.pre_jump = 4;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Changed);
+        assert_eq!(p.mode, Move::Fall);
+        assert_eq!(p.pre_jump, 4, "no ground means no jump-buffer consumption");
+
+        let mut p = grounded();
+        p.v.y = 3.;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Changed);
+        assert_eq!(p.mode, Move::Fall, "departing contact is not on-ground");
+
+        let mut p = grounded();
+        p.ceiling.enable_stand_up = false;
+        p.pre_jump = 4;
+        p.tilt = 1.;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Squat);
+        assert_eq!(p.pre_jump, 4, "stand-up gate precedes jump");
+        assert_eq!(p.v, Vec3::new(0., -3., 0.));
+
+        let mut p = grounded();
+        p.tilt = 1.;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Run);
+        p.pre_jump = 4;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Jump);
+        assert_eq!(p.pre_jump, 0);
+
+        let mut p = grounded();
+        p.mode = Move::LongJump;
+        p.ground_contact = 1;
+        let incoming = p.v;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Squat);
+        assert_eq!(p.v, incoming, "just-land LongJump alone skips the cut");
+        p.ground_contact = 2;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Squat);
+        assert_eq!(p.v, Vec3::new(0., -3., 0.));
+
+        let mut p = grounded();
+        p.fall.distance = t::LONG_FALL;
+        p.tilt = 1.;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Wait);
+        p.pre_jump = 4;
+        assert_eq!(p.ground_nerve(&crouch, &scene), GroundNerve::Jump);
+    }
+
+    #[test]
+    fn environment_priorities_precede_jump_and_crouch() {
+        let scene = Course::default();
+        let o = Orders {
+            crouch: true,
+            ..default()
+        };
+        for (floor, expected) in [
+            ("Slide", Move::SlopeSlide),
+            ("Rolling", Move::Roll),
+            ("SandSink", Move::SandWait),
+        ] {
+            let mut p = grounded();
+            p.mesh_ground = Some(Vec3::new(0., 0.8, -0.6));
+            p.touched.floor = Some(crate::geometry::CollisionCodes {
+                floor: floor.into(),
+                ..default()
+            });
+            p.pre_jump = 4;
+            p.set_nerve_on_ground(&o, &scene);
+            assert_eq!(p.mode, expected, "{floor} precedes buffered jump");
+            assert_eq!(p.pre_jump, 4);
+        }
+
+        let mut p = grounded();
+        p.grounded = false;
+        p.force_run.setup(2, 38.);
+        p.water_finder.found = true;
+        p.water_finder.distance = 0.;
+        assert_eq!(
+            p.ground_nerve(&o, &scene),
+            GroundNerve::Run,
+            "surface-run precedes the absent-ground Fall branch"
+        );
+
+        let mut p = grounded();
+        p.mesh_ground = Some(Vec3::new(0., 0.25, -0.968_245_86));
+        assert!(!p.fire_run_angle_contact());
+        p.force_run.setup(2, 38.);
+        assert_eq!(
+            p.ground_nerve(&o, &scene),
+            GroundNerve::Run,
+            "positive ForceRun uses contact instead of the standing-angle gate"
+        );
     }
 }

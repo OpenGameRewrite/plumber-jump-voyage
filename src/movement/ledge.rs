@@ -1060,8 +1060,6 @@ impl Player {
         self.start_clip("Fall");
         self.interpolation_cleared = true;
     }
-
-
 }
 
 #[cfg(test)]

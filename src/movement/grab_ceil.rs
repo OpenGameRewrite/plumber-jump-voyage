@@ -320,12 +320,12 @@ impl Player {
     }
 
     /// Direct judge/setup in setNerveOnGround (0x421978..0x4219ac).
-    pub(super) fn ground_grab_ceil(&mut self, scene: &Course) {
+    pub(super) fn ground_grab_ceil(&mut self, scene: &Course) -> bool {
         if self.is_carry() {
-            return;
+            return false;
         }
         let Some(mesh) = scene.catch_mesh() else {
-            return;
+            return false;
         };
         let grab = |codes: &Option<crate::geometry::CollisionCodes>| {
             codes.as_ref().is_some_and(|c| c.floor == "GrabCeil")
@@ -338,7 +338,7 @@ impl Player {
         {
             let velocity = pose_math::try_normalize_or_zero(self.v.with_y(0.)).0;
             if pose_math::dot(velocity, wall.normal) > 0. {
-                return;
+                return false;
             }
             grab_ceil_find::wall(&mesh, -wall.normal, wall.position)
         } else if let Some(ceiling) = self
@@ -355,13 +355,13 @@ impl Player {
             .filter(|_| grab(&self.touched.floor))
         {
             if pose_math::dot(self.v, ground.normal) > 0. {
-                return;
+                return false;
             }
             grab_ceil_find::no_wall(&mesh, ground.normal, ground.position, self.facing)
         } else {
             None
         };
-        let Some(mut fit) = fit else { return };
+        let Some(mut fit) = fit else { return false };
         let moving = pose_math::dot(self.v, fit.front);
         let orientation = if moving.abs() > 3. {
             moving
@@ -465,6 +465,7 @@ impl Player {
         self.sub_anim = None;
         self.upper_catch = None;
         self.grab_ceil_follow();
+        true
     }
 
     fn grab_ceil_follow(&mut self) {

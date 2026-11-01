@@ -264,21 +264,22 @@ impl Player {
     }
 
     /// Direct judge/setup in setNerveOnGround (0x421938..0x421974).
-    pub(super) fn ground_pole_climb(&mut self, o: &Orders, scene: &Course) {
+    pub(super) fn ground_pole_climb(&mut self, o: &Orders, scene: &Course) -> bool {
         if self.is_carry() {
-            return;
+            return false;
         }
         let Some(mesh) = scene.catch_mesh() else {
-            return;
+            return false;
         };
         let Some(touch) = self.pole_touch() else {
-            return;
+            return false;
         };
         let Some(fit) = find_start_pos(&mesh, &touch, CATCH_RANGE, CATCH_RANGE_MAX, UP_MARGIN)
         else {
-            return;
+            return false;
         };
         self.start_pole(fit, o);
+        true
     }
 
     /// `PlayerJudgePoleClimb::update` up to the finder: which surface the body

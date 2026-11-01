@@ -108,6 +108,12 @@ impl Player {
         if self.nerve.deferred || !self.on_ground_force_rolling() {
             return false;
         }
+        self.start_forced_rolling();
+        true
+    }
+
+    /// Actor helper 0x4229d0, also called directly by setNerveOnGround.
+    pub(super) fn start_forced_rolling(&mut self) {
         let down = vector_lib::calc_dir_slide(Vec3::NEG_Y, self.collided_ground_normal());
         if down != Vec3::ZERO {
             self.set_pose(pose_math::quat_front_up(
@@ -116,7 +122,6 @@ impl Player {
             ));
         }
         self.start_roll(RollStart::Forced);
-        true
     }
 
     pub(super) fn auto_run_skate(&self) -> bool {

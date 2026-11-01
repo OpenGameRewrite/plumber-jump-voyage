@@ -339,7 +339,7 @@ impl Player {
                 if self.ground_lost >= 5 {
                     self.fire_choose(Move::FireFall);
                 } else if self.frame >= 60 {
-                    self.set_nerve_on_ground(o, scene); // exeDamageFire 0x4265a0.
+                    self.end_burn();
                 }
             }
             Move::FireFall => {
@@ -382,7 +382,7 @@ impl Player {
         self.soot.record_damage_fire();
         if matches!(self.mode, Move::FireRun | Move::FireFall) {
             if self.fire.frames >= 60 {
-                self.set_nerve_on_ground(o, scene); // exeDamageFire 0x4265a0.
+                self.end_burn();
             }
             self.fire.frames += 1;
         }
