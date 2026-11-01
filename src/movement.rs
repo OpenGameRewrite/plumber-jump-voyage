@@ -3900,11 +3900,16 @@ impl Player {
             if !self.judge_enable_stand_up() {
                 self.stand_up_blocked();
             } else if self.ground_start_run() || self.anim_done(clip::SQUAT_END) {
-                self.v.y = if self.grounded {
-                    -t::GRAVITY
+                if self.grounded {
+                    // StandUp stopped horizontal travel on entry. waitGround
+                    // rebounds its normal pull before adding gravity again
+                    // (0x5656ec..0x56577c); keep only the port's separate pull,
+                    // rather than reusing the snapshot's normal XZ as travel.
+                    self.set_h(Vec3::ZERO);
+                    self.v.y = -t::GRAVITY;
                 } else {
-                    (self.v.y - t::GRAVITY).max(-t::FALL_MAX)
-                };
+                    self.v.y = (self.v.y - t::GRAVITY).max(-t::FALL_MAX);
+                }
                 self.set_nerve_on_ground(o, scene); // exeSquat 0x422ae4.
             } else {
                 self.stand(o);

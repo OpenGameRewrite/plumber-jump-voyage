@@ -494,6 +494,10 @@ impl Player {
     /// nerve), then the nerve's step count moves on (a nerve that was chosen in
     /// the step starts its own count at the next one).
     pub(super) fn pole_climb(&mut self, o: &Orders, scene: &Course) {
+        // NerveStateCtrl::updateCurrentState (0x959968) reports no completion
+        // after tryEndCurrentState (0x959a90) removed the child. Its persistent dead
+        // byte is not another completion event (notably after snapshot injection).
+        let child_was_active = !self.pole.killed;
         let mesh = scene.catch_mesh();
         let mesh = mesh.as_deref();
         if self.nerve.step == 0 {
@@ -517,7 +521,7 @@ impl Player {
         if self.pole.chosen == chosen {
             self.pole.steps += 1;
         }
-        if self.pole.killed {
+        if child_was_active && self.pole.killed {
             self.set_nerve_on_ground(o, scene); // exePoleClimb 0x424b4c.
         }
     }

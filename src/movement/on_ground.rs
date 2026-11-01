@@ -275,4 +275,18 @@ mod tests {
             "positive ForceRun uses contact instead of the standing-angle gate"
         );
     }
+
+    #[test]
+    fn completed_stand_up_does_not_reapply_the_recorded_normal_pull_as_travel() {
+        let mut p = grounded();
+        let normal = Vec3::new(0., 0.8, -0.6);
+        p.mesh_ground = Some(normal);
+        p.v = -normal * t::GRAVITY;
+        p.nerve.clear();
+        p.start_clip("SquatEnd");
+        p.anim.frame = clip::SQUAT_END as f32;
+        p.run(&Orders::default(), &Course::default());
+        assert_eq!(p.mode, Move::Idle);
+        assert_eq!(p.units_per_frame(), -normal * t::GRAVITY);
+    }
 }

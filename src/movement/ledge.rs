@@ -644,6 +644,10 @@ impl Player {
     /// nerve), then the nerve's step count moves on (a nerve that was chosen
     /// in the step starts its own count at the next one).
     pub(super) fn wall_catch(&mut self, o: &Orders, scene: &Course) {
+        // NerveStateCtrl::updateCurrentState (0x959968) reports no completion
+        // after tryEndCurrentState (0x959a90) removed the child. Its persistent dead
+        // byte is not another completion event (notably after snapshot injection).
+        let child_was_active = !self.catch.killed;
         let mesh = scene.catch_mesh();
         let mesh = mesh.as_deref();
         let chosen = self.catch.chosen;
@@ -659,7 +663,7 @@ impl Player {
         if self.catch.chosen == chosen {
             self.catch.steps += 1;
         }
-        if self.catch.killed {
+        if child_was_active && self.catch.killed {
             self.set_nerve_on_ground(o, scene); // exeWallCatch 0x424830 / 0x424a50.
         }
     }
