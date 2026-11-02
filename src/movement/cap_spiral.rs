@@ -12,10 +12,15 @@
 //! direction turned a quarter of the way to the side the spiral circles: the sum of the direction
 //! and the unit vector across it and the up axis, normalised, so 45 degrees round.
 //!
+//! Each step the nerve calls the throw nerves' terrain helper (`0x401d0c`, `cap_ground`) after the
+//! reflect and wall reactions, and then turns the curve's front (`+0x300`) with the cap's up axis
+//! the helper eased (`align_curve_front`); the circle's axis and the point it circles are the
+//! cap's up axis (`+0x24c`), which is the world's up unless the throw began on a tilted floor.
+//!
 //! Not ported: the wall reaction of the spiral (`tryCollideWallReactionSpiral`, which sends the
-//! cap into its rebound nerve), the ground-height keeping call at the start of each step
-//! (`0x401d0c`, which leaves a cap flying 70 centimetres over a flat floor alone), the five
-//! `SpiralTail` hit sensors that follow the cap and what they hit.
+//! cap into its rebound nerve) and the five `SpiralTail` hit sensors (`validateHitSensor` on the
+//! tenth step, then each follows the cap's recent positions: the sensors have no counterpart in
+//! the rewrite's contact model, so what the tail hits is not produced).
 use super::joint_math::ease_out;
 use super::pose_math::{
     DEGREES_TO_RADIANS, along_vector_normal_h, cosf, cross, normalize, rotate_by_quat, sinf,
@@ -81,11 +86,17 @@ pub struct Step {
     pub front: Option<Vec3>,
 }
 
+/// The curve's front (`+0x300`) carried over from the cap's up axis before the terrain helper to
+/// the one after it (`al::alongVectorNormalH` right after the helper's call).
+pub fn align_curve_front(curve_front: Vec3, previous_up: Vec3, up: Vec3) -> Vec3 {
+    along_vector_normal_h(curve_front, previous_up, up)
+}
+
 /// One step (`step` counts the steps of the nerve already run) of `exeThrowSpiral` for a cap at
-/// `spot`, circling `pivot` (70 above the player), starting along `curve_front`.
-pub fn step(step: u32, spot: Vec3, pivot: Vec3, curve_front: Vec3, side: f32) -> Step {
-    let curve_front = along_vector_normal_h(curve_front, UP, UP);
-    let axis = Vec3::new(side * UP.x, side * UP.y, side * UP.z);
+/// `spot`, circling `pivot` (the player's position `up` the throw height) about the cap's `up`
+/// axis, starting along `curve_front`.
+pub fn step(step: u32, spot: Vec3, pivot: Vec3, curve_front: Vec3, up: Vec3, side: f32) -> Step {
+    let axis = Vec3::new(side * up.x, side * up.y, side * up.z);
     let counted = step as f32 + 1.;
     let later = step.saturating_sub(9) as f32;
     let early = (step + 1).min(10) as f32;
@@ -118,7 +129,7 @@ pub fn step(step: u32, spot: Vec3, pivot: Vec3, curve_front: Vec3, side: f32) ->
         Vec3::new(target.x - spot.x, target.y - spot.y, target.z - spot.z),
         SPEED_MAX,
     );
-    let (across, found) = super::pose_math::try_normalize_or_zero(verticalize_vec(UP, velocity));
+    let (across, found) = super::pose_math::try_normalize_or_zero(verticalize_vec(up, velocity));
     Step {
         velocity,
         front: found.then_some(across),

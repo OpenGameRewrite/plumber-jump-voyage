@@ -853,7 +853,7 @@ impl Cap {
             CapNerve::ThrowBrake => self.throw_brake(&mut events, world),
             CapNerve::ThrowRolling => self.throw_rolling(),
             CapNerve::ThrowRollingBrake => self.throw_rolling_brake(),
-            CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT),
+            CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT, world.mesh),
             CapNerve::ThrowStay => self.throw_stay(world, &mut events),
             CapNerve::Trample | CapNerve::TrampleReturn => self.trample(&mut events),
             CapNerve::Rebound => self.rebound(),
@@ -1168,22 +1168,32 @@ impl Cap {
         .map(|contact| contact.normal)
     }
     /// `HackCap::exeThrowSpiral`: the cap chases a point that circles the player (see
-    /// `cap_spiral`) and returns after 105 steps.
-    fn throw_spiral(&mut self, feet: Vec3) -> Option<CapNerve> {
+    /// `cap_spiral`) and returns after 105 steps. The order is the nerve's: the point the cap
+    /// circles, the terrain helper (`0x401d0c`, as the other throw nerves call it, with the
+    /// curve's front carried along with the up axis it eases), then the step.
+    fn throw_spiral(&mut self, feet: Vec3, mesh: Option<&TriangleMesh>) -> Option<CapNerve> {
         if self.step == 0 {
             self.curve_front = self.front;
             self.play("FlyingWaitSpiral");
             self.velocity = Vec3::ZERO;
         }
-        // The ground helper turns the cap to face back along the way it moved last step.
+        // The point it circles follows the player (`+0x2f4`), above it along the cap's up axis.
+        let pivot = Vec3::new(
+            param::THROW_HEIGHT * self.up.x + feet.x,
+            param::THROW_HEIGHT * self.up.y + feet.y,
+            param::THROW_HEIGHT * self.up.z + feet.z,
+        );
+        let previous_up = self.up;
+        self.follow_terrain(mesh);
+        self.curve_front = cap_spiral::align_curve_front(self.curve_front, previous_up, self.up);
+        // The helper ends by turning the cap to face back along the way it moved last step.
         self.pose.face_back_along(self.front);
-        // The point it circles follows the player (`+0x2f4`).
-        let pivot = Vec3::new(feet.x, param::THROW_HEIGHT + feet.y, feet.z);
         let step = cap_spiral::step(
             self.step,
             self.spot,
             pivot,
             self.curve_front,
+            self.up,
             self.spiral_side,
         );
         self.velocity = step.velocity;

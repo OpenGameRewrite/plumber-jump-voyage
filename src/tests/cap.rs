@@ -6,6 +6,7 @@ pub(super) fn run() {
     the_return_after_a_trample_leaves_along_the_cap_pose();
     the_catch_is_the_sensor_contact();
     the_spiral_circles_the_player();
+    the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
     the_throw_down_rolls_along_the_floor();
 }
 
@@ -107,6 +108,45 @@ fn the_spiral_circles_the_player() {
         );
         assert_eq!((name, clip), ("ThrowSpiral", "FlyingWaitSpiral"));
     }
+}
+
+/// `exeThrowSpiral` calls the throw nerves' terrain helper (0x401d0c) every step, as `exeThrow`
+/// and `exeThrowBrake` do (its step counter counts up while the cap is not low over the ground),
+/// and circles about the cap's own up axis, which the helper eases toward the world's: the front
+/// the step leaves is across that axis, not across the world's.
+#[cfg_attr(test, test)]
+fn the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis() {
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: None,
+        water: None,
+        targets: &[],
+    };
+    let tilted = Vec3::new(0.6, 0.8, 0.);
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::new(0., 0., 1.),
+            kind: Throw::Spin,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: 1.,
+            up: tilted,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    assert_eq!(cap.ground_counter, 0);
+    for step in 1..=3 {
+        cap.update(&world);
+        assert_eq!(cap.ground_counter, step);
+        // The front the spiral keeps is across the up axis of this step's end.
+        assert!(cap.front.dot(cap.up).abs() < 1e-3, "{:?}", cap.front);
+    }
+    // The easing starts at the third step of the helper (a share of the way that grows from the
+    // second): the up axis is no longer the one the throw began with.
+    assert!(cap.up.dot(Vec3::Y) > tilted.dot(Vec3::Y));
 }
 
 /// The catch is the contact of the cap's `Catch` sensor (100) with the player's
