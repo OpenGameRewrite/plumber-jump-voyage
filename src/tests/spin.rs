@@ -8,6 +8,7 @@ pub(super) fn run() {
     the_spin_jump_leaves_with_its_own_limits();
     the_spin_drop_restarts_the_jump();
     a_held_spin_drop_lands_in_the_drop_landing();
+    a_spin_ended_with_the_stick_held_hands_over_to_a_fresh_run();
 }
 
 fn floor() -> Course {
@@ -248,4 +249,32 @@ fn a_held_spin_drop_lands_in_the_drop_landing() {
     }
     assert!(deepest >= -t::SPIN_DOWN_FALL_MAX);
     assert_eq!(p.phase_clip(), "LandDownFall");
+}
+
+/// `exeGroundSpin3D` (0x4803ac): the spin's end with the stick held sets `Run3D`, whose Run
+/// child appears with the ground move control's `appear`: the velocity the spin left is laid
+/// into the plane of the floor (`run_appear`), on a slope as well as a level floor, and the run
+/// cycle starts on the next step.
+#[cfg_attr(test, test)]
+fn a_spin_ended_with_the_stick_held_hands_over_to_a_fresh_run() {
+    let scene = floor();
+    let held = Orders {
+        stick: Vec2::new(0., -1.),
+        direction: Vec2::new(0., 1.),
+        ..default()
+    };
+    let mut p = just_spinning(&scene);
+    p.read_input(&held);
+    p.frame = t::GROUND_SPIN_FRAMES;
+    p.v = Vec3::new(0., 0., 5.);
+    // A floor tilted toward +x: the appearance projects the velocity across the floor's normal.
+    let up = Vec3::new(0.6, 0.8, 0.);
+    p.mesh_ground = Some(up);
+    p.ground_spin(&held);
+    assert_eq!(p.mode, Move::Walk);
+    assert_eq!(p.nerve.pending_clip(), Some("Move"));
+    let (travel, normal, set) = p.run_up.expect("the run's appearance recorded the plane");
+    assert_eq!((travel, normal), (Vec2::new(p.v.x, p.v.z), up));
+    // The velocity across the normal, less the pull along it.
+    assert!((set.dot(up) + GRAVITY_MOVE).abs() < 1e-4, "{set:?}");
 }

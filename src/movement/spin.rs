@@ -119,10 +119,16 @@ impl Player {
         }
         if self.frame >= t::GROUND_SPIN_FRAMES {
             if self.is_move() {
-                // `exeGroundSpin3D`: with the stick held the run state carries
-                // on in its run nerve. GUESS: it restarts the run clip with the
-                // speed the spin left (no recording ends a spin this way).
+                // `exeGroundSpin3D` (0x4803ac): the child ended and the stick is held,
+                // so the run state sets its `Run3D` nerve (0x4801cc) and not its
+                // own kill. The nerve's Run child appears at the end of this step
+                // (`PlayerStateRunHakoniwa::appear` 0x47e858): the ground move
+                // control's `appear` (0x416a7c) lays the velocity the spin left into
+                // the floor plane and pulls it down, and the run's first step
+                // (`run_step`'s step 0, started by the `Move` clip) resets the steering
+                // and the run cycle. (No recording ends a spin this way.)
                 self.pull = GRAVITY_MOVE;
+                self.run_appear(false);
                 self.defer(Move::Walk, "Move", |_| {});
             } else {
                 // The state ends and the actor chooses the wait state.
