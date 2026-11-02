@@ -573,7 +573,7 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(player.anim.frame, 0.);
-        player.begin_step();
+        player.begin_step(player.acting_nerve());
         assert_eq!(player.anim.frame, 1.);
         player.model_switch_row = true;
         player.anim.frame = 56.;
@@ -583,7 +583,7 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(player.anim.frame, 56.);
-        player.begin_step();
+        player.begin_step(player.acting_nerve());
         assert_eq!(player.anim.frame, 57.);
     }
 }

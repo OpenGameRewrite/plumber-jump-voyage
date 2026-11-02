@@ -1064,6 +1064,14 @@ pub enum Fx {
         forward: bool,
     },
 }
+/// The actor nerve whose `exe` the binary runs in a frame, and whether it is that nerve's first
+/// step. A state a sensor phase chooses in the same frame starts next frame, so the cap action
+/// history restores of this frame still belong to the nerve that was running.
+#[derive(Clone, Copy, Debug)]
+struct ActingNerve {
+    name: &'static str,
+    first_step: bool,
+}
 /// Clip the presentation should play: an original animation name, or "Move"
 /// for the speed-blended walk/run/dash cycle. `serial` changes on restarts.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1117,6 +1125,9 @@ struct ThrowControl {
     /// by `appear` for an air start and cleared by `control` on `rs::isOnGround`, and stays
     /// clear): the actor then restores the cap actions in every step.
     ground_seen: bool,
+    /// The ground spin's step ended the state (`updateNerveState` answered true in
+    /// `exeSpinCap`, 0x4239c4), which skips the actor's history restore of that step.
+    child_ended: bool,
     /// The direction the cap leaves along, fixed on the state's first step.
     dir: Option<Vec3>,
     /// The up axis the cap is handed with it, when it is not the world's (the swim's cap throw on
@@ -3168,11 +3179,10 @@ impl Player {
     }
     /// First step of a state chosen last step: start its clip, then do the
     /// work only its first step does.
-    fn begin_step(&mut self) {
+    fn begin_step(&mut self, acting: ActingNerve) {
         self.counter_restarted = false;
         self.run_start_effect = None;
         self.roll_forget_effect_call();
-        let first_step = self.nerve.step == 0;
         self.advance_clips();
         let (clip, work) = self.nerve.start();
         self.puppet_first_row = std::mem::take(&mut self.puppet_clip_pending) && clip.is_some();
@@ -3190,7 +3200,7 @@ impl Player {
         if let Some(work) = work {
             work(self);
         }
-        self.refresh_cap_jump(first_step);
+        self.refresh_cap_jump(acting);
     }
     /// `PlayerCapActionHistory::clearLandLimit`: the cap jump and the air catch's pop are both
     /// possible again.
@@ -3207,9 +3217,11 @@ impl Player {
     ///   step of `exeWait` (0x422480), `exeSquat` (0x422aac), `exeRun` (0x422ff0),
     ///   `exeSandSink` (0x4256f4) and `exeDamage` (0x425e90); every step of `exeRolling`
     ///   (0x423754), `exeHipDrop` (0x424bc4), `exeHeadSliding` (0x424f30) and `exeDamageFire`
-    ///   (0x426340) on which `rs::isCollidedGround` holds; every step of `exeSpinCap` while its
-    ///   state byte +0x78 is clear (0x4239cc..0x4239d8: ground start, or the ground touched
-    ///   since).
+    ///   (0x426340) on which `rs::isCollidedGround` holds, all of them before their state's
+    ///   `updateNerveState` (`refresh_cap_jump`, keyed on the nerve running at the start of the
+    ///   frame); every step of `exeSpinCap` while its state byte +0x78 is clear (0x4239cc..0x4239d8:
+    ///   ground start, or the ground touched since), but after `updateNerveState` and not when
+    ///   that ended the state (0x4239c4; `restore_after_spin_cap`).
     /// - `clearLandLimit` (0x42ddb0) sets both bytes: every step of `exeSwim` (0x425b38; only
     ///   its wall-history reset is first-step gated) and the first step of `exeWallCatch`
     ///   (0x4247e4), `exeGrabCeil` (0x424ab4), `exePoleClimb` (0x424b28), `exeBind` (0x426ca4)
@@ -3221,22 +3233,18 @@ impl Player {
     /// step; the water-exit state does not exist) and `endPlayerPuppet` (0x421f78,
     /// `clearLandLimit`, unguarded; reached from `endDemoPuppetable` 0x421e44 and
     /// `endDemoShineGet` 0x4221fc, the demo puppets, which the port has no state for).
-    fn refresh_cap_jump(&mut self, first_step: bool) {
-        let name = self.actor_name();
+    fn refresh_cap_jump(&mut self, acting: ActingNerve) {
+        let ActingNerve { name, first_step } = acting;
         if name == "SpinCap" && self.is_on_ground_by(self.v) {
             self.throwing.ground_seen = true;
         }
         let stand_angle_call = match name {
             "Wait" | "Squat" | "Run" | "SandSink" | "Damage" => first_step,
             "Rolling" | "HipDrop" | "HeadSliding" | "DamageFire" => self.is_collided_ground(),
-            "SpinCap" => !self.throwing.in_air || self.throwing.ground_seen,
             _ => false,
         };
         if stand_angle_call {
-            self.cap_pop_possible = true;
-            if self.is_on_ground_less_angle(t::STAND_ANGLE_MIN) {
-                self.cap_jump_possible = true;
-            }
+            self.restore_stand_angle_cap_actions();
         }
         let land_limit_call = match name {
             "Swim" => true,
@@ -3248,6 +3256,32 @@ impl Player {
         }
         if name == "WallAir" && first_step {
             self.cap_pop_possible = true;
+        }
+    }
+    /// `exeSpinCap` asks for its restore after `updateNerveState` (0x4239c0) and skips it when
+    /// that answered true, the ground spin having ended (0x4239c4); the rest of the actors ask
+    /// before their state's update (`refresh_cap_jump`).
+    fn restore_after_spin_cap(&mut self, acting: ActingNerve) {
+        let child_ended = std::mem::take(&mut self.throwing.child_ended);
+        if acting.name == "SpinCap"
+            && !child_ended
+            && (!self.throwing.in_air || self.throwing.ground_seen)
+        {
+            self.restore_stand_angle_cap_actions();
+        }
+    }
+    /// `clearLandLimitStandAngle`: the pop always, the cap jump on `isOnGroundLessAngle`.
+    fn restore_stand_angle_cap_actions(&mut self) {
+        self.cap_pop_possible = true;
+        if self.is_on_ground_less_angle(t::STAND_ANGLE_MIN) {
+            self.cap_jump_possible = true;
+        }
+    }
+    /// The actor nerve whose `exe` runs this frame, as the history restores read it.
+    fn acting_nerve(&self) -> ActingNerve {
+        ActingNerve {
+            name: self.actor_name(),
+            first_step: self.nerve.step == 0,
         }
     }
     fn set_h(&mut self, h: Vec3) {
@@ -3377,6 +3411,9 @@ impl Player {
         self.read_input(&o);
         self.update_input_2d(scene);
         self.landing_speed = 0.;
+        // The nerve whose `exe` the binary runs in this frame: the sensor phases below may choose
+        // another one, which starts next frame.
+        let acting = self.acting_nerve();
         self.nerve.deferred = false;
         self.nerve.renewed = false;
         self.sensor_restart = false;
@@ -3423,7 +3460,7 @@ impl Player {
         if advance_sources {
             self.dokan_sensor_phase(scene, &o);
         }
-        self.begin_step();
+        self.begin_step(acting);
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
             && !(self.mode == Move::Throw && self.grounded)
         {
@@ -3443,6 +3480,7 @@ impl Player {
             self.judge_in_water(scene);
             self.judge_rolling_wall_hit_down();
         }
+        self.restore_after_spin_cap(acting);
         self.update_sand_affect(scene);
         self.finish_carry_release(scene);
         let moved = self.v;
@@ -5770,6 +5808,8 @@ impl Player {
         } else if o.crouch {
             self.start_squat();
         } else if self.anim_done(clip::throw(self.anim.name)) {
+            // The state ended: `updateNerveState` answers true and skips the history restore.
+            self.throwing.child_ended = true;
             self.set_nerve_on_ground(o, scene); // exeSpinCap 0x423b18.
         }
     }

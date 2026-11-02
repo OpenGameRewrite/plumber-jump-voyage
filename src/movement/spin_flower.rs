@@ -91,7 +91,7 @@ mod checks {
         p.request_spin_flower(60.);
         assert!(!p.combo_kept);
         assert_eq!(p.combo.count, 0);
-        p.begin_step();
+        p.begin_step(p.acting_nerve());
         p.spin_flower_step();
         assert_eq!(p.nerve_name().name, "Jump/JumpSpinFlower");
         assert_eq!(p.anim.name, "SpinJumpStart");

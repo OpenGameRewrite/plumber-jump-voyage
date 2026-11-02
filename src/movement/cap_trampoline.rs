@@ -249,7 +249,7 @@ mod checks {
             ..default()
         };
         player.request_hip_drop_reflect();
-        player.begin_step();
+        player.begin_step(player.acting_nerve());
         assert_eq!(player.mode, Move::Jump);
         assert_eq!(player.v.y, 35.);
         assert_eq!(player.gravity, 1.5);

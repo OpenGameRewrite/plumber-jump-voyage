@@ -11,6 +11,7 @@ pub(super) fn run() {
     the_pop_is_its_own_state();
     history_restores_follow_their_callers_guards();
     the_spin_cap_restores_until_its_air_start_touches_the_ground();
+    the_history_restores_belong_to_the_nerve_that_ran_and_the_spin_cap_skips_its_end();
 }
 
 fn floor() -> Course {
@@ -385,7 +386,12 @@ fn spent(mode: Move) -> Player {
 fn restored(mut p: Player, first_step: bool) -> (bool, bool) {
     p.cap_jump_possible = false;
     p.cap_pop_possible = false;
-    p.refresh_cap_jump(first_step);
+    let acting = ActingNerve {
+        first_step,
+        ..p.acting_nerve()
+    };
+    p.refresh_cap_jump(acting);
+    p.restore_after_spin_cap(acting);
     (p.cap_jump_possible, p.cap_pop_possible)
 }
 
@@ -474,16 +480,46 @@ fn the_spin_cap_restores_until_its_air_start_touches_the_ground() {
         (true, true),
         "air start touching the ground"
     );
-    p.refresh_cap_jump(false);
+    p.refresh_cap_jump(p.acting_nerve());
     assert!(p.throwing.ground_seen);
     p.cap_jump_possible = false;
     p.cap_pop_possible = false;
     p.grounded = false;
-    p.refresh_cap_jump(false);
+    p.restore_after_spin_cap(p.acting_nerve());
     assert!(p.cap_pop_possible, "the latch outlives the ground contact");
     // Not on the ground the state started on: nothing restores without the contact.
     assert!(
         !p.cap_jump_possible,
         "the cap jump needs isOnGroundLessAngle"
     );
+}
+
+/// The restores are the `exe` of the nerve that ran this frame: a collided `exeRolling` restores
+/// (0x423754, before `updateNerveState`) even when a sensor phase chose another state in the
+/// same frame, and `exeSpinCap` skips its restore (0x4239c4) when its state ended in that step.
+#[cfg_attr(test, test)]
+fn the_history_restores_belong_to_the_nerve_that_ran_and_the_spin_cap_skips_its_end() {
+    let mut p = spent(Move::Roll);
+    let acting = p.acting_nerve();
+    assert_eq!(acting.name, "Rolling");
+    // A sensor phase chooses the fall before the step begins: the running nerve is still Rolling.
+    p.go(Move::Fall, "Fall");
+    p.refresh_cap_jump(acting);
+    assert!((p.cap_jump_possible, p.cap_pop_possible) == (true, true));
+    // The same frame keyed on the state chosen would restore nothing.
+    let mut chosen = spent(Move::Fall);
+    chosen.refresh_cap_jump(chosen.acting_nerve());
+    assert!((chosen.cap_jump_possible, chosen.cap_pop_possible) == (false, false));
+
+    let ground_spin = |child_ended: bool| {
+        let mut p = spent(Move::Throw);
+        p.throwing.in_air = false;
+        p.throwing.child_ended = child_ended;
+        let acting = p.acting_nerve();
+        p.restore_after_spin_cap(acting);
+        assert!(!p.throwing.child_ended, "the flag is for one step");
+        (p.cap_jump_possible, p.cap_pop_possible)
+    };
+    assert_eq!(ground_spin(false), (true, true));
+    assert_eq!(ground_spin(true), (false, false));
 }
