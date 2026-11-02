@@ -80,9 +80,36 @@ pub fn is_parallel_direction(a: Vec3, b: Vec3, limit: f32) -> bool {
     c.x.abs() <= limit && c.y.abs() <= limit && c.z.abs() <= limit
 }
 
+/// `al::calcDirVerticalAny(out, v)` (0x925c30, called from `getAxisAngleFromTwoVec`,
+/// MathUtil.cpp:1345): a unit vector across the unit vector `v`. It starts from the unit basis
+/// vector of the component of `v` with the smallest absolute value (strict comparisons: x only
+/// when it is under both others, otherwise y when it is under z, otherwise z, so ties go to
+/// z, then y), takes its part across `v` and normalizes that (zero under `NO_DIRECTION`).
+pub fn calc_dir_vertical_any(v: Vec3) -> Vec3 {
+    let magnitude = |c: f32| if c > 0. { c } else { -c };
+    let (ax, ay, az) = (magnitude(v.x), magnitude(v.y), magnitude(v.z));
+    let basis = if ax < az && ax < ay {
+        Vec3::X
+    } else if ay < az {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    let along = (v.x * basis.x + v.y * basis.y) + v.z * basis.z;
+    let across = Vec3::new(
+        basis.x - v.x * along,
+        basis.y - v.y * along,
+        basis.z - v.z * along,
+    );
+    if squared_length(across) < NO_DIRECTION {
+        return Vec3::ZERO;
+    }
+    scaled_by_inverse_length(across, squared_length(across).sqrt())
+}
+
 /// `al::getAxisAngleFromTwoVec`: the unit axis and the angle (radians) that turn `from` onto
-/// `to`; `None` when they are the same direction. Exactly opposed vectors turn by a half turn
-/// about an axis across them.
+/// `to`; `None` when they are the same direction. Opposed vectors turn by a half turn about
+/// `calc_dir_vertical_any(from)`.
 pub fn get_axis_angle_from_two_vec(from: Vec3, to: Vec3) -> Option<(Vec3, f32)> {
     let cosine = dot(from, to);
     let axis = cross(from, to);
@@ -91,9 +118,7 @@ pub fn get_axis_angle_from_two_vec(from: Vec3, to: Vec3) -> Option<(Vec3, f32)> 
         && axis.y.abs() <= OPPOSED_LIMIT
         && axis.z.abs() <= OPPOSED_LIMIT
     {
-        // (`al::calcDirVerticalAny`, whose choice of axis is not ported: any axis across `from`
-        // turns it onto its opposite. Guess: only ever reached by a ceiling-facing normal.)
-        return Some((from.any_orthonormal_vector(), std::f32::consts::PI));
+        return Some((calc_dir_vertical_any(from), std::f32::consts::PI));
     }
     if squared_length(axis) < NO_DIRECTION {
         return None;
@@ -326,7 +351,7 @@ pub fn make_quat_rotation_limit(from: Vec3, to: Vec3, limit: f32) -> Quat {
 
 /// `al::turnQuat(out, q, from, to, max_radians)`: `q` turned by the rotation that carries the
 /// direction `from` toward `to`, by at most `max_radians` (the shortest way; two opposed
-/// directions would take a random axis in the original, which is not ported), normalised.
+/// directions turn about `calc_dir_vertical_any(from)`), normalised.
 pub fn turn_quat(q: Quat, from: Vec3, to: Vec3, max_radians: f32) -> Quat {
     let (from, to) = (unit_or_zero(from), unit_or_zero(to));
     let (rx, ry, rz, rw) = match get_axis_angle_from_two_vec(from, to) {

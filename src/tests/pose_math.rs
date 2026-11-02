@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn run() {
     an_untouched_vector_has_no_axis_angle();
+    an_opposed_turn_takes_the_least_component_basis_axis();
     the_exes_pose_routines_agree_bit_for_bit();
     the_exes_follow_of_a_collision_part_agrees_bit_for_bit();
 }
@@ -57,6 +58,32 @@ fn same_quat_bits(a: Quat, b: Quat) -> bool {
 
 /// Cases from the executable's own functions, run in a local interpreter (see the fidelity
 /// folder's `gen_pose_cases.py`): `PJV_POSE_CASES` names the file; without it nothing runs.
+/// `al::calcDirVerticalAny` (0x925c30) through `getAxisAngleFromTwoVec`: the basis axis of the
+/// smallest absolute component, across the input; ties go to z, then y (strict comparisons).
+#[cfg_attr(test, test)]
+fn an_opposed_turn_takes_the_least_component_basis_axis() {
+    // Straight up: x and z tie at zero and z wins the tie, so the axis is z projected across Y.
+    let (axis, angle) = get_axis_angle_from_two_vec(Vec3::Y, -Vec3::Y).expect("a half turn");
+    assert_eq!((axis, angle), (Vec3::Z, std::f32::consts::PI));
+    // The smallest component picks its own basis axis: x when it is under both others.
+    assert_eq!(calc_dir_vertical_any(Vec3::new(0., 0.6, 0.8)), Vec3::X);
+    // ... y when x is not under both and y is under z.
+    assert_eq!(calc_dir_vertical_any(Vec3::new(0.8, 0., 0.6)), Vec3::Y);
+    // ... otherwise z, including when every component ties.
+    assert_eq!(calc_dir_vertical_any(Vec3::new(0.6, 0.8, 0.)), Vec3::Z);
+    let corner = Vec3::splat(1. / 3f32.sqrt());
+    let axis = calc_dir_vertical_any(corner);
+    assert!(
+        axis.z.abs() > 0.5 && axis.dot(corner).abs() < 1e-6 && (axis.length() - 1.).abs() < 1e-6
+    );
+    // The turn follows the input, not glam's choice: a half turn from -Y about x-less axes.
+    let (axis, _) = get_axis_angle_from_two_vec(Vec3::new(0., 0.6, 0.8), Vec3::new(0., -0.6, -0.8))
+        .expect("a half turn");
+    assert_eq!(axis, Vec3::X);
+    // A zero vector (all components tie) still seeds the z basis, which stays unprojected.
+    assert_eq!(calc_dir_vertical_any(Vec3::ZERO), Vec3::Z);
+}
+
 #[cfg_attr(test, test)]
 fn the_exes_pose_routines_agree_bit_for_bit() {
     let Some(path) = std::env::var_os("PJV_POSE_CASES") else {
@@ -81,12 +108,14 @@ fn the_exes_pose_routines_agree_bit_for_bit() {
                 let got = get_axis_angle_from_two_vec(vec3(&case["a"]), vec3(&case["b"]));
                 let want_ok = case["ok"].as_bool().unwrap();
                 assert_eq!(got.is_some(), want_ok, "{case}");
-                // (An exactly opposed pair takes the guessed axis: its angle only.)
                 if let Some((axis, angle)) = got {
                     assert_eq!(angle.to_bits(), number(&case["angle"]).to_bits(), "{case}");
-                    let opposed = angle == std::f32::consts::PI;
-                    assert!(opposed || same_bits(axis, vec3(&case["axis"])), "{case}");
+                    assert!(same_bits(axis, vec3(&case["axis"])), "{case}");
                 }
+            }
+            "dir_vertical" => {
+                let got = calc_dir_vertical_any(vec3(&case["v"]));
+                assert!(same_bits(got, vec3(&case["out"])), "{case} -> {got:?}");
             }
             "along" => {
                 let got = along_vector_normal_h(
@@ -98,11 +127,6 @@ fn the_exes_pose_routines_agree_bit_for_bit() {
             }
             "turn" => {
                 let (frm, to) = (vec3(&case["frm"]), vec3(&case["to"]));
-                if get_axis_angle_from_two_vec(frm, to)
-                    .is_some_and(|(_, a)| a == std::f32::consts::PI)
-                {
-                    continue;
-                }
                 let got = turn_vec_to_vec_degree(frm, to, number(&case["deg"]));
                 assert!(same_bits(got, vec3(&case["out"])), "{case} -> {got:?}");
             }

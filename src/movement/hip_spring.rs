@@ -203,8 +203,8 @@ fn pre_scale(m: &mut Mat34, scale: Vec3) {
 }
 
 /// `al::turnQuat(out, q, from, to, limit)`: `q` turned so that `from` moves toward `to` by at
-/// most `limit` radians. (Two opposed directions pick a random axis in the original; here the
-/// axis `get_axis_angle_from_two_vec` gives.)
+/// most `limit` radians. (Two opposed directions turn about the axis `get_axis_angle_from_two_vec`
+/// gives, `calc_dir_vertical_any` of `from`.)
 fn turn_quat(q: Quat, from: Vec3, to: Vec3, limit: f32) -> Quat {
     let (from, _) = try_normalize_or_zero(from);
     let (to, _) = try_normalize_or_zero(to);
