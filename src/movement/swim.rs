@@ -508,28 +508,41 @@ impl Player {
 
     /// `rs::tryCalcEffectMtxDoubleCheckWaterIn/Out`: whether there is a surface to splash on.
     /// The surface the finder holds counts unless the body stands on the ground; with none in
-    /// reach the segment the body moved along since last step is tried for a crossing, from the
-    /// swim's center offset above the root and from the root itself.
-    fn surface_to_splash(&self, scene: &Course) -> bool {
+    /// reach the body's velocity parts are shot as arrows (`calcFindWaterAreaSurfaceNoWaveByArrow`,
+    /// which only finds a start outside the water and an end inside it), from the swim's center
+    /// offset above the root and from the root itself. Entering (`tryCalcEffectMtxWaterIn`,
+    /// 0x55dd38) shoots from 1.5 parts back to the body, the gravity-parallel part first and only
+    /// when it points against gravity, then the part across; leaving (`WaterOut`, 0x55e084)
+    /// shoots from the body 1.5 parts back, the gravity-parallel part first and always.
+    fn surface_to_splash(&self, scene: &Course, entering: bool) -> bool {
         if self.water_finder.found {
             return !self.is_collided_ground();
         }
         let here = self.position_cm();
         let (vertical, horizontal) = lib::separate_parallel_vertical(GRAVITY, self.v);
+        let areas = scene.water_areas();
         [k::CENTER_OFFSET, 0.].into_iter().any(|offset| {
-            let start = here + UP * offset;
-            [vertical, horizontal].into_iter().any(|part| {
-                let back = start - part * 1.5;
-                let areas = scene.water_areas();
-                areas.crosses_surface(scene.in_water_frame(back), scene.in_water_frame(start))
-            })
+            let body = here + UP * offset;
+            let shoots = |part: Vec3| {
+                let reach = part * 1.5;
+                let (start, offset) = if entering {
+                    (body - reach, reach)
+                } else {
+                    (body, -reach)
+                };
+                areas
+                    .surface_by_arrow(scene.in_water_frame(start), offset)
+                    .is_some()
+            };
+            let vertical_first = !entering || pose_math::dot(GRAVITY, vertical) < 0.;
+            (vertical_first && shoots(vertical)) || shoots(horizontal)
         })
     }
 
     /// `PlayerStateSwim::tryReactionWaterIn`: the splash and the entry sound; the dive and the
     /// hip drop (action triggers 9, 15, 19 and 29) enter harder.
     pub(super) fn try_reaction_water_in(&mut self, scene: &Course) {
-        if self.surface_to_splash(scene) {
+        if self.surface_to_splash(scene, true) {
             // (The large splash and the loud entry: one of the triggers 9, 15, 19, 29 is on.)
             let strong = self.swim.entered_by_hip_drop
                 || self.swim.entered_by_head_slide
@@ -541,7 +554,7 @@ impl Player {
     /// `PlayerStateSwim::tryReactionWaterOut`: the hit reaction of leaving the water and its
     /// splash.
     pub(super) fn try_reaction_water_out(&mut self, scene: &Course) {
-        if self.surface_to_splash(scene) {
+        if self.surface_to_splash(scene, false) {
             self.events.push(Fx::WaterOut);
         }
     }

@@ -351,14 +351,27 @@ impl WaterAreas {
         None
     }
 
-    /// Whether the segment `from -> to` crosses the surface of the water area that holds either
-    /// end (the arrow `rs::calcFindWaterAreaSurfaceNoWaveByArrow` shoots; GUESS: the executable's
-    /// own area choice is not read, this one follows `find_surface`).
-    pub fn crosses_surface(&self, from: Vec3, to: Vec3) -> bool {
-        let usable = |p: Vec3| self.volume_at(p).filter(|area| !area.ignore);
-        usable(from)
-            .or_else(|| usable(to))
-            .is_some_and(|area| area.arrow(from, to).is_some())
+    /// `rs::calcFindWaterAreaSurfaceNoWaveByArrow(actor, out position, out normal, start,
+    /// offset)` (0x545008): the surface hit by the arrow from `start` to `start + offset`, which
+    /// must begin outside the water (`al::isInWaterPos`) and end inside it, so only an entry
+    /// finds anything. When the start lies in an ignored area that does not also hold the end,
+    /// the arrow runs back from the end to the start against that ignored area, and the normal
+    /// it reports is reversed; otherwise the area holding the end is shot, unless it is ignored.
+    pub fn surface_by_arrow(&self, start: Vec3, offset: Vec3) -> Option<(Vec3, Vec3)> {
+        let end = Vec3::new(start.x + offset.x, start.y + offset.y, start.z + offset.z);
+        if self.is_water(start) || !self.is_water(end) {
+            return None;
+        }
+        if let Some(ignored) = self
+            .volume_at(start)
+            .filter(|area| area.ignore && !area.contains(end))
+        {
+            let (position, normal) = ignored.arrow(end, start)?;
+            return Some((position, Vec3::new(-normal.x, -normal.y, -normal.z)));
+        }
+        self.volume_at(end)
+            .filter(|area| !area.ignore)?
+            .arrow(start, end)
     }
 
     /// `al::WaterSurfaceFinder::update`: ask for the surface within `dist` of `position` along
@@ -377,4 +390,11 @@ impl WaterAreas {
             None => SurfaceFinder::default(),
         }
     }
+}
+
+#[path = "tests/water.rs"]
+mod checks;
+
+pub fn self_check() {
+    checks::run();
 }

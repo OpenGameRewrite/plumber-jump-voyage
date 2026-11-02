@@ -115,6 +115,7 @@ pub(super) fn run() {
     swimming();
     the_dive_in_judge_wants_a_long_fall_over_deep_water();
     a_trample_in_the_water_hops_the_swimmer_up();
+    the_splash_arrows_point_into_the_water_for_entering_and_out_of_it_for_leaving();
     poles();
     slope_slide();
     burn_and_soot();
@@ -1317,6 +1318,34 @@ fn the_dive_in_judge_wants_a_long_fall_over_deep_water() {
     p.pos.y = 17.;
     p.anim.name = "DiveInWater";
     assert!(!p.dive_in_water_enabled(&pool));
+}
+
+/// `tryCalcEffectMtxWaterIn` shoots from 1.5 velocity parts back to the body, `WaterOut` from the
+/// body 1.5 parts back, and 0x545008 wants the start outside the water and the end inside: a
+/// body just in at the pool's side that came from outside splashes on entry only, a body just
+/// out of it that came from inside splashes on leaving only.
+#[cfg_attr(test, test)]
+fn the_splash_arrows_point_into_the_water_for_entering_and_out_of_it_for_leaving() {
+    let pool = Course {
+        water: crate::water::WaterAreas::demo_box(0., 0., 500., 500., 100., 1000.),
+        ..default()
+    };
+    let splashes = |x: f32, vx: f32| {
+        let mut p = Player::spawn_at(Vec3::new(x, -2., 0.), Vec3::Z);
+        p.water_finder = Default::default();
+        p.v = Vec3::new(vx, 0., 0.);
+        p.try_reaction_water_in(&pool);
+        let entered = !p.events.is_empty();
+        p.events.clear();
+        p.try_reaction_water_out(&pool);
+        (entered, !p.events.is_empty())
+    };
+    // 495 cm is in the pool (its side is at 500), 15 cm back outward is outside it.
+    assert_eq!(splashes(4.95, -10.), (true, false));
+    // 505 cm is outside, 15 cm back inward is inside.
+    assert_eq!(splashes(5.05, 10.), (false, true));
+    // Not crossing the side at all.
+    assert_eq!(splashes(4.95, 10.), (false, false));
 }
 
 /// The attack-sensor trigger of a trample (nothing in the rewrite raises it yet) sends the

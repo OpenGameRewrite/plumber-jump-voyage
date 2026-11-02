@@ -97,6 +97,7 @@ fn main() {
         spin_input::self_check();
         game_names::self_check();
         game_columns::self_check();
+        water::self_check();
         tone::self_check();
         trace::self_check();
         replay::self_check();
