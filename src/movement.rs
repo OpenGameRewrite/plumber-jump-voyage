@@ -3198,41 +3198,50 @@ impl Player {
         self.cap_jump_possible = true;
         self.cap_pop_possible = true;
     }
-    /// A cap jump is possible again (`PlayerCapActionHistory::
-    /// clearLandLimitStandAngle` and `clearLandLimit`): the first step of the
-    /// ground nerves on level ground, every step of the spin throw's ground
-    /// state and of the pound, and the first step of the climbing, swimming
-    /// and bound ones.
+    /// The cap jump and the air catch's pop are possible again, by the three history calls the
+    /// states make, each with its own caller's guard:
     ///
-    /// The cap jump's byte (+0x38) is set by `clearLandLimit` always, but by
-    /// `clearLandLimitStandAngle` (0x42ddd8) only on `rs::isOnGroundLessAngle`; the pop's byte
-    /// (+0x39) is set by every one of these calls. The pop therefore follows the callers' own
-    /// guards: the ground nerves' first step (`exeWait` 0x422480, `exeSquat`, `exeRun`,
-    /// `exeRolling`), every `exeSpinCap` step while its state byte +0x78 is clear (0x4239cc..
-    /// 0x4239d8: ground start, or the ground touched since), every `exeHipDrop` step with a
-    /// collided ground (0x424bb8..0x424bc4), and the first step of `exeWallAir` (0x424590),
-    /// `exeWallCatch`, `exeGrabCeil`, `exePoleClimb`, `exeSwim`, `exeBind` (0x426ca4). Not
-    /// ported: `exeRise` (0x4259ac), whose water-exit state does not exist here.
+    /// - `clearLandLimitStandAngle` (0x42ddd8) always sets the pop's byte (+0x39) and sets the
+    ///   cap jump's (+0x38) only on `rs::isOnGroundLessAngle(StandAngleMin)`. Callers: the first
+    ///   step of `exeWait` (0x422480), `exeSquat` (0x422aac) and `exeRun` (0x422ff0); every
+    ///   step of `exeRolling` (0x423754), `exeHipDrop` (0x424bc4) and `exeDamageFire`
+    ///   (0x426340) on which `rs::isCollidedGround` holds; every step of `exeSpinCap` while its
+    ///   state byte +0x78 is clear (0x4239cc..0x4239d8: ground start, or the ground touched
+    ///   since).
+    /// - `clearLandLimit` (0x42ddb0) sets both bytes: every step of `exeSwim` (0x425b38; only
+    ///   its wall-history reset is first-step gated) and the first step of `exeWallCatch`,
+    ///   `exeGrabCeil`, `exePoleClimb` and `exeBind` (0x426ca4).
+    /// - `clearWallAirLimit` sets the pop's byte only: the first step of `exeWallAir` (0x424590).
+    ///
+    /// Not ported: `exeRise` (0x4259ac, `clearLandLimit` on its first step), whose water-exit
+    /// state does not exist here, and `endPlayerPuppet` (0x421f58, `clearLandLimit`), whose
+    /// puppet end is not tied to the history in this port.
     fn refresh_cap_jump(&mut self, first_step: bool) {
         let name = self.actor_name();
         if name == "SpinCap" && self.is_on_ground_by(self.v) {
             self.throwing.ground_seen = true;
         }
-        let restored = match name {
-            "Wait" | "Squat" | "Run" | "Rolling" => self.grounded && first_step,
-            "SpinCap" => self.grounded,
-            "HipDrop" => self.grounded,
-            "WallCatch" | "PoleClimb" | "GrabCeil" | "Swim" | "Bind" => first_step,
+        let stand_angle_call = match name {
+            "Wait" | "Squat" | "Run" => first_step,
+            "Rolling" | "HipDrop" | "DamageFire" => self.is_collided_ground(),
+            "SpinCap" => !self.throwing.in_air || self.throwing.ground_seen,
             _ => false,
         };
-        self.cap_jump_possible |= restored;
-        let pop_restored = match name {
-            "Wait" | "Squat" | "Run" | "Rolling" | "WallAir" => first_step,
-            "SpinCap" => !self.throwing.in_air || self.throwing.ground_seen,
-            "HipDrop" => self.is_collided_ground(),
-            _ => restored,
+        if stand_angle_call {
+            self.cap_pop_possible = true;
+            if self.is_on_ground_less_angle(t::STAND_ANGLE_MIN) {
+                self.cap_jump_possible = true;
+            }
+        }
+        let land_limit_call = match name {
+            "Swim" => true,
+            "WallCatch" | "PoleClimb" | "GrabCeil" | "Bind" => first_step,
+            _ => false,
         };
-        if pop_restored {
+        if land_limit_call {
+            self.restore_cap_actions();
+        }
+        if name == "WallAir" && first_step {
             self.cap_pop_possible = true;
         }
     }

@@ -1,8 +1,9 @@
 //! Own-cap and attack bounces in the water: SwimTrample and SwimReflectDownFall.
 //!
 //! Attack trigger 2 specifically follows accepted PlayerCapTrample/CapTouchJump;
-//! attackSensor sets trigger 1 with it. Move/Paddle require 2, while Land/Walk
-//! also accept 1. ReflectDownFall consumes 1/3 (obj473's underwater hip drop).
+//! attackSensor raises attack trigger 1 (`EAttackSensorTrigger`, unrelated to the
+//! `ECollisionTrigger` 1 that `swim_dive.rs` documents) with it. Move/Paddle require 2,
+//! while Land/Walk also accept 1. ReflectDownFall consumes 1/3 (obj473's underwater hip drop).
 use super::swim::{SwimEnd, SwimNerve};
 use super::swim_const as k;
 use super::*;

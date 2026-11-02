@@ -44,6 +44,10 @@ fn takeoff(power: f32, extend: u32, lock: u32, gravity: f32) -> air_move::Takeof
 impl Player {
     /// `rs::isCollidedGroundRunAngle` (0x56968c..0x56989c). First contact measures
     /// speed across gravity; subsequent contacts measure it across the floor normal.
+    /// Known limit: the original reads `al::getGravity` (the area gravity); this port, like the
+    /// rest of the ground code, takes gravity as straight down (`Vec3::NEG_Y`), as no gravity
+    /// source reaches the controller outside the 2D/pipe area queries. Also reached from the
+    /// roll jump's landing (`isOnGroundRunAngle`).
     pub(super) fn fire_run_angle_contact(&self) -> bool {
         if !self.is_collided_ground() {
             return false;

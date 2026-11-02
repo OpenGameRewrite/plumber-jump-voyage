@@ -9,6 +9,7 @@ pub(super) fn run() {
     the_pop_requires_the_catch_nerve_and_byte();
     the_touch_sender_checks_the_air_spin_step_window();
     the_pop_is_its_own_state();
+    history_restores_follow_their_callers_guards();
 }
 
 fn floor() -> Course {
@@ -352,4 +353,42 @@ fn the_pop_is_its_own_state() {
     }
     assert_eq!(p.mode, Move::Fall);
     assert!(p.state_frames() <= 1);
+}
+
+/// `exeRolling` (0x423754) and `exeDamageFire` (0x426340) call `clearLandLimitStandAngle` on
+/// every step with a collided ground, `exeSwim` (0x425b38) calls `clearLandLimit` on every step,
+/// `exeWait` (0x422480) only on its first.
+#[cfg_attr(test, test)]
+fn history_restores_follow_their_callers_guards() {
+    let spent = |mode: Move| {
+        let mut p = standing_with_cap(Vec3::ZERO);
+        p.mode = mode;
+        p.cap_jump_possible = false;
+        p.cap_pop_possible = false;
+        p
+    };
+    for (mode, every_step, needs_ground) in [
+        (Move::Roll, true, true),
+        (Move::BurnJump, true, true),
+        (Move::Swim, true, false),
+        (Move::Idle, false, true),
+    ] {
+        let mut p = spent(mode);
+        p.refresh_cap_jump(true);
+        assert!(
+            p.cap_jump_possible && p.cap_pop_possible,
+            "{mode:?} first step"
+        );
+        p.cap_jump_possible = false;
+        p.cap_pop_possible = false;
+        p.refresh_cap_jump(false);
+        assert_eq!(p.cap_pop_possible, every_step, "{mode:?} later step");
+        assert_eq!(p.cap_jump_possible, every_step, "{mode:?} later step");
+        if needs_ground {
+            let mut p = spent(mode);
+            p.grounded = false;
+            p.refresh_cap_jump(true);
+            assert!(!p.cap_jump_possible, "{mode:?} airborne");
+        }
+    }
 }
