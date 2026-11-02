@@ -10,6 +10,7 @@ pub(super) fn run() {
     the_touch_sender_checks_the_air_spin_step_window();
     the_pop_is_its_own_state();
     history_restores_follow_their_callers_guards();
+    the_spin_cap_restores_until_its_air_start_touches_the_ground();
 }
 
 fn floor() -> Course {
@@ -355,40 +356,134 @@ fn the_pop_is_its_own_state() {
     assert!(p.state_frames() <= 1);
 }
 
-/// `exeRolling` (0x423754) and `exeDamageFire` (0x426340) call `clearLandLimitStandAngle` on
-/// every step with a collided ground, `exeSwim` (0x425b38) calls `clearLandLimit` on every step,
-/// `exeWait` (0x422480) only on its first.
+/// How a state asks the cap action history to restore, by the binary's callers of
+/// `clearLandLimitStandAngle` (0x42ddd8), `clearLandLimit` (0x42ddb0) and `clearWallAirLimit`
+/// (0x42de30).
+#[derive(Clone, Copy, Debug)]
+enum Restore {
+    /// `clearLandLimitStandAngle` on the first step: the pop always, the cap jump when
+    /// `isOnGroundLessAngle(StandAngleMin)`.
+    StandAngleFirstStep,
+    /// `clearLandLimitStandAngle` on every step with `isCollidedGround`.
+    StandAngleCollided,
+    /// `clearLandLimit` on every step.
+    LandLimitEveryStep,
+    /// `clearLandLimit` on the first step.
+    LandLimitFirstStep,
+    /// `clearWallAirLimit` on the first step: the pop only.
+    WallAirFirstStep,
+}
+
+fn spent(mode: Move) -> Player {
+    let mut p = standing_with_cap(Vec3::ZERO);
+    p.mode = mode;
+    p.cap_jump_possible = false;
+    p.cap_pop_possible = false;
+    p
+}
+/// The two bytes after one `refresh_cap_jump` of `p`, starting from both spent.
+fn restored(mut p: Player, first_step: bool) -> (bool, bool) {
+    p.cap_jump_possible = false;
+    p.cap_pop_possible = false;
+    p.refresh_cap_jump(first_step);
+    (p.cap_jump_possible, p.cap_pop_possible)
+}
+
+/// Every direct caller of the three history helpers that has a state here (the 17 of the
+/// binary's 19 sites; `exeRise` and `endPlayerPuppet` have none), with its guard: the first-step
+/// and every-step gates, the `isCollidedGround` gate, the `+0x38` byte following
+/// `isOnGroundLessAngle` and `exeWallAir` leaving it alone.
 #[cfg_attr(test, test)]
 fn history_restores_follow_their_callers_guards() {
-    let spent = |mode: Move| {
-        let mut p = standing_with_cap(Vec3::ZERO);
-        p.mode = mode;
-        p.cap_jump_possible = false;
-        p.cap_pop_possible = false;
-        p
-    };
-    for (mode, every_step, needs_ground) in [
-        (Move::Roll, true, true),
-        (Move::BurnJump, true, true),
-        (Move::Swim, true, false),
-        (Move::Idle, false, true),
+    let steep = 70f32.to_radians();
+    for (mode, restore) in [
+        (Move::Idle, Restore::StandAngleFirstStep),
+        (Move::Crouch, Restore::StandAngleFirstStep),
+        (Move::Run, Restore::StandAngleFirstStep),
+        (Move::SandWait, Restore::StandAngleFirstStep),
+        (Move::DamageAir, Restore::StandAngleFirstStep),
+        (Move::Roll, Restore::StandAngleCollided),
+        (Move::GroundPound, Restore::StandAngleCollided),
+        (Move::Dive, Restore::StandAngleCollided),
+        (Move::BurnJump, Restore::StandAngleCollided),
+        (Move::Swim, Restore::LandLimitEveryStep),
+        (Move::DamageSwim, Restore::LandLimitFirstStep),
+        (Move::Bind, Restore::LandLimitFirstStep),
+        (Move::GrabCeil, Restore::LandLimitFirstStep),
+        (Move::WallSlide, Restore::WallAirFirstStep),
     ] {
-        let mut p = spent(mode);
-        p.refresh_cap_jump(true);
-        assert!(
-            p.cap_jump_possible && p.cap_pop_possible,
-            "{mode:?} first step"
-        );
-        p.cap_jump_possible = false;
-        p.cap_pop_possible = false;
-        p.refresh_cap_jump(false);
-        assert_eq!(p.cap_pop_possible, every_step, "{mode:?} later step");
-        assert_eq!(p.cap_jump_possible, every_step, "{mode:?} later step");
-        if needs_ground {
-            let mut p = spent(mode);
-            p.grounded = false;
-            p.refresh_cap_jump(true);
-            assert!(!p.cap_jump_possible, "{mode:?} airborne");
+        // (name, collided ground, ground flatter than StandAngleMin)
+        for (what, collided, flatter) in [
+            ("flat", true, true),
+            ("steep", true, false),
+            ("air", false, false),
+        ] {
+            let scenario = || {
+                let mut p = spent(mode);
+                match what {
+                    "steep" => p.mesh_ground = Some(Vec3::new(steep.sin(), steep.cos(), 0.)),
+                    "air" => {
+                        p.grounded = false;
+                        p.hop_contact = false;
+                    }
+                    _ => {}
+                }
+                p
+            };
+            let (first, later) = match restore {
+                Restore::StandAngleFirstStep => ((flatter, true), (false, false)),
+                Restore::StandAngleCollided => {
+                    let both = (flatter && collided, collided);
+                    (both, both)
+                }
+                Restore::LandLimitEveryStep => ((true, true), (true, true)),
+                Restore::LandLimitFirstStep => ((true, true), (false, false)),
+                Restore::WallAirFirstStep => ((false, true), (false, false)),
+            };
+            let label = format!("{mode:?} {what} ({restore:?})");
+            assert_eq!(restored(scenario(), true), first, "{label} first step");
+            assert_eq!(restored(scenario(), false), later, "{label} later step");
         }
     }
+}
+
+/// `exeSpinCap` (0x4239cc..0x4239d8) restores while its state byte +0x78 is clear: set by an
+/// air start, cleared once the ground is touched and then kept (the latch).
+#[cfg_attr(test, test)]
+fn the_spin_cap_restores_until_its_air_start_touches_the_ground() {
+    let mut p = spent(Move::Throw);
+    p.throwing.in_air = false;
+    p.throwing.ground_seen = false;
+    assert_eq!(restored(p, false), (true, true), "ground start");
+    let air_start = |grounded: bool| {
+        let mut p = spent(Move::Throw);
+        p.throwing.in_air = true;
+        p.throwing.ground_seen = false;
+        p.grounded = grounded;
+        p.hop_contact = false;
+        p
+    };
+    assert_eq!(
+        restored(air_start(false), false),
+        (false, false),
+        "air start, airborne"
+    );
+    let mut p = air_start(true);
+    assert_eq!(
+        restored(air_start(true), false),
+        (true, true),
+        "air start touching the ground"
+    );
+    p.refresh_cap_jump(false);
+    assert!(p.throwing.ground_seen);
+    p.cap_jump_possible = false;
+    p.cap_pop_possible = false;
+    p.grounded = false;
+    p.refresh_cap_jump(false);
+    assert!(p.cap_pop_possible, "the latch outlives the ground contact");
+    // Not on the ground the state started on: nothing restores without the contact.
+    assert!(
+        !p.cap_jump_possible,
+        "the cap jump needs isOnGroundLessAngle"
+    );
 }

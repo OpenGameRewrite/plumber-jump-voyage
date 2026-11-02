@@ -3199,31 +3199,36 @@ impl Player {
         self.cap_pop_possible = true;
     }
     /// The cap jump and the air catch's pop are possible again, by the three history calls the
-    /// states make, each with its own caller's guard:
+    /// states make (all 19 direct call sites of 0x42ddb0, 0x42ddd8 and 0x42de30), each with its
+    /// own caller's guard:
     ///
     /// - `clearLandLimitStandAngle` (0x42ddd8) always sets the pop's byte (+0x39) and sets the
     ///   cap jump's (+0x38) only on `rs::isOnGroundLessAngle(StandAngleMin)`. Callers: the first
-    ///   step of `exeWait` (0x422480), `exeSquat` (0x422aac) and `exeRun` (0x422ff0); every
-    ///   step of `exeRolling` (0x423754), `exeHipDrop` (0x424bc4) and `exeDamageFire`
+    ///   step of `exeWait` (0x422480), `exeSquat` (0x422aac), `exeRun` (0x422ff0),
+    ///   `exeSandSink` (0x4256f4) and `exeDamage` (0x425e90); every step of `exeRolling`
+    ///   (0x423754), `exeHipDrop` (0x424bc4), `exeHeadSliding` (0x424f30) and `exeDamageFire`
     ///   (0x426340) on which `rs::isCollidedGround` holds; every step of `exeSpinCap` while its
     ///   state byte +0x78 is clear (0x4239cc..0x4239d8: ground start, or the ground touched
     ///   since).
     /// - `clearLandLimit` (0x42ddb0) sets both bytes: every step of `exeSwim` (0x425b38; only
-    ///   its wall-history reset is first-step gated) and the first step of `exeWallCatch`,
-    ///   `exeGrabCeil`, `exePoleClimb` and `exeBind` (0x426ca4).
-    /// - `clearWallAirLimit` sets the pop's byte only: the first step of `exeWallAir` (0x424590).
+    ///   its wall-history reset is first-step gated) and the first step of `exeWallCatch`
+    ///   (0x4247e4), `exeGrabCeil` (0x424ab4), `exePoleClimb` (0x424b28), `exeBind` (0x426ca4)
+    ///   and `exeDamageSwim` (0x42619c).
+    /// - `clearWallAirLimit` (0x42de30) sets the pop's byte only: the first step of `exeWallAir`
+    ///   (0x424590).
     ///
-    /// Not ported: `exeRise` (0x4259ac, `clearLandLimit` on its first step), whose water-exit
-    /// state does not exist here, and `endPlayerPuppet` (0x421f58, `clearLandLimit`), whose
-    /// puppet end is not tied to the history in this port.
+    /// Not ported (no such state here): `exeRise` (0x4259ac, `clearLandLimit` on its first
+    /// step; the water-exit state does not exist) and `endPlayerPuppet` (0x421f78,
+    /// `clearLandLimit`, unguarded; reached from `endDemoPuppetable` 0x421e44 and
+    /// `endDemoShineGet` 0x4221fc, the demo puppets, which the port has no state for).
     fn refresh_cap_jump(&mut self, first_step: bool) {
         let name = self.actor_name();
         if name == "SpinCap" && self.is_on_ground_by(self.v) {
             self.throwing.ground_seen = true;
         }
         let stand_angle_call = match name {
-            "Wait" | "Squat" | "Run" => first_step,
-            "Rolling" | "HipDrop" | "DamageFire" => self.is_collided_ground(),
+            "Wait" | "Squat" | "Run" | "SandSink" | "Damage" => first_step,
+            "Rolling" | "HipDrop" | "HeadSliding" | "DamageFire" => self.is_collided_ground(),
             "SpinCap" => !self.throwing.in_air || self.throwing.ground_seen,
             _ => false,
         };
@@ -3235,7 +3240,7 @@ impl Player {
         }
         let land_limit_call = match name {
             "Swim" => true,
-            "WallCatch" | "PoleClimb" | "GrabCeil" | "Bind" => first_step,
+            "WallCatch" | "PoleClimb" | "GrabCeil" | "Bind" | "DamageSwim" => first_step,
             _ => false,
         };
         if land_limit_call {
