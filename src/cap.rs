@@ -989,19 +989,31 @@ impl Cap {
     /// and `changeThrowParamInWater` that change nothing in single play with button throws, so
     /// they are not ported:
     /// - 0x402c4c steers the flying cap with the second player's stick (`calcCapSeparateMoveInput`
-    ///   0x44dda8; it turns the front and keeps the speed). It returns at once unless the
-    ///   `PlayerSeparateCapFlag` word at `+0x148` has byte 0 set and byte 2 clear
-    ///   (0x402c78..0x402c8c), which the game's separate-play mode alone sets (see `throw_stay`).
+    ///   0x44dda8; it turns the front and keeps the speed). It returns at once when the cap's
+    ///   byte `+0x299` is set, when byte 2 of the `PlayerSeparateCapFlag` word is set or when
+    ///   its byte 0 is clear (0x402c78..0x402c8c; the cap takes the flag object in its
+    ///   constructor and keeps it at `+0x148`). The actor's `movement` refreshes the word every
+    ///   frame (0x41f544 -> 0x420438, also `startPlayerPuppet`, 0x421d1c): bytes 0 and 1 are
+    ///   cleared (0x4204e4) unless `rs::isSeparatePlay` holds (0x42048c) together with the other
+    ///   gates, and byte 0 is written 1 only past them (0x420600, 0x420610), so in single play
+    ///   the answer is always false (see `throw_stay`).
     ///   In `exeThrowBrake` a true answer also skips the 0.94 damping, not only the added
     ///   velocity (0x40312c branches to 0x403174, past 0x40315c and 0x403170).
     /// - `addCurveOffset` 0x402e30 moves the cap sideways by `40 * (sin(pi * d1 / reach) -
     ///   sin(pi * d0 / reach))` along front x up (turned by the swing angle) times `+0x264`, the
-    ///   side sign `startThrow` stores for a left/right motion throw (0x3fc9f8, 0x3fca1c): the
-    ///   motion controller's single-hand swings (judge modes 2 and 3 of
-    ///   `PlayerJudgePreInputCapThrow::update`, 0x45a95c) set it to +-1 in single play too.
-    ///   The rewrite has no motion input, so for the throws it can produce the sign is the 0 of
-    ///   0x3fc9c8 and the offset is zero: a scope limit, not a property of the game. It also adds
-    ///   the cap's speed to the distance flown `+0x274`, which nothing else reads.
+    ///   side sign `startThrow` stores: `-1`/`+1` from the sign of the left/right vector it is
+    ///   handed (0x3fc9f8, when `isThrowTypeLeftRight` holds, i.e. the vector is not near zero)
+    ///   or of the stick vector's y (0x3fca1c, when that vector is not near zero). The left/right
+    ///   vector is the attack's `+0x48`, which `setupAttackInfo` fills (0x464a7c..0x464a88)
+    ///   only for the recorded judge modes 2 and 3 (0x464a54..0x464a64: the motion
+    ///   controller's single-hand swings, `isTriggerCapSingleHandThrow` 0x44d0e0 ->
+    ///   `isSwingAnyHand`; `PlayerJudgePreInputCapThrow::update` 0x45aa04..0x45aa5c stores the mode
+    ///   2 or 3 and `getCapThrowDir` as the vector). Button throws record mode 1 with zero vectors
+    ///   (0x45aa88..0x45aaac) and the stick vector is zeroed (0x464998), so for them the sign is
+    ///   the 0 stored by 0x3fc9c8 and the offset is zero. The rewrite has no motion input: that
+    ///   is a scope limit, not a property of the game, which runs the offset for the swings in
+    ///   single play. The offset also adds the cap's speed to the distance flown `+0x274`, which
+    ///   nothing else reads.
     fn throw(&mut self, events: &mut Vec<CapEvent>, world: &CapWorld) -> Option<CapNerve> {
         if self.step == 0 {
             events.push(CapEvent::Thrown);
