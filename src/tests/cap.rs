@@ -8,6 +8,11 @@ pub(super) fn run() {
     the_spiral_circles_the_player();
     the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
     the_throw_down_rolls_along_the_floor();
+    the_helper_makes_the_front_a_unit_vector_in_its_easing_only();
+    the_collision_turn_follows_the_binarys_gates();
+    the_collision_turn_lays_the_front_and_velocity_in_the_new_plane();
+    a_cap_stood_on_its_up_axis_faces_back_along_its_front();
+    a_cap_thrown_into_a_slope_turns_onto_it_and_raises_the_reaction();
 }
 
 /// The throw down of the recorded `cap-throw-rolling-down` run, on the plane the player stood on:
@@ -378,4 +383,244 @@ fn the_return_after_a_trample_leaves_along_the_cap_pose() {
             "got {got:?}, recorded {want:?}"
         );
     }
+}
+
+/// A floor at y = 0 facing up, wide enough for any cap in these tests.
+fn flat_floor() -> TriangleMesh {
+    TriangleMesh::from_corners(&[
+        [
+            Vec3::new(-1000., 0., -1000.),
+            Vec3::new(-1000., 0., 1000.),
+            Vec3::new(1000., 0., -1000.),
+        ],
+        [
+            Vec3::new(1000., 0., 1000.),
+            Vec3::new(1000., 0., -1000.),
+            Vec3::new(-1000., 0., 1000.),
+        ],
+    ])
+}
+
+/// What the helper (0x401d0c) leaves of a cap.
+struct Helped {
+    front: Vec3,
+    up: Vec3,
+    velocity: Vec3,
+    counter: i32,
+    turn: Option<f32>,
+}
+
+/// One step of the helper for a cap with (`front`, `up`, `velocity`), `counter` steps worked and
+/// at `spot`.
+fn help(
+    (mut front, mut up, mut velocity): (Vec3, Vec3, Vec3),
+    mut counter: i32,
+    mut spot: Vec3,
+    touch: &cap_ground::Touch,
+    mesh: Option<&TriangleMesh>,
+) -> Helped {
+    let turn = cap_ground::follow(
+        cap_ground::Cap {
+            spot: &mut spot,
+            front: &mut front,
+            up: &mut up,
+            velocity: &mut velocity,
+            counter: &mut counter,
+        },
+        touch,
+        mesh,
+        // `param::THROW_HEIGHT`.
+        70.,
+    );
+    Helped {
+        front,
+        up,
+        velocity,
+        counter,
+        turn,
+    }
+}
+
+fn surface(normal: Vec3) -> Option<cap_ground::Surface> {
+    Some(cap_ground::Surface { normal })
+}
+
+/// The helper makes its front a unit vector in the easing (0x401e60, every step the easing runs)
+/// and leaves it as it is while the ground check keeps the cap low (0x40a088 skips the easing,
+/// and without a touch nothing else writes the front).
+#[cfg_attr(test, test)]
+fn the_helper_makes_the_front_a_unit_vector_in_its_easing_only() {
+    let long_front = Vec3::new(0., 0., 1.001);
+    let state = (long_front, Vec3::Y, Vec3::new(0., 0., 10.));
+    let none = cap_ground::Touch::default();
+    // High over nothing (no ground to find): the easing runs and normalizes.
+    let eased = help(state, 0, Vec3::new(0., 200., 0.), &none, None);
+    assert_eq!(eased.front, Vec3::Z);
+    assert_eq!(eased.counter, 1);
+    assert_eq!(eased.turn, None);
+    // Low over the floor (10 up, the throw height 70): the counter resets and the front stays.
+    let floor = flat_floor();
+    let low = help(state, 3, Vec3::new(0., 10., 0.), &none, Some(&floor));
+    assert_eq!(low.front, long_front);
+    assert_eq!(low.velocity, state.2);
+    assert_eq!(low.counter, 0);
+    // The same cap with a floor touch: the collision turn is the part that normalizes now.
+    let touch = cap_ground::Touch {
+        wall_face: None,
+        ground: surface(Vec3::Y),
+    };
+    let turned = help(state, 3, Vec3::new(0., 10., 0.), &touch, Some(&floor));
+    assert_eq!(turned.front, Vec3::Z);
+    assert_eq!(turned.up, Vec3::Y);
+    assert_eq!(turned.counter, 0);
+    // (A turn of no angle raises no reaction.)
+    assert_eq!(turned.turn, None);
+}
+
+/// The collision turn's gates (0x402104..0x4021e8, 0x402218): a wall face counts only when its
+/// normal is at least half along the cap's up axis and leans against the gravity; otherwise the
+/// ground does; a surface facing away from the up axis turns nothing.
+#[cfg_attr(test, test)]
+fn the_collision_turn_follows_the_binarys_gates() {
+    let state = |up: Vec3| (Vec3::Z, up, Vec3::new(0., 0., 10.));
+    let low = Vec3::new(0., 10., 0.);
+    let floor = flat_floor();
+    let ground_normal = Vec3::new(0., 0.8, -0.6);
+    let side_wall = Vec3::new(-1., 0., 0.);
+    // A vertical wall is not steep against the up axis: the ground turns the cap.
+    let both = cap_ground::Touch {
+        wall_face: surface(side_wall),
+        ground: surface(ground_normal),
+    };
+    assert_eq!(
+        help(state(Vec3::Y), 0, low, &both, Some(&floor)).up,
+        ground_normal
+    );
+    // A wall face along the cap's own up axis (here x) and leaning against the gravity takes
+    // over ...
+    let leaning = Vec3::new(0.8, 0.6, 0.);
+    let tilted_ground = Vec3::new(0.6, 0.8, 0.);
+    let along_x = cap_ground::Touch {
+        wall_face: surface(leaning),
+        ground: surface(tilted_ground),
+    };
+    assert_eq!(help(state(Vec3::X), 0, low, &along_x, None).up, leaning);
+    // ... but not when it leans with the gravity (its normal pointing down).
+    let hanging = Vec3::new(0.8, -0.6, 0.);
+    let down_x = cap_ground::Touch {
+        wall_face: surface(hanging),
+        ground: surface(tilted_ground),
+    };
+    assert_eq!(
+        help(state(Vec3::X), 0, low, &down_x, None).up,
+        tilted_ground
+    );
+    // A wall face alone that fails the gates turns nothing, and neither does a normal facing
+    // away from the up axis.
+    let wall_only = cap_ground::Touch {
+        wall_face: surface(side_wall),
+        ground: None,
+    };
+    let kept = help(state(Vec3::Y), 2, low, &wall_only, Some(&floor));
+    assert_eq!((kept.up, kept.counter, kept.turn), (Vec3::Y, 0, None));
+    let away = cap_ground::Touch {
+        wall_face: None,
+        ground: surface(Vec3::NEG_Y),
+    };
+    let kept = help(state(Vec3::Y), 2, low, &away, Some(&floor));
+    assert_eq!((kept.front, kept.up, kept.turn), (Vec3::Z, Vec3::Y, None));
+}
+
+/// The collision turn lays the front in the surface's plane (`alongVectorNormalH`, a unit
+/// vector), rebuilds the velocity (the part across the old front along the new up, the part
+/// along it along the new front, sizes kept) and answers the angle it turned by.
+#[cfg_attr(test, test)]
+fn the_collision_turn_lays_the_front_and_velocity_in_the_new_plane() {
+    let normal = Vec3::new(0.6, 0.8, 0.);
+    let touch = cap_ground::Touch {
+        wall_face: None,
+        ground: surface(normal),
+    };
+    let floor = flat_floor();
+    let state = (Vec3::X, Vec3::Y, Vec3::new(10., 3., 0.));
+    let turned = help(state, 4, Vec3::new(0., 10., 0.), &touch, Some(&floor));
+    assert_eq!(turned.up, normal);
+    assert_eq!(turned.counter, 0);
+    assert!((turned.front.length() - 1.).abs() < 1e-6);
+    assert!(turned.front.dot(normal).abs() < 1e-6, "{:?}", turned.front);
+    // The angle between the surfaces is the angle between the fronts.
+    let expected = normal.dot(Vec3::Y).acos().to_degrees();
+    let turn = turned.turn.expect("a turn wide enough for the reaction");
+    assert!((turn - expected).abs() < 1e-3, "{turn} {expected}");
+    // 10 ran along the old front, 3 across it: they are now along the new front and up.
+    let rebuilt = turned.front * 10. + normal * 3.;
+    assert!((turned.velocity - rebuilt).length() < 1e-4);
+}
+
+/// The helper ends by standing the cap on its own up axis, facing back along its front
+/// (0x40247c): the pose's up is the cap's up, not the world's.
+#[cfg_attr(test, test)]
+fn a_cap_stood_on_its_up_axis_faces_back_along_its_front() {
+    let mut upright = CapPose::thrown_along(Vec3::Z);
+    upright.face_back_along(Vec3::Z, Vec3::Y);
+    assert!((upright.world_axis(Vec3::Y) - Vec3::Y).length() < 1e-5);
+    let up = Vec3::new(0.6, 0.8, 0.);
+    let mut leaning = CapPose::thrown_along(Vec3::Z);
+    leaning.face_back_along(Vec3::Z, up);
+    assert!((leaning.world_axis(Vec3::Y) - up).length() < 1e-5);
+    assert!((leaning.world_axis(Vec3::Z) + Vec3::Z).length() < 1e-5);
+}
+
+/// The helper in a flight: the cap's sphere meets a slope, and a later step's helper takes the
+/// slope's normal for the cap's up axis and raises the collision reaction (`TerrainTurn`).
+#[cfg_attr(test, test)]
+fn a_cap_thrown_into_a_slope_turns_onto_it_and_raises_the_reaction() {
+    // A slope rising along +z at 30 degrees, from the floor at z = 400.
+    let (rise, run) = (30_f32.to_radians().sin(), 30_f32.to_radians().cos());
+    let top = Vec3::new(0., 1000. * rise, 400. + 1000. * run);
+    let mesh = TriangleMesh::from_corners(&[
+        [
+            Vec3::new(-1000., 0., 400.),
+            Vec3::new(-1000., top.y, top.z),
+            Vec3::new(1000., 0., 400.),
+        ],
+        [
+            Vec3::new(1000., 0., 400.),
+            Vec3::new(-1000., top.y, top.z),
+            Vec3::new(1000., top.y, top.z),
+        ],
+    ]);
+    let normal = mesh.triangles[0].normal;
+    assert!(normal.y > 0.8 && normal.z < 0., "{normal:?}");
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::Z,
+            kind: Throw::Forward,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: 0.,
+            up: Vec3::Y,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: Some(&mesh),
+        water: None,
+        targets: &[],
+    };
+    let mut turns = Vec::new();
+    for _ in 0..40 {
+        for event in cap.update(&world) {
+            if let CapEvent::TerrainTurn(degrees) = event {
+                turns.push(degrees);
+            }
+        }
+    }
+    assert!(!turns.is_empty(), "the cap never met the slope");
+    assert!(turns.iter().all(|degrees| *degrees >= 0.1));
+    assert!(cap.up.dot(normal) > 0.999, "{:?} {normal:?}", cap.up);
 }
