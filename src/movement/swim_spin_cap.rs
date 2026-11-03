@@ -127,7 +127,8 @@ impl Player {
     fn swim_throw_cap_on_frame(&mut self) {
         let frame = k::SPIN_CAP_THROW_FRAME;
         if self.swim.steps == frame && self.winding && self.launch.is_none() {
-            self.launch_cap(Throw::Forward, self.throwing.continuous);
+            let up = self.throwing.up.unwrap_or(UP);
+            self.launch_cap_across(Throw::Forward, self.throwing.continuous, up);
         }
     }
 

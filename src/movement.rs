@@ -1133,8 +1133,8 @@ struct ThrowControl {
     child_ended: bool,
     /// The direction the cap leaves along, fixed on the state's first step.
     dir: Option<Vec3>,
-    /// The up axis the cap is handed with it, when it is not the world's (the swim's cap throw on
-    /// a slope: the ground's normal).
+    /// The up axis the swim spin stores on its first step and hands the cap on the throw frame
+    /// (the ground and air spins ask `launch_up_axis` at the throw frame instead).
     up: Option<Vec3>,
     /// SpinAir preserves the tilted model root, unwinding its translation over ten steps.
     model_shift: Option<Vec3>,
@@ -5902,24 +5902,20 @@ impl Player {
             self.gravity = self.constants.gravity_air;
         }
     }
-    /// The up axis the throw hands the cap (`PlayerSpinCapAttack::startCapThrow`'s second argument):
-    /// the swim spin's stored vector (0x489ed4, 0x48a424); in the air `-al::getGravity` (0x4829d4);
-    /// on the ground `rs::calcGroundNormalOrGravityDir` (0x482174 -> 0x55baac): the collided
-    /// ground's normal, or `-gravity` when the collider holds no ground.
+    /// The up axis the ground and air spins hand the cap (`PlayerSpinCapAttack::startCapThrow`'s
+    /// second argument): in the air `-al::getGravity` (0x4829d4); on the ground
+    /// `rs::calcGroundNormalOrGravityDir` (0x482174 -> 0x55baac): the collided ground's normal,
+    /// or `-gravity` when the collider holds no ground. (The swim spins hand the vector they
+    /// stored, 0x489ed4 and 0x48a424: `launch_cap_across`.)
     fn launch_up_axis(&self) -> Vec3 {
-        if let Some(up) = self.throwing.up {
-            up
-        } else if !self.grounded {
-            pose_math::NEGATED_GRAVITY
-        } else if self.is_collided_ground() {
+        if self.grounded && self.is_collided_ground() {
             self.collided_ground_normal()
         } else {
             pose_math::NEGATED_GRAVITY
         }
     }
-    fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {
+    fn throw_launch(&self, kind: Throw, continuous: bool, up: Vec3) -> Launch {
         let dir = self.throwing.dir.unwrap_or(self.facing);
-        let up = self.launch_up_axis();
         // A throw whose up axis is not the world's flies along the direction as given (the
         // throw's direction already lies across that axis); the others along the horizontal.
         let front = if up == Vec3::Y {
@@ -5939,8 +5935,12 @@ impl Player {
     }
     /// `HackCap::startThrow`: the cap starts flying on the next frame.
     fn launch_cap(&mut self, kind: Throw, continuous: bool) {
+        self.launch_cap_across(kind, continuous, self.launch_up_axis());
+    }
+    /// [`Self::launch_cap`] with the up axis the thrower hands over.
+    fn launch_cap_across(&mut self, kind: Throw, continuous: bool, up: Vec3) {
         self.throwing.launch_offset = Vec3::ZERO;
-        self.launch = Some(self.throw_launch(kind, continuous));
+        self.launch = Some(self.throw_launch(kind, continuous, up));
     }
     /// The cap's frame, which comes before the player's
     /// (`HackCap::movement` before `PlayerActorHakoniwa::movement`).

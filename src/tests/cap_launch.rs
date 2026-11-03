@@ -67,9 +67,8 @@ fn a_throw_from_level_ground_keeps_the_horizontal_front() {
 #[cfg_attr(test, test)]
 fn a_swim_throw_keeps_the_up_axis_it_stored() {
     let mut p = on_slope();
-    p.throwing.up = Some(Vec3::X);
     p.throwing.dir = Some(Vec3::Z);
-    p.launch_cap(Throw::Forward, false);
+    p.launch_cap_across(Throw::Forward, false, Vec3::X);
     let launch = p.launch.as_ref().unwrap();
     assert_eq!((launch.up, launch.front), (Vec3::X, Vec3::Z));
 }

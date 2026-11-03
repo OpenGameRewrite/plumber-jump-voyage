@@ -227,7 +227,7 @@ fn the_pop_requires_the_catch_nerve_and_byte() {
         "SpinAttack during Catch"
     );
     p.winding = false;
-    p.launch = Some(p.throw_launch(Throw::Forward, false));
+    p.launch = Some(p.throw_launch(Throw::Forward, false, Vec3::Y));
     assert!(!p.judge_cap_catch_pop(&jump_press()), "ThrowStart");
     p.launch = None;
     for name in [
