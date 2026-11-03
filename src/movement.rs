@@ -5705,20 +5705,40 @@ impl Player {
     /// the actor takes it at once (`rs::slerpUpFront` with rate 1) and the cap
     /// will leave along it whatever the facing does later.
     fn face_throw_direction(&mut self) {
-        let dir = if self.tilt >= STICK_DEADZONE {
-            self.stick
-        } else {
-            self.facing
-        };
         let up = self
             .mesh_ground
             .filter(|_| self.grounded)
             .unwrap_or(Vec3::Y);
+        let dir = if self.grounded && up != Vec3::Y {
+            self.throw_direction_across(up)
+        } else if self.tilt >= STICK_DEADZONE {
+            self.stick
+        } else {
+            self.facing
+        };
         let stored = self
             .actor_pose()
             .slerp_up_front(up, dir, 1., t::HILL_POSE_DEGREE_MAX);
         self.set_pose(stored);
         self.throwing.dir = Some(dir);
+    }
+    /// The throw direction on sloped ground (the helper at 0x4831b8, called by both spin
+    /// states' first step): `PlayerInput::calcCapThrowInput` is the move input in the plane of
+    /// the ground normal (`calcMoveInputImpl`, 0x44dd84); without a direction the actor's front
+    /// is carried from its up axis onto that plane (0x4832c8..0x483300). On level ground the
+    /// stick is already the direction. The branch for `PlayerTrigger` 0 (set by `exeWallAir`
+    /// only, 0x4245f8) is not ported.
+    fn throw_direction_across(&self, normal: Vec3) -> Vec3 {
+        let (input, has_direction) = pose_math::try_normalize_or_zero(self.plane_stick(normal));
+        if has_direction {
+            return input;
+        }
+        let pose = self.actor_pose();
+        pose_math::normalize(pose_math::along_vector_normal_h(
+            pose.front(),
+            pose.up(),
+            normal,
+        ))
     }
     /// Start a sub animation on the model; `frame` is where its counter
     /// stands before this frame's advance.
@@ -5882,13 +5902,30 @@ impl Player {
             self.gravity = self.constants.gravity_air;
         }
     }
+    /// The up axis the throw hands the cap (`PlayerSpinCapAttack::startCapThrow`'s second argument):
+    /// the swim spin's stored vector (0x489ed4, 0x48a424); in the air `-al::getGravity` (0x4829d4);
+    /// on the ground `rs::calcGroundNormalOrGravityDir` (0x482174 -> 0x55baac): the collided
+    /// ground's normal, or `-gravity` when the collider holds no ground.
+    fn launch_up_axis(&self) -> Vec3 {
+        if let Some(up) = self.throwing.up {
+            up
+        } else if !self.grounded {
+            pose_math::NEGATED_GRAVITY
+        } else if self.is_collided_ground() {
+            self.collided_ground_normal()
+        } else {
+            pose_math::NEGATED_GRAVITY
+        }
+    }
     fn throw_launch(&self, kind: Throw, continuous: bool) -> Launch {
         let dir = self.throwing.dir.unwrap_or(self.facing);
-        // A throw with an up axis of its own flies along the direction as given (it lies across
-        // that axis); the others along the horizontal.
-        let (front, up) = match self.throwing.up {
-            Some(up) => (dir, up),
-            None => (dir.with_y(0.).normalize_or(Vec3::NEG_Z), Vec3::Y),
+        let up = self.launch_up_axis();
+        // A throw whose up axis is not the world's flies along the direction as given (the
+        // throw's direction already lies across that axis); the others along the horizontal.
+        let front = if up == Vec3::Y {
+            dir.with_y(0.).normalize_or(Vec3::NEG_Z)
+        } else {
+            dir
         };
         Launch {
             front,
@@ -6689,6 +6726,8 @@ impl Player {
     }
 }
 
+#[path = "tests/cap_launch.rs"]
+mod cap_launch_checks;
 #[path = "tests/cap_touch.rs"]
 mod cap_touch_checks;
 #[path = "tests/movement.rs"]
@@ -6709,6 +6748,7 @@ pub fn self_check() {
     recovery_dead::self_check();
     stain::self_check();
     checks::run();
+    cap_launch_checks::run();
     cap_touch_checks::run();
     spin_checks::run();
     wall_air_checks::run();

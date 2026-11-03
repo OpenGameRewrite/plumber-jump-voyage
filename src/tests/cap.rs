@@ -20,6 +20,7 @@ pub(super) fn run() {
     a_return_that_never_arrives_hides_the_cap_after_180_steps();
     a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
+    the_cap_thrown_from_a_slope_flies_along_the_slope();
 }
 
 /// The throw down of the recorded `cap-throw-rolling-down` run, on the plane the player stood on:
@@ -953,4 +954,45 @@ fn the_rolling_stand_follows_the_throw_type_not_the_rolling_state() {
     }
     assert_eq!(cleared.pose.quat(), kept.pose.quat());
     assert_ne!(cleared.pose.quat(), upright.pose.quat());
+}
+
+/// `HackCap::startThrow` keeps the up axis and the front it is given (the launch's up from
+/// `rs::calcGroundNormalOrGravityDir`, the front across it): the cap leaves along the slope, at
+/// the thrower's feet raised along that axis.
+#[cfg_attr(test, test)]
+fn the_cap_thrown_from_a_slope_flies_along_the_slope() {
+    let normal = Vec3::new(0., 0.8, -0.6);
+    let front = Vec3::new(0., 0.6, 0.8);
+    let cap = Cap::start(
+        Launch {
+            front,
+            kind: Throw::Forward,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: 0.,
+            up: normal,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    assert_eq!(cap.up, normal);
+    assert!((cap.front - front).length() < 1e-6);
+    assert!(cap.velocity.dot(normal).abs() < 1e-3, "{:?}", cap.velocity);
+    assert!(cap.velocity.normalize().dot(front) > 0.9999);
+    // Level ground flies along the horizontal whatever height the direction has.
+    let level = Cap::start(
+        Launch {
+            front: Vec3::new(0., 0.5, 1.),
+            kind: Throw::Forward,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: 0.,
+            up: Vec3::Y,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    assert_eq!(level.front, Vec3::Z);
 }
