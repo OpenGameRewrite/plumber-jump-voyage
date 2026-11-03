@@ -1619,8 +1619,7 @@ impl Cap {
     /// Make the cap's return fly to a captured target's matrix (`+0x2a4` set, `exeReturn`
     /// 0x407068..0x407098). The original sets it when a captured object throws the cap to another
     /// (`receiveRequestTransferHack` 0x3fc190); the rewrite has no capture, so nothing in the
-    /// game calls this and only the tests build such a return.
-    #[cfg(test)]
+    /// game calls this and only the checks build such a return.
     pub fn start_hack_return(&mut self, target: Vec3) {
         self.hack_target = Some(target);
     }
