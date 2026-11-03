@@ -16,10 +16,11 @@ fn slope_normal() -> Vec3 {
     Vec3::new(0., 0.8, -0.6)
 }
 fn on_slope() -> Player {
-    let mut p = Player::default();
-    p.grounded = true;
-    p.mesh_ground = Some(slope_normal());
-    p
+    Player {
+        grounded: true,
+        mesh_ground: Some(slope_normal()),
+        ..default()
+    }
 }
 
 /// `exeSpinAir` hands `-al::getGravity` (0x4829d4: three negations of gravity (0, -1, 0)), so
@@ -53,9 +54,11 @@ fn a_ground_throw_hands_the_cap_the_collided_ground_normal() {
 /// On level ground the normal is the world's up and the cap flies along the horizontal.
 #[cfg_attr(test, test)]
 fn a_throw_from_level_ground_keeps_the_horizontal_front() {
-    let mut p = Player::default();
-    p.grounded = true;
-    p.mesh_ground = Some(Vec3::Y);
+    let mut p = Player {
+        grounded: true,
+        mesh_ground: Some(Vec3::Y),
+        ..default()
+    };
     p.throwing.dir = Some(Vec3::new(1., 0.25, 0.));
     p.launch_cap(Throw::Forward, false);
     let launch = p.launch.as_ref().unwrap();
