@@ -5,6 +5,7 @@ pub(super) fn run() {
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
     the_return_writes_the_pose_from_its_first_execution();
+    a_cap_flying_a_fixed_front_alternates_its_pose_by_an_ulp();
     the_catch_is_the_sensor_contact();
     the_spiral_circles_the_player();
     the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
@@ -727,4 +728,37 @@ fn a_cap_thrown_into_a_slope_turns_onto_it_and_raises_the_reaction() {
     assert!(!turns.is_empty(), "the cap never met the slope");
     assert!(turns.iter().all(|degrees| *degrees >= 0.1));
     assert!(cap.up.dot(normal) > 0.999, "{:?} {normal:?}", cap.up);
+}
+
+/// The helper ends in `slerpQuat(pose, target, 1.0)` (0x402470, `sead::QuatCalcCommon::slerpTo`
+/// 0xf17ac), and a whole slerp does not return the target: the weight is
+/// `(1 / sin(theta)) * sin(theta * t)` in single precision (0xf1860..0xf1884), and a target whose
+/// own dot product is 0.99999994 (not exactly unit) has a non-zero theta even against itself, so
+/// the weight is 0.99999994 and the pose lands an ulp off. From there theta is larger, the weight
+/// is 1.0 and the pose is the target again. A cap flying a fixed front therefore alternates its
+/// pose by an ulp every step, which is the pose the stay and the return inherit when the brake's
+/// last step lands on the odd phase.
+#[cfg_attr(test, test)]
+fn a_cap_flying_a_fixed_front_alternates_its_pose_by_an_ulp() {
+    use crate::movement::cap_pose::CapPose;
+    use crate::movement::pose_math::{NEGATED_GRAVITY, quat_front_up};
+    let front = Vec3::new(-0.139_765_98, 0., 0.990_184_6);
+    let target = quat_front_up(-front, NEGATED_GRAVITY);
+    let mut pose = CapPose::thrown_along(front);
+    assert_eq!(pose.quat(), target);
+    let mut poses = Vec::new();
+    for _ in 0..6 {
+        pose.face_back_along(front, NEGATED_GRAVITY);
+        poses.push(pose.quat());
+    }
+    for pair in poses.windows(2) {
+        assert_ne!(pair[0], pair[1]);
+        // (One ulp apart in the y component, 0.997 and up.)
+        assert_eq!(pair[0].y.to_bits().abs_diff(pair[1].y.to_bits()), 1);
+    }
+    for triple in poses.windows(3) {
+        assert_eq!(triple[0], triple[2]);
+    }
+    // The odd steps are the target again.
+    assert_eq!(poses[1], target);
 }
