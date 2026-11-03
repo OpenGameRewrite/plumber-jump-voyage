@@ -5707,11 +5707,12 @@ impl Player {
     fn face_throw_direction(&mut self) {
         let up = self
             .mesh_ground
-            .filter(|_| self.grounded)
+            .filter(|_| self.is_collided_ground())
             .unwrap_or(Vec3::Y);
-        // (The ground the collider holds, as `launch_up_axis` hands it to the cap.)
+        // The ground the collider holds (`rs::isCollidedGround` alone, whatever the actor's own
+        // grounded state says), as `launch_up_axis` hands it to the cap.
         let ground = self
-            .grounded
+            .is_collided_ground()
             .then(|| self.collided_ground_normal())
             .filter(|normal| *normal != Vec3::Y);
         let dir = if let Some(normal) = ground {
@@ -5908,12 +5909,15 @@ impl Player {
         }
     }
     /// The up axis the ground and air spins hand the cap (`PlayerSpinCapAttack::startCapThrow`'s
-    /// second argument): in the air `-al::getGravity` (0x4829d4); on the ground
-    /// `rs::calcGroundNormalOrGravityDir` (0x482174 -> 0x55baac): the collided ground's normal,
-    /// or `-gravity` when the collider holds no ground. (The swim spins hand the vector they
-    /// stored, 0x489ed4 and 0x48a424: `launch_cap_across`.)
+    /// second argument): `exeSpinAir` hands `-al::getGravity` (0x4829d4) without asking the
+    /// collider; `exeSpinGround` asks `rs::calcGroundNormalOrGravityDir` (0x482174 -> 0x55baac),
+    /// which asks `rs::isCollidedGround` alone (the collider's depth, 0x565e8c): the collided
+    /// ground's normal, or `-gravity` when the collider holds no ground, whatever the actor's own
+    /// grounded state is. (The swim spins hand the vector they stored, 0x489ed4 and 0x48a424:
+    /// `launch_cap_across`.)
     fn launch_up_axis(&self) -> Vec3 {
-        if self.grounded && self.is_collided_ground() {
+        let air_spin = self.mode == Move::Throw && self.throwing.in_air;
+        if !air_spin && self.is_collided_ground() {
             self.collided_ground_normal()
         } else {
             pose_math::NEGATED_GRAVITY

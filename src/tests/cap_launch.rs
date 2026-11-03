@@ -10,6 +10,7 @@ pub(super) fn run() {
     a_swim_throw_keeps_the_up_axis_it_stored();
     the_slope_throw_direction_lies_across_the_ground_normal();
     the_first_step_takes_the_direction_across_the_ground_the_cap_is_handed();
+    the_collider_alone_decides_the_ground_a_ground_spin_hands_over();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -28,9 +29,12 @@ fn on_slope() -> Player {
 /// the up axis carries the signed zeros.
 #[cfg_attr(test, test)]
 fn an_air_throw_hands_the_cap_negated_gravity() {
-    // Even over a slope (the ground the collider knows) the air spin takes the gravity.
+    // Even over a slope the collider still holds, the air spin takes the gravity.
     let mut p = on_slope();
     p.grounded = false;
+    p.hop_contact = true;
+    p.mode = Move::Throw;
+    p.throwing.in_air = true;
     p.launch_cap(Throw::Forward, false);
     let up = p.launch.as_ref().unwrap().up;
     assert_eq!(
@@ -122,4 +126,36 @@ fn the_first_step_takes_the_direction_across_the_ground_the_cap_is_handed() {
     };
     level.face_throw_direction();
     assert_eq!(level.throwing.dir, Some(Vec3::X));
+}
+
+/// `exeSpinGround` asks `rs::isCollidedGround` alone (0x482174 -> 0x55baac, and the first step's
+/// helper through 0x55ba38): a collider that touches the floor while the actor is not grounded
+/// (`hop_contact`: it moves up off it) still hands the collided normal and the plane direction.
+#[cfg_attr(test, test)]
+fn the_collider_alone_decides_the_ground_a_ground_spin_hands_over() {
+    let mut p = Player {
+        grounded: false,
+        hop_contact: true,
+        mesh_ground: Some(slope_normal()),
+        mode: Move::Throw,
+        stick: Vec3::Z,
+        tilt: 1.,
+        ..default()
+    };
+    p.face_throw_direction();
+    let dir = p.throwing.dir.unwrap();
+    assert!((dir - Vec3::new(0., 0.6, 0.8)).length() < 1e-6, "{dir:?}");
+    p.launch_cap(Throw::Forward, false);
+    let launch = p.launch.as_ref().unwrap();
+    assert_eq!((launch.up, launch.front), (slope_normal(), dir));
+    // The collider holding nothing hands -gravity, grounded or not.
+    let mut released = Player {
+        grounded: false,
+        hop_contact: false,
+        mesh_ground: Some(slope_normal()),
+        mode: Move::Throw,
+        ..default()
+    };
+    released.launch_cap(Throw::Forward, false);
+    assert_eq!(released.launch.as_ref().unwrap().up, Vec3::Y);
 }
