@@ -1565,6 +1565,20 @@ impl PlayerCollider {
         self.floor.is_some()
     }
 
+    /// `rs::isCollidedGround` (0x565e8c): the deepest floor contact of the last move reached at
+    /// least zero deep (`+0x70 >= 0`; a disk contact may be kept a hair short of zero).
+    pub fn collided_ground(&self) -> bool {
+        self.floor.is_some() && self.best[0] >= 0.
+    }
+
+    /// `rs::isCollidedWallFace` (0x565f5c): the deepest wall contact of the last move reached at
+    /// least zero deep (`+0x80 >= 0`) and met the wall on a face, not an edge or corner.
+    pub fn collided_wall_face(&self) -> Option<&Contact> {
+        self.wall
+            .as_ref()
+            .filter(|wall| self.best[1] >= 0. && wall.location == Location::Face)
+    }
+
     /// `rs::resetCollision` (`PlayerCollider::onInvalidate`): the contacts are
     /// forgotten and the collider takes the actor's pose as the one it stood
     /// in.

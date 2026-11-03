@@ -15,6 +15,7 @@ pub(super) fn run() {
     a_reset_body_skips_the_hair_touch_at_the_start_of_its_move();
     the_bounding_radius_and_the_growth_of_a_reset_collider();
     the_exes_sweep_poses_agree_bit_for_bit();
+    the_collided_queries_need_a_depth_of_zero_or_more();
 }
 
 fn square(y: f32, half: f32) -> [[Vec3; 3]; 2] {
@@ -130,6 +131,44 @@ fn a_wall_stops_the_sphere_at_its_radius() {
     assert!(c.grounded());
     let wall = c.wall.expect("wall contact");
     assert!(wall.normal.x < -0.99);
+}
+
+/// `rs::isCollidedGround` and `rs::isCollidedWallFace` also ask the deepest contact's depth
+/// (`+0x70`, `+0x80`) to be at least zero; a contact kept a hair short of zero (a disk's
+/// `isNearZero` tolerance) is not a collision for them although the collider holds it.
+#[cfg_attr(test, test)]
+fn the_collided_queries_need_a_depth_of_zero_or_more() {
+    let mut c = PlayerCollider::new(Form::Normal);
+    fall(&mut c, &flat(), 0., -3.);
+    assert!(c.collided_ground());
+    c.best[0] = -0.0005;
+    assert!(c.grounded() && !c.collided_ground());
+    c.invalidate(0.);
+    assert!(!c.grounded() && !c.collided_ground());
+
+    let mut list = vec![];
+    list.extend(square(0., 1000.));
+    list.push([
+        Vec3::new(100., -500., -500.),
+        Vec3::new(100., 500., -500.),
+        Vec3::new(100., -500., 500.),
+    ]);
+    list.push([
+        Vec3::new(100., 500., 500.),
+        Vec3::new(100., -500., 500.),
+        Vec3::new(100., 500., -500.),
+    ]);
+    let mut mesh = TriangleMesh::from_corners(&list);
+    for t in &mut mesh.triangles[2..] {
+        if t.normal.x > 0. {
+            t.normal = -t.normal;
+        }
+    }
+    let mut c = PlayerCollider::new(Form::Normal);
+    c.collide(&mesh, Vec3::new(0., 0., 0.), Vec3::new(80., -3., 0.), 0.);
+    assert!(c.collided_wall_face().is_some_and(|w| w.normal.x < -0.99));
+    c.best[1] = -0.0005;
+    assert!(c.wall.is_some() && c.collided_wall_face().is_none());
 }
 
 /// A step a few cm high does not block the run: the spheres' flank touches
