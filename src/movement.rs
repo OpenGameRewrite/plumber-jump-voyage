@@ -211,6 +211,8 @@ const BUTTON_THROW_SWING_ANGLE: f32 = 0.;
 pub(crate) mod cap_ground;
 #[path = "movement/cap_pose.rs"]
 pub(crate) mod cap_pose;
+#[path = "movement/cap_return.rs"]
+pub(crate) mod cap_return;
 #[path = "movement/cap_rolling.rs"]
 pub(crate) mod cap_rolling;
 #[path = "movement/cap_spiral.rs"]
@@ -5997,6 +5999,9 @@ impl Player {
                     self.events.push(Fx::CapLockOn);
                 }
                 CapEvent::LockReturn => self.events.push(Fx::CapLockReturn),
+                // The cap attached to the captured target it flew back to: the rewrite has no
+                // capture, so nothing starts such a return.
+                CapEvent::TargetReached => {}
                 CapEvent::Reflected(index) => {
                     self.signboards[index].reflect();
                     self.events.push(Fx::CapReflect);
@@ -6014,16 +6019,28 @@ impl Player {
                 CapEvent::StayStarted => self.events.push(Fx::CapStayStart),
                 CapEvent::Trampled => self.events.push(Fx::CapBounce),
                 CapEvent::LeftStay => self.events.push(Fx::CapReturn),
-                CapEvent::Caught => {
-                    // receiveMsg's PlayerCapCatch accept (0x408b2c..0x408b34); forcePutOn
-                    // also sets this byte (0x3fce6c), even when the player skips the reaction.
-                    self.cap_catched = true;
+                CapEvent::Caught | CapEvent::Hidden => {
+                    // A catch is receiveMsg's PlayerCapCatch accept (0x408b2c..0x408b34), which
+                    // sets both flag bytes, and the player's `attackSensor` then restarts its
+                    // after-catch counter (the trigger set at 0x428528, after `startCatch`
+                    // 0x42859c). A hidden cap (the return ended away from the player,
+                    // `hide(false)`, see `cap_return.rs`) is taken in the player's `movement`
+                    // instead (`isNoPutOnHide` 0x41dd6c), by the same choice
+                    // (`isEnableReactionCapCatch`, 0x41f8f4): `startCatch` sets the put-on byte
+                    // only (0x3fcdc0) and no trigger, so the catch window and the byte
+                    // `isCatched` reads stay as the throw left them.
+                    let by_sensor = moment == CapEvent::Caught;
                     self.cap_water_left = cap.water_effects();
-                    self.catch_window = t::CAP_CATCH_WINDOW;
+                    if by_sensor {
+                        self.cap_catched = true;
+                        self.catch_window = t::CAP_CATCH_WINDOW;
+                    }
                     if !self.catch_reacts() {
                         // The cap goes on the head (`putOnCapPlayer`): no catch
                         // animation, hit reaction or effect. It is reported
-                        // once more where this frame left it.
+                        // once more where this frame left it. `forcePutOn` sets the catch
+                        // byte as well (0x3fce6c), even when the player skips the reaction.
+                        self.cap_catched = true;
                         self.cap_put_on = true;
                         break;
                     }

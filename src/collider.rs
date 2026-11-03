@@ -1579,6 +1579,19 @@ impl PlayerCollider {
             .filter(|wall| self.best[1] >= 0. && wall.location == Location::Face)
     }
 
+    /// `rs::isCollidedWall` (0x565eb4): the deepest wall contact of the last move reached at
+    /// least zero deep (`+0x80 >= 0`), on a face or not. `rs::getCollidedWallNormal` (0x565fd4)
+    /// is that struck triangle's face normal.
+    pub fn collided_wall(&self) -> Option<&Contact> {
+        self.wall.as_ref().filter(|_| self.best[1] >= 0.)
+    }
+
+    /// `rs::isCollidedCeiling` (0x565edc): the same for the deepest ceiling contact
+    /// (`+0x90 >= 0`); `rs::getCollidedCeilingNormal` (0x565ff8) is its face normal.
+    pub fn collided_ceiling(&self) -> Option<&Contact> {
+        self.ceiling.as_ref().filter(|_| self.best[2] >= 0.)
+    }
+
     /// `rs::resetCollision` (`PlayerCollider::onInvalidate`): the contacts are
     /// forgotten and the collider takes the actor's pose as the one it stood
     /// in.

@@ -26,7 +26,7 @@ use crate::collider::{Location, PlayerCollider};
 use crate::geometry::TriangleMesh;
 use crate::movement::cap_pose::{CapPose, direction_of, horizontal_length, length};
 use crate::movement::{Throw, UNIT};
-use crate::movement::{cap_ground, cap_rolling, cap_spiral};
+use crate::movement::{cap_ground, cap_return, cap_rolling, cap_spiral};
 use crate::water::{SurfaceFinder, WaterAreas};
 use bevy::prelude::*;
 
@@ -52,7 +52,10 @@ mod param {
     /// Throw distance (`mMaxDist`) and braking time (`mBreakTime`).
     pub const RANGE: f32 = 500.;
     pub const BRAKE_FRAMES: u32 = 10;
-    /// Most the return turns toward the player in one frame, in degrees.
+    /// Most the return turns toward the player in one frame, in degrees (`ターン限界角度`, read
+    /// by `exeReturn` at 0x407240 from `HackCapThrowParam + 0x48`). The value is the game's own:
+    /// 40.0 in `ActorParam.byml` of `MarioCapCommonInfo.szs` (and in its `ActorParamMoon` and
+    /// `ActorParamMoonBackUp` siblings), the archive the other throw parameters here come from.
     pub const TURN_LIMIT_DEGREES: f32 = 40.;
 }
 /// Where the cap appears, in front of the thrown-from point
@@ -315,6 +318,12 @@ pub enum CapEvent {
     LockedOn(usize),
     /// A rejected `CapKeepLockOn` made the cap return (`tryReturn`).
     LockReturn,
+    /// The return ended away from the player (`exeReturn`'s tail, see `cap_return`): the cap
+    /// hid itself (`HackCap::hide(false)`, 0x407584) and the player takes it back as in a catch.
+    Hidden,
+    /// The return that flew to a captured target ended near it (`endHackThrowAndReturnHack`).
+    /// Nothing in the rewrite starts such a return (`Cap::start_hack_return`).
+    TargetReached,
     /// The cap began to skim the water's surface (the reaction `水面移動`, its effect and sound).
     WaterFly,
     /// The cap began to rest on the water's surface (the reaction `水面待機`).
@@ -484,6 +493,17 @@ pub struct Cap {
     /// `tryReturn` turned the collision off for `+0x290` steps (`al::offCollide`); the return's
     /// executions count it down and turn it back on at zero (0x407030).
     collision_off_steps: i32,
+    /// `exeReturn`'s wall counter (`+0x284`), cleared by its first execution.
+    wall_hits: i32,
+    /// The captured target the return flies to instead of the head (`+0x2a4` set, the target
+    /// matrix's translation); see `cap_return` for why nothing sets it here.
+    hack_target: Option<Vec3>,
+    /// The return ended (`hide`, or the target's end): the cap does not run any more.
+    hidden: bool,
+    /// The throw type is the rolling one (`+0x268` near zero and `+0x26c` not, `HackCap::
+    /// isThrowTypeRolling` 0x400250): `startThrow` writes the pair and nothing clears it, not
+    /// even the rebound, which does clear `rolling` here.
+    rolling_throw: bool,
     water: CapWater,
 }
 impl Cap {
@@ -573,6 +593,10 @@ impl Cap {
             lock_on: None,
             carry_collider: false,
             collision_off_steps: 0,
+            wall_hits: 0,
+            hack_target: None,
+            hidden: false,
+            rolling_throw: rolled,
             water: CapWater::default(),
         };
         if rolled {
@@ -820,6 +844,9 @@ impl Cap {
     /// Run one frame: the current nerve, then the collider's move. Returns
     /// what happened.
     pub fn update(&mut self, world: &CapWorld) -> Vec<CapEvent> {
+        if self.hidden {
+            return Vec::new();
+        }
         self.frames += 1;
         self.age = self.frames as f32 / crate::movement::FPS;
         self.water.fly_started = false;
@@ -879,7 +906,9 @@ impl Cap {
             self.advance(world.mesh);
         }
         // The sensors touch where the cap has come to.
+        // (A return that ended this frame hid the cap and turned its hit sensors off.)
         if self.nerve == CapNerve::Return
+            && !self.hidden
             && ((self.spot - body).length() < CATCH_SENSOR_RADIUS + BODY_SENSOR_RADIUS
                 || (self.spot - head).length() < CATCH_SENSOR_RADIUS + HEAD_SENSOR_RADIUS)
         {
@@ -1472,14 +1501,20 @@ impl Cap {
     /// 0x407220) when the head is within 200 horizontally (0x40717c) and the pose's up axis is
     /// not parallel to the way to it (0x4071d8), then the stand (`makeQuatFrontUp` 0x407350,
     /// `updatePoseQuat` 0x40735c) unless the turned front is parallel to the up axis it takes
-    /// (0x407330). Both need a way to the head (`tryNormalizeOrZero` 0x407104, gate 0x407108).
+    /// (0x407330). Both need a way to the head (`tryNormalizeOrZero` 0x407104, gate 0x407108);
+    /// without one the nerve goes straight to its tail (0x407434), which still runs.
     /// A frame in which the stay nerve hands over to this one runs the stay's body and not this
     /// one (`NerveKeeper::update`, 0x9596a4..0x9596dc, switches the nerve after the execute), so
     /// the trace row that already says `Return` at step 0 still holds the stay's pose.
     ///
-    /// Not ported: `tryCollideWallLockOn` (0x40705c) and the tail after the flight (0x407434..
-    /// 0x40764c: the wall counter, the 180-step limit and the end of a lock-on return). The
-    /// separate-play block (0x4075a4..0x407648) is behind the gate that `throw_stay` documents.
+    /// After the flight comes the tail (`end_return`, `cap_return.rs`): the wall counter and the
+    /// ends of the return. `tryCollideWallLockOn` (0x407058, before the flight) answers true when
+    /// the cap's collided wall belongs to a collision part whose owner accepts `CapStartLockOn`
+    /// (`rs::tryGetCollidedWallSensor` 0x5660fc reads the wall hit's sensor, `+0x138` of the hit's
+    /// collision part) and starts the lock-on nerve; the rewrite's lock-on targets (hangers and
+    /// switches, `LockTarget`) have no collision part its meshes could hit (the loaders refuse
+    /// `IsConnectToCollision`), so it always answers false here. The separate-play block that ends
+    /// the nerve (0x4075a4..0x407648) is behind the gate that `throw_stay` documents.
     fn go_back(
         &mut self,
         head: Vec3,
@@ -1501,13 +1536,21 @@ impl Cap {
                 thrown(Throw::Forward, self.air, self.left)
             };
             self.try_play(action);
+            // The one 8-byte store at +0x284 clears the return speed and the wall counter.
             self.return_speed = 0.;
+            self.wall_hits = 0;
         }
-        let to_head = head - self.spot;
+        let to_head = self.hack_target.unwrap_or(head) - self.spot;
         let (direction, found) = direction_of(to_head);
-        if !found {
-            return None;
+        if found {
+            self.fly_toward(to_head, direction);
         }
+        self.end_return(if found { direction } else { Vec3::ZERO }, events);
+        None
+    }
+    /// The flight of `exeReturn` (0x40710c..0x407430) toward a head `to_head` away, in
+    /// `direction`.
+    fn fly_toward(&mut self, to_head: Vec3, direction: Vec3) {
         if horizontal_length(to_head) < RETURN_SLOW_DISTANCE {
             self.return_speed = self
                 .return_speed
@@ -1522,9 +1565,10 @@ impl Cap {
             .front_turned_toward(direction, param::TURN_LIMIT_DEGREES)
             .unwrap_or(Vec3::Z);
         // A throw type of rolling (`startThrow` stores `Vector2f::ey`, 0x3fca94, so +0x268 is zero
-        // and +0x26c is not: the test at 0x40729c..0x4072b0) keeps its up axis across the new
-        // front, like a wheel (0x4072b4..0x40731c); the other throws stand upright (0x407284).
-        if self.rolling.is_some() {
+        // and +0x26c is not: the test at 0x40729c..0x4072b0, `isThrowTypeRolling`) keeps its up
+        // axis across the new front, like a wheel (0x4072b4..0x40731c); the other throws stand
+        // upright (0x407284).
+        if self.rolling_throw {
             self.pose.stand_facing_across(front);
         } else {
             self.pose.stand_facing(front);
@@ -1541,7 +1585,44 @@ impl Cap {
         let across = self.velocity - self.front * self.velocity.dot(self.front);
         let ease = ease_in((self.step as f32 / RETURN_EASE_FRAMES).min(1.));
         self.velocity = self.front * self.return_speed + across * (1. - ease);
-        None
+    }
+    /// The tail of `exeReturn` (0x407434..0x40764c), see `cap_return.rs`: the wall counter from
+    /// what the collider touched in its last move, then the step, counter and target ends.
+    /// `direction` is the way to the head this execution (zero without one).
+    fn end_return(&mut self, direction: Vec3, events: &mut Vec<CapEvent>) {
+        let normal = if let Some(wall) = self.collider.collided_wall() {
+            wall.normal
+        } else if let Some(ceiling) = self.collider.collided_ceiling() {
+            ceiling.normal
+        } else if self.collider.collided_ground() {
+            self.collider.ground_normal
+        } else {
+            Vec3::ZERO
+        };
+        self.wall_hits = cap_return::wall_counter(self.wall_hits, normal, direction);
+        let target_distance = self.hack_target.map(|target| length(target - self.spot));
+        let Some(end) = cap_return::end(self.step, self.wall_hits, target_distance) else {
+            return;
+        };
+        // `hide` and `endHackThrowAndReturnHack` both leave the cap hidden, its hit sensors off
+        // and its velocity zero (`setVelocityZero` 0x3fa8f4, 0x3fdd40).
+        self.hidden = true;
+        self.velocity = Vec3::ZERO;
+        match end {
+            cap_return::End::Hide => events.push(CapEvent::Hidden),
+            cap_return::End::Target => {
+                self.hack_target = None;
+                events.push(CapEvent::TargetReached);
+            }
+        }
+    }
+    /// Make the cap's return fly to a captured target's matrix (`+0x2a4` set, `exeReturn`
+    /// 0x407068..0x407098). The original sets it when a captured object throws the cap to another
+    /// (`receiveRequestTransferHack` 0x3fc190); the rewrite has no capture, so nothing in the
+    /// game calls this and only the tests build such a return.
+    #[cfg(test)]
+    pub fn start_hack_return(&mut self, target: Vec3) {
+        self.hack_target = Some(target);
     }
 }
 /// The cap's flight state, without the collider's bookkeeping: the simulation
