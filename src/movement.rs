@@ -998,7 +998,8 @@ pub enum Fx {
     /// A step of the cap's stay (it sounds on every one) and the end of it.
     CapStay,
     CapReturn,
-    /// The cap turned along a wall; the number is how square the hit was.
+    /// The cap turned along a wall (the number is how square the hit was) or onto the surface
+    /// its terrain helper found (the turn's angle in degrees).
     CapWallHit(f32),
     /// An exported actor accepted the cap's `CapReflectCollide`: its hit reaction.
     CapReflect,
@@ -6004,6 +6005,7 @@ impl Player {
                     self.rocket.request_scene_stop(2);
                 }
                 CapEvent::WallHit(strength) => self.events.push(Fx::CapWallHit(strength)),
+                CapEvent::TerrainTurn(degrees) => self.events.push(Fx::CapWallHit(degrees)),
                 CapEvent::Staying => self.events.push(Fx::CapStay),
                 CapEvent::WaterFly => self.events.push(Fx::CapWaterFly),
                 CapEvent::WaterStay => self.events.push(Fx::CapWaterStay),

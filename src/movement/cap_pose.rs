@@ -52,11 +52,12 @@ impl CapPose {
     }
 
     /// The throw nerves' ground helper (`0x401d0c`, called by `exeThrow`, `exeThrowBrake` and
-    /// `exeThrowSpiral` after their wall reaction) ends by standing the cap upright facing back
-    /// along the direction it keeps (`makeQuatFrontUp(-direction, up)`, slerped whole from its
-    /// own quaternion): a cap turned along a wall, or circling, faces back along its new way.
-    pub fn face_back_along(&mut self, direction: Vec3) {
-        let target = quat_front_up(-direction, NEGATED_GRAVITY);
+    /// `exeThrowSpiral` after their wall reaction) ends by standing the cap on the up axis it
+    /// keeps, facing back along the direction it keeps (`makeQuatFrontUp(-direction, up)` at
+    /// `0x40247c`, slerped whole from its own quaternion): a cap turned along a wall, or
+    /// circling, faces back along its new way, and one that touched ground leans on its normal.
+    pub fn face_back_along(&mut self, direction: Vec3, up: Vec3) {
+        let target = quat_front_up(-direction, up);
         *self = Self::given(slerp(self.stored, target, 1.));
     }
 

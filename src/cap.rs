@@ -306,6 +306,9 @@ pub enum CapEvent {
     /// reaction, its effect and the sound `HitCol`, which is louder the
     /// squarer the hit (the cosine of the angle).
     WallHit(f32),
+    /// The throw nerves' terrain helper (`0x401d0c`) turned the cap onto the surface its collider
+    /// touched, by this many degrees: the same collision reaction and sound.
+    TerrainTurn(f32),
     /// Accepted CapReflectCollide: index of the exported SignBoardNormal.
     Reflected(usize),
     /// An accepted `CapStartLockOn`: index of the exported CapHanger.
@@ -853,7 +856,9 @@ impl Cap {
             CapNerve::ThrowBrake => self.throw_brake(&mut events, world),
             CapNerve::ThrowRolling => self.throw_rolling(),
             CapNerve::ThrowRollingBrake => self.throw_rolling_brake(),
-            CapNerve::ThrowSpiral => self.throw_spiral(world.player / UNIT, world.mesh),
+            CapNerve::ThrowSpiral => {
+                self.throw_spiral(world.player / UNIT, world.mesh, &mut events)
+            }
             CapNerve::ThrowStay => self.throw_stay(world, &mut events),
             CapNerve::Trample | CapNerve::TrampleReturn => self.trample(&mut events),
             CapNerve::Rebound => self.rebound(),
@@ -966,8 +971,8 @@ impl Cap {
             return Some(next);
         }
         self.wall_reaction(events);
-        self.follow_terrain(world.mesh);
-        self.pose.face_back_along(self.front);
+        self.follow_terrain(world.mesh, events);
+        self.pose.face_back_along(self.front, self.up);
         self.change_throw_param_in_water(world, events);
         self.velocity = scale_except_direction(self.front, self.velocity, ACROSS_DAMPING);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
@@ -1171,7 +1176,12 @@ impl Cap {
     /// `cap_spiral`) and returns after 105 steps. The order is the nerve's: the point the cap
     /// circles, the terrain helper (`0x401d0c`, as the other throw nerves call it, with the
     /// curve's front carried along with the up axis it eases), then the step.
-    fn throw_spiral(&mut self, feet: Vec3, mesh: Option<&TriangleMesh>) -> Option<CapNerve> {
+    fn throw_spiral(
+        &mut self,
+        feet: Vec3,
+        mesh: Option<&TriangleMesh>,
+        events: &mut Vec<CapEvent>,
+    ) -> Option<CapNerve> {
         if self.step == 0 {
             self.curve_front = self.front;
             self.play("FlyingWaitSpiral");
@@ -1184,10 +1194,10 @@ impl Cap {
             param::THROW_HEIGHT * self.up.z + feet.z,
         );
         let previous_up = self.up;
-        self.follow_terrain(mesh);
+        self.follow_terrain(mesh, events);
         self.curve_front = cap_spiral::align_curve_front(self.curve_front, previous_up, self.up);
         // The helper ends by turning the cap to face back along the way it moved last step.
-        self.pose.face_back_along(self.front);
+        self.pose.face_back_along(self.front, self.up);
         let step = cap_spiral::step(
             self.step,
             self.spot,
@@ -1209,8 +1219,8 @@ impl Cap {
             return Some(next);
         }
         self.wall_reaction(events);
-        self.follow_terrain(world.mesh);
-        self.pose.face_back_along(self.front);
+        self.follow_terrain(world.mesh, events);
+        self.pose.face_back_along(self.front, self.up);
         self.change_throw_param_in_water(world, events);
         self.velocity += self.front * self.brake_step;
         self.velocity = scale_except_direction(self.front, self.velocity, ACROSS_DAMPING);
@@ -1219,8 +1229,9 @@ impl Cap {
         (stopped || reversed || self.step >= param::BRAKE_FRAMES).then_some(CapNerve::ThrowStay)
     }
     /// The terrain helper the throw nerves share (see `cap_ground`).
-    fn follow_terrain(&mut self, mesh: Option<&TriangleMesh>) {
-        cap_ground::follow(
+    fn follow_terrain(&mut self, mesh: Option<&TriangleMesh>, events: &mut Vec<CapEvent>) {
+        let touch = self.touched_surfaces();
+        let turn = cap_ground::follow(
             cap_ground::Cap {
                 spot: &mut self.spot,
                 front: &mut self.front,
@@ -1228,9 +1239,30 @@ impl Cap {
                 velocity: &mut self.velocity,
                 counter: &mut self.ground_counter,
             },
+            &touch,
             mesh,
             param::THROW_HEIGHT,
         );
+        if let Some(degrees) = turn {
+            events.push(CapEvent::TerrainTurn(degrees));
+        }
+    }
+
+    /// What the helper asks the collider after its last move: `rs::isCollidedWallFace` (a wall
+    /// met on a face) and `rs::isCollidedGround`, with their normals.
+    fn touched_surfaces(&self) -> cap_ground::Touch {
+        let wall_face = self
+            .collider
+            .wall
+            .as_ref()
+            .filter(|wall| wall.location == Location::Face)
+            .map(|wall| cap_ground::Surface {
+                normal: wall.normal,
+            });
+        let ground = self.collider.grounded().then_some(cap_ground::Surface {
+            normal: self.collider.ground_normal,
+        });
+        cap_ground::Touch { wall_face, ground }
     }
 
     // ---- The water ---------------------------------------------------------------------------
