@@ -1253,15 +1253,16 @@ impl Cap {
     fn touched_surfaces(&self) -> cap_ground::Touch {
         let wall_face = self
             .collider
-            .wall
-            .as_ref()
-            .filter(|wall| wall.location == Location::Face)
+            .collided_wall_face()
             .map(|wall| cap_ground::Surface {
                 normal: wall.normal,
             });
-        let ground = self.collider.grounded().then_some(cap_ground::Surface {
-            normal: self.collider.ground_normal,
-        });
+        let ground = self
+            .collider
+            .collided_ground()
+            .then_some(cap_ground::Surface {
+                normal: self.collider.ground_normal,
+            });
         cap_ground::Touch { wall_face, ground }
     }
 
@@ -1405,6 +1406,16 @@ impl Cap {
 
     /// `HackCap::exeThrowStay`: hover for the stay time, longer while the
     /// button is held, then go back.
+    ///
+    /// The original's stay nerve carries a second copy of the terrain helper and a pose rebuild
+    /// (`0x405660..0x405ae0`), and the port does not run them. They sit behind the
+    /// `PlayerSeparateCapFlag` the player refreshes every frame (`0x420438`): the gate is
+    /// `+0x299 == 0`, flag byte 0 non-zero and byte 2 zero. Byte 0 is only ever set to 1 after
+    /// `rs::isSeparatePlay` answered true, the game's separate-play mode
+    /// (`GameDataHolder::setSeparatePlay`, called by the pad-system update, the boot menu, a
+    /// sequence change and `rs::changeSeparatePlayMode`), a second player's controller mode the
+    /// port does not have. A single player never opens the gate, so the cap keeps the pose of its
+    /// last throw step while it stays.
     fn throw_stay(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         let hold = world.hold;
         if self.step == 0 {
