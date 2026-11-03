@@ -1863,10 +1863,16 @@ fn original_simulation_trace() {
     }
     // ponytail: this bit-exact baseline pins the Windows toolchain; other
     // platforms exercise the same trace but libm may round differently.
+    //
+    // A regression baseline, not game-verified: its continuations run in the synthetic scene.
+    // The three step-181 hide ends come from the no-stage plane clamp in `Cap::advance`. The
+    // Run and Swim reaction answers behind root rows 3439, 23439 and 27322 are unverified
+    // (D4). Open gaps (D5-D9): same-frame order, the tryReturn branch, the Wait stage-switch
+    // refusal at 0x48d62c, the rolling_throw source and real-stage lock-on.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xdabf6898292eab9b,
-        "simulation differs from the shared setNerveOnGround revision"
+        hash, 0x478071695fe5087d,
+        "simulation differs from the cap terrain helper, pose up axis and return tail revision"
     );
     #[cfg(not(target_os = "windows"))]
     assert_ne!(hash, 0);
