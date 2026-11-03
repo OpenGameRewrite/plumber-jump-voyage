@@ -45,7 +45,8 @@ const COUNTER_LIMIT: i32 = 5;
 const RATE_FROM: f32 = 2.;
 const RATE_TO: f32 = 5.;
 const MAX_RATE: f32 = 0.5;
-/// `al::isNearZeroOrLess(height - throw height, 0.001)`.
+/// The limit of `al::isNearZeroOrLess(height - throw height, 0.001)` and `al::isNearZeroOrGreater`
+/// (`0x187fc80`): both compare strictly against it (`< 0.001`, `> -0.001`).
 const NEAR_ZERO: f32 = 0.001;
 /// The cosine of 5 degrees: the hit surface counts as tilted against the cap's up axis when the
 /// cosine between them is under it.
@@ -129,7 +130,7 @@ fn keeps_low(cap: &Cap, ground: Option<&Ground>, throw_height: f32) -> bool {
         return false;
     };
     let height = dot(*cap.spot - ground.position, *cap.up);
-    let low = height - throw_height <= NEAR_ZERO;
+    let low = height - throw_height < NEAR_ZERO;
     let diving = dot(*cap.front, NEGATED_GRAVITY) < 0. && dot(*cap.front, ground.normal) > 0.;
     low || diving
 }
@@ -153,7 +154,7 @@ fn ease_toward_world_up(cap: &mut Cap, ground: Option<&Ground>, throw_height: f3
     // Ground that is flatter than the cap's up axis draws a cap that is too high down to the
     // throw height (only while the cap does not point downward).
     if let Some(ground) = ground {
-        let level = dot(*cap.front, NEGATED_GRAVITY) >= -NEAR_ZERO;
+        let level = dot(*cap.front, NEGATED_GRAVITY) > -NEAR_ZERO;
         let across = dot(new_up, ground.normal).abs();
         if level
             && across < TILT_COS

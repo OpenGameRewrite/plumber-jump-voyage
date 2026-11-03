@@ -9,6 +9,7 @@ pub(super) fn run() {
     the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
     the_throw_down_rolls_along_the_floor();
     the_helper_makes_the_front_a_unit_vector_in_its_easing_only();
+    the_near_zero_tests_are_strict();
     the_collision_turn_follows_the_binarys_gates();
     the_collision_turn_lays_the_front_and_velocity_in_the_new_plane();
     a_cap_stood_on_its_up_axis_faces_back_along_its_front();
@@ -480,6 +481,60 @@ fn the_helper_makes_the_front_a_unit_vector_in_its_easing_only() {
 /// The collision turn's gates (0x402104..0x4021e8, 0x402218): a wall face counts only when its
 /// normal is at least half along the cap's up axis and leans against the gravity; otherwise the
 /// ground does; a surface facing away from the up axis turns nothing.
+/// `al::isNearZeroOrLess(x, 0.001)` is `x < 0.001` and `al::isNearZeroOrGreater(x, 0.001)` is
+/// `x > -0.001` (0x91f568, 0x91f544): a value exactly on the limit is outside it.
+#[cfg_attr(test, test)]
+fn the_near_zero_tests_are_strict() {
+    let floor = flat_floor();
+    // The ground check (0x40a038): the cap's height over the floor minus the throw height.
+    let height_over = |throw_height: f32, height: f32| {
+        let (mut front, mut up, mut velocity) = (Vec3::Z, Vec3::Y, Vec3::new(0., 0., 10.));
+        let mut spot = Vec3::new(0., height, 0.);
+        let mut counter = 3;
+        cap_ground::follow(
+            cap_ground::Cap {
+                spot: &mut spot,
+                front: &mut front,
+                up: &mut up,
+                velocity: &mut velocity,
+                counter: &mut counter,
+            },
+            &cap_ground::Touch::default(),
+            Some(&floor),
+            throw_height,
+        );
+        counter
+    };
+    // Exactly 0.001 over the throw height is not low (the counter goes on); a hair under is.
+    assert_eq!(height_over(0., 0.001), 4);
+    assert_eq!(height_over(0., 0.000_999_9), 0);
+
+    // The pull toward the throw height (0x401e94): a cap far above floor that is flatter than its
+    // up axis is drawn down unless its front rises by more than -0.001 along the up axis.
+    let pulled = |front_up: f32| {
+        let tilt = 40_f32.to_radians();
+        let up = Vec3::new(tilt.sin(), tilt.cos(), 0.);
+        let (mut front, mut up, mut velocity) = (Vec3::new(0., front_up, 1.), up, Vec3::Z);
+        let mut spot = Vec3::new(0., 100., 0.);
+        let mut counter = 3;
+        cap_ground::follow(
+            cap_ground::Cap {
+                spot: &mut spot,
+                front: &mut front,
+                up: &mut up,
+                velocity: &mut velocity,
+                counter: &mut counter,
+            },
+            &cap_ground::Touch::default(),
+            Some(&floor),
+            70.,
+        );
+        spot.y < 100.
+    };
+    assert!(!pulled(-0.001), "on the limit");
+    assert!(pulled(-0.000_999_9), "inside the limit");
+}
+
 #[cfg_attr(test, test)]
 fn the_collision_turn_follows_the_binarys_gates() {
     let state = |up: Vec3| (Vec3::Z, up, Vec3::new(0., 0., 10.));
