@@ -13,6 +13,7 @@ pub(super) fn run() {
     the_collider_alone_decides_the_ground_a_ground_spin_hands_over();
     after_a_wall_jump_the_input_pointing_back_is_clamped_sideways();
     a_throw_on_the_wall_jumps_first_step_sets_the_trigger_and_turns_the_actor_back();
+    the_wall_jump_throw_resets_the_wall_along_memory_before_the_helper_reads_the_stick();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -222,4 +223,51 @@ fn a_throw_on_the_wall_jumps_first_step_sets_the_trigger_and_turns_the_actor_bac
         let front = other.actor_pose().front();
         assert!((front - Vec3::Z).length() < 1e-6, "{front:?}");
     }
+}
+
+/// `exeWallAir`'s throw press calls `PlayerInput::resetAlongWall` (0x4245ec) before the spin's
+/// helper runs, so a stick held along the wall the jump left is not bent along it: the helper's
+/// direction is the stick as it is. The same press records the wall jump again from 20 below the
+/// body (`startSlideSpinAttack`, 0x48f6c8).
+#[cfg_attr(test, test)]
+fn the_wall_jump_throw_resets_the_wall_along_memory_before_the_helper_reads_the_stick() {
+    // A wall facing +z remembered at full weight; the stick is 20 degrees off the wall's
+    // direction (x) into the wall, within the 50 degrees the bend runs along it. The press turns
+    // the actor back to -z, so the stick is ahead of it and the helper's clamp leaves it alone.
+    let stick = Vec3::new(20f32.to_radians().cos(), 0., -20f32.to_radians().sin());
+    let mut p = facing_z(stick, 1.);
+    for _ in 0..40 {
+        p.wall_along.update(Some(Vec3::Z), Vec2::Y);
+    }
+    p.pos = Vec3::new(1., 2., 3.);
+    // The memory alone would bend the input onto the wall's direction.
+    let bent = p.plane_stick(Vec3::Y);
+    assert!((bent - Vec3::X).length() < 0.03, "{bent:?}");
+
+    p.mode = Move::WallJump;
+    p.frame = 0;
+    p.start_throw(Throw::Forward);
+    assert!(p.throwing.after_wall_air);
+    p.face_throw_direction();
+    let dir = p.throwing.dir.unwrap();
+    assert!((dir - stick).length() < 1e-6, "{dir:?}");
+    let (from, _) = p
+        .wall_history
+        .jump
+        .expect("the wall jump is recorded again");
+    assert!(
+        (from - Vec3::new(100., 200. - 20., 300.)).length() < 1e-3,
+        "{from:?}"
+    );
+
+    // Another state's throw leaves the memory and the history alone.
+    let mut other = facing_z(stick, 1.);
+    for _ in 0..40 {
+        other.wall_along.update(Some(Vec3::Z), Vec2::Y);
+    }
+    other.mode = Move::Idle;
+    other.start_throw(Throw::Forward);
+    let kept = other.plane_stick(Vec3::Y);
+    assert!((kept - Vec3::X).length() < 0.03, "{kept:?}");
+    assert!(other.wall_history.jump.is_none());
 }

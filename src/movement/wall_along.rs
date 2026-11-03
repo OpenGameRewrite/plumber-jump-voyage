@@ -83,6 +83,14 @@ impl WallAlong {
         self.rise();
     }
 
+    /// `PlayerInput::resetAlongWall` (0x44c0d4, one 8-byte store at +0x1c): the frames and the
+    /// weight go to zero; the remembered wall and stick (+0x24, +0x30) stay. Its only caller is
+    /// `exeWallAir`'s throw press (0x4245ec).
+    pub fn reset(&mut self) {
+        self.frames = 0;
+        self.weight = 0.;
+    }
+
     fn rise(&mut self) {
         self.weight += (1. - self.weight) * RISE_RATE;
     }
@@ -197,6 +205,17 @@ mod tests {
         let along = remembering(Vec3::NEG_Z);
         let out = along.snap(Vec3::Z, Vec3::Y);
         assert!((out - Vec3::Z).length() < 1.0e-5, "{out}");
+    }
+
+    #[test]
+    fn resetting_stops_the_bend_and_keeps_the_remembered_wall() {
+        let mut along = remembering(Vec3::NEG_Z);
+        let input = Vec3::new(30f32.to_radians().cos(), 0., 30f32.to_radians().sin());
+        assert!(along.snap(input, Vec3::Y).z.abs() < 0.03);
+        along.reset();
+        assert_eq!(along.snap(input, Vec3::Y), input);
+        assert_eq!((along.frames, along.weight), (0, 0.));
+        assert_eq!(along.wall, Vec3::NEG_Z);
     }
 
     #[test]

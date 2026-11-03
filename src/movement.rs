@@ -5653,8 +5653,14 @@ impl Player {
         self.throwing.after_wall_air =
             self.mode == Move::WallJump && self.frame == 0 && !self.nerve.deferred;
         if self.throwing.after_wall_air {
-            // The same press runs `PlayerStateWallAir::startSlideSpinAttack` (0x4245fc): the actor
-            // turns to face back, upright (0x48f6dc..0x48f740, `makeQuatFrontUp`).
+            // The press first resets the input's wall-along memory (`PlayerInput::resetAlongWall`,
+            // 0x4245ec: frames and weight to zero), so the helper's move input is not bent
+            // along the wall the jump left, unless the next frame's update remembers a wall again.
+            self.wall_along.reset();
+            // Then it runs `PlayerStateWallAir::startSlideSpinAttack` (0x4245fc): the wall jump is
+            // recorded again, from 20 below the body (0x48f6c8), and the actor turns to face
+            // back, upright (0x48f6dc..0x48f740, `makeQuatFrontUp`).
+            self.record_wall_jump_throw();
             let front = self.actor_pose().front();
             self.set_pose(pose_math::quat_front_up(-front, pose_math::NEGATED_GRAVITY));
         }

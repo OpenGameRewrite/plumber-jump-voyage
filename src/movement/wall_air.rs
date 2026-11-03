@@ -499,6 +499,18 @@ impl Player {
         self.wall_history.leave = Some((self.pos / UNIT, self.wall_air.slide.normal_start));
     }
 
+    /// `PlayerStateWallAir::startSlideSpinAttack` (0x48f654) records the wall jump again before it
+    /// turns the actor (`recordWallJump`, 0x48f6c8 -> 0x492d60: the flag, the position and the
+    /// collided wall's normal): from 20 below the body (`getTrans + getGravity * 20`), where
+    /// `exeSlide`'s own record (0x48f82c) takes the position as it is. The normal is the slide's,
+    /// as the jump's record takes it here (the collider still holds the wall the jump left).
+    pub(super) fn record_wall_jump_throw(&mut self) {
+        self.wall_history.jump = Some((
+            self.pos / UNIT + Vec3::NEG_Y * 20.,
+            self.wall_air.slide.normal_start,
+        ));
+    }
+
     /// `Keep`'s first steps: only the press into the wall.
     fn press_into_wall(&mut self) {
         self.v = self.wall_air.slide.press(self.v);
