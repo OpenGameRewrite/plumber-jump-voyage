@@ -207,6 +207,11 @@ mod t {
 /// left/right throw gesture sets one, and the rewrite's input has none.
 const BUTTON_THROW_SWING_ANGLE: f32 = 0.;
 
+/// The throw direction helper (0x4831b8) leaves a move input alone when it points back (along
+/// the actor's negated front) within 15 degrees: the limit of the band it clamps (cos 15
+/// degrees, float at 0x187fcd0).
+const THROW_BACK_COS: f32 = 0.965_925_8;
+
 #[path = "movement/cap_ground.rs"]
 pub(crate) mod cap_ground;
 #[path = "movement/cap_pose.rs"]
@@ -1131,6 +1136,10 @@ struct ThrowControl {
     /// The ground spin's step ended the state (`updateNerveState` answered true in
     /// `exeSpinCap`, 0x4239c4), which skips the actor's history restore of that step.
     child_ended: bool,
+    /// `PlayerTrigger` action 0 was on when the state appeared (`PlayerStateSpinCap` byte +0xa9,
+    /// stored by `appear` at 0x4819cc and read by both spins' first step as the throw direction
+    /// helper's last argument): the throw was pressed in the wall state's non-air steps.
+    after_wall_air: bool,
     /// The direction the cap leaves along, fixed on the state's first step.
     dir: Option<Vec3>,
     /// The up axis the swim spin stores on its first step and hands the cap on the throw frame
@@ -5634,6 +5643,20 @@ impl Player {
         let air = !self.grounded;
         self.setup_attack_info();
 
+        // `exeWallAir` (0x4245f8, the only writer of `PlayerTrigger` action 0 and `appear` the only
+        // reader, xref over the executable) sets the trigger when the throw is pressed in the
+        // wall state's steps that are not in the air: the slide, and the wall jump's first step
+        // (`PlayerStateWallAir::isAir` needs the air nerve past its step 0). The set and the
+        // appear belong to the same step (`NerveKeeper::update` changes the nerve at its tail) and
+        // the next `movement` clears it (0x41e000), so the state keeps the byte it read.
+        self.throwing.after_wall_air =
+            self.mode == Move::WallJump && self.frame == 0 && !self.nerve.deferred;
+        if self.throwing.after_wall_air {
+            // The same press runs `PlayerStateWallAir::startSlideSpinAttack` (0x4245fc): the actor
+            // turns to face back, upright (0x48f6dc..0x48f740, `makeQuatFrontUp`).
+            let front = self.actor_pose().front();
+            self.set_pose(pose_math::quat_front_up(-front, pose_math::NEGATED_GRAVITY));
+        }
         self.throwing.kind = Some(kind);
         self.throwing.up = None;
         self.throwing.in_air = air;
@@ -5715,8 +5738,16 @@ impl Player {
             .is_collided_ground()
             .then(|| self.collided_ground_normal())
             .filter(|normal| *normal != Vec3::Y);
-        let dir = if let Some(normal) = ground {
-            self.throw_direction_across(normal)
+        let dir = if self.throwing.after_wall_air {
+            // The helper's ground is the collided one, else the actor's own up axis.
+            let normal = if self.is_collided_ground() {
+                self.collided_ground_normal()
+            } else {
+                self.actor_pose().up()
+            };
+            self.throw_direction_across(normal, true)
+        } else if let Some(normal) = ground {
+            self.throw_direction_across(normal, false)
         } else if self.tilt >= STICK_DEADZONE {
             self.stick
         } else {
@@ -5732,14 +5763,32 @@ impl Player {
     /// states' first step): `PlayerInput::calcCapThrowInput` is the move input in the plane of
     /// the ground normal (`calcMoveInputImpl`, 0x44dd84); without a direction the actor's front
     /// is carried from its up axis onto that plane (0x4832c8..0x483300). On level ground the
-    /// stick is already the direction. The branch for `PlayerTrigger` 0 (set by `exeWallAir`
-    /// only, 0x4245f8) is not ported.
-    fn throw_direction_across(&self, normal: Vec3) -> Vec3 {
-        let (input, has_direction) = pose_math::try_normalize_or_zero(self.plane_stick(normal));
+    /// stick is already the direction. With `after_wall_air` (the helper's last argument, the
+    /// `PlayerTrigger` 0 branch, 0x4831fc..0x4832b8) the move input that points back within the
+    /// band between 90 and 15 degrees loses its part along the direction behind the actor (its
+    /// negated front carried onto the plane of the normal), so the throw cannot turn back into
+    /// the wall the jump left. The comparison uses the move input as it is, not its direction, so
+    /// a half-tilted stick reaches the band at a smaller angle.
+    fn throw_direction_across(&self, normal: Vec3, after_wall_air: bool) -> Vec3 {
+        let pose = self.actor_pose();
+        let mut input = self.plane_stick(normal);
+        if after_wall_air {
+            let (behind, has_behind) = pose_math::try_normalize_or_zero(along_vector_normal_h(
+                -pose.front(),
+                pose.up(),
+                normal,
+            ));
+            if has_behind {
+                let toward = pose_math::dot(input, behind);
+                if toward > 0. && toward < THROW_BACK_COS {
+                    input = vector_lib::verticalize_vec(behind, input);
+                }
+            }
+        }
+        let (input, has_direction) = pose_math::try_normalize_or_zero(input);
         if has_direction {
             return input;
         }
-        let pose = self.actor_pose();
         pose_math::normalize(pose_math::along_vector_normal_h(
             pose.front(),
             pose.up(),

@@ -11,6 +11,8 @@ pub(super) fn run() {
     the_slope_throw_direction_lies_across_the_ground_normal();
     the_first_step_takes_the_direction_across_the_ground_the_cap_is_handed();
     the_collider_alone_decides_the_ground_a_ground_spin_hands_over();
+    after_a_wall_jump_the_input_pointing_back_is_clamped_sideways();
+    a_throw_on_the_wall_jumps_first_step_sets_the_trigger_and_turns_the_actor_back();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -87,13 +89,13 @@ fn the_slope_throw_direction_lies_across_the_ground_normal() {
     let mut p = on_slope();
     p.stick = Vec3::Z;
     p.tilt = 1.;
-    let dir = p.throw_direction_across(slope_normal());
+    let dir = p.throw_direction_across(slope_normal(), false);
     assert!((dir - Vec3::new(0., 0.6, 0.8)).length() < 1e-6, "{dir:?}");
     assert!(dir.dot(slope_normal()).abs() < 1e-6);
     // Without a direction the actor's front is carried onto the plane (0x4832c8..0x483300).
     p.tilt = 0.;
     p.stick = Vec3::ZERO;
-    let dir = p.throw_direction_across(slope_normal());
+    let dir = p.throw_direction_across(slope_normal(), false);
     assert!((dir.length() - 1.).abs() < 1e-6);
     assert!(dir.dot(slope_normal()).abs() < 1e-6, "{dir:?}");
 }
@@ -158,4 +160,66 @@ fn the_collider_alone_decides_the_ground_a_ground_spin_hands_over() {
     };
     released.launch_cap(Throw::Forward, false);
     assert_eq!(released.launch.as_ref().unwrap().up, Vec3::Y);
+}
+
+/// A player facing +z on level ground whose stick is pushed along `direction` by `tilt`.
+fn facing_z(direction: Vec3, tilt: f32) -> Player {
+    let mut p = Player {
+        grounded: true,
+        stick: direction,
+        tilt,
+        ..default()
+    };
+    p.set_pose(pose_math::quat_front_up(Vec3::Z, Vec3::Y));
+    p
+}
+
+/// The helper's `PlayerTrigger` 0 branch (0x4831fc..0x4832b8): the move input that points back
+/// (along the negated front) between 90 and 15 degrees of it loses its backward part; the
+/// comparison takes the move input as it is, so a smaller tilt reaches the band at a smaller angle.
+#[cfg_attr(test, test)]
+fn after_a_wall_jump_the_input_pointing_back_is_clamped_sideways() {
+    let sixty_off_back = Vec3::new(60f32.to_radians().sin(), 0., -60f32.to_radians().cos());
+    let p = facing_z(sixty_off_back, 1.);
+    let dir = p.throw_direction_across(Vec3::Y, true);
+    assert!((dir - Vec3::X).length() < 1e-6, "{dir:?}");
+    // Without the trigger the input is the direction as it is.
+    let plain = p.throw_direction_across(Vec3::Y, false);
+    assert!((plain - sixty_off_back).length() < 1e-6, "{plain:?}");
+    // Within 15 degrees of straight back, and ahead, the input stays.
+    let ten_off_back = Vec3::new(10f32.to_radians().sin(), 0., -10f32.to_radians().cos());
+    let back = facing_z(ten_off_back, 1.).throw_direction_across(Vec3::Y, true);
+    assert!((back - ten_off_back).length() < 1e-6, "{back:?}");
+    let ahead = Vec3::new(0.5, 0., 0.5_f32.sqrt() * 1.2).normalize();
+    let forward = facing_z(ahead, 1.).throw_direction_across(Vec3::Y, true);
+    assert!((forward - ahead).length() < 1e-6, "{forward:?}");
+    // The same ten degrees at half tilt: the dot product (0.49) falls inside the band.
+    let half = facing_z(ten_off_back, 0.5).throw_direction_across(Vec3::Y, true);
+    assert!((half - Vec3::X).length() < 1e-6, "{half:?}");
+}
+
+/// Without a move input the direction is the actor's front, which the trigger's throw has
+/// just turned back (`startSlideSpinAttack`).
+#[cfg_attr(test, test)]
+fn a_throw_on_the_wall_jumps_first_step_sets_the_trigger_and_turns_the_actor_back() {
+    let mut p = facing_z(Vec3::ZERO, 0.);
+    p.mode = Move::WallJump;
+    p.frame = 0;
+    p.start_throw(Throw::Forward);
+    assert!(p.throwing.after_wall_air);
+    let front = p.actor_pose().front();
+    assert!((front - Vec3::NEG_Z).length() < 1e-6, "{front:?}");
+    p.face_throw_direction();
+    let dir = p.throwing.dir.unwrap();
+    assert!((dir - Vec3::NEG_Z).length() < 1e-6, "{dir:?}");
+    // The jump's later steps and the other states leave the trigger off and the pose alone.
+    for (mode, frame) in [(Move::WallJump, 1), (Move::Idle, 0)] {
+        let mut other = facing_z(Vec3::ZERO, 0.);
+        other.mode = mode;
+        other.frame = frame;
+        other.start_throw(Throw::Forward);
+        assert!(!other.throwing.after_wall_air);
+        let front = other.actor_pose().front();
+        assert!((front - Vec3::Z).length() < 1e-6, "{front:?}");
+    }
 }
