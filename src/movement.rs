@@ -5709,8 +5709,13 @@ impl Player {
             .mesh_ground
             .filter(|_| self.grounded)
             .unwrap_or(Vec3::Y);
-        let dir = if self.grounded && up != Vec3::Y {
-            self.throw_direction_across(up)
+        // (The ground the collider holds, as `launch_up_axis` hands it to the cap.)
+        let ground = self
+            .grounded
+            .then(|| self.collided_ground_normal())
+            .filter(|normal| *normal != Vec3::Y);
+        let dir = if let Some(normal) = ground {
+            self.throw_direction_across(normal)
         } else if self.tilt >= STICK_DEADZONE {
             self.stick
         } else {

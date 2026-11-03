@@ -9,6 +9,7 @@ pub(super) fn run() {
     a_throw_from_level_ground_keeps_the_horizontal_front();
     a_swim_throw_keeps_the_up_axis_it_stored();
     the_slope_throw_direction_lies_across_the_ground_normal();
+    the_first_step_takes_the_direction_across_the_ground_the_cap_is_handed();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -91,4 +92,34 @@ fn the_slope_throw_direction_lies_across_the_ground_normal() {
     let dir = p.throw_direction_across(slope_normal());
     assert!((dir.length() - 1.).abs() < 1e-6);
     assert!(dir.dot(slope_normal()).abs() < 1e-6, "{dir:?}");
+}
+
+/// The first step fixes the direction across the same ground normal the throw frame hands the
+/// cap: here the toy course's ramp, which rises along +x (no collision mesh).
+#[cfg_attr(test, test)]
+fn the_first_step_takes_the_direction_across_the_ground_the_cap_is_handed() {
+    let mut p = Player {
+        grounded: true,
+        slope: 0.5,
+        stick: Vec3::X,
+        tilt: 1.,
+        ..default()
+    };
+    p.face_throw_direction();
+    let dir = p.throwing.dir.unwrap();
+    let normal = p.collided_ground_normal();
+    assert!((dir.y - 0.447_213_6).abs() < 1e-5, "{dir:?}");
+    assert!(dir.dot(normal).abs() < 1e-6);
+    p.launch_cap(Throw::Forward, false);
+    let launch = p.launch.as_ref().unwrap();
+    assert_eq!((launch.up, launch.front), (normal, dir));
+    // Level ground keeps the stick as it is.
+    let mut level = Player {
+        grounded: true,
+        stick: Vec3::X,
+        tilt: 1.,
+        ..default()
+    };
+    level.face_throw_direction();
+    assert_eq!(level.throwing.dir, Some(Vec3::X));
 }
