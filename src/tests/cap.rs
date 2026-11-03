@@ -478,9 +478,6 @@ fn the_helper_makes_the_front_a_unit_vector_in_its_easing_only() {
     assert_eq!(turned.turn, None);
 }
 
-/// The collision turn's gates (0x402104..0x4021e8, 0x402218): a wall face counts only when its
-/// normal is at least half along the cap's up axis and leans against the gravity; otherwise the
-/// ground does; a surface facing away from the up axis turns nothing.
 /// `al::isNearZeroOrLess(x, 0.001)` is `x < 0.001` and `al::isNearZeroOrGreater(x, 0.001)` is
 /// `x > -0.001` (0x91f568, 0x91f544): a value exactly on the limit is outside it.
 #[cfg_attr(test, test)]
@@ -535,6 +532,9 @@ fn the_near_zero_tests_are_strict() {
     assert!(pulled(-0.000_999_9), "inside the limit");
 }
 
+/// The collision turn's gates (0x402104..0x4021e8, 0x402218): a wall face counts only when its
+/// normal is at least half along the cap's up axis and leans against the gravity; otherwise the
+/// ground does; a surface facing away from the up axis turns nothing.
 #[cfg_attr(test, test)]
 fn the_collision_turn_follows_the_binarys_gates() {
     let state = |up: Vec3| (Vec3::Z, up, Vec3::new(0., 0., 10.));
