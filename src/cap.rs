@@ -986,16 +986,22 @@ impl Cap {
     /// cruise frames are used up.
     ///
     /// The nerve (0x401744) and `exeThrowBrake` (0x402ff8) make two calls after the terrain helper
-    /// and `changeThrowParamInWater` that change nothing in this game, so they are not ported:
+    /// and `changeThrowParamInWater` that change nothing in single play with button throws, so
+    /// they are not ported:
     /// - 0x402c4c steers the flying cap with the second player's stick (`calcCapSeparateMoveInput`
     ///   0x44dda8; it turns the front and keeps the speed). It returns at once unless the
     ///   `PlayerSeparateCapFlag` word at `+0x148` has byte 0 set and byte 2 clear
     ///   (0x402c78..0x402c8c), which the game's separate-play mode alone sets (see `throw_stay`).
+    ///   In `exeThrowBrake` a true answer also skips the 0.94 damping, not only the added
+    ///   velocity (0x40312c branches to 0x403174, past 0x40315c and 0x403170).
     /// - `addCurveOffset` 0x402e30 moves the cap sideways by `40 * (sin(pi * d1 / reach) -
     ///   sin(pi * d0 / reach))` along front x up (turned by the swing angle) times `+0x264`, the
-    ///   side sign `startThrow` stores only for a left/right motion throw (0x3fc9f8, 0x3fca1c;
-    ///   button throws leave the 0 of 0x3fc9c8), and adds the cap's speed to the distance flown
-    ///   `+0x274`, which nothing else reads. With the sign 0 the offset is zero.
+    ///   side sign `startThrow` stores for a left/right motion throw (0x3fc9f8, 0x3fca1c): the
+    ///   motion controller's single-hand swings (judge modes 2 and 3 of
+    ///   `PlayerJudgePreInputCapThrow::update`, 0x45a95c) set it to +-1 in single play too.
+    ///   The rewrite has no motion input, so for the throws it can produce the sign is the 0 of
+    ///   0x3fc9c8 and the offset is zero: a scope limit, not a property of the game. It also adds
+    ///   the cap's speed to the distance flown `+0x274`, which nothing else reads.
     fn throw(&mut self, events: &mut Vec<CapEvent>, world: &CapWorld) -> Option<CapNerve> {
         if self.step == 0 {
             events.push(CapEvent::Thrown);
@@ -1008,8 +1014,9 @@ impl Cap {
         self.follow_terrain(world.mesh, events);
         self.pose.face_back_along(self.front, self.up);
         self.change_throw_param_in_water(world, events);
-        // exeThrow goes on to two calls that do nothing in this game: 0x402c4c (the second
-        // player's steering) and `addCurveOffset` 0x402e30; see the notes at `throw`'s head.
+        // exeThrow goes on to two calls that do nothing in single play with button throws: 0x402c4c
+        // (the second player's steering) and `addCurveOffset` 0x402e30; see the notes at
+        // `throw`'s head.
         self.velocity = scale_except_direction(self.front, self.velocity, ACROSS_DAMPING);
         (self.step >= self.cruise_frames).then_some(CapNerve::ThrowBrake)
     }

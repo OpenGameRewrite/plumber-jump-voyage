@@ -119,7 +119,10 @@ impl Player {
             .slerp_up_front(pose_up, dir, 1., t::HILL_POSE_DEGREE_MAX);
         self.set_pose(stored);
         self.throwing.dir = Some(dir);
-        // The cap is handed the up axis the direction was found across.
+        // The open-water spin hands the cap the vector its first step stored (+0xcc, call 0x489edc).
+        // The surface spin computes -gravity at its throw frame instead (call 0x48a424); the
+        // rewrite stores that nerve's up here too, which is the same vector while gravity is the
+        // constant one.
         self.throwing.up = Some(up);
     }
 

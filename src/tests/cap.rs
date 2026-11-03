@@ -957,8 +957,8 @@ fn the_rolling_stand_follows_the_throw_type_not_the_rolling_state() {
 }
 
 /// `HackCap::startThrow` keeps the up axis and the front it is given (the launch's up from
-/// `rs::calcGroundNormalOrGravityDir`, the front across it): the cap leaves along the slope, at
-/// the thrower's feet raised along that axis.
+/// `rs::calcGroundNormalOrGravityDir`, the front across it): the cap keeps that up axis and
+/// front and leaves along the slope.
 #[cfg_attr(test, test)]
 fn the_cap_thrown_from_a_slope_flies_along_the_slope() {
     let normal = Vec3::new(0., 0.8, -0.6);

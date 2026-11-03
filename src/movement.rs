@@ -1143,7 +1143,8 @@ struct ThrowControl {
     /// The direction the cap leaves along, fixed on the state's first step.
     dir: Option<Vec3>,
     /// The up axis the swim spin stores on its first step and hands the cap on the throw frame
-    /// (the ground and air spins ask `launch_up_axis` at the throw frame instead).
+    /// (the ground and air spins ask `launch_up_axis` at the throw frame instead). The surface
+    /// swim spin's is a -gravity the binary computes at the throw frame; here it is stored too.
     up: Option<Vec3>,
     /// SpinAir preserves the tilted model root, unwinding its translation over ten steps.
     model_shift: Option<Vec3>,
