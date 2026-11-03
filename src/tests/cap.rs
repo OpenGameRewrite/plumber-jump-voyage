@@ -4,6 +4,7 @@ pub(super) fn run() {
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
+    the_return_writes_the_pose_from_its_first_execution();
     the_catch_is_the_sensor_contact();
     the_spiral_circles_the_player();
     the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
@@ -321,6 +322,54 @@ fn a_wall_at_an_angle_turns_the_cap() {
     assert!(deepest <= 440.01, "reached x = {deepest}");
     // Free flight at 45 degrees ends near z = 480; turned along the wall it goes on.
     assert!(cap.pos.z / UNIT > 485., "slid to z = {}", cap.pos.z / UNIT);
+}
+
+/// `exeReturn` writes the pose on every execution, its first one included (the lean at 0x4071f8,
+/// the stand at 0x407350). Whatever pose the cap had, it leaves the upright one facing the front
+/// it flew along, made from that front alone, both within the lean's 200 of the head and beyond.
+#[cfg_attr(test, test)]
+fn the_return_writes_the_pose_from_its_first_execution() {
+    use crate::movement::pose_math::{NEGATED_GRAVITY, quat_front_up};
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: None,
+        water: None,
+        targets: &[],
+    };
+    for distance in [150., 300.] {
+        let mut cap = Cap::start(
+            Launch {
+                front: Vec3::Z,
+                kind: Throw::Forward,
+                left: false,
+                air: false,
+                continuous: false,
+                spiral_side: 0.,
+                up: Vec3::Y,
+            },
+            Vec3::ZERO,
+            1,
+        );
+        cap.resume(&Moment {
+            nerve: CapNerve::Return,
+            step: 0,
+            spot: Vec3::new(distance, 75., distance),
+            velocity: Vec3::ZERO,
+            speed: 32.,
+            return_speed: 0.,
+            anchor: Vec3::ZERO,
+            after_lock_on: false,
+        });
+        let thrown = cap.pose.quat();
+        cap.update(&world);
+        assert_ne!(cap.pose.quat(), thrown, "{distance}");
+        assert_eq!(
+            cap.pose.quat(),
+            quat_front_up(cap.front, NEGATED_GRAVITY),
+            "{distance}"
+        );
+    }
 }
 
 /// The cap-bounce run: Cappy hovers 678 ahead, the player lands on it, and after the fifteen

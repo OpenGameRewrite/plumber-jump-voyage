@@ -1461,11 +1461,25 @@ impl Cap {
             self.pose.face_to_direction(front);
         }
     }
-    /// `HackCap::exeReturn`: fly toward the head, a little faster every frame. The pose first
-    /// leans a quarter of the way toward the head (only within `RETURN_SLOW_DISTANCE` of it, as
-    /// the speed limit), then its front turns toward the head by at most the turn limit, and the
-    /// cap flies along that front. The cap's front is the one it had when the return began: facing
-    /// the player after a throw, the joint's front after a trample.
+    /// `HackCap::exeReturn` (0x406f4c): fly toward the head, a little faster every frame. The
+    /// pose first leans a quarter of the way toward the head (only within `RETURN_SLOW_DISTANCE`
+    /// of it, as the speed limit), then its front turns toward the head by at most the turn
+    /// limit, and the cap flies along that front. The cap's front is the one it had when the
+    /// return began: facing the player after a throw, the joint's front after a trample.
+    ///
+    /// The nerve writes the pose on every execution, the first one included, and nowhere else:
+    /// the lean (`makeQuatFrontUp` 0x4071f8, `slerpQuat` at 0.25 0x407214, `updatePoseQuat`
+    /// 0x407220) when the head is within 200 horizontally (0x40717c) and the pose's up axis is
+    /// not parallel to the way to it (0x4071d8), then the stand (`makeQuatFrontUp` 0x407350,
+    /// `updatePoseQuat` 0x40735c) unless the turned front is parallel to the up axis it takes
+    /// (0x407330). Both need a way to the head (`tryNormalizeOrZero` 0x407104, gate 0x407108).
+    /// A frame in which the stay nerve hands over to this one runs the stay's body and not this
+    /// one (`NerveKeeper::update`, 0x9596a4..0x9596dc, switches the nerve after the execute), so
+    /// the trace row that already says `Return` at step 0 still holds the stay's pose.
+    ///
+    /// Not ported: `tryCollideWallLockOn` (0x40705c) and the tail after the flight (0x407434..
+    /// 0x40764c: the wall counter, the 180-step limit and the end of a lock-on return). The
+    /// separate-play block (0x4075a4..0x407648) is behind the gate that `throw_stay` documents.
     fn go_back(
         &mut self,
         head: Vec3,
@@ -1500,13 +1514,16 @@ impl Cap {
                 .clamp(0., (length(to_head) * RETURN_SLOW_RATE).max(0.));
             self.pose.lean_toward(direction);
         }
-        // (A rolling throw takes another up axis here, which is not ported; `front_turned_toward`
-        // writes nothing only for a direction without a plane, which does not happen here.)
+        // `turnFrontSpherical` writes nothing when its turn gives up (never in the traced
+        // returns); the out vector then keeps what the nerve gave it, `sead::Vector3f::ez`
+        // (0x407224..0x407238).
         let front = self
             .pose
             .front_turned_toward(direction, param::TURN_LIMIT_DEGREES)
-            .unwrap_or(Vec3::ZERO);
-        // (A cap that rolled keeps its up axis across the new front, like a wheel.)
+            .unwrap_or(Vec3::Z);
+        // A throw type of rolling (`startThrow` stores `Vector2f::ey`, 0x3fca94, so +0x268 is zero
+        // and +0x26c is not: the test at 0x40729c..0x4072b0) keeps its up axis across the new
+        // front, like a wheel (0x4072b4..0x40731c); the other throws stand upright (0x407284).
         if self.rolling.is_some() {
             self.pose.stand_facing_across(front);
         } else {
