@@ -5999,9 +5999,6 @@ impl Player {
                     self.events.push(Fx::CapLockOn);
                 }
                 CapEvent::LockReturn => self.events.push(Fx::CapLockReturn),
-                // The cap attached to the captured target it flew back to: the rewrite has no
-                // capture, so nothing starts such a return.
-                CapEvent::TargetReached => {}
                 CapEvent::Reflected(index) => {
                     self.signboards[index].reflect();
                     self.events.push(Fx::CapReflect);

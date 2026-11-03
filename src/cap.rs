@@ -321,9 +321,6 @@ pub enum CapEvent {
     /// The return ended away from the player (`exeReturn`'s tail, see `cap_return`): the cap
     /// hid itself (`HackCap::hide(false)`, 0x407584) and the player takes it back as in a catch.
     Hidden,
-    /// The return that flew to a captured target ended near it (`endHackThrowAndReturnHack`).
-    /// Nothing in the rewrite starts such a return (`Cap::start_hack_return`).
-    TargetReached,
     /// The cap began to skim the water's surface (the reaction `水面移動`, its effect and sound).
     WaterFly,
     /// The cap began to rest on the water's surface (the reaction `水面待機`).
@@ -495,10 +492,7 @@ pub struct Cap {
     collision_off_steps: i32,
     /// `exeReturn`'s wall counter (`+0x284`), cleared by its first execution.
     wall_hits: i32,
-    /// The captured target the return flies to instead of the head (`+0x2a4` set, the target
-    /// matrix's translation); see `cap_return` for why nothing sets it here.
-    hack_target: Option<Vec3>,
-    /// The return ended (`hide`, or the target's end): the cap does not run any more.
+    /// The return ended (`hide`): the cap does not run any more.
     hidden: bool,
     /// The throw type is the rolling one (`+0x268` near zero and `+0x26c` not, `HackCap::
     /// isThrowTypeRolling` 0x400250): `startThrow` writes the pair and nothing clears it, not
@@ -594,7 +588,6 @@ impl Cap {
             carry_collider: false,
             collision_off_steps: 0,
             wall_hits: 0,
-            hack_target: None,
             hidden: false,
             rolling_throw: rolled,
             water: CapWater::default(),
@@ -1540,7 +1533,7 @@ impl Cap {
             self.return_speed = 0.;
             self.wall_hits = 0;
         }
-        let to_head = self.hack_target.unwrap_or(head) - self.spot;
+        let to_head = head - self.spot;
         let (direction, found) = direction_of(to_head);
         if found {
             self.fly_toward(to_head, direction);
@@ -1600,28 +1593,17 @@ impl Cap {
             Vec3::ZERO
         };
         self.wall_hits = cap_return::wall_counter(self.wall_hits, normal, direction);
-        let target_distance = self.hack_target.map(|target| length(target - self.spot));
-        let Some(end) = cap_return::end(self.step, self.wall_hits, target_distance) else {
+        // The binary's third end, the capture-transfer target within 100 (flag +0x2a4, set by
+        // `receiveRequestTransferHack` 0x3fc190; the constant at 0x187fcb8), is not ported: the
+        // port has no capture transfer, so the flag is never set.
+        if !cap_return::ends(self.step, self.wall_hits) {
             return;
-        };
-        // `hide` and `endHackThrowAndReturnHack` both leave the cap hidden, its hit sensors off
-        // and its velocity zero (`setVelocityZero` 0x3fa8f4, 0x3fdd40).
+        }
+        // `hide` leaves the cap hidden, its hit sensors off and its velocity zero
+        // (`setVelocityZero` 0x3fa8f4).
         self.hidden = true;
         self.velocity = Vec3::ZERO;
-        match end {
-            cap_return::End::Hide => events.push(CapEvent::Hidden),
-            cap_return::End::Target => {
-                self.hack_target = None;
-                events.push(CapEvent::TargetReached);
-            }
-        }
-    }
-    /// Make the cap's return fly to a captured target's matrix (`+0x2a4` set, `exeReturn`
-    /// 0x407068..0x407098). The original sets it when a captured object throws the cap to another
-    /// (`receiveRequestTransferHack` 0x3fc190); the rewrite has no capture, so nothing in the
-    /// game calls this and only the checks build such a return.
-    pub fn start_hack_return(&mut self, target: Vec3) {
-        self.hack_target = Some(target);
+        events.push(CapEvent::Hidden);
     }
 }
 /// The cap's flight state, without the collider's bookkeeping: the simulation
