@@ -329,6 +329,8 @@ mod spin;
 mod spin_air_pose;
 #[path = "movement/spin_cap.rs"]
 mod spin_cap;
+#[path = "movement/spin_cap_appear.rs"]
+mod spin_cap_appear;
 #[path = "movement/squat.rs"]
 mod squat;
 #[path = "movement/swim.rs"]
@@ -1127,7 +1129,8 @@ struct ThrowControl {
     /// Which kind the state in progress throws.
     kind: Option<Throw>,
     /// The state in progress began in the air (`exeSpinAir` instead of
-    /// `exeSpinGround`): the ground judges never ask about it.
+    /// `exeSpinGround`), as `PlayerStateSpinCap::appear` chose it (`spin_cap_in_air`): the ground
+    /// judges never ask about it.
     in_air: bool,
     /// An air-started state has been on the ground since (`PlayerStateSpinCap` byte +0x78 is set
     /// by `appear` for an air start and cleared by `control` on `rs::isOnGround`, and stays
@@ -5641,7 +5644,8 @@ impl Player {
         if self.cap.is_some() || self.launch.is_some() || !self.sand_cap_enabled() {
             return;
         }
-        let air = !self.grounded;
+        // The child `PlayerStateSpinCap::appear` picks for the actor as it is now.
+        let air = self.spin_cap_in_air();
         self.setup_attack_info();
 
         // `exeWallAir` (0x4245f8, the only writer of `PlayerTrigger` action 0 and `appear` the only
@@ -5971,9 +5975,10 @@ impl Player {
     /// ground's normal, or `-gravity` when the collider holds no ground, whatever the actor's own
     /// grounded state is. (The swim spins hand the vector they stored, 0x489ed4 and 0x48a424:
     /// `launch_cap_across`.)
-    fn launch_up_axis(&self) -> Vec3 {
-        let air_spin = self.mode == Move::Throw && self.throwing.in_air;
-        if !air_spin && self.is_collided_ground() {
+    ///
+    /// `air_child` is the child `PlayerStateSpinCap::appear` chose (`spin_cap_in_air`).
+    fn launch_up_axis(&self, air_child: bool) -> Vec3 {
+        if !air_child && self.is_collided_ground() {
             self.collided_ground_normal()
         } else {
             pose_math::NEGATED_GRAVITY
@@ -6000,7 +6005,15 @@ impl Player {
     }
     /// `HackCap::startThrow`: the cap starts flying on the next frame.
     fn launch_cap(&mut self, kind: Throw, continuous: bool) {
-        self.launch_cap_across(kind, continuous, self.launch_up_axis());
+        // The spin state chose its child when it appeared (`start_throw`). The throws the port
+        // launches without a state of their own (the run throw, the burn jump's) went through the
+        // same `appear`: ask its choice now.
+        let air_child = if self.mode == Move::Throw {
+            self.throwing.in_air
+        } else {
+            self.spin_cap_in_air()
+        };
+        self.launch_cap_across(kind, continuous, self.launch_up_axis(air_child));
     }
     /// [`Self::launch_cap`] with the up axis the thrower hands over.
     fn launch_cap_across(&mut self, kind: Throw, continuous: bool, up: Vec3) {

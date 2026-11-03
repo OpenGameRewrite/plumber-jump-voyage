@@ -49,15 +49,19 @@ impl Player {
     /// source reaches the controller outside the 2D/pipe area queries. Also reached from the
     /// roll jump's landing (`isOnGroundRunAngle`).
     pub(super) fn fire_run_angle_contact(&self) -> bool {
+        self.run_angle_contact(self.is_just_land())
+    }
+
+    /// The body the run-angle judges share (0x569734) with its last argument: the speed is
+    /// measured across gravity when `across_gravity`, else across the floor's normal. The
+    /// judges above pass the just-land flag (0x56998c); `rs::isLandGroundRunAngle` (0x569ac8)
+    /// always passes true.
+    pub(super) fn run_angle_contact(&self, across_gravity: bool) -> bool {
         if !self.is_collided_ground() {
             return false;
         }
         let normal = self.collided_ground_normal();
-        let reference = if self.is_just_land() {
-            Vec3::NEG_Y
-        } else {
-            normal
-        };
+        let reference = if across_gravity { Vec3::NEG_Y } else { normal };
         let speed = vector_lib::length(verticalize_vec(reference, self.v));
         // PlayerConst: StandAngleMin/Max 60/70; HillAngleSpeedMin/Max 21/26.
         let rate = turn_control::ease_in(joint_math::calc_rate01(speed, 21., 26.));

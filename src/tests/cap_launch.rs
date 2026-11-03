@@ -14,6 +14,10 @@ pub(super) fn run() {
     after_a_wall_jump_the_input_pointing_back_is_clamped_sideways();
     a_throw_on_the_wall_jumps_first_step_sets_the_trigger_and_turns_the_actor_back();
     the_wall_jump_throw_resets_the_wall_along_memory_before_the_helper_reads_the_stick();
+    a_burn_jump_throw_hands_negated_gravity_while_the_collider_touches_the_floor();
+    the_throw_frame_hands_the_up_axis_of_the_child_start_throw_picked();
+    a_throw_in_the_fall_onto_a_floor_beyond_the_run_angle_starts_the_air_child();
+    the_run_throw_asks_the_same_choice_at_the_leaving_edge();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -270,4 +274,141 @@ fn the_wall_jump_throw_resets_the_wall_along_memory_before_the_helper_reads_the_
     let kept = other.plane_stick(Vec3::Y);
     assert!((kept - Vec3::X).length() < 0.03, "{kept:?}");
     assert!(other.wall_history.jump.is_none());
+}
+
+/// The bits of `-al::getGravity` (0x4829d4): (-0, 1, -0).
+fn negated_gravity_bits() -> [u32; 3] {
+    [(-0.0f32).to_bits(), 1.0f32.to_bits(), (-0.0f32).to_bits()]
+}
+
+/// A throw pressed at the takeoff of a burn jump (`exeDamageFire` -> `tryActionCapSpinAttackImpl`
+/// -> the SpinCap nerve): `appear` asks `rs::isOnGround`, which a velocity leaving the floor
+/// fails, so the air child hands `-gravity` although the collider still touches the floor
+/// (`hop_contact`, which a burn jump rising off the floor sets).
+#[cfg_attr(test, test)]
+fn a_burn_jump_throw_hands_negated_gravity_while_the_collider_touches_the_floor() {
+    let mut rising = Player {
+        mode: Move::BurnJump,
+        grounded: false,
+        hop_contact: true,
+        v: Vec3::new(0., 20., 0.),
+        pre_throw: 1,
+        mesh_ground: Some(Vec3::Y),
+        ..default()
+    };
+    assert!(rising.spin_cap_in_air());
+    rising.fire_throws(&Orders::default());
+    let up = rising.launch.as_ref().expect("the cap leaves").up;
+    assert_eq!(up.to_array().map(f32::to_bits), negated_gravity_bits());
+
+    // The same burn jump over a slope hands -gravity too, not the collided normal.
+    let mut over_slope = on_slope();
+    over_slope.mode = Move::BurnJump;
+    over_slope.grounded = false;
+    over_slope.hop_contact = true;
+    over_slope.v = Vec3::new(0., 20., 0.);
+    over_slope.pre_throw = 1;
+    over_slope.fire_throws(&Orders::default());
+    let up = over_slope.launch.as_ref().expect("the cap leaves").up;
+    assert_eq!(up.to_array().map(f32::to_bits), negated_gravity_bits());
+
+    // A burn jump on the floor (not leaving it) asks the ground child's rule.
+    let mut landed = on_slope();
+    landed.mode = Move::BurnJump;
+    landed.pre_throw = 1;
+    assert!(!landed.spin_cap_in_air());
+    landed.fire_throws(&Orders::default());
+    assert_eq!(
+        landed.launch.as_ref().expect("the cap leaves").up,
+        slope_normal()
+    );
+}
+
+/// The choice through `start_throw` with the states the port produces: the throw frame's up axis
+/// follows the child `appear` picked when the throw began (`throwing.in_air`).
+#[cfg_attr(test, test)]
+fn the_throw_frame_hands_the_up_axis_of_the_child_start_throw_picked() {
+    let up_at_throw_frame = |mut p: Player| {
+        p.start_throw(Throw::Forward);
+        let in_air = p.throwing.in_air;
+        p.launch_cap(Throw::Forward, false);
+        (in_air, p.launch.as_ref().unwrap().up)
+    };
+    // Rising off a slope the collider still touches: moving away from the floor, the air child.
+    let mut rising = on_slope();
+    rising.grounded = false;
+    rising.hop_contact = true;
+    rising.v = slope_normal() * 6.;
+    let (in_air, up) = up_at_throw_frame(rising);
+    assert!(in_air);
+    assert_eq!(up.to_array().map(f32::to_bits), negated_gravity_bits());
+    // Standing on it, or running along it: the ground child, the collided normal.
+    let (in_air, up) = up_at_throw_frame(on_slope());
+    assert!(!in_air);
+    assert_eq!(up, slope_normal());
+    let mut along = on_slope();
+    along.v = Vec3::new(0., 0.6, 0.8) * 8.;
+    let (in_air, up) = up_at_throw_frame(along);
+    assert!(!in_air);
+    assert_eq!(up, slope_normal());
+    // Touching the floor while the velocity is leaving it, though the actor is grounded.
+    let mut leaving = on_slope();
+    leaving.v = slope_normal() * 6.;
+    let (in_air, up) = up_at_throw_frame(leaving);
+    assert!(in_air);
+    assert_eq!(up.to_array().map(f32::to_bits), negated_gravity_bits());
+}
+
+/// `exeFall` sets action trigger 2 when its throw succeeds on ground that is not within the run
+/// angle (`rs::isLandGroundRunAngle` false): `appear` then starts the air child although
+/// `rs::isOnGround` holds. On a floor within the angle the fall's throw starts the ground child.
+#[cfg_attr(test, test)]
+fn a_throw_in_the_fall_onto_a_floor_beyond_the_run_angle_starts_the_air_child() {
+    let steep = Vec3::new(75f32.to_radians().sin(), 75f32.to_radians().cos(), 0.);
+    let mut on_steep = Player {
+        mode: Move::Fall,
+        grounded: true,
+        mesh_ground: Some(steep),
+        ..default()
+    };
+    assert!(on_steep.is_on_ground_by(on_steep.v));
+    assert!(!on_steep.is_land_ground_run_angle());
+    assert!(on_steep.spin_cap_in_air());
+    on_steep.start_throw(Throw::Forward);
+    assert!(on_steep.throwing.in_air);
+    // The same floor from another state: no trigger 2, the ground child.
+    let mut standing = Player {
+        mode: Move::Idle,
+        grounded: true,
+        mesh_ground: Some(steep),
+        ..default()
+    };
+    assert!(!standing.spin_cap_in_air());
+    // A fall onto a floor within the angle starts the ground child.
+    let mut on_slope_fall = on_slope();
+    on_slope_fall.mode = Move::Fall;
+    assert!(on_slope_fall.is_land_ground_run_angle());
+    assert!(!on_slope_fall.spin_cap_in_air());
+    standing.start_throw(Throw::Forward);
+    assert!(!standing.throwing.in_air);
+}
+
+/// The run throw launches the cap without a state of its own and asks the same choice: a run
+/// whose collider touches the floor while the velocity leaves it (the leaving edge) gets the air
+/// child's `-gravity`; a run along the floor gets the collided normal.
+#[cfg_attr(test, test)]
+fn the_run_throw_asks_the_same_choice_at_the_leaving_edge() {
+    let mut along = on_slope();
+    along.mode = Move::Run;
+    along.v = Vec3::new(0., 0.6, 0.8) * 10.;
+    along.launch_cap(Throw::Forward, false);
+    assert_eq!(along.launch.as_ref().unwrap().up, slope_normal());
+
+    let mut leaving = on_slope();
+    leaving.mode = Move::Run;
+    leaving.v = Vec3::new(0., 0.6, 0.8) * 10. + slope_normal() * 4.;
+    assert!(leaving.is_collided_ground() && leaving.spin_cap_in_air());
+    leaving.launch_cap(Throw::Forward, false);
+    let up = leaving.launch.as_ref().unwrap().up;
+    assert_eq!(up.to_array().map(f32::to_bits), negated_gravity_bits());
 }
