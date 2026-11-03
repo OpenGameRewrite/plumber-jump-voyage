@@ -16,6 +16,11 @@ pub(super) fn run() {
     the_collision_turn_lays_the_front_and_velocity_in_the_new_plane();
     a_cap_stood_on_its_up_axis_faces_back_along_its_front();
     a_cap_thrown_into_a_slope_turns_onto_it_and_raises_the_reaction();
+    the_returns_tail_counts_walls_and_ends_by_step_and_target();
+    a_return_that_never_arrives_hides_the_cap_after_180_steps();
+    a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
+    a_return_to_a_captured_target_ends_within_100_of_it();
+    the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
 }
 
 /// The throw down of the recorded `cap-throw-rolling-down` run, on the plane the player stood on:
@@ -761,4 +766,233 @@ fn a_cap_flying_a_fixed_front_alternates_its_pose_by_an_ulp() {
     }
     // The odd steps are the target again.
     assert_eq!(poses[1], target);
+}
+
+/// A cap in its return, `step` executions old, at `spot` (centimetres), resting there.
+fn returning_at(step: u32, spot: Vec3) -> Cap {
+    let mut cap = Cap::start(
+        Launch {
+            front: Vec3::Z,
+            kind: Throw::Forward,
+            left: false,
+            air: false,
+            continuous: false,
+            spiral_side: 0.,
+            up: Vec3::Y,
+        },
+        Vec3::ZERO,
+        1,
+    );
+    cap.resume(&Moment {
+        nerve: CapNerve::Return,
+        step,
+        spot,
+        velocity: Vec3::ZERO,
+        speed: 32.,
+        return_speed: 0.,
+        anchor: Vec3::ZERO,
+        after_lock_on: false,
+    });
+    cap
+}
+
+/// A player this far from the origin (metres) is out of any return's reach in 181 steps.
+fn far_world(mesh: Option<&TriangleMesh>) -> CapWorld<'_> {
+    CapWorld {
+        player: Vec3::new(0., 0., 100_000.),
+        hold: false,
+        mesh,
+        water: None,
+        targets: &[],
+    }
+}
+
+/// The tail of `exeReturn` (0x407434..0x40764c): the counter rises when the touched surface
+/// faces against the way to the head by more than sin 5 degrees (0x1880754), strictly, and any
+/// other answer, no surface and no direction included, clears it; the return ends when its step
+/// is above 180 (0x4074c8, `isGreaterStep`) or the counter above 45 (0x4074e0), by `hide` unless
+/// a captured target is flown to, which ends it by `endHackThrowAndReturnHack` and also when the
+/// target is within 100 (0x187fcb8).
+#[cfg_attr(test, test)]
+fn the_returns_tail_counts_walls_and_ends_by_step_and_target() {
+    use cap_return::{AGAINST_SURFACE, End, end, wall_counter};
+    let toward = Vec3::Z;
+    // Facing straight against the way to the head: counted. A wall seen from behind, a graze
+    // (exactly -sin 5 degrees is not past it), no surface and no direction: cleared.
+    assert_eq!(wall_counter(7, -Vec3::Z, toward), 8);
+    assert_eq!(wall_counter(7, Vec3::Z, toward), 0);
+    assert_eq!(
+        wall_counter(7, Vec3::new(0., 0., AGAINST_SURFACE), toward),
+        0
+    );
+    assert_eq!(
+        wall_counter(7, Vec3::new(0., 0., AGAINST_SURFACE - 1e-3), toward),
+        8
+    );
+    assert_eq!(wall_counter(7, Vec3::ZERO, toward), 0);
+    assert_eq!(wall_counter(7, -Vec3::Z, Vec3::ZERO), 0);
+    // The step: 180 still flies, 181 ends. The counter: 45 still flies, 46 ends.
+    assert_eq!(end(180, 0, None), None);
+    assert_eq!(end(181, 0, None), Some(End::Hide));
+    assert_eq!(end(0, 45, None), None);
+    assert_eq!(end(0, 46, None), Some(End::Hide));
+    // A captured target ends it by its own end, whichever way, within 100 included.
+    assert_eq!(end(0, 0, Some(100.)), None);
+    assert_eq!(end(0, 0, Some(99.99)), Some(End::Target));
+    assert_eq!(end(181, 0, Some(500.)), Some(End::Target));
+    assert_eq!(end(0, 46, Some(500.)), Some(End::Target));
+}
+
+/// A return that does not reach the player runs its nerve 181 times and ends in the 182nd,
+/// whose step is 181 (`isGreaterStep(180)`): the cap hides (`HackCap::hide(false)`, 0x407584) with
+/// no velocity and no catch, and does not run any more.
+#[cfg_attr(test, test)]
+fn a_return_that_never_arrives_hides_the_cap_after_180_steps() {
+    let world = far_world(None);
+    let mut cap = returning_at(0, Vec3::new(0., 75., 0.));
+    let mut hidden_at = None;
+    for update in 1..=190 {
+        let events = cap.update(&world);
+        assert!(!events.contains(&CapEvent::Caught), "update {update}");
+        if events.contains(&CapEvent::Hidden) {
+            assert_eq!(hidden_at.replace(update), None, "hidden twice");
+        }
+    }
+    assert_eq!(hidden_at, Some(182));
+    assert_eq!(cap.velocity, Vec3::ZERO);
+    // The cap stays where it ended: the later updates did nothing.
+    let spot = cap.spot;
+    cap.update(&world);
+    assert_eq!(cap.spot, spot);
+}
+
+/// A return flown into a wall that stands between the cap and the head ends when the wall counter
+/// passes 45, long before the 180 steps: each execution that finds the cap touching the wall
+/// (its normal against the way to the head) counts, and the first one only finds the contact the
+/// previous move made. Without the wall the same flight goes on past as many executions.
+#[cfg_attr(test, test)]
+fn a_return_pressed_into_a_wall_ends_when_the_counter_passes_45() {
+    // A wall at x = 500 facing -x, tall enough for the cap at 75; the head is beyond it.
+    let mesh = TriangleMesh::from_corners(&[
+        [
+            Vec3::new(500., -100., -2000.),
+            Vec3::new(500., 300., 2000.),
+            Vec3::new(500., 300., -2000.),
+        ],
+        [
+            Vec3::new(500., -100., -2000.),
+            Vec3::new(500., -100., 2000.),
+            Vec3::new(500., 300., 2000.),
+        ],
+    ]);
+    let world = CapWorld {
+        player: Vec3::new(100_000., 0., 0.),
+        hold: false,
+        mesh: Some(&mesh),
+        water: None,
+        targets: &[],
+    };
+    let mut cap = returning_at(0, Vec3::new(300., 75., 0.));
+    let mut ended = None;
+    for update in 1..=100 {
+        let events = cap.update(&world);
+        if events.contains(&CapEvent::Hidden) {
+            ended = Some((update, cap.wall_hits));
+            break;
+        }
+    }
+    let (update, counter) = ended.expect("the return never ended");
+    assert_eq!(counter, 46, "ended by the counter");
+    assert!(update < 100, "ended at update {update}");
+    // The cap stopped at the wall, 60 short of it.
+    assert!(cap.spot.x < 440.01, "{:?}", cap.spot);
+    // The same flight over open ground is still going after as many executions.
+    let open = CapWorld {
+        player: Vec3::new(100_000., 0., 0.),
+        ..far_world(None)
+    };
+    let mut free = returning_at(0, Vec3::new(300., 75., 0.));
+    for _ in 0..update {
+        assert!(!free.update(&open).contains(&CapEvent::Hidden));
+    }
+}
+
+/// A return flying to a captured target (`+0x2a4`) takes its matrix for the head, and ends by
+/// `endHackThrowAndReturnHack` in the execution that finds the cap less than 100 from it.
+#[cfg_attr(test, test)]
+fn a_return_to_a_captured_target_ends_within_100_of_it() {
+    let target = Vec3::new(0., 75., 1000.);
+    let mut cap = returning_at(0, Vec3::new(0., 75., 0.));
+    cap.start_hack_return(target);
+    // The player is elsewhere: the cap must fly toward the target, not the head.
+    let world = CapWorld {
+        player: Vec3::new(100_000., 0., 0.),
+        ..far_world(None)
+    };
+    let mut ended = None;
+    for update in 1..=100 {
+        let before = (target - cap.spot).length();
+        let events = cap.update(&world);
+        assert!(!events.contains(&CapEvent::Hidden), "update {update}");
+        if events.contains(&CapEvent::TargetReached) {
+            // The distance is read before the cap moves in the frame.
+            assert!(before < 100., "ended {before} from the target");
+            ended = Some(update);
+            break;
+        }
+        assert!(
+            before >= 100.,
+            "update {update} was {before} away and went on"
+        );
+    }
+    assert!(ended.is_some(), "never reached the target");
+    assert!(cap.hack_target.is_none() && cap.velocity == Vec3::ZERO);
+    // It stopped where the last execution found it, within 100 of the target.
+    assert!((target - cap.spot).length() < 100., "{:?}", cap.spot);
+}
+
+/// The stand's rolling gate is the throw type the start stored (`HackCap::isThrowTypeRolling`,
+/// 0x400250: `+0x268` near zero and `+0x26c` not), which nothing clears: a down throw whose
+/// rolling state is gone still stands across its front, and a forward throw does not.
+#[cfg_attr(test, test)]
+fn the_rolling_stand_follows_the_throw_type_not_the_rolling_state() {
+    let thrown = |kind| {
+        Cap::start(
+            Launch {
+                front: Vec3::Z,
+                kind,
+                left: false,
+                air: false,
+                continuous: false,
+                spiral_side: 0.,
+                up: Vec3::Y,
+            },
+            Vec3::ZERO,
+            1,
+        )
+    };
+    let world = far_world(None);
+    let moment = Moment {
+        nerve: CapNerve::Return,
+        step: 0,
+        spot: Vec3::new(0., 75., 0.),
+        velocity: Vec3::ZERO,
+        speed: 30.,
+        return_speed: 0.,
+        anchor: Vec3::ZERO,
+        after_lock_on: false,
+    };
+    let mut kept = thrown(Throw::Down);
+    kept.resume(&moment);
+    let mut cleared = thrown(Throw::Down);
+    cleared.resume(&moment);
+    cleared.rolling = None;
+    let mut upright = thrown(Throw::Forward);
+    upright.pose = kept.pose;
+    upright.resume(&moment);
+    for cap in [&mut kept, &mut cleared, &mut upright] {
+        cap.update(&world);
+    }
+    assert_eq!(cleared.pose.quat(), kept.pose.quat());
+    assert_ne!(cleared.pose.quat(), upright.pose.quat());
 }

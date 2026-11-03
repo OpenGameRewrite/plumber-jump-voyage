@@ -12,6 +12,7 @@ pub(super) fn run() {
     history_restores_follow_their_callers_guards();
     the_spin_cap_restores_until_its_air_start_touches_the_ground();
     the_history_restores_belong_to_the_nerve_that_ran_and_the_spin_cap_skips_its_end();
+    a_cap_the_return_gave_up_on_is_taken_without_the_sensor_flags();
 }
 
 fn floor() -> Course {
@@ -522,4 +523,83 @@ fn the_history_restores_belong_to_the_nerve_that_ran_and_the_spin_cap_skips_its_
     };
     assert_eq!(ground_spin(false), (true, true));
     assert_eq!(ground_spin(true), (false, false));
+}
+
+/// A return that gives up (`exeReturn`'s tail: 181 steps, `HackCap::hide(false)`) leaves the cap in
+/// Hide with no put-on byte, and the player's `movement` takes it at once (`isNoPutOnHide`,
+/// 0x41dd6c) by the choice a catch makes (`isEnableReactionCapCatch`, 0x41f8f4): a falling player
+/// plays the catch (`startCatch` sets the put-on byte only, 0x3fcdc0), a rolling one just puts the
+/// cap on (`forcePutOn` sets both bytes, 0x3fce6c). Neither is the sensor's catch: the player's
+/// `attackSensor` restarts the after-catch counter only there (0x428528), and the catch byte
+/// `isCatched` reads (0x2a3) is the sensor accept's alone (0x408b34).
+#[cfg_attr(test, test)]
+fn a_cap_the_return_gave_up_on_is_taken_without_the_sensor_flags() {
+    // The cap is 500 metres away at the end of its 181st execution.
+    let given_up = || {
+        let mut cap = Cap::start(
+            Launch {
+                front: Vec3::Z,
+                kind: Throw::Forward,
+                left: false,
+                air: false,
+                continuous: false,
+                spiral_side: 0.,
+                up: Vec3::Y,
+            },
+            Vec3::ZERO,
+            1,
+        );
+        cap.resume(&Moment {
+            nerve: CapNerve::Return,
+            step: 181,
+            spot: Vec3::new(0., 75., 50_000.),
+            velocity: Vec3::ZERO,
+            speed: 32.,
+            return_speed: 0.,
+            anchor: Vec3::ZERO,
+            after_lock_on: false,
+        });
+        cap
+    };
+    let scene = floor();
+    // Falling: the catch plays, and the catch byte and the window are untouched.
+    let mut p = falling_after_a_catch();
+    p.cap_catched = false;
+    p.catch_window = 0;
+    p.cap = Some(given_up());
+    p.step(&Orders::default(), &scene);
+    assert!(p.cap.is_none());
+    assert_eq!(p.catching, Some(-1));
+    assert!(!p.cap_catched && !p.cap_put_on);
+    assert_eq!(p.catch_window, 0);
+    // Rolling: the cap goes on the head, with the byte `forcePutOn` sets.
+    let mut p = Player {
+        pos: Vec3::new(0., 0., 0.),
+        mode: Move::Roll,
+        ..default()
+    };
+    p.cap = Some(given_up());
+    p.step(&Orders::default(), &scene);
+    assert!(p.cap_put_on && p.cap_catched);
+    assert_eq!(p.catching, None);
+    assert_eq!(p.catch_window, 0);
+    // The sensor's catch of the same cap, near the head, does restart the window.
+    let mut p = falling_after_a_catch();
+    p.cap_catched = false;
+    p.catch_window = 0;
+    let mut cap = given_up();
+    cap.resume(&Moment {
+        nerve: CapNerve::Return,
+        step: 6,
+        spot: p.pos / UNIT + Vec3::Y * 110.,
+        velocity: Vec3::ZERO,
+        speed: 32.,
+        return_speed: 0.,
+        anchor: Vec3::ZERO,
+        after_lock_on: false,
+    });
+    p.cap = Some(cap);
+    p.step(&Orders::default(), &scene);
+    assert!(p.cap_catched);
+    assert!(p.catch_window > 0);
 }
