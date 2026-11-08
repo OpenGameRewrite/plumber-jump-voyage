@@ -23,6 +23,9 @@ pub(super) fn run() {
     the_wall_jump_throw_records_the_wall_the_collider_holds();
     a_crouch_press_does_not_cancel_a_ground_throw_under_an_open_ceiling();
     a_ground_spin_under_a_low_ceiling_squats_ahead_of_a_jump();
+    a_moving_ground_spin_ends_in_the_run_with_its_velocity();
+    a_low_ceiling_on_the_end_step_squats_with_the_velocity_cut();
+    a_jump_pressed_on_the_end_step_waits_for_the_forced_slide();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -698,4 +701,107 @@ fn a_ground_spin_under_a_low_ceiling_squats_ahead_of_a_jump() {
     let (_, _, free) = ground_throw_then(&jump, &open, &open);
     assert_ne!(free, Move::SquatBrake);
     assert_ne!(free, Move::Throw);
+}
+
+/// A standing actor throws on `course`, holding `stick` from the step after the throw, and the spin
+/// runs until the step its clip ends on. Returns the mode and velocity the actor had before that
+/// step and the actor after it, when `end_course` and `end_orders` replace the course and the
+/// order of that step alone.
+fn ground_spin_end_step(
+    course: &Course,
+    stick: Vec2,
+    end_course: &Course,
+    end_orders: &Orders,
+) -> ((Move, Vec3), Player) {
+    let throw = Orders {
+        throw_pressed: true,
+        throw_held: true,
+        ..default()
+    };
+    let held = Orders {
+        direction: stick,
+        ..default()
+    };
+    let (_, end, _) = ground_throw_then(&Orders::default(), course, course);
+    let end = end.expect("an untouched spin ends");
+    let mut p = Player::default();
+    p.step(&throw, course);
+    let mut before = (p.mode, p.v);
+    for step in 1..=end {
+        before = (p.mode, p.v);
+        let (order, scene) = if step == end {
+            (end_orders, end_course)
+        } else {
+            (&held, course)
+        };
+        p.step(order, scene);
+    }
+    (before, p)
+}
+
+/// The step the ground child ends on, `exeSpinCap` skips its chain (0x4239c4 branches to
+/// 0x423b08) and runs `setNerveOnGround` alone. On a flat floor with the stick held it is the
+/// run, with the velocity the spin had.
+#[cfg_attr(test, test)]
+fn a_moving_ground_spin_ends_in_the_run_with_its_velocity() {
+    let open = floor_under_ceiling_at(3.);
+    let (before, after) = ground_spin_end_step(
+        &open,
+        Vec2::NEG_Y,
+        &open,
+        &Orders {
+            direction: Vec2::NEG_Y,
+            ..default()
+        },
+    );
+    assert_eq!(before.0, Move::Throw);
+    assert_eq!(after.mode, Move::Run);
+    assert!(
+        before.1.with_y(0.).length() > 0.,
+        "the spin was moving on its last step"
+    );
+}
+
+/// A ceiling that first forbids standing on the step the clip ends on reaches the squat of
+/// `setNerveOnGround` (0x4219b0..0x421a18), which releases a carried object and cuts the
+/// velocity to the ground normal (`cutVerticalVelocityGroundNormal`, 0x421a08). The chain's own
+/// squat (0x423cdc) has no cut, and is not asked on this step.
+#[cfg_attr(test, test)]
+fn a_low_ceiling_on_the_end_step_squats_with_the_velocity_cut() {
+    let open = floor_under_ceiling_at(3.);
+    let low = floor_under_ceiling_at(1.4);
+    let stick = Orders {
+        direction: Vec2::NEG_Y,
+        ..default()
+    };
+    let (before, after) = ground_spin_end_step(&open, Vec2::NEG_Y, &low, &stick);
+    assert_eq!(before.0, Move::Throw);
+    assert!(before.1.with_y(0.).length() > 0.);
+    assert_eq!(after.mode, Move::SquatBrake);
+    assert!(
+        after.v.with_y(0.).length() < 1e-4,
+        "the squat keeps only the velocity along the ground normal: {:?}",
+        after.v
+    );
+}
+
+/// A jump pressed on the step the clip ends on is judged by `setNerveOnGround` after the
+/// forced slide (0x4218b8) and the other floor judges, not by the chain's jump (0x423d6c):
+/// over a `Slide` floor beyond the slide angle the actor slides, over an open floor it jumps.
+#[cfg_attr(test, test)]
+fn a_jump_pressed_on_the_end_step_waits_for_the_forced_slide() {
+    let open = floor_under_ceiling_at(3.);
+    let mut slide = floor_under_ceiling_at(3.);
+    slide.solids[0].floor_code = "Slide";
+    slide.solids[0].slope = 0.3;
+    let jump = Orders {
+        jump: true,
+        jump_held: true,
+        ..default()
+    };
+    let (_, jumped) = ground_spin_end_step(&open, Vec2::ZERO, &open, &jump);
+    assert_eq!(jumped.mode, Move::Jump);
+    let (before, slid) = ground_spin_end_step(&slide, Vec2::ZERO, &slide, &jump);
+    assert_eq!(before.0, Move::Throw);
+    assert_eq!(slid.mode, Move::SlopeSlide);
 }
