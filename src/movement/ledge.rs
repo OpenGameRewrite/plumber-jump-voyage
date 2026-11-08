@@ -519,7 +519,9 @@ impl Player {
     }
 
     /// The states that ask `PlayerJudgeWallCatchInputDir` after their step: the
-    /// jump nerve's, the fall, the long jump, the air throw and the wall states.
+    /// jump nerve's, the fall, the long jump, the throw whose collider is off the floor and the
+    /// wall states. Both catch judges (0x45c188, ground chain; 0x45be6c, air chain) refuse
+    /// while `rs::isCollidedGround` holds, so the throw asks the collider, not `grounded`.
     fn wall_catch_applies(&self) -> bool {
         if self.is_dead() {
             return false;
@@ -535,7 +537,7 @@ impl Player {
         }
         self.wall_keep_applies()
             || matches!(self.mode, Move::LongJump | Move::WallSlide)
-            || (self.mode == Move::Throw && !self.grounded)
+            || (self.mode == Move::Throw && !self.is_collided_ground())
     }
 
     /// The actor's catch judge, asked after the state's own step (before the
@@ -555,9 +557,10 @@ impl Player {
 
     /// `PlayerJudgeWallCatch::update`, on the wall the last step touched.
     fn catch_target(&self, scene: &Course) -> Option<CatchTarget> {
-        // Touching a wall, not standing, and not a wall that may not be grabbed.
+        // Touching a wall, the collider off the floor (`rs::isCollidedGround`, which also holds
+        // under a hop that has left the ground), and not a wall that may not be grabbed.
         let contact = self.touched.wall_contact.as_ref()?;
-        if self.grounded || self.touched.wall.as_ref().is_some_and(no_wall_grab) {
+        if self.is_collided_ground() || self.touched.wall.as_ref().is_some_and(no_wall_grab) {
             return None;
         }
         let facing = if self.mode == Move::Backflip {

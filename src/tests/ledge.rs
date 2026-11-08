@@ -5,6 +5,7 @@ use crate::geometry::TriangleMesh;
 pub(super) fn run() {
     easing_and_poses();
     catching_a_ledge();
+    a_collider_on_the_floor_refuses_the_catch_whatever_the_actor_stands_on();
     letting_go_of_a_ledge();
     climbing_fast_and_the_climb_jump();
     sliding_along_a_straight_ledge();
@@ -130,6 +131,46 @@ fn catching_a_ledge() {
         p.pos.y > 2.99 && p.pos.y < 3.01,
         "the hang holds: {:?}",
         p.pos
+    );
+}
+
+/// Both catch judges (`PlayerJudgeWallCatchInputDir`, 0x45c188 and `PlayerJudgeWallCatch`,
+/// 0x45be6c) refuse while `rs::isCollidedGround` holds. A throw whose collider still reports the
+/// floor under a hop (`hop_contact`) while the actor is not grounded asks the collider, not
+/// `grounded`, and so does not catch the ledge it reaches.
+#[cfg_attr(test, test)]
+fn a_collider_on_the_floor_refuses_the_catch_whatever_the_actor_stands_on() {
+    let scene = platform();
+    let throw_at_the_wall = || {
+        // The recatch lock keeps the first step from catching, so the wall contact is on record.
+        let mut p = falling_at_the_wall();
+        p.fall_after_ledge = Some(Vec3::NEG_X);
+        p.step(&toward_wall(), &scene);
+        assert!(p.touched.wall_contact.is_some());
+        p.fall_after_ledge = None;
+        p.nerve.deferred = false;
+        p.mode = Move::Throw;
+        p.grounded = false;
+        p
+    };
+
+    let mut on_floor = throw_at_the_wall();
+    on_floor.hop_contact = true;
+    assert!(on_floor.is_collided_ground());
+    on_floor.judge_wall_catch(&scene);
+    assert_eq!(
+        on_floor.mode,
+        Move::Throw,
+        "the collider on the floor refuses"
+    );
+
+    let mut off_floor = throw_at_the_wall();
+    off_floor.hop_contact = false;
+    off_floor.judge_wall_catch(&scene);
+    assert_eq!(
+        off_floor.mode,
+        Move::Ledge,
+        "the same throw catches without it"
     );
 }
 
