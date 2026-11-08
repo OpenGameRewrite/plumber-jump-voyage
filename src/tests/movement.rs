@@ -1871,8 +1871,8 @@ fn original_simulation_trace() {
     // refusal at 0x48d62c, the rolling_throw source and real-stage lock-on.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x478071695fe5087d,
-        "simulation differs from the cap terrain helper, pose up axis and return tail revision"
+        hash, 0x82205061305af486,
+        "simulation differs from the cap throw revision (spin ground chain without the crouch press)"
     );
     #[cfg(not(target_os = "windows"))]
     assert_ne!(hash, 0);
