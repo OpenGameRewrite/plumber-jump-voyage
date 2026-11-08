@@ -1,5 +1,6 @@
 //! Placement-bound flower objects and the player's independent carry keeper.
 pub use super::grow_seed::Seed;
+use super::grow_seed::SeedThrow;
 use super::push_receiver::{PushReceiver, calc_push_trans};
 use super::*;
 
@@ -74,6 +75,18 @@ pub struct Carry {
     pub(super) reconstruction_release_unavailable: bool,
     /// The throw reached its release step; the seed leaves the hand once the frame's state ran.
     pub release_due: bool,
+    /// A `startCancelAndRelease` the keeper has not run yet (see [`Player::start_cancel_and_release`]).
+    pub(super) cancel: Option<PendingCancel>,
+}
+
+/// The keeper's Release nerve, chosen by `startCancelAndRelease` (0x42e9b0). A nerve chosen in a
+/// state runs in the keeper's update later in the same frame (`updateCarry` 0x420ed8, in the
+/// actor's control), and until then the keeper still holds: `isCarry` (0x42ebfc) asks the current
+/// nerve and the held sensor.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingCancel {
+    /// The throw the held seed started on `SensorMsgHoldCancel`, aimed where the message arrived.
+    seed_throw: Option<SeedThrow>,
 }
 
 /// The receive dispatch compares message identities; an unhandled identity falls through.
@@ -246,10 +259,10 @@ impl Player {
             && pose_math::dot(self.units_per_frame(), Vec3::NEG_Y) >= 0.;
         if constrained {
             self.carry.lock_up = (self.carry.lock_up + 1).min(10);
-            if self.carry.lock_up == 10
-                && let Some(stone) = &mut self.carry.stone
-            {
-                stone.limit = "stone_hold_cancel_unavailable";
+            if self.carry.lock_up == 10 {
+                // PlayerCarryKeeper::updateCollideLockUp answers true on the tenth frame and the
+                // actor cancels and releases the hold (updateCollider 0x4215c4).
+                self.start_cancel_and_release();
             }
         } else {
             self.carry.lock_up = 0;
@@ -410,6 +423,9 @@ impl Player {
     /// which the actor's control runs after the state of the frame: Mario's pose and velocity
     /// are those the state left.
     pub(super) fn finish_carry_release(&mut self, scene: &Course) {
+        if let Some(cancel) = self.carry.cancel.take() {
+            self.run_release_nerve(cancel, scene);
+        }
         if self.carry.phase == 3 && self.carry.step == 1 && self.tilt >= STICK_DEADZONE {
             // updateCarry 0x420e78..0x420ed0 runs after the state: its facing must
             // survive that state's ground pose update, and must not steer its velocity.
@@ -427,6 +443,62 @@ impl Player {
             }
             self.release_flower_seed(scene);
             self.carry.held = false;
+        }
+    }
+
+    /// `PlayerCarryKeeper::startCancelAndRelease` (0x42e9b0), asked by the actor's states behind
+    /// `isCarry` (every one of its 32 callers tests it first): it sends `SensorMsgHoldCancel` from
+    /// the carry sensor to the held sensor, zeroes the hand and leg joint angles the keeper hands
+    /// the joint controls and the vector at +0x50 (presentation, not modelled), and chooses the
+    /// Release nerve.
+    ///
+    /// The held object answers the message where it arrives:
+    /// - `GrowFlowerSeed::receiveMsg` (0x292564), in its hold nerve, takes `PlayerRelease` and
+    ///   `HoldCancel` through one branch (0x292828) that is the ordinary throw with the speeds of a
+    ///   release not by swing (28 and 70, helper 0x291934), aimed at the player's velocity and front
+    ///   as they are now: the seed leaves the hand.
+    /// - `KickStone::receiveMsg` (0x2ab494) takes it through
+    ///   `MapObjStatePlayerHold::receiveMsgCancel` (0x2b6ddc): the stone is set down, hidden, its
+    ///   sensors invalidated and it restarts from its placement (nerve RestartPrepare, 0x2acf7c).
+    ///   The stone's restart is not modelled, so the keeper keeps holding it and the limit is
+    ///   exposed, as for the collision lock-up cancel.
+    ///
+    /// The Release nerve itself runs in the keeper's update later in this frame
+    /// ([`Self::run_release_nerve`]); until then `isCarry` still answers true.
+    pub(super) fn start_cancel_and_release(&mut self) {
+        if !self.is_carry() || self.carry.cancel.is_some() {
+            return;
+        }
+        if let Some(stone) = &mut self.carry.stone {
+            stone.limit = "stone_hold_cancel_unavailable";
+            return;
+        }
+        let seed_throw = self
+            .carry
+            .seed
+            .is_some()
+            .then(|| self.aim_flower_seed_throw());
+        self.carry.cancel = Some(PendingCancel { seed_throw });
+    }
+
+    /// `PlayerCarryKeeper::exeRelease` (0x42f28c) after `updateNerve` switched to the Release
+    /// nerve: the held sensor is forgotten (`isCarry` turns false), unless the model is the 2D one
+    /// the upper body animation is cleared (`clearUpperBodyAnim`, as the throw's start does),
+    /// the pickup is inhibited for ten frames (+0x48, counted down by every update) and the
+    /// carry-above and wall-keep flags are cleared; then the keeper waits.
+    fn run_release_nerve(&mut self, cancel: PendingCancel, scene: &Course) {
+        if let Some(throw) = cancel.seed_throw {
+            self.throw_flower_seed(throw, scene);
+        }
+        self.carry.held = false;
+        self.carry.release_due = false;
+        self.carry.phase = 0;
+        self.carry.step = 0;
+        if !self.model_2d() {
+            self.carry.upper = None;
+            self.upper_cleared = true;
+            self.carry.inhibition = 10;
+            self.carry.wall_keep = false;
         }
     }
 

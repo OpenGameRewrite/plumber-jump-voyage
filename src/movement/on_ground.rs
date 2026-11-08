@@ -44,9 +44,8 @@ impl Player {
         }
         // +0x3f8 ForceSlopeSlide precedes +0x400 ForceRolling (0x4218b8..0x421918).
         if self.on_ground_force_slide_code(self.v) {
-            // startCancelAndRelease (0x42e9b0) is not ported. Preserve its
-            // priority and held ownership, and expose the unsupported release.
-            self.ground_cancel_carry();
+            // 0x4218c0..0x4218e8: a carried object is cancelled and released first.
+            self.start_cancel_and_release();
             self.start_slope_slide();
             return GroundNerve::Changed;
         }
@@ -70,7 +69,8 @@ impl Player {
         // +0x3e8 EnableStandUp, then judgeAndResetReturnTrue(+0x4a0)
         // PreInputJump (0x4219b0..0x4219d8). A low ceiling consumes no jump.
         if !self.judge_enable_stand_up() {
-            self.ground_cancel_carry();
+            // 0x4219e0: the squat cancels and releases a carried object (0x4219ec).
+            self.start_cancel_and_release();
             self.cut_velocity_ground_normal();
             return GroundNerve::Squat;
         }
@@ -161,12 +161,6 @@ impl Player {
     fn cut_velocity_ground_normal(&mut self) {
         if self.is_collided_ground() {
             self.v = vector_lib::parallelize_vec(self.collided_ground_normal(), self.v);
-        }
-    }
-
-    pub(super) fn ground_cancel_carry(&mut self) {
-        if self.is_carry() {
-            self.carry.reconstruction_release_unavailable = true;
         }
     }
 }

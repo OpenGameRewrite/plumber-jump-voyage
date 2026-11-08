@@ -5930,7 +5930,7 @@ impl Player {
         // modes only (`carry_sensor_phase`), so it never reaches the diversion.
         if !self.judge_enable_stand_up() {
             // 0x423cdc..0x423cfc: release a carried object, then the Squat nerve.
-            self.ground_cancel_carry();
+            self.start_cancel_and_release();
             self.start_squat();
         } else if self.pre_jump > 0 && self.is_on_ground_run_angle() {
             self.ground_jump(o);
@@ -6843,6 +6843,8 @@ impl Player {
 mod cap_launch_checks;
 #[path = "tests/cap_touch.rs"]
 mod cap_touch_checks;
+#[path = "tests/carry_release.rs"]
+mod carry_release_checks;
 #[path = "tests/movement.rs"]
 mod checks;
 #[path = "tests/ledge.rs"]
@@ -6862,6 +6864,7 @@ pub fn self_check() {
     stain::self_check();
     checks::run();
     cap_launch_checks::run();
+    carry_release_checks::run();
     cap_touch_checks::run();
     spin_checks::run();
     wall_air_checks::run();

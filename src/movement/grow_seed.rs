@@ -83,7 +83,7 @@ pub struct Seed {
 }
 
 impl Seed {
-    fn new(id: String, position: Vec3) -> Self {
+    pub(super) fn new(id: String, position: Vec3) -> Self {
         Self {
             id,
             position,
@@ -400,6 +400,15 @@ impl Player {
     /// `GrowFlowerSeed::receiveMsg` for PlayerRelease: the pose turns to the player's front, the
     /// throw helper (0x291934) aims it, and the seed starts its throw.
     pub(super) fn release_flower_seed(&mut self, scene: &Course) {
+        let throw = self.aim_flower_seed_throw();
+        self.throw_flower_seed(throw, scene);
+    }
+
+    /// What the seed reads from the player when the message arrives: the pose's front, the player's
+    /// velocity (`GrowSeedUtil::throwFromPlayer`) and the player's position for the arrow test.
+    /// A hold cancel reads it where the state sends it and the seed leaves with the frame's
+    /// release (`CarryKeeper::start_cancel_and_release`).
+    pub(super) fn aim_flower_seed_throw(&self) -> SeedThrow {
         let (_, front) = self.pose_axes();
         let flat_front = try_normalize_or_zero(Vec3::new(front.x, 0., front.z)).0;
         let direction = pose_math::turn_vec_to_vec_degree(flat_front, Vec3::Y, 70.);
@@ -407,18 +416,24 @@ impl Player {
         // `throwFromPlayer` normalises the turned direction and `setVelocityToDirection`
         // normalises it again before it scales it by the speed.
         let aimed = try_normalize_or_zero(try_normalize_or_zero(direction).0).0;
-        let velocity = aimed * 28. + player_velocity;
-        let player_position = self.position_cm();
+        SeedThrow {
+            front,
+            velocity: aimed * 28. + player_velocity,
+            player_position: self.position_cm(),
+        }
+    }
+
+    pub(super) fn throw_flower_seed(&mut self, throw: SeedThrow, scene: &Course) {
         let Some(seed) = &mut self.carry.seed else {
             return;
         };
-        seed.quat = pose_math::quat_front_up(front, Vec3::Y);
+        seed.quat = pose_math::quat_front_up(throw.front, Vec3::Y);
         seed.thrown = true;
-        seed.velocity = velocity;
+        seed.velocity = throw.velocity;
         if let Some(mesh) = scene.mesh.as_deref() {
             // The helper tests an arrow behind the seed (as long as the distance of its
             // outer point from the world origin) and moves the seed to the player on a hit.
-            let direction = try_normalize_or_zero(velocity).0;
+            let direction = try_normalize_or_zero(throw.velocity).0;
             let reach = ARROW_SENSOR_SCALE * BODY_SENSOR_RADIUS;
             let length = squared_length(seed.position + direction * reach).sqrt();
             let arrow = direction * length;
@@ -430,13 +445,21 @@ impl Player {
             )
             .is_some()
             {
-                seed.position = mesh.to_game_vec(player_position);
+                seed.position = mesh.to_game_vec(throw.player_position);
             }
         }
         seed.collide_off = false;
         seed.collider.invalidate(seed.position, seed.pose_up);
         seed.set_nerve(Nerve::Throw);
     }
+}
+
+/// The throw a held seed starts when it is released or its hold is cancelled.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SeedThrow {
+    front: Vec3,
+    velocity: Vec3,
+    player_position: Vec3,
 }
 
 #[cfg(test)]

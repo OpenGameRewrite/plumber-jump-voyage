@@ -12,9 +12,9 @@ pub(super) const HOLD_OFFSET: Vec3 = Vec3::new(0., 30., 65.);
 
 #[derive(Clone, Debug)]
 pub struct Source {
-    id: String,
-    position: Vec3,
-    joint: Quat,
+    pub(super) id: String,
+    pub(super) position: Vec3,
+    pub(super) joint: Quat,
 }
 
 pub fn sources(root: &serde_json::Value) -> Vec<Source> {
@@ -375,6 +375,20 @@ mod tests {
             position: Vec3::new(0., 100., 0.),
             joint: Quat::IDENTITY,
         }
+    }
+
+    /// A stone answers `HoldCancel` by disappearing and restarting from its placement (nerve
+    /// RestartPrepare, 0x2acf7c; `MapObjStatePlayerHold::receiveMsgCancel` 0x2b6ddc), which the
+    /// port does not model: the limit is exposed and the hold stays, as for the collision lock-up.
+    #[test]
+    fn a_stone_hold_cancel_is_exposed_and_keeps_the_hold() {
+        let mut p = Player::default();
+        p.carry.stone = Some(Stone::new(&source()));
+        p.carry.held = true;
+        p.start_cancel_and_release();
+        assert!(p.carry.cancel.is_none());
+        assert!(p.is_carry());
+        assert_eq!(p.fidelity_limits(), "stone_hold_cancel_unavailable");
     }
 
     #[test]

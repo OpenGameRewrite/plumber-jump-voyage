@@ -70,12 +70,17 @@ impl Player {
         self.pre_jump > 0 && !self.on_ground_force_slide_code(self.units_per_frame())
     }
 
-    /// The actor's `PlayerJudgeForceSlopeSlide` in a ground nerve: standing on a floor with the
-    /// `Slide` code takes the actor to the `Slope` nerve. True when it did.
+    /// The actor's `PlayerJudgeForceSlopeSlide` (+0x3f8): standing on a floor with the `Slide`
+    /// code takes the actor to the `Slope` nerve. True when it did. Every actor nerve that asks
+    /// this judge (the wait 0x4225a4, the run 0x4230e8, the squat 0x422b08, the jump, fall, hip
+    /// drop, head sliding, rise, damage, sand sink, hack end, bind and spin-cap states, and
+    /// `setNerveOnGround`) cancels and releases a carried object before it chooses the slide, and
+    /// before the slide's `appear` takes the velocity (0x42e9b0 behind `isCarry`).
     pub(super) fn try_force_slope_slide(&mut self) -> bool {
         if self.nerve.deferred || !self.on_ground_force_slide_code(self.units_per_frame()) {
             return false;
         }
+        self.start_cancel_and_release();
         self.start_slope_slide();
         true
     }
