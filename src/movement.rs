@@ -5922,9 +5922,12 @@ impl Player {
         // sand sink (+0x450), pole climb (+0x498), grab ceiling (+0x408) and, after the
         // stand-up judge, the water-surface run (+0x488) and the dive (+0x410). The wall catch
         // (+0x4d8, asked before them) is `judge_wall_catch`. The carry diversion of 0x423a1c
-        // (`isCarry`, then `setNerveOnGround`) cannot arise: a spin never starts while
-        // carrying (`tryActionCapSpinAttackImpl` refuses at 0x4295d0) and the port picks an
-        // object up from the walk, run and air modes only (`carry_sensor_phase`).
+        // (`isCarry`, then `setNerveOnGround`) is not ported. A spin never starts while
+        // carrying (`tryActionCapSpinAttackImpl` refuses at 0x4295d0), but the binary does
+        // pick an object up mid-spin: `attackSensor` (0x427818) starts a carry in NrvSpinCap
+        // once `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10) holds, which is in
+        // SpinGround after the cap has left. The port picks up from the walk, run and air
+        // modes only (`carry_sensor_phase`), so it never reaches the diversion.
         if !self.judge_enable_stand_up() {
             // 0x423cdc..0x423cfc: release a carried object, then the Squat nerve.
             self.ground_cancel_carry();
