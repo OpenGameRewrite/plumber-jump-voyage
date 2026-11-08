@@ -20,6 +20,7 @@ pub(super) fn run() {
     the_run_throw_asks_the_same_choice_at_the_leaving_edge();
     a_ground_spin_that_leaves_the_floor_keeps_the_ground_child();
     a_fall_landing_within_the_run_angle_carries_its_velocity_onto_the_slope();
+    the_wall_jump_throw_records_the_wall_the_collider_holds();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -558,3 +559,32 @@ fn a_fall_landing_within_the_run_angle_carries_its_velocity_onto_the_slope() {
     assert_eq!(level.v, Vec3::new(3., -GRAVITY_MOVE, 4.));
 }
 
+/// `recordWallJump` (0x492d60) stores `rs::getCollidedWallNormal` (0x565fd4), the face normal of
+/// the wall the collider holds at the press, not the normal the slide last followed.
+#[cfg_attr(test, test)]
+fn the_wall_jump_throw_records_the_wall_the_collider_holds() {
+    let followed = Vec3::Z;
+    let held = Vec3::new(0.6, 0., 0.8);
+    let press = |contact: Option<Vec3>| {
+        let mut p = Player {
+            mode: Move::WallJump,
+            pos: Vec3::new(1., 2., 3.),
+            ..default()
+        };
+        p.wall_air.slide.normal_start = followed;
+        p.touched.wall_contact = contact.map(|normal| WallContact {
+            normal,
+            position: Vec3::ZERO,
+            at_face: true,
+        });
+        p.start_throw(Throw::Forward);
+        p.wall_history
+            .jump
+            .expect("the press records the wall jump")
+    };
+    let (position, normal) = press(Some(held));
+    assert_eq!(normal, held);
+    assert_eq!(position, Vec3::new(1., 2., 3.) / UNIT + Vec3::NEG_Y * 20.);
+    // No contact: the slide's normal stands in.
+    assert_eq!(press(None).1, followed);
+}

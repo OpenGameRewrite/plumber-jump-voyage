@@ -66,7 +66,7 @@ pub(super) struct WallAirControl {
     steps: u32,
     /// The wall as the last step saw it (`mNormalStart`), the direction the slide moves by, which
     /// follows the pose's front (`mNormalEnd`), and the speed along the wall the stick asks for.
-    slide: WallSlide,
+    pub(super) slide: WallSlide,
     /// The speed into the wall has come off already (`followNormal` did it as it lost the wall
     /// or met the ground).
     left: bool,
@@ -501,14 +501,19 @@ impl Player {
 
     /// `PlayerStateWallAir::startSlideSpinAttack` (0x48f654) records the wall jump again before it
     /// turns the actor (`recordWallJump`, 0x48f6c8 -> 0x492d60: the flag, the position and the
-    /// collided wall's normal): from 20 below the body (`getTrans + getGravity * 20`), where
-    /// `exeSlide`'s own record (0x48f82c) takes the position as it is. The normal is the slide's,
-    /// as the jump's record takes it here (the collider still holds the wall the jump left).
+    /// normal): from 20 below the body (`getTrans + getGravity * 20`), where `exeSlide`'s own
+    /// record (0x48f82c) takes the position as it is. The normal is `rs::getCollidedWallNormal`
+    /// (0x565fd4: the face normal of the wall triangle the collider holds, 0x492d94), read at the
+    /// press: the contact of the last move, which on a curved wall is not the one the slide last
+    /// followed (`normal_start`, the contact of the move before). Without a contact the binary
+    /// reads a triangle that is no longer current; the slide's normal stands in for it.
     pub(super) fn record_wall_jump_throw(&mut self) {
-        self.wall_history.jump = Some((
-            self.pos / UNIT + Vec3::NEG_Y * 20.,
-            self.wall_air.slide.normal_start,
-        ));
+        let normal = self
+            .touched
+            .wall_contact
+            .as_ref()
+            .map_or(self.wall_air.slide.normal_start, |contact| contact.normal);
+        self.wall_history.jump = Some((self.pos / UNIT + Vec3::NEG_Y * 20., normal));
     }
 
     /// `Keep`'s first steps: only the press into the wall.
