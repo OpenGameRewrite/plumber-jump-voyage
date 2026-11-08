@@ -18,6 +18,7 @@ pub(super) fn run() {
     the_throw_frame_hands_the_up_axis_of_the_child_start_throw_picked();
     a_throw_in_the_fall_onto_a_floor_beyond_the_run_angle_starts_the_air_child();
     the_run_throw_asks_the_same_choice_at_the_leaving_edge();
+    a_ground_spin_that_leaves_the_floor_keeps_the_ground_child();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -83,7 +84,7 @@ fn a_throw_from_level_ground_keeps_the_horizontal_front() {
 fn a_swim_throw_keeps_the_up_axis_it_stored() {
     let mut p = on_slope();
     p.throwing.dir = Some(Vec3::Z);
-    p.launch_cap_across(Throw::Forward, false, Vec3::X);
+    p.launch_cap_across(Throw::Forward, false, Vec3::X, false);
     let launch = p.launch.as_ref().unwrap();
     assert_eq!((launch.up, launch.front), (Vec3::X, Vec3::Z));
 }
@@ -412,3 +413,90 @@ fn the_run_throw_asks_the_same_choice_at_the_leaving_edge() {
     let up = leaving.launch.as_ref().unwrap().up;
     assert_eq!(up.to_array().map(f32::to_bits), negated_gravity_bits());
 }
+
+/// A narrow floor from `edge_z` to the far side: the actor runs toward -z and leaves it there.
+fn floor_ending_at(edge_z: f32) -> Course {
+    Course {
+        solids: vec![Solid {
+            center: Vec3::new(0., -0.5, edge_z + 100.),
+            half: Vec3::new(100., 0.5, 100.),
+            slope: 0.,
+            moving: false,
+            floor_code: "Ground",
+        }],
+        ..default()
+    }
+}
+
+/// A standing actor that still carries a run's momentum presses the throw: a ground spin that
+/// brakes over its first steps. Returns the first step the actor was off the floor, the step the
+/// cap left on, and the player after 30 steps.
+fn spin_throw_over(course: &Course) -> (Option<u32>, Option<u32>, Player) {
+    let mut p = Player::default();
+    p.pos.z = 40.;
+    p.v = Vec3::new(0., 0., -9.);
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            throw_held: true,
+            ..default()
+        },
+        course,
+    );
+    let (mut launched, mut left_floor) = (None, None);
+    for _ in 0..30 {
+        let step = p.frame;
+        p.step(&Orders::default(), course);
+        if left_floor.is_none() && !p.grounded {
+            left_floor = Some(step);
+        }
+        if launched.is_none() && p.launch.is_some() {
+            launched = Some(step);
+        }
+    }
+    (left_floor, launched, p)
+}
+
+/// `PlayerStateSpinCap::appear` (0x481958) starts one child and nothing but `exeSpinAir`'s own end
+/// (the fall nerve after step 22, 0x482a38) changes it: the only `setNerve` calls of the class are
+/// 0x481ad4, 0x481b04 (`appear`) and that one, and the nerve objects are referenced from no
+/// function outside `PlayerStateSpinCap`. A ground spin whose actor coasts off an edge before the
+/// throw frame stays `exeSpinGround`: it throws on the ground frame (12, `getThrowFrameGround`),
+/// not on the air frame (8), and the actor keeps the ground control's pull.
+#[cfg_attr(test, test)]
+fn a_ground_spin_that_leaves_the_floor_keeps_the_ground_child() {
+    // On a floor wide enough to stay on, the throw frame is the ground one.
+    let (left_floor, launched, p) = spin_throw_over(&floor_ending_at(-100.));
+    assert_eq!(
+        (left_floor, launched),
+        (None, Some(t::SPIN_CAP_THROW_FRAME))
+    );
+    assert!(!p.throwing.in_air);
+
+    // The same spin with the floor ending where the actor is at the spin's first step.
+    let mut probe = Player::default();
+    probe.pos.z = 40.;
+    probe.v = Vec3::new(0., 0., -9.);
+    let wide = floor_ending_at(-100.);
+    probe.step(
+        &Orders {
+            throw_pressed: true,
+            throw_held: true,
+            ..default()
+        },
+        &wide,
+    );
+    while probe.frame < 1 {
+        probe.step(&Orders::default(), &wide);
+    }
+    let (left_floor, launched, p) = spin_throw_over(&floor_ending_at(probe.pos.z));
+    let left = left_floor.expect("the spin coasts off the floor");
+    assert!(left < t::SPIN_CAP_THROW_FRAME_AIR, "left at step {left}");
+    assert!(!p.throwing.in_air);
+    assert_eq!(
+        launched,
+        Some(t::SPIN_CAP_THROW_FRAME),
+        "the ground child throws on its own frame whatever the actor stands on"
+    );
+}
+

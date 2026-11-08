@@ -131,7 +131,9 @@ impl Player {
         let frame = k::SPIN_CAP_THROW_FRAME;
         if self.swim.steps == frame && self.winding && self.launch.is_none() {
             let up = self.throwing.up.unwrap_or(UP);
-            self.launch_cap_across(Throw::Forward, self.throwing.continuous, up);
+            // The swim spin has no air child; the cap's air flag keeps following the actor.
+            let airborne = !self.grounded;
+            self.launch_cap_across(Throw::Forward, self.throwing.continuous, up, airborne);
         }
     }
 

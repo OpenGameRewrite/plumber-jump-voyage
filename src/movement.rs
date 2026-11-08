@@ -2727,7 +2727,7 @@ impl Player {
         }
         // (`exeSpinGround` pulls with the ground control's gravity like the run states do.)
         self.pull = if matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
-            || self.mode == Move::Throw && self.grounded
+            || self.mode == Move::Throw && !self.throwing.in_air
         {
             GRAVITY_MOVE
         } else {
@@ -3478,7 +3478,7 @@ impl Player {
         }
         self.begin_step(acting);
         if !matches!(self.mode, Move::Walk | Move::Run | Move::Skid | Move::Turn)
-            && !(self.mode == Move::Throw && self.grounded)
+            && !(self.mode == Move::Throw && !self.throwing.in_air)
         {
             self.pull = t::GRAVITY;
         }
@@ -5829,11 +5829,14 @@ impl Player {
             t::SPIN_CAP_THROW_FRAME
         }
     }
-    /// The throw state (`PlayerStateSpinCap`): `exeSpinGround` on the ground,
-    /// `exeSpinAir` in the air.
+    /// The throw state (`PlayerStateSpinCap`): `exeSpinGround` or `exeSpinAir`, whichever child
+    /// `appear` started (0x481958: `setNerve` at 0x481ad4 / 0x481af0 choose it, and nothing in
+    /// the class changes it afterwards but `exeSpinAir`'s own end, the fall nerve after step 22,
+    /// 0x482a38). A ground spin whose actor leaves the floor keeps the ground child's throw frame
+    /// and control, and an air spin that touches the floor keeps the air child's.
     fn throw_state(&mut self, o: &Orders, scene: &Course) {
         let kind = self.throwing.kind.unwrap_or(Throw::Forward);
-        let air = !self.grounded;
+        let air = self.throwing.in_air;
         let step = self.frame;
         // The cap leaves on the throw frame, if it is still the spin attack.
         if self.winding && self.launch.is_none() && step == self.throw_frame(kind, air) {
@@ -5888,13 +5891,16 @@ impl Player {
             self.spin_ik = true;
         }
         // Once the cap is away the other actions may cancel the spin
-        // (`isEnableCancelGround`): jump, crouch, then the run.
+        // (`isEnableCancelGround`): jump, crouch, then the run. The ground child keeps this chain
+        // while the actor coasts off an edge, and its judges are the ground ones: the jump is
+        // asked behind `rs::isOnGroundRunAngle` (0x423d60, before the jump judge), the squat is
+        // a ground action.
         if self.winding {
             return;
         }
-        if self.pre_jump > 0 {
+        if self.pre_jump > 0 && self.is_on_ground_run_angle() {
             self.ground_jump(o);
-        } else if o.crouch {
+        } else if o.crouch && self.grounded {
             self.start_squat();
         } else if self.anim_done(clip::throw(self.anim.name)) {
             // The state ended: `updateNerveState` answers true and skips the history restore.
@@ -5984,7 +5990,7 @@ impl Player {
             pose_math::NEGATED_GRAVITY
         }
     }
-    fn throw_launch(&self, kind: Throw, continuous: bool, up: Vec3) -> Launch {
+    fn throw_launch(&self, kind: Throw, continuous: bool, up: Vec3, air_child: bool) -> Launch {
         let dir = self.throwing.dir.unwrap_or(self.facing);
         // A throw whose up axis is not the world's flies along the direction as given (the
         // throw's direction already lies across that axis); the others along the horizontal.
@@ -5997,7 +6003,7 @@ impl Player {
             front,
             kind,
             left: false,
-            air: !self.grounded,
+            air: air_child,
             continuous,
             spiral_side: spiral_side_of(Some(kind), !self.spin_clockwise),
             up,
@@ -6013,12 +6019,12 @@ impl Player {
         } else {
             self.spin_cap_in_air()
         };
-        self.launch_cap_across(kind, continuous, self.launch_up_axis(air_child));
+        self.launch_cap_across(kind, continuous, self.launch_up_axis(air_child), air_child);
     }
     /// [`Self::launch_cap`] with the up axis the thrower hands over.
-    fn launch_cap_across(&mut self, kind: Throw, continuous: bool, up: Vec3) {
+    fn launch_cap_across(&mut self, kind: Throw, continuous: bool, up: Vec3, air_child: bool) {
         self.throwing.launch_offset = Vec3::ZERO;
-        self.launch = Some(self.throw_launch(kind, continuous, up));
+        self.launch = Some(self.throw_launch(kind, continuous, up, air_child));
     }
     /// The cap's frame, which comes before the player's
     /// (`HackCap::movement` before `PlayerActorHakoniwa::movement`).
@@ -6302,7 +6308,8 @@ impl Player {
     /// The states the player's foot can trample the cap in
     /// (`PlayerActorHakoniwa::attackSensor`): not on a pole,
     /// grabbing a ledge or ceiling, rolling, pounding, or spinning the cap in
-    /// the air.
+    /// the air (`PlayerStateSpinCap::isSpinAttackAir`, 0x481e40: asked of the air child, whatever
+    /// the floor under the actor is).
     fn can_trample(&self) -> bool {
         if self.mode == Move::Swim {
             return !matches!(
@@ -6319,7 +6326,7 @@ impl Player {
                 | Move::Roll
                 | Move::RollEnd
                 | Move::RollJump
-        ) && !(self.mode == Move::Throw && !self.grounded)
+        ) && !(self.mode == Move::Throw && self.throwing.in_air)
     }
     /// The jump off the cap (`PlayerStateJump::appear`, request 11, shared
     /// with the jump on an enemy): `TrampleHighJumpPower` with
