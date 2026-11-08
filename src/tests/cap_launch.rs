@@ -19,6 +19,7 @@ pub(super) fn run() {
     a_throw_in_the_fall_onto_a_floor_beyond_the_run_angle_starts_the_air_child();
     the_run_throw_asks_the_same_choice_at_the_leaving_edge();
     a_ground_spin_that_leaves_the_floor_keeps_the_ground_child();
+    a_fall_landing_within_the_run_angle_carries_its_velocity_onto_the_slope();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -498,5 +499,62 @@ fn a_ground_spin_that_leaves_the_floor_keeps_the_ground_child() {
         Some(t::SPIN_CAP_THROW_FRAME),
         "the ground child throws on its own frame whatever the actor stands on"
     );
+}
+
+/// `exeFall` sets trigger 1 for a throw that lands within the run angle (0x425280); `appear` then
+/// carries the fall's velocity onto the collided ground before the ground child's brake:
+/// `alongVectorNormalH(velocity, velocity, -gravity, collidedGroundNormal)` (0x481a1c..0x481a70),
+/// which drops the vertical part and turns the horizontal part into the ground's plane,
+/// keeping its length.
+#[cfg_attr(test, test)]
+fn a_fall_landing_within_the_run_angle_carries_its_velocity_onto_the_slope() {
+    let angle = 30f32.to_radians();
+    // A ground rising toward +z, its normal tilted toward -z.
+    let normal = Vec3::new(0., angle.cos(), -angle.sin());
+    let uphill = Vec3::new(0., angle.sin(), angle.cos());
+    let landing = |mode| Player {
+        mode,
+        grounded: true,
+        mesh_ground: Some(normal),
+        // 10 along the ground's horizontal heading, and a fall into it.
+        v: Vec3::new(0., -20., 10.),
+        facing: Vec3::Z,
+        ..default()
+    };
+    let mut p = landing(Move::Fall);
+    assert!(p.is_land_ground_run_angle());
+    p.start_throw(Throw::Forward);
+    assert!(!p.throwing.in_air);
+    // The carried velocity lies in the plane of the ground and keeps the horizontal length 10;
+    // the floor pull of the ground control sits on top of it along -normal.
+    let carried = p.v + normal * GRAVITY_MOVE;
+    assert!(carried.dot(normal).abs() < 1e-4, "{carried}");
+    assert!((carried - uphill * 10.).length() < 1e-4, "{carried}");
+    // The brake of the first step then keeps 0.95 of that length, not 0.95 of the horizontal
+    // part laid onto the slope (10 cos 30).
+    p.spin_cap_inertia();
+    let braked = (p.v + normal * GRAVITY_MOVE).length();
+    assert!(
+        (braked - 10. * t::SPIN_BRAKE_RATE).abs() < 1e-4,
+        "{braked} from {}",
+        p.v
+    );
+
+    // Only the fall's trigger 1 carries: the same ground and velocity from another state
+    // keeps the raw velocity with the pull as the port's ground states hold it.
+    let mut standing = landing(Move::Idle);
+    standing.start_throw(Throw::Forward);
+    assert_eq!(standing.v, Vec3::new(0., -GRAVITY_MOVE, 10.));
+
+    // Level ground: the vertical part of the fall is dropped and the pull stands in its place.
+    let mut level = Player {
+        mode: Move::Fall,
+        grounded: true,
+        v: Vec3::new(3., -20., 4.),
+        ..default()
+    };
+    assert!(level.is_land_ground_run_angle());
+    level.start_throw(Throw::Forward);
+    assert_eq!(level.v, Vec3::new(3., -GRAVITY_MOVE, 4.));
 }
 

@@ -5646,6 +5646,9 @@ impl Player {
         }
         // The child `PlayerStateSpinCap::appear` picks for the actor as it is now.
         let air = self.spin_cap_in_air();
+        // The velocity it hands the ground child after a fall that lands within the run angle
+        // (trigger 1), read before anything below changes the actor.
+        let landing_velocity = self.spin_cap_fall_landing_velocity();
         self.setup_attack_info();
 
         // `exeWallAir` (0x4245f8, the only writer of `PlayerTrigger` action 0 and `appear` the only
@@ -5693,7 +5696,11 @@ impl Player {
             // The state's ground control pulls the player to the floor from
             // the frame it is chosen.
             self.pull = GRAVITY_MOVE;
-            self.v.y = -GRAVITY_MOVE;
+            match landing_velocity {
+                // The brake of the first step then works on the velocity carried onto the ground.
+                Some(velocity) => self.v = velocity,
+                None => self.v.y = -GRAVITY_MOVE,
+            }
         }
         self.throwing.dir = None;
         self.change(Move::Throw, name, move |p| {
