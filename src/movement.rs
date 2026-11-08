@@ -5897,18 +5897,26 @@ impl Player {
         if clip::throw(self.anim.name) as f32 - self.anim.frame <= 3. {
             self.spin_ik = true;
         }
-        // Once the cap is away the other actions may cancel the spin
-        // (`isEnableCancelGround`): jump, crouch, then the run. The ground child keeps this chain
-        // while the actor coasts off an edge, and its judges are the ground ones: the jump is
-        // asked behind `rs::isOnGroundRunAngle` (0x423d60, before the jump judge), the squat is
-        // a ground action.
+        // Once the cap is away the actor's ground chain may cancel the spin
+        // (`isEnableCancelGround`, `exeSpinCap` 0x423aa4..0x423d80). Of that chain the port
+        // carries the two judges below, in the binary's order: the stand-up judge (+0x3e8,
+        // 0x423cb0) sets the Squat nerve when a ceiling forbids standing on a collided floor,
+        // then the jump (+0x4a0, 0x423d6c) behind `rs::isOnGroundRunAngle` (0x423d60). No
+        // button is read here: the crouch press (StartSquat, +0x480) is asked only by
+        // `setNerveOnGround` (0x421a44), which the child's end reaches below. Not ported, in
+        // the binary's order: the rethrow (`isEnableReThrowCap`), the forced slope slide
+        // (+0x3f8), the forced rolling (+0x400), sand sink (+0x450), pole climb (+0x498), grab
+        // ceiling (+0x408) and, after the stand-up judge, the water-surface run (+0x488) and
+        // the dive (+0x410). The wall catch (+0x4d8, asked before them) is `judge_wall_catch`.
         if self.winding {
             return;
         }
-        if self.pre_jump > 0 && self.is_on_ground_run_angle() {
-            self.ground_jump(o);
-        } else if o.crouch && self.grounded {
+        if !self.judge_enable_stand_up() {
+            // 0x423cdc..0x423cfc: release a carried object, then the Squat nerve.
+            self.ground_cancel_carry();
             self.start_squat();
+        } else if self.pre_jump > 0 && self.is_on_ground_run_angle() {
+            self.ground_jump(o);
         } else if self.anim_done(clip::throw(self.anim.name)) {
             // The state ended: `updateNerveState` answers true and skips the history restore.
             self.throwing.child_ended = true;

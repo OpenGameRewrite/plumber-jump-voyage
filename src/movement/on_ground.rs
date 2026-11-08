@@ -164,7 +164,7 @@ impl Player {
         }
     }
 
-    fn ground_cancel_carry(&mut self) {
+    pub(super) fn ground_cancel_carry(&mut self) {
         if self.is_carry() {
             self.carry.reconstruction_release_unavailable = true;
         }

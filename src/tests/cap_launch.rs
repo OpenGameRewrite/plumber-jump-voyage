@@ -21,6 +21,8 @@ pub(super) fn run() {
     a_ground_spin_that_leaves_the_floor_keeps_the_ground_child();
     a_fall_landing_within_the_run_angle_carries_its_velocity_onto_the_slope();
     the_wall_jump_throw_records_the_wall_the_collider_holds();
+    a_crouch_press_does_not_cancel_a_ground_throw_under_an_open_ceiling();
+    a_ground_spin_under_a_low_ceiling_squats_ahead_of_a_jump();
 }
 
 /// The normal of a ground that rises towards +z (a 36.87 degree slope).
@@ -587,4 +589,113 @@ fn the_wall_jump_throw_records_the_wall_the_collider_holds() {
     assert_eq!(position, Vec3::new(1., 2., 3.) / UNIT + Vec3::NEG_Y * 20.);
     // No contact: the slide's normal stands in.
     assert_eq!(press(None).1, followed);
+}
+
+/// A wide floor (top at y = 0) with a slab over it whose underside is `height` metres up.
+/// `PlayerCeilingCheck::isEnableStandUp` holds for a ceiling 1.6 m up or higher. The collider
+/// pushes a standing body sideways out from under a lower slab, so a test that wants the ceiling
+/// check to refuse while the actor still stands there brings the slab in only after the throw.
+fn floor_under_ceiling_at(height: f32) -> Course {
+    let slab = |center_y: f32, floor_code| Solid {
+        center: Vec3::new(0., center_y, 0.),
+        half: Vec3::new(100., 0.5, 100.),
+        slope: 0.,
+        moving: false,
+        floor_code,
+    };
+    Course {
+        solids: vec![slab(-0.5, "Ground"), slab(height + 0.5, "Ground")],
+        ..default()
+    }
+}
+
+/// A standing actor throws on `before`; from the step after the cap has left it steps on
+/// `after`, with `held` as the order. Returns the step the cap left on, the step the actor
+/// stopped being in the throw (`None` when it did not within 80 steps) and the mode it was in
+/// then.
+fn ground_throw_then(held: &Orders, before: &Course, after: &Course) -> (u32, Option<u32>, Move) {
+    let mut p = Player::default();
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            throw_held: true,
+            ..default()
+        },
+        before,
+    );
+    let (mut cap_left, mut ended) = (None, None);
+    for step in 1..80 {
+        let (order, course) = if cap_left.is_some() {
+            (held.clone(), after)
+        } else {
+            (Orders::default(), before)
+        };
+        p.step(&order, course);
+        if cap_left.is_none() && p.launch.is_some() {
+            cap_left = Some(step);
+        }
+        if cap_left.is_some() && p.mode != Move::Throw {
+            ended = Some(step);
+            break;
+        }
+    }
+    (cap_left.expect("the cap leaves"), ended, p.mode)
+}
+
+/// The ground chain of `exeSpinCap` (0x423aa4..0x423d80) reads no crouch button: its squat is
+/// judge +0x3e8 (`PlayerJudgeEnableStandUp`, 0x459514), taken only when a ceiling forbids
+/// standing on a collided floor. The StartSquat judge (+0x480) is asked by `setNerveOnGround`
+/// (0x421a44) alone, which the child reaches at its end. So a crouch held after a throw under an
+/// open ceiling does not squat before the clip is over, and then it squats.
+#[cfg_attr(test, test)]
+fn a_crouch_press_does_not_cancel_a_ground_throw_under_an_open_ceiling() {
+    let open = floor_under_ceiling_at(3.);
+    let crouch = Orders {
+        crouch: true,
+        crouch_pressed: true,
+        ..default()
+    };
+    let (_, plain_end, _) = ground_throw_then(&Orders::default(), &open, &open);
+    let plain_end = plain_end.expect("an untouched spin ends");
+    let (cap_left, held_end, mode) = ground_throw_then(&crouch, &open, &open);
+    assert!(
+        cap_left + 3 < plain_end,
+        "the clip outlasts the cap's leaving"
+    );
+    assert_eq!(
+        held_end,
+        Some(plain_end),
+        "the spin runs to the same end with the crouch held"
+    );
+    assert_eq!(mode, Move::SquatBrake, "setNerveOnGround then squats");
+}
+
+/// With a ceiling that forbids standing the chain squats at once after the cap has left, with no
+/// button read, and ahead of the jump judge (0x423cb0 before 0x423d6c): a jump held from the
+/// cap's leaving is not taken, while under an open ceiling the same press jumps.
+#[cfg_attr(test, test)]
+fn a_ground_spin_under_a_low_ceiling_squats_ahead_of_a_jump() {
+    let open = floor_under_ceiling_at(3.);
+    let low = floor_under_ceiling_at(1.4);
+    let jump = Orders {
+        jump: true,
+        jump_held: true,
+        ..default()
+    };
+    let (cap_left, ended, mode) = ground_throw_then(&Orders::default(), &open, &low);
+    assert_eq!(mode, Move::SquatBrake);
+    assert_eq!(
+        ended,
+        Some(cap_left + 1),
+        "the squat is the step after the cap left"
+    );
+    let (_, _, jumped) = ground_throw_then(&jump, &open, &low);
+    assert_eq!(
+        jumped,
+        Move::SquatBrake,
+        "the low ceiling takes the squat, not the jump"
+    );
+    let (_, _, free) = ground_throw_then(&jump, &open, &open);
+    assert_ne!(free, Move::SquatBrake);
+    assert_ne!(free, Move::Throw);
 }
