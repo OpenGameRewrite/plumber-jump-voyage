@@ -5905,12 +5905,26 @@ impl Player {
         // function runs its own judges (the run-angle gate, the forced slide, rolling, sand,
         // pole, grab, then the stand-up squat with its velocity cut, the jump, the run and the
         // squat button), which `set_nerve_on_ground` carries.
-        if self.winding {
-            return;
-        }
-        if self.anim_done(clip::throw(self.anim.name)) {
+        if !self.winding && self.anim_done(clip::throw(self.anim.name)) {
             self.throwing.child_ended = true;
             self.set_nerve_on_ground(o, scene); // exeSpinCap 0x423b18.
+            return;
+        }
+        // 0x423a1c: a carried object (picked up since the cap left, `carry_sensor_phase`) ends the
+        // spin at once through `setNerveOnGround` (0x423a24 -> 0x423b08), ahead of the water
+        // judge and of every cancel of the chain below. The state's end was asked before it, and
+        // the history restore (0x4239d4) before both.
+        if self.is_carry() {
+            // The state ends: `PlayerStateSpinCap::kill` (0x481b08) takes a cap that has not left
+            // back (`HackCap::cancelCapState`, then put on). Only the step between choosing the
+            // spin and its first step can have an object picked up with the cap still winding.
+            if std::mem::take(&mut self.winding) {
+                self.winding_age = 0;
+            }
+            self.set_nerve_on_ground(o, scene);
+            return;
+        }
+        if self.winding {
             return;
         }
         // Of the chain the port carries two judges, in the binary's order: the stand-up judge
@@ -5922,12 +5936,11 @@ impl Player {
         // sand sink (+0x450), pole climb (+0x498), grab ceiling (+0x408) and, after the
         // stand-up judge, the water-surface run (+0x488) and the dive (+0x410). The wall catch
         // (+0x4d8, asked before them) is `judge_wall_catch`. The carry diversion of 0x423a1c
-        // (`isCarry`, then `setNerveOnGround`) is not ported. A spin never starts while
-        // carrying (`tryActionCapSpinAttackImpl` refuses at 0x4295d0), but the binary does
-        // pick an object up mid-spin: `attackSensor` (0x427818) starts a carry in NrvSpinCap
-        // once `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10) holds, which is in
-        // SpinGround after the cap has left. The port picks up from the walk, run and air
-        // modes only (`carry_sensor_phase`), so it never reaches the diversion.
+        // (`isCarry`, then `setNerveOnGround`) is the diversion above. A spin never starts while
+        // carrying (`tryActionCapSpinAttackImpl` refuses at 0x4295d0), but `attackSensor`
+        // (0x427818) starts a carry in NrvSpinCap once `PlayerStateSpinCap::isEnableCancelCarry`
+        // (0x481f10) holds, which is in SpinGround after the cap has left
+        // (`spin_cap_enable_cancel_carry`).
         if !self.judge_enable_stand_up() {
             // 0x423cdc..0x423cfc: release a carried object, then the Squat nerve.
             self.start_cancel_and_release();
@@ -6849,6 +6862,8 @@ mod carry_release_checks;
 mod checks;
 #[path = "tests/ledge.rs"]
 mod ledge_checks;
+#[path = "tests/spin_carry.rs"]
+mod spin_carry_checks;
 #[path = "tests/spin.rs"]
 mod spin_checks;
 #[path = "tests/wall_air.rs"]
@@ -6866,6 +6881,7 @@ pub fn self_check() {
     cap_launch_checks::run();
     carry_release_checks::run();
     cap_touch_checks::run();
+    spin_carry_checks::run();
     spin_checks::run();
     wall_air_checks::run();
     ledge_checks::run();

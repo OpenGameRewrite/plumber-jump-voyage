@@ -274,16 +274,48 @@ impl Player {
         self.carry.held
     }
 
+    /// What the actor's state allows `attackSensor` (0x427818) to start a carry in. Both pickup
+    /// paths (the `Carry` sensor on the press, 0x4279c8, and the held `Body` one, 0x42825c) ask
+    /// the same gates: the refusals of 0x429c68 and 0x429b44 (dead, hack, damage, the squat,
+    /// rolling, grab ceiling, wall catch, dive and so on), and, while the actor nerve is SpinCap
+    /// (0x1d78940), `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10).
+    ///
+    /// The port starts a carry from the idle, walk, run, skid, turn, jump and fall modes and from
+    /// the ground spin once the cap has left. The binary lets the other states it does not refuse
+    /// pick an object up too (the other jump kinds, the hip drop family, the slope slide, the
+    /// long jump, the sand states, the fire damage, the rise); their carry handling (animation,
+    /// cancels) is not ported, and no recording picks up there.
+    fn pickup_state_allows(&self) -> bool {
+        match self.mode {
+            Move::Idle | Move::Walk | Move::Run | Move::Skid | Move::Turn => true,
+            Move::Jump | Move::Fall => true,
+            Move::Throw => self.spin_cap_enable_cancel_carry(),
+            _ => false,
+        }
+    }
+
+    /// `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10) for the ground child (`SpinGround`,
+    /// 0x1d7ff80): true once the cap is no longer the spin attack (`PlayerSpinCapAttack::
+    /// isCapSpinAttack`, 0x465420), and while the state is not dead (the byte at +0x10, set by
+    /// `kill` on the child's end step). Before the cap leaves it asks `isEnableCancelAir`
+    /// (0x481da4), which is false for the ground nerves. (`SpinGroundSeparate` after step 10 is the
+    /// second player's throw and never runs in single play.) The air child answers through
+    /// `isEnableCancelAir` alone: false for the first 23 steps, and from the fall nerve on, which
+    /// the port runs as the fall mode.
+    pub(super) fn spin_cap_enable_cancel_carry(&self) -> bool {
+        self.mode == Move::Throw
+            && !self.throwing.in_air
+            && !self.winding
+            && !self.throwing.child_ended
+    }
+
     pub(super) fn carry_sensor_phase(&mut self, o: &Orders, scene: &Course) {
         self.carry.held_during_sensor_phase = self.carry.held;
         self.carry.picked_up = false;
         if self.carry.held
             || self.carry.inhibition > 0
             || !o.throw_held
-            || !matches!(
-                self.mode,
-                Move::Idle | Move::Walk | Move::Run | Move::Jump | Move::Fall
-            )
+            || !self.pickup_state_allows()
         {
             return;
         }
