@@ -9,6 +9,7 @@ pub(super) fn run() {
     the_spin_drop_restarts_the_jump();
     a_held_spin_drop_lands_in_the_drop_landing();
     a_spin_ended_with_the_stick_held_hands_over_to_a_fresh_run();
+    lockstep_spin_jump_loop_row_does_not_wrap_twice();
 }
 
 fn floor() -> Course {
@@ -164,8 +165,28 @@ fn the_spin_jump_leaves_with_its_own_limits() {
         p.step(&Orders::default(), &scene);
         frames.push(p.anim.frame);
     }
-    assert!(frames.iter().all(|f| (0.0..8.).contains(f)));
+    assert!(frames.iter().all(|f| (1.0..=8.).contains(f)), "{frames:?}");
     assert!(frames.windows(9).all(|w| w[0] == w[8]), "{frames:?}");
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_spin_jump_loop_row_does_not_wrap_twice() {
+    // Recordings read 8 in the row the clip's pose wraps in and 1 in the next. A snapshot
+    // of the 8 row must not start the loop's triggers again when the next step runs.
+    let scene = floor();
+    let mut p = Player::default();
+    p.inject(&Snapshot {
+        mode: Some(Move::SpinJump),
+        grounded: false,
+        pos: Vec3::Y,
+        v: Vec3::Y,
+        state_frames: Some(9),
+        anim: Some(("StartSpinJumpL", 8.)),
+        ..default()
+    });
+    p.step(&Orders::default(), &scene);
+    assert_eq!(p.anim.frame, 1.);
+    assert!(!p.clip_wrapped, "the loop wrapped in the row before");
 }
 
 /// A spin jump 20 steps in (row 66, the step the recorded drop was pressed).

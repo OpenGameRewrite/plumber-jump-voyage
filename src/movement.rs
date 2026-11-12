@@ -580,6 +580,10 @@ pub mod clip {
             | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" | "WaitCold" | "WaitVeryCold" => {
                 1.
             }
+            // The spin jump's body clips (length 8) read 1..8 in every recorded row, never 0
+            // after the start: updateSync (0x42d170) gives the counter the model's frame plus
+            // its rate, so it shows the length for the row the pose wraps in.
+            "StartSpinJumpL" | "StartSpinJumpR" | "RestartSpinJumpL" | "RestartSpinJumpR" => 1.,
             _ => 0.,
         }
     }
