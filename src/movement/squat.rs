@@ -132,8 +132,12 @@ impl Player {
     }
     /// The first step of `exeBrake` (0x483710) before the slide.
     fn brake_first_step(&mut self) {
-        let up = self.mesh_ground.unwrap_or(Vec3::Y);
-        self.v = brake_entry_velocity(self.v, self.facing, up, self.on_ground_skate());
+        // 0x4836fc calls `rs::calcGroundNormalOrUpDir` (0x55ba38) with the actor
+        // and its collision; 0x48379c reads the pose front (`al::calcFrontDir`),
+        // which `pose_axes` gives from the stored pose, as set by the last step.
+        let up = self.ground_normal_or_up();
+        let (_, front) = self.pose_axes();
+        self.v = brake_entry_velocity(self.v, front, up, self.on_ground_skate());
     }
 
     /// One step of the squat nerve, then the actor's decisions (`exeSquat`).
@@ -282,8 +286,8 @@ impl Player {
 }
 
 /// `exeBrake`'s first-step velocity adjustment (0x483760..0x48391c). `up` is
-/// `rs::calcGroundNormalOrUpDir` (0x4836fc) and `front` stands for
-/// `al::calcFrontDir` (0x48379c). The velocity is separated into the part
+/// `rs::calcGroundNormalOrUpDir` (0x4836fc) and `front` is the pose
+/// front, `al::calcFrontDir` (0x48379c). The velocity is separated into the part
 /// along `up` and the rest (0x483788); the front is verticalized against
 /// `up` (0x4837a0..0x4837ac) and normalized (0x4837b4). Moving backwards off
 /// a skate floor drops the backward part (0x4837dc..0x483808). A rest that is
@@ -314,32 +318,81 @@ fn brake_entry_velocity(velocity: Vec3, front: Vec3, up: Vec3, on_skate: bool) -
 mod tests {
     use super::*;
 
+    const TILTED_UP: Vec3 = Vec3::new(0.6, 0.8, 0.);
+
     /// On a floor tilted about Z the split is by its normal: the part along the
     /// normal is kept, the rest is scaled by `SquatAccelRate` (0x483860).
     #[test]
     fn brake_entry_splits_by_the_ground_normal() {
-        let up = Vec3::new(0.6, 0.8, 0.);
         let front = Vec3::new(0.8, -0.6, 0.);
         let rest = front * 5.;
-        let along_up = up * 2.;
-        let out = brake_entry_velocity(rest + along_up, front, up, false);
+        let along_up = TILTED_UP * 2.;
+        let out = brake_entry_velocity(rest + along_up, front, TILTED_UP, false);
         let expected = rest * t::SQUAT_ACCEL_RATE + along_up;
         assert!((out - expected).length() < 1e-5, "{out:?} vs {expected:?}");
-        // A world-Y split would have scaled part of the normal component.
-        let world =
-            Vec3::Y * (rest + along_up).y + (rest + along_up).with_y(0.) * t::SQUAT_ACCEL_RATE;
-        assert!((out - world).length() > 0.1);
     }
 
     /// A flat facing on a slope is verticalized against the normal (0x4837a0):
     /// backward motion is cut along the slope front, leaving the normal part.
     #[test]
     fn brake_entry_cuts_backward_motion_along_the_slope_front() {
-        let up = Vec3::new(0.6, 0.8, 0.);
         let flat_facing = Vec3::X;
-        let slope_front = vector_lib::verticalize_vec(up, flat_facing).normalize();
-        let along_up = up * 1.5;
-        let out = brake_entry_velocity(-slope_front * 3. + along_up, flat_facing, up, false);
+        let slope_front = vector_lib::verticalize_vec(TILTED_UP, flat_facing).normalize();
+        let along_up = TILTED_UP * 1.5;
+        let out = brake_entry_velocity(-slope_front * 3. + along_up, flat_facing, TILTED_UP, false);
         assert!((out - along_up).length() < 1e-5, "{out:?}");
+    }
+
+    /// With a diagonal front on a tilted floor, the pose front (in the floor
+    /// plane, `calcFrontDir` 0x48379c) and the horizontal facing project to
+    /// different directions, so only the pose front cuts this backward motion.
+    #[test]
+    fn brake_entry_reads_the_pose_front_on_a_diagonal_slope() {
+        let root_half = std::f32::consts::FRAC_1_SQRT_2;
+        let pose_front = Vec3::new(0.8, -0.6, 0.) * root_half + Vec3::Z * root_half;
+        let facing = Vec3::new(1., 0., 1.).normalize();
+        let along_up = TILTED_UP * 1.5;
+        let velocity = -pose_front * 3. + along_up;
+        let from_pose = brake_entry_velocity(velocity, pose_front, TILTED_UP, false);
+        assert!((from_pose - along_up).length() < 1e-5, "{from_pose:?}");
+        let from_facing = brake_entry_velocity(velocity, facing, TILTED_UP, false);
+        assert!((from_facing - along_up).length() > 0.1, "{from_facing:?}");
+    }
+
+    /// Faster than `NormalMaxSpeed` (0x483854) the rest is left as it is.
+    #[test]
+    fn brake_entry_leaves_speeds_above_normal_max() {
+        let velocity = Vec3::Z * (t::NORMAL_MAX + 1.);
+        assert_eq!(
+            brake_entry_velocity(velocity, Vec3::Z, Vec3::Y, false),
+            velocity
+        );
+    }
+
+    /// A scaled speed at or below `SquatBrakeEnd` is stopped (0x4838c0..0x4838c8);
+    /// above it, the scaled speed stays.
+    #[test]
+    fn brake_entry_stops_when_the_scaled_speed_reaches_the_brake_end() {
+        let stopped_speed = t::SQUAT_BRAKE_END / t::SQUAT_ACCEL_RATE;
+        let out = brake_entry_velocity(Vec3::Z * stopped_speed, Vec3::Z, Vec3::Y, false);
+        assert_eq!(out, Vec3::ZERO);
+        let kept_speed = stopped_speed + 0.5;
+        let out = brake_entry_velocity(Vec3::Z * kept_speed, Vec3::Z, Vec3::Y, false);
+        assert!((out - Vec3::Z * kept_speed * t::SQUAT_ACCEL_RATE).length() < 1e-5);
+    }
+
+    /// Off a skate floor backward motion is dropped (0x4837dc..0x483808); on one
+    /// it is kept and, not moving forward, left unscaled.
+    #[test]
+    fn brake_entry_keeps_backward_motion_on_skate() {
+        let velocity = -Vec3::Z * 5.;
+        assert_eq!(
+            brake_entry_velocity(velocity, Vec3::Z, Vec3::Y, true),
+            velocity
+        );
+        assert_eq!(
+            brake_entry_velocity(velocity, Vec3::Z, Vec3::Y, false),
+            Vec3::ZERO
+        );
     }
 }
