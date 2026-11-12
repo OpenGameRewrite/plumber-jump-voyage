@@ -246,8 +246,9 @@ fn lockstep_nested_choices() {
     // NerveKeeper::update (0x959640) can expose successive step-zero rows.
     // Squat::exeBrake's first-step velocity adjustment (0x483710..0x48391c)
     // must survive the re-choice before LongJump::exeJump (0x474b80).
-    // Exercise both capped and uncapped launch speeds, with a changed stick
-    // on takeoff so each repeated update must use its own input frame.
+    // Exercise both capped and uncapped launch speeds, with the stick changing
+    // on the frame after the takeoff press so each repeated update must use its
+    // own input frame.
     for run_frames in [20, 50] {
         let script = Script::parse(&format!(
             "start 0 0 0 0\n{run_frames} 0 1 -\n1 0 1 ZL\n1 0 1 ZL+B\n2 0 0 -\n"
