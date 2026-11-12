@@ -863,12 +863,24 @@ impl Player {
     pub fn restore_swim_nerve(&mut self, name: &str, step: u32) {
         let nerve = match name {
             "Swim/SwimMove" => SwimNerve::Move,
+            "Swim/SwimSurface" => SwimNerve::Surface,
             "Swim/SwimLand" => SwimNerve::Land,
             "Swim/SwimWalk" => SwimNerve::Walk,
             "Swim/SwimPaddle" => SwimNerve::Paddle,
             "Swim/SwimHipDropStart" => SwimNerve::HipDropStart,
             "Swim/SwimHipDropLoop" => SwimNerve::HipDropLoop,
+            "Swim/SwimHipDropLand" => SwimNerve::HipDropLand,
+            "Swim/SwimHipDropJump" => SwimNerve::HipDropJump,
+            "Swim/SwimHipDropHeadSliding" => SwimNerve::HipDropHeadSliding,
+            "Swim/SwimHipDropHeadSlidingEnd" => SwimNerve::HipDropHeadSlidingEnd,
+            "Swim/SwimFallIn" => SwimNerve::FallIn,
+            "Swim/SwimDive" => SwimNerve::Dive,
+            "Swim/SwimHeadIn" => SwimNerve::HeadIn,
+            "Swim/SwimDiveIn" => SwimNerve::DiveIn,
+            "Swim/SwimTrample" => SwimNerve::Trample,
             "Swim/SwimReflectDownFall" => SwimNerve::ReflectDownFall,
+            "Swim/SwimSpinCapSurface" => SwimNerve::SpinCapSurface,
+            "Swim/SwimSpinCap" => SwimNerve::SpinCap,
             _ => return,
         };
         self.swim.nerve = nerve;

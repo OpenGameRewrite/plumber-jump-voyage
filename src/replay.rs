@@ -1069,6 +1069,16 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     player.restore_jump_held_frames(*jump_held);
                 }
                 player.inject(&snapshot_with_geometry(game, last - 1, &course));
+                // setNerve leaves the new swim nerve unexecuted (0x487e14,
+                // 0x488ca4). Re-choice must run the preceding inner nerve,
+                // not execute the already chosen one twice at the old depth.
+                if let Some(state) = game.cell(last - 1, "state") {
+                    player.restore_swim_nerve(
+                        state,
+                        game.number(last - 1, "sub_step").unwrap_or(0.).max(0.) as u32,
+                    );
+                }
+                player.update_water_finder(&course);
                 if let Some(hint) = game.look_hint(last - 1) {
                     restore_look(&mut player, &hint, &course);
                 }

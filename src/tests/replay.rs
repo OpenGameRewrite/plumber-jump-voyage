@@ -8,6 +8,7 @@ pub(super) fn run() {
     lockstep();
     lockstep_nested_choices();
     lockstep_slope_pull();
+    lockstep_swim_choices();
     lockstep_recovery_land_interpolation();
     lockstep_unroll_keeps_the_model_frame();
     lockstep_preserves_the_recorded_contact_code();
@@ -19,6 +20,56 @@ pub(super) fn run() {
 const IDLE: &str = "start 0 0 0 0\n60 0 0 -\n";
 const RUN: &str = "start 0 0 0 0\n120 0 1 -\n60 0 0 -\n";
 const JUMP: &str = "start 0 0 0 0\n10 0 0 -\n21 0 0 B\n60 0 0 -\n";
+
+#[cfg_attr(test, test)]
+fn lockstep_swim_choices() {
+    let mut mesh = TriangleMesh::default();
+    mesh.water = crate::water::WaterAreas::demo_box(0., 0., 10_000., 10_000., 0., 10_000.);
+    let mesh = Arc::new(mesh);
+    for input in [
+        "start 0 -30 0 0\n10 0 0 -\n1 0 0 ZL\n35 0 0 -\n",
+        "start 0 300 0 0\n80 0 0 -\n",
+    ] {
+        let script = Script::parse(input).unwrap();
+        let free = replay(
+            &script,
+            Options {
+                geometry: Some(mesh.clone()),
+                ..options(None)
+            },
+        )
+        .unwrap();
+        let game = TraceFile::parse(&free.to_csv()).unwrap();
+        let locked = replay(
+            &script,
+            Options {
+                geometry: Some(mesh.clone()),
+                lockstep: Some(&game),
+                ..options(None)
+            },
+        )
+        .unwrap();
+        assert!(free.rows.iter().any(|r| {
+            let at = COLUMNS.iter().position(|c| *c == "state").unwrap();
+            r[at].starts_with("Swim/")
+        }));
+        for frame in 1..free.rows.len() {
+            for column in ["state", "sub_step", "anim", "anim_frame"] {
+                assert_eq!(
+                    cell(&locked.rows, frame, column),
+                    cell(&free.rows, frame, column),
+                    "frame {frame} {column}, {input}"
+                );
+            }
+            let expected = number(&free.rows, frame, "py");
+            let actual = number(&locked.rows, frame, "py");
+            assert!(
+                (expected - actual).abs() < 0.01,
+                "frame {frame} py: {expected} vs {actual}"
+            );
+        }
+    }
+}
 
 fn options(game: Option<&TraceFile>) -> Options<'_> {
     Options {
@@ -69,7 +120,10 @@ fn lockstep_preserves_the_recorded_contact_code() {
         };
         let snapshot = snapshot_with_geometry(&trace, 0, &course);
         let (codes, _, _) = snapshot.floor_contact.unwrap();
-        assert_eq!(codes.floor, if code == "Skate" { "Skate" } else { "Ground" });
+        assert_eq!(
+            codes.floor,
+            if code == "Skate" { "Skate" } else { "Ground" }
+        );
         assert_eq!(codes.material, "StoneRough");
     }
 }
@@ -332,7 +386,10 @@ fn lockstep_recovery_land_interpolation() {
     let blends: Vec<_> = (0..free.rows.len())
         .filter(|&frame| cell(&free.rows, frame, "interp").starts_with("Land:"))
         .collect();
-    assert!(!blends.is_empty(), "must exercise the outgoing landing pose");
+    assert!(
+        !blends.is_empty(),
+        "must exercise the outgoing landing pose"
+    );
     for frame in blends[0]..free.rows.len() {
         for column in ["state", "sub_step", "anim_frame", "interp", "anim_layers"] {
             assert_eq!(
@@ -348,10 +405,9 @@ fn lockstep_recovery_land_interpolation() {
 fn lockstep_unroll_keeps_the_model_frame() {
     // exeUnRoll copies Rolling's model frame to RollingEnd (0x47c470..0x47c498),
     // while PlayerAnimFrameCtrl restarts the exported counter at zero.
-    let script = Script::parse(
-        "start 0 0 0 0\n30 0 1 -\n10 0 1 ZL\n1 0 1 ZL+Y\n170 0 1 ZL\n40 0 0 -\n",
-    )
-    .unwrap();
+    let script =
+        Script::parse("start 0 0 0 0\n30 0 1 -\n10 0 1 ZL\n1 0 1 ZL+Y\n170 0 1 ZL\n40 0 0 -\n")
+            .unwrap();
     let free = replay(&script, options(None)).unwrap();
     let game = TraceFile::parse(&free.to_csv()).unwrap();
     let locked = replay(
@@ -373,7 +429,8 @@ fn lockstep_unroll_keeps_the_model_frame() {
         );
         assert!(
             (number(&locked.rows, frame, "anim_frame") - number(&free.rows, frame, "anim_frame"))
-                .abs() < 0.01,
+                .abs()
+                < 0.01,
             "frame {frame}: {} vs {}",
             cell(&locked.rows, frame, "anim_frame"),
             cell(&free.rows, frame, "anim_frame"),
