@@ -2,7 +2,7 @@
 //! with its consumer; scene restart and recovery do not belong to this keeper.
 use super::*;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Damage {
     pub hp: u8,
     pub invalid: u32,

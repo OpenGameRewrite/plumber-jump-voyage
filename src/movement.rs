@@ -3335,7 +3335,12 @@ impl Player {
     /// Reconstruct Mario's chosen nerve without advancing independently owned
     /// actors or delivering their sensor messages a second time.
     pub(crate) fn repeat_step_for_lockstep(&mut self, o: &Orders, scene: &Course) {
+        // PlayerDamageKeeper::update (0x43f4c4) already ran for this row.
+        // Re-choice must not advance its blink again: show (0x94c2b4)
+        // clears the outgoing animation blend when visibility returns.
+        let damage = self.damage.clone();
         self.step_with_sources(o, scene, false);
+        self.damage = damage;
     }
 
     fn step_with_sources(&mut self, o: &Orders, scene: &Course, advance_sources: bool) {

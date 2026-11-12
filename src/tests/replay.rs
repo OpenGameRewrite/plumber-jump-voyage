@@ -8,6 +8,7 @@ pub(super) fn run() {
     lockstep();
     lockstep_nested_choices();
     lockstep_slope_pull();
+    lockstep_recovery_land_interpolation();
     command_line();
     geometry_per_scenario();
     placement_constant_selection();
@@ -238,6 +239,69 @@ fn lockstep() {
                 };
                 assert!(close, "frame {frame} {column}: {x} vs {y}");
             }
+        }
+    }
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_recovery_land_interpolation() {
+    // Leaving a synthetic RecoveryArea returns to the last safe floor point.
+    // Recovery's landing starts damage blinking; Land -> Wait then exposes a
+    // step-zero re-choice while the outgoing pose is still interpolating.
+    let mut mesh = TriangleMesh::from_corners(&[
+        [
+            Vec3::new(-1000., 0., -1000.),
+            Vec3::new(-1000., 0., 1000.),
+            Vec3::new(1000., 0., -1000.),
+        ],
+        [
+            Vec3::new(1000., 0., -1000.),
+            Vec3::new(-1000., 0., 1000.),
+            Vec3::new(1000., 0., 1000.),
+        ],
+    ]);
+    mesh.recovery = crate::water::WaterAreas::from_export_named(
+        &serde_json::json!([{
+            "name": "RecoveryArea", "shape": "AreaCubeCenter",
+            "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0], "scale": [1,1,0.3]
+        }]),
+        "RecoveryArea",
+    );
+    mesh.safety_hosts = vec![true];
+    let geometry = Arc::new(mesh);
+    let script = Script::parse("start 0 0 0 0\n30 0 0 -\n50 0 1 -\n300 0 0 -\n").unwrap();
+    let free = replay(
+        &script,
+        Options {
+            geometry: Some(geometry.clone()),
+            ..options(None)
+        },
+    )
+    .unwrap();
+    let game = TraceFile::parse(&free.to_csv()).unwrap();
+    let locked = replay(
+        &script,
+        Options {
+            geometry: Some(geometry),
+            lockstep: Some(&game),
+            ..options(None)
+        },
+    )
+    .unwrap();
+    assert!(free.rows.iter().any(|row| {
+        row[COLUMNS.iter().position(|c| *c == "anim").unwrap()] == "TractorBubbleWait"
+    }));
+    let blends: Vec<_> = (0..free.rows.len())
+        .filter(|&frame| cell(&free.rows, frame, "interp").starts_with("Land:"))
+        .collect();
+    assert!(!blends.is_empty(), "must exercise the outgoing landing pose");
+    for frame in blends[0]..free.rows.len() {
+        for column in ["state", "sub_step", "anim_frame", "interp", "anim_layers"] {
+            assert_eq!(
+                cell(&locked.rows, frame, column),
+                cell(&free.rows, frame, column),
+                "frame {frame} {column}"
+            );
         }
     }
 }
