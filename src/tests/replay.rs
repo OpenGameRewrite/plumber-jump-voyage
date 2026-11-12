@@ -10,6 +10,7 @@ pub(super) fn run() {
     lockstep_slope_pull();
     lockstep_recovery_land_interpolation();
     lockstep_unroll_keeps_the_model_frame();
+    lockstep_preserves_the_recorded_contact_code();
     command_line();
     geometry_per_scenario();
     placement_constant_selection();
@@ -35,6 +36,42 @@ fn trace(script: &str) -> Vec<Vec<String>> {
 fn cell<'a>(rows: &'a [Vec<String>], frame: usize, column: &str) -> &'a str {
     let at = COLUMNS.iter().position(|c| *c == column).unwrap();
     &rows[frame][at]
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_preserves_the_recorded_contact_code() {
+    // FloorCode belongs to the cached collision triangle (0x8d907c), not
+    // whichever surface a fresh vertical ray finds at this row's position.
+    let trace = TraceFile::parse(
+        "frame,px,py,pz,state,anim,ground,collision\n\
+         0,0,0,0,Run/Run3D,Move,1,ground=1;gn=0/1/0;gcode=Ground;gmat=StoneRough;gcodeidx=8\n",
+    )
+    .unwrap();
+    for code in ["SandSink", "Skate"] {
+        let mesh = TriangleMesh::from_coded_corners(
+            &[(
+                [
+                    Vec3::new(-100., 0., -100.),
+                    Vec3::new(0., 0., 100.),
+                    Vec3::new(100., 0., -100.),
+                ],
+                0,
+            )],
+            vec![crate::geometry::CollisionCodes {
+                floor: code.into(),
+                material: "Ice".into(),
+                ..Default::default()
+            }],
+        );
+        let course = Course {
+            mesh: Some(Arc::new(mesh)),
+            ..Default::default()
+        };
+        let snapshot = snapshot_with_geometry(&trace, 0, &course);
+        let (codes, _, _) = snapshot.floor_contact.unwrap();
+        assert_eq!(codes.floor, if code == "Skate" { "Skate" } else { "Ground" });
+        assert_eq!(codes.material, "StoneRough");
+    }
 }
 fn number(rows: &[Vec<String>], frame: usize, column: &str) -> f32 {
     cell(rows, frame, column).parse().unwrap()

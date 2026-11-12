@@ -528,9 +528,28 @@ impl Trace {
     }
 }
 
-/// The probe's gcode prints Ground for Skate because it only tests selected
-/// codes. Keep recorded contact/normal state, but recover its code from the
-/// actual exported floor at the injected position.
+/// The floor codes the probe can print: it only calls the boolean `rs::isCollisionCode*` tests
+/// of these (fidelity/probe-mod/src/extras.cpp). `Ground` is "none true", which also covers
+/// codes without a test (Skate, Slip, Rolling, ...).
+const PROBED_FLOOR_CODES: [&str; 11] = [
+    "Poison",
+    "Needle",
+    "DamageFire",
+    "SandSink",
+    "Slide",
+    "Jump",
+    "JumpSmall",
+    "Bed",
+    "Chair",
+    "GrabCeil",
+    "Pole",
+];
+
+/// The recorded `gcode` of a row is the cached contact triangle's code (0x8d907c): a probed
+/// code is authoritative and so is the recorded material. A row that prints `Ground` may stand
+/// on a code the probe cannot test, which the exported floor under the injected position
+/// supplies (the probe's `Ground` excludes every probed code, so a probed code found there
+/// belongs to the triangle the position has since moved onto).
 fn snapshot_with_geometry(
     game: &TraceFile,
     row: usize,
@@ -541,8 +560,12 @@ fn snapshot_with_geometry(
         && let Some(mesh) = &course.mesh
     {
         let p = snapshot.pos / crate::movement::UNIT;
-        if let Some((_, exported)) = mesh.floor_below_with_codes(p.x, p.z, p.y + 40., 0.3) {
-            *codes = exported.clone();
+        if codes.floor == "Ground"
+            && let Some((_, exported)) = mesh.floor_below_with_codes(p.x, p.z, p.y + 40., 0.3)
+            && !PROBED_FLOOR_CODES.contains(&exported.floor.as_str())
+        {
+            codes.floor = exported.floor.clone();
+            codes.floor_index = exported.floor_index;
         }
     }
     snapshot
