@@ -1,5 +1,35 @@
 use super::*;
 
+#[cfg_attr(test, test)]
+fn lockstep_pivot_completion_chooses_the_run_mode() {
+    // exePivot chooses Run, not Brake, after the pivot finishes with input
+    // (0x47ef98..0x47efb4). Both children print the same Run/Run3D label.
+    let mut player = Player::default();
+    player.inject(&Snapshot {
+        mode: Some(Move::Turn),
+        grounded: true,
+        v: Vec3::NEG_Z * 0.5,
+        state_frames: Some(14),
+        anim: Some(("TurnPoint", 8.)),
+        run: Some(RunHint {
+            chosen: Some("Move"),
+            steps: 9,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    assert_eq!(player.mode, Move::Walk);
+    player.step(
+        &Orders {
+            direction: Vec2::NEG_Y,
+            ..Default::default()
+        },
+        &floor(),
+    );
+    assert!(player.v.z < -0.5);
+    assert!(player.cycle.weights[4] > 0.);
+}
+
 #[test]
 fn placement_constants_belong_to_each_player() {
     let mut moon = Player::default();
@@ -85,6 +115,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    lockstep_pivot_completion_chooses_the_run_mode();
     wait_snapshot_separates_slope_pull_from_travel();
     crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();

@@ -2828,6 +2828,9 @@ impl Player {
                         "Brake" => (Move::Skid, RunNerve::Brake),
                         "Turn" => (Move::Turn, RunNerve::Turn),
                         "TurnPoint" => (Move::Turn, RunNerve::Pivot),
+                        // exePivot chooses Run once the pivot completes with input
+                        // (0x47ef98..0x47efb4); Brake would print the same label.
+                        _ if self.anim.name == "TurnPoint" => (Move::Walk, RunNerve::Run),
                         _ if self.anim.name == "Turn" => (Move::Walk, RunNerve::RunAfterTurn),
                         _ => (self.mode, RunNerve::Run),
                     };
