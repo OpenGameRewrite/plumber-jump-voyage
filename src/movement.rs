@@ -4042,7 +4042,7 @@ impl Player {
             self.set_h(Vec3::ZERO);
         }
         // (The forced slope slide comes before the state's own start-run judge.)
-        if self.try_force_slope_slide(scene) || self.try_force_rolling() {
+        if self.try_wait_run_forced_action(scene) {
             return;
         }
         if self.force_run.is_active() || self.tilt >= STICK_DEADZONE || self.auto_run_skate() {
@@ -4444,7 +4444,7 @@ impl Player {
         // actor's (jump, crouch, throw), which look at the state's result.
         if !ended {
             self.try_start_ground_spin();
-            if !self.try_force_slope_slide(scene) && !self.try_force_rolling() {
+            if !self.try_wait_run_forced_action(scene) {
                 self.ground_actions(o);
             }
         }
@@ -4526,7 +4526,7 @@ impl Player {
         }
         // The actor's judges look at the state's result: the brake of this
         // frame has already slowed the player when a turning jump is chosen.
-        if self.try_force_slope_slide(scene) || self.try_force_rolling() {
+        if self.try_wait_run_forced_action(scene) {
             return;
         }
         if self.pre_input_jump_judges() && self.quick_turn > 0 {

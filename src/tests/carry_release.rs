@@ -5,6 +5,10 @@ use super::*;
 pub(super) fn run() {
     the_stand_up_squat_cancels_the_hold_and_the_keeper_releases_in_the_same_frame();
     pending_release_skips_the_previous_carry_or_throw_update();
+    a_new_low_ceiling_cancels_a_carrying_wait();
+    a_new_low_ceiling_cancels_a_carrying_run();
+    a_new_low_ceiling_cancels_a_carrying_skid();
+    a_new_low_ceiling_cancels_a_carrying_turn();
     a_forced_slope_slide_cancels_a_carry_before_the_slide_starts();
 }
 
@@ -128,6 +132,95 @@ fn pending_release_skips_the_previous_carry_or_throw_update() {
         p.start_cancel_and_release(None);
         assert!(p.carry.cancel.is_none(), "no hold means no second cancel");
     }
+}
+
+/// EnableStandUp failure in continuing exeWait (0x422634..0x4226b0) and exeRun
+/// (0x423164..0x4231e0), including Run's Brake/Turn children. Bring the ceiling in only after
+/// an open frame has executed the carrying child. No setNerveOnGround call drives the test.
+fn low_ceiling_cancels(mode: Move) {
+    let open = Course {
+        solids: vec![slab(-0.5, "Ground", 0.)],
+        ..default()
+    };
+    let low = Course {
+        solids: vec![slab(-0.5, "Ground", 0.), slab(1.9, "Ground", 0.)],
+        ..default()
+    };
+    let mut p = Player::default();
+    for _ in 0..3 {
+        p.step(&Orders::default(), &open);
+    }
+    p.carry.seed = Some(seed_beside(&p, &open));
+    p.carry.held = true;
+    p.carry.phase = 2;
+    p.carry.upper = Some(("CarryFront", 0.));
+    p.v = p.facing * 12.;
+    let mut order = Orders::default();
+    match mode {
+        Move::Run => {
+            p.go(Move::Run, "Move");
+            p.enter_nerve(RunNerve::Run);
+            order.direction = Vec2::new(p.facing.x, p.facing.z);
+        }
+        Move::Skid => {
+            p.go(Move::Skid, "Brake");
+            p.enter_nerve(RunNerve::Brake);
+        }
+        Move::Turn => {
+            p.go(Move::Turn, "Turn");
+            p.enter_nerve(RunNerve::Turn);
+        }
+        _ => {}
+    }
+    p.step(&order, &open);
+    assert_eq!(p.mode, mode);
+    assert!(p.is_carry());
+    assert!(p.judge_enable_stand_up());
+    // Keep momentum in Wait too, so a mistaken setNerveOnGround velocity cut is observable.
+    if mode == Move::Idle {
+        p.v = p.facing * 3.;
+    }
+    order.jump = true;
+    p.step(&order, &low);
+    assert!(!p.ceiling.enable_stand_up);
+    assert_eq!(p.mode, Move::SquatBrake, "{mode:?}: ceiling precedes jump");
+    assert!(!p.is_carry());
+    assert!(!p.carry.held);
+    assert_eq!(p.carry.inhibition, 10);
+    assert!(p.carry.upper.is_none());
+    assert!(p.upper_cleared);
+    assert!(
+        p.v.with_y(0.).length_squared() > 0.,
+        "chain squat keeps tangent velocity"
+    );
+    assert!(
+        p.carry
+            .seed
+            .as_ref()
+            .unwrap()
+            .throw_diagnostic()
+            .contains("seed_nerve=Throw/0")
+    );
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_cancels_a_carrying_wait() {
+    low_ceiling_cancels(Move::Idle);
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_cancels_a_carrying_run() {
+    low_ceiling_cancels(Move::Run);
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_cancels_a_carrying_skid() {
+    low_ceiling_cancels(Move::Skid);
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_cancels_a_carrying_turn() {
+    low_ceiling_cancels(Move::Turn);
 }
 
 /// The forced slope slide (+0x3f8) cancels and releases the carried object in every actor nerve

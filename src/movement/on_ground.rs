@@ -14,6 +14,30 @@ pub(super) enum GroundNerve {
 }
 
 impl Player {
+    /// Continuing Wait/Run actor chains, after the child update and before pole/grab:
+    /// ForceSlopeSlide, ForceRolling, SandSink, EnableStandUp (0x4225a4..0x4226b4,
+    /// 0x4230e8..0x4231f8). Run's brake and turn children use the same actor chain.
+    pub(super) fn try_wait_run_forced_action(&mut self, scene: &Course) -> bool {
+        if self.nerve.deferred {
+            return false;
+        }
+        if self.try_force_slope_slide(scene) || self.try_force_rolling() {
+            return true;
+        }
+        if self.judge_sand_sink() {
+            self.appear_sand_sink();
+            return true;
+        }
+        if !self.judge_enable_stand_up() {
+            // HoldCancel at 0x4226a4 / 0x4231d4, Squat at 0x4226b0 / 0x4231e0.
+            // These chains do not cut velocity along the ground normal (unlike 0x4219f4).
+            self.start_cancel_and_release(scene.mesh.as_deref());
+            self.start_squat();
+            return true;
+        }
+        false
+    }
+
     /// `rs::isOnGroundRunAngle` (0x56989c): a collided floor the velocity is not leaving
     /// (the same departing test as `rs::isOnGround`), then the speed-dependent run angle
     /// of 0x569734 that `fire_run_angle_contact` evaluates, with the just-land axis.
