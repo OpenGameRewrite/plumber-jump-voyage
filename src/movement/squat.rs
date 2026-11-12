@@ -132,12 +132,26 @@ impl Player {
     }
     /// The first step of `exeBrake` (0x483710) before the slide.
     fn brake_first_step(&mut self) {
-        // 0x4836fc calls `rs::calcGroundNormalOrUpDir` (0x55ba38) with the actor
-        // and its collision; 0x48379c reads the pose front (`al::calcFrontDir`),
-        // which `pose_axes` gives from the stored pose, as set by the last step.
-        let up = self.ground_normal_or_up();
-        let (_, front) = self.pose_axes();
+        // 0x4836fc calls `rs::calcGroundNormalOrUpDir` (0x55ba38); 0x48379c reads the
+        // pose front (`al::calcFrontDir`), which `pose_axes` gives from the stored pose.
+        let (pose_up, front) = self.pose_axes();
+        let up = self.ground_normal_or_pose_up(pose_up);
         self.v = brake_entry_velocity(self.v, front, up, self.on_ground_skate());
+    }
+
+    /// `rs::calcGroundNormalOrUpDir` (0x55ba38): the collided ground's normal
+    /// (`isCollidedGround` 0x565e8c, `getCollidedGroundNormal` 0x565fb4) or, with
+    /// no ground collided, the actor's own up (`al::calcUpDir`), which is the stored
+    /// pose's up and not the world's. The port's collided normal is the mesh
+    /// collider's floor normal; a box floor has no mesh normal, so the port
+    /// derives one from its slope (`floor_normal`), an approximation of the
+    /// normal the binary's collider would report there.
+    fn ground_normal_or_pose_up(&self, pose_up: Vec3) -> Vec3 {
+        if self.is_collided_ground() {
+            self.collided_ground_normal()
+        } else {
+            pose_up
+        }
     }
 
     /// One step of the squat nerve, then the actor's decisions (`exeSquat`).
@@ -369,16 +383,71 @@ mod tests {
         );
     }
 
-    /// A scaled speed at or below `SquatBrakeEnd` is stopped (0x4838c0..0x4838c8);
-    /// above it, the scaled speed stays.
+    /// The scaled speed is kept only when it is above `SquatBrakeEnd` (`fcsel hi`
+    /// at 0x4838c8), so one at or below it is stopped. The speeds are the two
+    /// neighbouring floats where the scaled speed crosses that limit, found with
+    /// the same product, so the test does not rely on the limit being representable.
     #[test]
-    fn brake_entry_stops_when_the_scaled_speed_reaches_the_brake_end() {
-        let stopped_speed = t::SQUAT_BRAKE_END / t::SQUAT_ACCEL_RATE;
+    fn brake_entry_stops_when_the_scaled_speed_is_not_above_the_brake_end() {
+        let scaled = |speed: f32| t::SQUAT_ACCEL_RATE * speed;
+        let mut stopped_speed = t::SQUAT_BRAKE_END / t::SQUAT_ACCEL_RATE;
+        while scaled(stopped_speed) > t::SQUAT_BRAKE_END {
+            stopped_speed = f32::from_bits(stopped_speed.to_bits() - 1);
+        }
+        while scaled(f32::from_bits(stopped_speed.to_bits() + 1)) <= t::SQUAT_BRAKE_END {
+            stopped_speed = f32::from_bits(stopped_speed.to_bits() + 1);
+        }
+        let kept_speed = f32::from_bits(stopped_speed.to_bits() + 1);
+        assert!(scaled(stopped_speed) <= t::SQUAT_BRAKE_END);
+        assert!(scaled(kept_speed) > t::SQUAT_BRAKE_END);
         let out = brake_entry_velocity(Vec3::Z * stopped_speed, Vec3::Z, Vec3::Y, false);
         assert_eq!(out, Vec3::ZERO);
-        let kept_speed = stopped_speed + 0.5;
         let out = brake_entry_velocity(Vec3::Z * kept_speed, Vec3::Z, Vec3::Y, false);
-        assert!((out - Vec3::Z * kept_speed * t::SQUAT_ACCEL_RATE).length() < 1e-5);
+        assert!((out - Vec3::Z * scaled(kept_speed)).length() < 1e-5);
+    }
+
+    /// A tilted-floor Player whose stored pose faces the diagonal `front`
+    /// (in the floor plane) while its horizontal facing differs from it.
+    fn player_on_tilted_floor(front: Vec3) -> Player {
+        let mut player = Player {
+            grounded: true,
+            mesh_ground: Some(TILTED_UP),
+            ..Player::default()
+        };
+        player.set_pose(pose_math::quat_up_front(TILTED_UP, front));
+        player
+    }
+
+    fn diagonal_floor_front() -> Vec3 {
+        let root_half = std::f32::consts::FRAC_1_SQRT_2;
+        Vec3::new(0.8, -0.6, 0.) * root_half + Vec3::Z * root_half
+    }
+
+    /// The first step reads the pose front and the collided floor's normal at its
+    /// call site: backward motion along the pose front is cut and the part along
+    /// the normal stays. With the horizontal facing as the front it would not be.
+    #[test]
+    fn the_first_brake_step_reads_the_pose_front_and_the_floor_normal() {
+        let front = diagonal_floor_front();
+        let mut player = player_on_tilted_floor(front);
+        let along_up = TILTED_UP * 1.5;
+        player.v = -front * 3. + along_up;
+        player.brake_first_step();
+        assert!((player.v - along_up).length() < 1e-4, "{:?}", player.v);
+    }
+
+    /// With no ground collided the up is the pose's (`al::calcUpDir`), not a stale
+    /// mesh normal and not the world's up.
+    #[test]
+    fn the_first_brake_step_uses_the_pose_up_without_collided_ground() {
+        let front = diagonal_floor_front();
+        let mut player = player_on_tilted_floor(front);
+        player.grounded = false;
+        player.mesh_ground = Some(Vec3::Y);
+        let along_up = TILTED_UP * 1.5;
+        player.v = -front * 3. + along_up;
+        player.brake_first_step();
+        assert!((player.v - along_up).length() < 1e-4, "{:?}", player.v);
     }
 
     /// Off a skate floor backward motion is dropped (0x4837dc..0x483808); on one
