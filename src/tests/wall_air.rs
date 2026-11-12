@@ -7,6 +7,27 @@ pub(super) fn run() {
     wall_history();
     ledge_fall_waits_for_the_judge();
     fall_distance_counts_from_the_terminal_speed();
+    lockstep_wall_keep_completion();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_wall_keep_completion() {
+    // exeKeep chooses Slide after isAnimEnd (0x476210..0x476228).
+    // The completed Keep clip is still visible in that row.
+    for (keep, slide) in [
+        ("WallKeep", "WallSlideR"),
+        ("WallKeepReverse", "WallSlideL"),
+    ] {
+        let mut player = Player::default();
+        player.inject(&Snapshot {
+            mode: Some(Move::WallSlide),
+            state_frames: Some(27),
+            sub_steps: Some(27),
+            anim: Some((keep, 26.)),
+            ..Default::default()
+        });
+        assert_eq!(player.phase_clip(), slide);
+    }
 }
 
 #[cfg_attr(test, test)]

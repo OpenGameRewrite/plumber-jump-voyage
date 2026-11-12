@@ -486,6 +486,21 @@ impl Player {
             side_to_camera: matches!(clip, "WallKeep" | "WallSlideR"),
             left: false,
         };
+        // exeKeep has already chosen Slide once its visible clip is complete
+        // (0x476210..0x476228). Its first execution starts the slide clip next
+        // update; inject cleared that pending work along with the actor nerve.
+        if keeping
+            && s.anim
+                .is_some_and(|(_, frame)| frame >= WALL_KEEP_CLIP as f32)
+        {
+            self.wall_air.nerve = SlideNerve::Slide;
+            self.wall_air.steps = 0;
+            self.play(if self.wall_air.side_to_camera {
+                "WallSlideR"
+            } else {
+                "WallSlideL"
+            });
+        }
     }
 
     /// What leaving the wall does (the end of `exeSlide`, and the ground
