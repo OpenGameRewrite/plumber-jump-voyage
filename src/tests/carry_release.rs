@@ -15,6 +15,10 @@ pub(super) fn run() {
     an_ordinary_throw_reads_the_post_state_pose_and_velocity();
     a_fresh_jump_slide_landing_releases_after_one_final_air_update();
     a_fresh_fall_slide_landing_releases_after_one_final_air_update();
+    a_fresh_jump_mesh_slide_landing_uses_air_velocity_without_ground_pull();
+    a_fresh_fall_mesh_slide_landing_uses_air_velocity_without_ground_pull();
+    a_fresh_jump_mesh_slide_without_carry_uses_the_air_child_appear_input();
+    a_fresh_fall_mesh_slide_without_carry_uses_the_air_child_appear_input();
     a_forced_slope_slide_cancels_a_carry_before_the_slide_starts();
 }
 
@@ -318,11 +322,26 @@ fn an_ordinary_throw_reads_the_post_state_pose_and_velocity() {
 /// exeJump updates its child at 0x4240a4 before cancel 0x4241c4; exeFall at 0x425240
 /// before 0x42532c. Air updates 0x4729c4 / 0x46b4a0, Jump landing limit 0x472a1c,
 /// and seed horizontal inheritance 0x29a734..0x29a758 determine the exact expected velocity.
-fn fresh_slide_landing(mode: Move) {
-    let course = Course {
+fn fresh_slide_landing(mode: Move, real_mesh: bool, held: bool) {
+    let mut course = Course {
         solids: vec![slab(-0.5, "Slide", 0.3)],
         ..default()
     };
+    if real_mesh {
+        // Synthetic plane y = -0.3x, through the actual triangle collider.
+        let a = Vec3::new(-1000., 300., -1000.);
+        let b = Vec3::new(-1000., 300., 1000.);
+        let c = Vec3::new(1000., -300., -1000.);
+        let d = Vec3::new(1000., -300., 1000.);
+        course.mesh = Some(Arc::new(crate::geometry::TriangleMesh::from_coded_corners(
+            &[([a, b, c], 0), ([c, b, d], 0)],
+            vec![crate::geometry::CollisionCodes {
+                floor: "Slide".into(),
+                ..default()
+            }],
+        )));
+        course.solids.clear();
+    }
     let mut p = Player::default();
     p.go(mode, if mode == Move::Jump { "Jump" } else { "Fall" });
     p.pos = Vec3::Y * 0.2;
@@ -337,20 +356,25 @@ fn fresh_slide_landing(mode: Move) {
     };
     p.air.setup(&mut p.v, p.facing, &takeoff);
     p.air_for = Some(mode);
-    p.carry.seed = Some(seed_beside(&p, &course));
-    p.carry.held = true;
-    p.carry.phase = 2;
-    p.carry.upper = Some(("CarryFront", 0.));
+    if held {
+        p.carry.seed = Some(seed_beside(&p, &course));
+        p.carry.held = true;
+        p.carry.phase = 2;
+        p.carry.upper = Some(("CarryFront", 0.));
+    }
     // The first frame collides; the next executes the fresh-touchdown child and actor chain.
     p.step(&Orders::default(), &course);
     assert_eq!(p.mode, mode);
-    assert!(p.is_carry());
+    assert_eq!(p.is_carry(), held);
     assert!(p.is_just_land());
     assert!(p.nerve.touchdown);
-    assert!(
-        p.mesh_ground.is_none(),
-        "the box fixture has no cached ground-plane velocity"
-    );
+    if real_mesh {
+        assert_ne!(p.mesh_ground.unwrap().with_y(0.), Vec3::ZERO);
+        assert!(p.ground_move.is_none());
+        assert!(p.run_up.is_none());
+    } else {
+        assert!(p.mesh_ground.is_none());
+    }
 
     let order = Orders {
         direction: Vec2::Y,
@@ -364,7 +388,7 @@ fn fresh_slide_landing(mode: Move) {
     };
     let before = p.v;
     let mut air = p.air.clone();
-    let mut velocity = before;
+    let mut velocity = before.with_y(p.touchdown_speed);
     air.update(&mut velocity, push, false, &steer);
     let before_limit = velocity;
     if mode == Move::Jump {
@@ -377,6 +401,25 @@ fn fresh_slide_landing(mode: Move) {
     }
     let front = air.turn_facing(p.facing, push);
     let expected = seed_velocity(front, velocity);
+    let mut appear = Player {
+        mode: Move::SlopeSlide,
+        grounded: p.grounded,
+        ground_contact: p.ground_contact,
+        mesh_ground: p.mesh_ground,
+        slope: p.slope,
+        touched: p.touched.clone(),
+        v: velocity,
+        ..default()
+    };
+    appear.start_slope_slide();
+    let expected_slide = appear.v;
+    if real_mesh {
+        let normal = p.mesh_ground.unwrap();
+        let mut along = velocity.with_y(0.);
+        along.y = -along.dot(normal) / normal.y;
+        let pulled = along - normal * p.pull;
+        assert_ne!(expected.with_y(0.), seed_velocity(front, pulled).with_y(0.));
+    }
     assert_ne!(
         velocity.with_y(0.),
         before.with_y(0.),
@@ -396,8 +439,13 @@ fn fresh_slide_landing(mode: Move) {
     p.step(&order, &course);
     assert_eq!(p.mode, Move::SlopeSlide);
     assert!(!p.is_carry());
-    assert_eq!(p.carry.inhibition, 10);
-    assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+    assert_eq!(p.v, expected_slide);
+    if held {
+        assert_eq!(p.carry.inhibition, 10);
+        assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+    } else {
+        assert!(p.carry.seed.is_none());
+    }
     assert_ne!(
         p.units_per_frame().with_y(0.),
         velocity.with_y(0.),
@@ -411,12 +459,32 @@ fn fresh_slide_landing(mode: Move) {
 
 #[cfg_attr(test, test)]
 fn a_fresh_jump_slide_landing_releases_after_one_final_air_update() {
-    fresh_slide_landing(Move::Jump);
+    fresh_slide_landing(Move::Jump, false, true);
 }
 
 #[cfg_attr(test, test)]
 fn a_fresh_fall_slide_landing_releases_after_one_final_air_update() {
-    fresh_slide_landing(Move::Fall);
+    fresh_slide_landing(Move::Fall, false, true);
+}
+
+#[cfg_attr(test, test)]
+fn a_fresh_jump_mesh_slide_landing_uses_air_velocity_without_ground_pull() {
+    fresh_slide_landing(Move::Jump, true, true);
+}
+
+#[cfg_attr(test, test)]
+fn a_fresh_fall_mesh_slide_landing_uses_air_velocity_without_ground_pull() {
+    fresh_slide_landing(Move::Fall, true, true);
+}
+
+#[cfg_attr(test, test)]
+fn a_fresh_jump_mesh_slide_without_carry_uses_the_air_child_appear_input() {
+    fresh_slide_landing(Move::Jump, true, false);
+}
+
+#[cfg_attr(test, test)]
+fn a_fresh_fall_mesh_slide_without_carry_uses_the_air_child_appear_input() {
+    fresh_slide_landing(Move::Fall, true, false);
 }
 
 /// The forced slope slide (+0x3f8) cancels and releases the carried object in every actor nerve

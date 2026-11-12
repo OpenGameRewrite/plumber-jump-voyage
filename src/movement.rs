@@ -6457,8 +6457,9 @@ impl Player {
         // precedes forced-slide HoldCancel (0x4241c4 / 0x42532c), which reads its velocity.
         let air_step_ran = (self.mode.uses_air_control() || self.mode == Move::CapCatchPop)
             && self.air_for == Some(self.mode);
+        let mut airborne_velocity = None;
         if air_step_ran {
-            let mut v = self.v;
+            let mut v = self.v.with_y(self.touchdown_speed);
             let steer = air_move::Steering {
                 front: t::JUMP_ACCEL_FRONT,
                 back: t::JUMP_ACCEL_BACK,
@@ -6470,22 +6471,30 @@ impl Player {
                 self.air.limit_landing_speed(&mut v);
             }
             self.set_h(v);
+            airborne_velocity = Some(v);
             // (`exePop` only updates the air control; the jump state turns the actor itself.)
             if self.mode != Move::CapCatchPop {
                 self.facing = self.air.turn_facing(self.facing, push);
             }
         }
-        // A floor with the `Slide` code takes the actor to the slope slide before any landing
-        // state (`setNerveOnGround`, `tryChangeNerveFromAir`).
-        if self.try_force_slope_slide(scene) {
-            return;
-        }
-        // The original collider retains the incoming velocity. Restore the
-        // vertical part our landing bookkeeping took out before Rolling::appear
-        // reads it; ordinary landing states still replace it themselves.
+        // Forced judges and appear read the stored actor velocity after the air child, as does
+        // the seed's synchronous response (0x29a734..0x29a758 -> 0x56fa70..0x56fa80).
+        // Cache that full velocity too: units_per_frame must not reconstruct floor-normal pull
+        // if its Y happens to equal the ground representation's zero or -pull.
         let before = self.v;
-        self.v.y = self.touchdown_speed;
-        if self.try_force_rolling() {
+        let ground_move = self.ground_move;
+        if let Some(velocity) = airborne_velocity {
+            self.v = velocity;
+            self.ground_move = Some((Vec2::new(velocity.x, velocity.z), self.pull, velocity));
+        }
+        // Slide retains priority over rolling and the remaining landing decisions.
+        let forced_slide = self.try_force_slope_slide(scene);
+        if !forced_slide && airborne_velocity.is_none() {
+            self.v.y = self.touchdown_speed;
+        }
+        let forced = forced_slide || self.try_force_rolling();
+        self.ground_move = ground_move;
+        if forced {
             return;
         }
         self.v = before;
