@@ -2783,6 +2783,13 @@ impl Player {
                     self.run_up = Some((Vec2::new(travel.x, travel.z), normal, s.v));
                     travel
                 })
+            } else if matches!(self.mode, Move::Walk | Move::Run)
+                && self.mesh_ground.is_some_and(|normal| normal.y < 1.)
+            {
+                // A Run row's velocity is its travel plus -normal * GravityMove; on a slope
+                // that pull has horizontal parts the steering would take for travel.
+                let normal = self.mesh_ground.unwrap_or(Vec3::Y);
+                Some((s.v + normal * self.pull).with_y(0.))
             } else {
                 None
             };

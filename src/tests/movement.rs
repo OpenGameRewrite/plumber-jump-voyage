@@ -175,6 +175,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    run_snapshot_separates_slope_pull_from_travel();
     lockstep_rechoice_keeps_the_footstep_counter();
     lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice();
     lockstep_pivot_completion_chooses_the_run_mode();
@@ -260,6 +261,30 @@ fn wait_snapshot_separates_slope_pull_from_travel() {
                 assert_eq!(player.units_per_frame(), snapshot.v);
             }
         }
+    }
+}
+
+#[cfg_attr(test, test)]
+fn run_snapshot_separates_slope_pull_from_travel() {
+    // Synthetic unit normal and tangent, not game tuning: the Run state pulls with
+    // GravityMove along the floor normal, which a row's velocity includes.
+    let normal = Vec3::new(0., 0.8, 0.6);
+    for travel in [Vec3::ZERO, Vec3::X * 2.] {
+        let mut player = Player::default();
+        let snapshot = Snapshot {
+            mode: Some(Move::Walk),
+            grounded: true,
+            v: travel - normal * GRAVITY_MOVE,
+            facing: Vec3::X,
+            floor_contact: Some((CollisionCodes::default(), normal, 3)),
+            anim: Some(("Move", 4.)),
+            state_frames: Some(4),
+            sub_steps: Some(4),
+            ..Snapshot::default()
+        };
+        player.inject(&snapshot);
+        assert_eq!(player.v, travel);
+        assert_eq!(player.units_per_frame(), snapshot.v);
     }
 }
 
