@@ -30,7 +30,7 @@ impl Player {
         }
         if !self.judge_enable_stand_up() {
             // HoldCancel at 0x4226a4 / 0x4231d4, Squat at 0x4226b0 / 0x4231e0.
-            // These chains do not cut velocity along the ground normal (unlike 0x4219f4).
+            // These chains do not cut velocity along the ground normal (unlike 0x421a08).
             self.start_cancel_and_release(scene.mesh.as_deref());
             self.start_squat();
             return true;

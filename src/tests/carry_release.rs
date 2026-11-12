@@ -9,6 +9,8 @@ pub(super) fn run() {
     a_new_low_ceiling_cancels_a_carrying_run();
     a_new_low_ceiling_cancels_a_carrying_skid();
     a_new_low_ceiling_cancels_a_carrying_turn();
+    a_fresh_jump_slide_landing_releases_after_one_final_air_update();
+    a_fresh_fall_slide_landing_releases_after_one_final_air_update();
     a_forced_slope_slide_cancels_a_carry_before_the_slide_starts();
 }
 
@@ -89,10 +91,14 @@ fn the_stand_up_squat_cancels_the_hold_and_the_keeper_releases_in_the_same_frame
 /// Non-swing release: angle 70 (0x292850), speed 28 (0x292838), double normalization
 /// (0x29a71c, setVelocityToDirection at 0x29a730), then horizontal inheritance (0x29a734..0x29a758).
 fn cancel_velocity(p: &Player) -> Vec3 {
-    let front = pose_math::try_normalize_or_zero(p.pose_axes().1.with_y(0.)).0;
+    seed_velocity(p.pose_axes().1, p.units_per_frame())
+}
+
+fn seed_velocity(front: Vec3, inherited: Vec3) -> Vec3 {
+    let front = pose_math::try_normalize_or_zero(front.with_y(0.)).0;
     let direction = pose_math::turn_vec_to_vec_degree(front, Vec3::Y, 70.);
     let aimed = pose_math::try_normalize_or_zero(pose_math::try_normalize_or_zero(direction).0).0;
-    aimed * 28. + p.units_per_frame().with_y(0.)
+    aimed * 28. + inherited.with_y(0.)
 }
 
 #[cfg_attr(test, test)]
@@ -221,6 +227,110 @@ fn a_new_low_ceiling_cancels_a_carrying_skid() {
 #[cfg_attr(test, test)]
 fn a_new_low_ceiling_cancels_a_carrying_turn() {
     low_ceiling_cancels(Move::Turn);
+}
+
+/// exeJump updates its child at 0x4240a4 before cancel 0x4241c4; exeFall at 0x425240
+/// before 0x42532c. Air updates 0x4729c4 / 0x46b4a0, Jump landing limit 0x472a1c,
+/// and seed horizontal inheritance 0x29a734..0x29a758 determine the exact expected velocity.
+fn fresh_slide_landing(mode: Move) {
+    let course = Course {
+        solids: vec![slab(-0.5, "Slide", 0.3)],
+        ..default()
+    };
+    let mut p = Player::default();
+    p.go(mode, if mode == Move::Jump { "Jump" } else { "Fall" });
+    p.pos = Vec3::Y * 0.2;
+    p.grounded = false;
+    p.ground_contact = 0;
+    p.facing = Vec3::X;
+    p.v = Vec3::new(24., -30., 0.);
+    let takeoff = if mode == Move::Jump {
+        jump_takeoff(0, p.v.y, p.constants.jump_gravity)
+    } else {
+        fall_takeoff(p.constants, p.v.y)
+    };
+    p.air.setup(&mut p.v, p.facing, &takeoff);
+    p.air_for = Some(mode);
+    p.carry.seed = Some(seed_beside(&p, &course));
+    p.carry.held = true;
+    p.carry.phase = 2;
+    p.carry.upper = Some(("CarryFront", 0.));
+    // The first frame collides; the next executes the fresh-touchdown child and actor chain.
+    p.step(&Orders::default(), &course);
+    assert_eq!(p.mode, mode);
+    assert!(p.is_carry());
+    assert!(p.is_just_land());
+    assert!(p.nerve.touchdown);
+    assert!(
+        p.mesh_ground.is_none(),
+        "the box fixture has no cached ground-plane velocity"
+    );
+
+    let order = Orders {
+        direction: Vec2::Y,
+        ..default()
+    };
+    let push = Vec3::Z;
+    let steer = air_move::Steering {
+        front: t::JUMP_ACCEL_FRONT,
+        back: t::JUMP_ACCEL_BACK,
+        turn: t::JUMP_ACCEL_TURN,
+    };
+    let before = p.v;
+    let mut air = p.air.clone();
+    let mut velocity = before;
+    air.update(&mut velocity, push, false, &steer);
+    let before_limit = velocity;
+    if mode == Move::Jump {
+        air.limit_landing_speed(&mut velocity);
+        assert_ne!(
+            velocity.with_y(0.),
+            before_limit.with_y(0.),
+            "the Jump fixture exercises its landing limit"
+        );
+    }
+    let front = air.turn_facing(p.facing, push);
+    let expected = seed_velocity(front, velocity);
+    assert_ne!(
+        velocity.with_y(0.),
+        before.with_y(0.),
+        "steering changes horizontal velocity"
+    );
+    let mut twice = velocity;
+    air.update(&mut twice, push, false, &steer);
+    if mode == Move::Jump {
+        air.limit_landing_speed(&mut twice);
+    }
+    assert_ne!(
+        twice.with_y(0.),
+        velocity.with_y(0.),
+        "a duplicate child update is detectable"
+    );
+
+    p.step(&order, &course);
+    assert_eq!(p.mode, Move::SlopeSlide);
+    assert!(!p.is_carry());
+    assert_eq!(p.carry.inhibition, 10);
+    assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+    assert_ne!(
+        p.units_per_frame().with_y(0.),
+        velocity.with_y(0.),
+        "slide appear has its own velocity, after the message"
+    );
+    assert_eq!(
+        p.slide.steps, 0,
+        "exeSlide must not run on the choosing step"
+    );
+}
+
+#[cfg_attr(test, test)]
+fn a_fresh_jump_slide_landing_releases_after_one_final_air_update() {
+    fresh_slide_landing(Move::Jump);
+}
+
+#[cfg_attr(test, test)]
+fn a_fresh_fall_slide_landing_releases_after_one_final_air_update() {
+    fresh_slide_landing(Move::Fall);
 }
 
 /// The forced slope slide (+0x3f8) cancels and releases the carried object in every actor nerve

@@ -6439,20 +6439,6 @@ impl Player {
         if self.mode == Move::WallSlide {
             self.leave_wall_slide();
         }
-        // A floor with the `Slide` code takes the actor to the slope slide before any landing
-        // state (`setNerveOnGround`, `tryChangeNerveFromAir`).
-        if self.try_force_slope_slide(scene) {
-            return;
-        }
-        // The original collider retains the incoming velocity. Restore the
-        // vertical part our landing bookkeeping took out before Rolling::appear
-        // reads it; ordinary landing states still replace it themselves.
-        let before = self.v;
-        self.v.y = self.touchdown_speed;
-        if self.try_force_rolling() {
-            return;
-        }
-        self.v = before;
         if self.mode == Move::Fall && self.air_for != Some(Move::Fall) {
             // Fall's first execution still sets up its air control when the
             // preceding collision already found ground (0x46b3ec..0x46b4a0).
@@ -6460,8 +6446,9 @@ impl Player {
             self.v.y = self.touchdown_speed;
             self.arm_fall_control();
         }
-        // The jump state's last frame: its air control still steers, and a jump
-        // that ends on the ground counts toward the combo (a fall does not).
+        // The child still updates on touchdown: exeJump 0x4240a4 -> air update 0x4729c4
+        // and landing limit 0x472a1c..0x472a64; exeFall 0x425240 -> 0x46b4a0. This
+        // precedes forced-slide HoldCancel (0x4241c4 / 0x42532c), which reads its velocity.
         let air_step_ran = (self.mode.uses_air_control() || self.mode == Move::CapCatchPop)
             && self.air_for == Some(self.mode);
         if air_step_ran {
@@ -6482,6 +6469,20 @@ impl Player {
                 self.facing = self.air.turn_facing(self.facing, push);
             }
         }
+        // A floor with the `Slide` code takes the actor to the slope slide before any landing
+        // state (`setNerveOnGround`, `tryChangeNerveFromAir`).
+        if self.try_force_slope_slide(scene) {
+            return;
+        }
+        // The original collider retains the incoming velocity. Restore the
+        // vertical part our landing bookkeeping took out before Rolling::appear
+        // reads it; ordinary landing states still replace it themselves.
+        let before = self.v;
+        self.v.y = self.touchdown_speed;
+        if self.try_force_rolling() {
+            return;
+        }
+        self.v = before;
         if self.actor_name() == "Jump" {
             self.count_jump_combo();
         }
