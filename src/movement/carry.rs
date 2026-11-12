@@ -415,7 +415,9 @@ impl Player {
             if self.carry.step == 0 {
                 self.carry.upper = None;
                 self.upper_cleared = true;
-                self.start_sub("CarryFrontThrow", 24., -1.);
+                // exeThrow starts the sub at 0x42f194: the skeleton stores frame 0 and rate 1
+                // (0x8001f4..0x800210). This keeper runs after begin_step's clip advance.
+                self.start_sub("CarryFrontThrow", 24., 0.);
             }
             if self.carry.held && self.carry.step >= 5 {
                 // The keeper releases in the actor's control, after the standing state of the
@@ -703,7 +705,7 @@ mod tests {
         assert_eq!((p.carry.phase, p.carry.step, p.carry.inhibition), (3, 1, 9));
         assert!(p.carry.upper.is_none());
         assert!(p.upper_cleared);
-        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", -1.)));
+        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", 0.)));
         for _ in 1..5 {
             p.update_carry(&Orders::default(), true);
             p.finish_carry_release(&Course::default());

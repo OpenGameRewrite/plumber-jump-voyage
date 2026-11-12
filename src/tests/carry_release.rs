@@ -272,6 +272,9 @@ fn a_new_low_ceiling_preempts_an_old_throw_release_step() {
 
 /// updateCarry (0x420e78..0x420ed8) uses the actor's completed movement and pose;
 /// the seed inherits that velocity at 0x29a734..0x29a758.
+/// exeThrow starts the sub at 0x42f194 with skeleton frame 0/rate 1 (0x8001f4..0x800210);
+/// the one-shot policy only clamps (0xb1737c..0xb1738c). Release remains keeper step 5
+/// (0x42f1b4..0x42f1c8), independently of the sub's lifetime.
 #[cfg_attr(test, test)]
 fn an_ordinary_throw_reads_the_post_state_pose_and_velocity() {
     let course = Course {
@@ -295,28 +298,48 @@ fn an_ordinary_throw_reads_the_post_state_pose_and_velocity() {
     assert!(p.events.contains(&Fx::CarryThrow));
     assert_eq!(p.carry.phase, 3);
     assert_eq!(p.pose_axes().1, Vec3::Z);
-    assert_eq!(p.model_sub(), Some(("CarryFrontThrow", -1.)));
-    for _ in 0..4 {
-        p.step(
-            &Orders {
-                throw_pressed: false,
-                ..order.clone()
-            },
-            &course,
-        );
+    assert_eq!(p.model_sub(), Some(("CarryFrontThrow", 0.)));
+    let continuing = Orders {
+        throw_pressed: false,
+        ..order
+    };
+    for frame in 1..5 {
+        p.step(&continuing, &course);
+        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", frame as f32)));
+        assert_eq!(p.carry.step, frame + 1);
         assert!(p.is_carry());
     }
     let before = cancel_velocity(&p);
-    p.step(
-        &Orders {
-            throw_pressed: false,
-            ..order
-        },
-        &course,
-    );
+    assert_eq!(p.carry.step, 5);
+    p.step(&continuing, &course);
+    assert_eq!(p.model_sub(), Some(("CarryFrontThrow", 5.)));
     assert!(!p.is_carry());
     assert_eq!(p.carry.seed.as_ref().unwrap().velocity, cancel_velocity(&p));
     assert_ne!(p.carry.seed.as_ref().unwrap().velocity, before);
+    for frame in 6..=24 {
+        p.step(&continuing, &course);
+        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", frame as f32)));
+        assert!(p.ended_model_sub().is_none());
+        assert!(p.look.keeper_cell().starts_with("mode=0;"));
+        assert!(
+            !p.events
+                .iter()
+                .any(|event| matches!(event, Fx::FootLift { .. } | Fx::Step { .. }))
+        );
+    }
+    assert_eq!((p.carry.phase, p.carry.step), (0, 0));
+    p.step(&continuing, &course);
+    assert!(p.model_sub().is_none());
+    assert_eq!(p.ended_model_sub(), Some(("CarryFrontThrow", 24.)));
+    assert!(p.look.keeper_cell().starts_with("mode=1;"));
+    assert!(
+        p.events
+            .iter()
+            .any(|event| matches!(event, Fx::FootLift { .. } | Fx::Step { .. }))
+    );
+    p.step(&continuing, &course);
+    assert!(p.model_sub().is_none());
+    assert!(p.ended_model_sub().is_none());
 }
 
 /// exeJump updates its child at 0x4240a4 before cancel 0x4241c4; exeFall at 0x425240

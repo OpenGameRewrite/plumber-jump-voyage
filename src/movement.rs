@@ -5819,8 +5819,9 @@ impl Player {
             normal,
         ))
     }
-    /// Start a sub animation on the model; `frame` is where its counter
-    /// stands before this frame's advance.
+    /// Start a sub animation at the supplied counter. Callers before `begin_step` account
+    /// for its same-frame advance; the post-actor carry keeper starts at frame 0
+    /// (skeleton start 0x8001f4..0x800210).
     fn start_sub(&mut self, name: &'static str, length: f32, frame: f32) {
         self.sub = SubClip {
             name,
