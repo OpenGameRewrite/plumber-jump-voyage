@@ -1873,7 +1873,10 @@ impl TraceFile {
     /// throw it is (the clip names it).
     fn throw_hint(&self, row: usize) -> Option<crate::movement::ThrowHint> {
         use crate::movement::{Throw, ThrowHint};
-        if !self.cell(row, "state")?.starts_with("SpinCap/") {
+        let state = self.cell(row, "state")?;
+        if !state.starts_with("SpinCap/")
+            && !matches!(state, "Swim/SwimSpinCap" | "Swim/SwimSpinCapSurface")
+        {
             return None;
         }
         let spinning = |row: usize| self.cell(row, "cap_state") == Some("SpinAttack");
@@ -1891,7 +1894,12 @@ impl TraceFile {
         }
         let state_runs = self.cell(row, "cap_state").is_none();
         Some(ThrowHint {
-            winding: age > 0 || state_runs,
+            // HackCap's nerve set during startSpinAttack is exposed a row
+            // later; -1 is the pending nerve step in the starting row.
+            winding: age > 0
+                || state_runs
+                || self.cell(row, "cap_state") == Some("")
+                    && self.number(row, "cap_step") == Some(-1.),
             age: age as u32,
             launch: age > 0
                 && matches!(

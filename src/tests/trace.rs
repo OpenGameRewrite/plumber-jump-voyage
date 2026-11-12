@@ -7,6 +7,30 @@ pub(super) fn run() {
     preroll_interpolation();
     geyser_collider_pose();
     run_start_clock();
+    lockstep_swim_spin_attack_hint();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_swim_spin_attack_hint() {
+    // startCapThrowSurface sets up the same attack keeper as the land throw
+    // (0x485830..0x48584c); its SpinAttack rows must retain the winding latch.
+    for state in ["Swim/SwimSpinCapSurface", "Swim/SwimSpinCap"] {
+        let trace = TraceFile::parse(&format!(
+            "frame,state,anim,cap_state\n0,{state},SwimSpinCapStart,SpinAttack\n\
+             1,{state},SwimSpinCapStart,SpinAttack\n2,{state},SwimSpinCapStart,Throw\n"
+        ))
+        .unwrap();
+        let hint = trace.snapshot(1).throw.expect("the swim spin attack");
+        assert!(hint.winding);
+        assert!(hint.launch);
+        assert_eq!(hint.age, 2);
+        assert_eq!(hint.kind, crate::movement::Throw::Forward);
+        let pending = TraceFile::parse(&format!(
+            "frame,state,anim,cap_state,cap_step\n0,{state},SwimSpinCapStart,,-1\n"
+        ))
+        .unwrap();
+        assert!(pending.snapshot(0).throw.unwrap().winding);
+    }
 }
 
 #[cfg_attr(test, test)]
