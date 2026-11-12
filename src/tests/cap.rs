@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn run() {
+    lockstep_retains_the_stay_reaction_latch();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
@@ -21,6 +22,25 @@ pub(super) fn run() {
     a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
     the_cap_thrown_from_a_slope_flies_along_the_slope();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_retains_the_stay_reaction_latch() {
+    // HackCap::exeThrowStay's +0x2a9 latch survives for the throw
+    // (0x405d4c..0x405d6c), including a release and another press.
+    let mut before = returning_at(0, Vec3::new(0., 70., 1000.));
+    before.nerve = CapNerve::ThrowStay;
+    let mut world = far_world(None);
+    world.hold = true;
+    assert!(before.update(&world).contains(&CapEvent::StayStarted));
+    let mut restored = returning_at(0, before.spot);
+    restored.nerve = CapNerve::ThrowStay;
+    restored.step = before.step;
+    restored.continue_clip(&before);
+    world.hold = false;
+    restored.update(&world);
+    world.hold = true;
+    assert!(!restored.update(&world).contains(&CapEvent::StayStarted));
 }
 
 /// The throw down of the recorded `cap-throw-rolling-down` run, on the plane the player stood on:

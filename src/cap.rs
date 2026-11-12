@@ -732,9 +732,13 @@ impl Cap {
     pub fn continue_clip(&mut self, before: &Cap) {
         // (The spiral keeps circling from the throw direction it began with.)
         self.curve_front = before.curve_front;
+        // exeThrowStay's +0x2a9 is a per-throw latch (0x405d4c..0x405d6c),
+        // not a new edge each time the actor is restored from a snapshot.
+        self.stay_reaction_done = before.stay_reaction_done;
         self.action_serial = before.action_serial + u32::from(before.action != self.action);
         if before.action == self.action {
             self.action_frame = before.action_frame;
+
         }
         if self.carry_collider {
             self.collider = before.collider.clone();
