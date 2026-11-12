@@ -896,6 +896,8 @@ pub struct Snapshot {
     pub catching: Option<i32>,
     /// The model's sub animation while one plays: name, frame and length.
     pub sub: Option<(&'static str, f32, f32)>,
+    /// The row's clip is not the previous row's: the clip started in this row.
+    pub clip_started: bool,
     /// The state is the roll's brake (its clip is the unrolling clip's).
     pub roll_brake: bool,
     /// The state is the spin cap state's fall.
@@ -2901,7 +2903,10 @@ impl Player {
             // under a sub animation already in progress (the area clip under a catch), then the
             // row where the nerve's step restarts is the one that started it.
             let first_frame = s.anim.is_some_and(|(_, clip_frame)| clip_frame == 0.);
-            self.anim_skip = first_frame && (frame == 0. || s.sub_steps == Some(0));
+            // (`PlayerAnimFrameCtrl::update` skips once after `startAction`, whichever frame
+            // of the sub animation the clip starts under.)
+            self.anim_skip =
+                first_frame && (frame == 0. || s.sub_steps == Some(0) || s.clip_started);
         } else {
             self.anim_skip = false;
         }

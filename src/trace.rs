@@ -2087,6 +2087,7 @@ impl TraceFile {
             throw: self.throw_hint(row),
             catching: self.catching(row),
             sub: self.sub_hint(row),
+            clip_started: row > 0 && self.cell(row - 1, "anim") != self.cell(row, "anim"),
             roll_brake: self.cell(row, "state") == Some("Rolling/Brake"),
             spin_fall,
             sand: self.sand_hint(row),

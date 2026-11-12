@@ -30,6 +30,27 @@ fn lockstep_pivot_completion_chooses_the_run_mode() {
     assert!(player.cycle.weights[4] > 0.);
 }
 
+#[cfg_attr(test, test)]
+fn lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame() {
+    // The Wait clip starts in the row that shows frame 0 while the catch's sub animation
+    // is already at its third frame; the next update skips once (PlayerAnimFrameCtrl).
+    let mut player = Player::default();
+    player.inject(&Snapshot {
+        mode: Some(Move::Idle),
+        grounded: true,
+        state_frames: Some(28),
+        sub_steps: Some(1),
+        anim: Some(("Wait", 0.)),
+        sub: Some(("CatchCap", 3., 10.)),
+        clip_started: true,
+        ..Default::default()
+    });
+    player.step(&Orders::default(), &floor());
+    assert_eq!(player.anim.frame, 0.);
+    player.step(&Orders::default(), &floor());
+    assert_eq!(player.anim.frame, 1.);
+}
+
 #[test]
 fn placement_constants_belong_to_each_player() {
     let mut moon = Player::default();
@@ -116,6 +137,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 
 pub(super) fn run() {
     lockstep_pivot_completion_chooses_the_run_mode();
+    lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame();
     wait_snapshot_separates_slope_pull_from_travel();
     crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();
