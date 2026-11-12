@@ -2705,9 +2705,11 @@ impl Player {
             // A puppet-started action's first sample is updateSync's counter
             // (0x42d170), one rate ahead of its model pose. Injection must restore
             // the pose counter, otherwise the following update advances it twice.
-            let frame = if self.model_switch_row && self.anim.name == name {
+            let frame = if (self.model_switch_row || self.counter_restarted) && self.anim.name == name {
                 // copyAnimLocal starts the counter again while carrying the
-                // prior model's action pose (0x42c1cc..0x42c250).
+                // prior model's action pose (0x42c1cc..0x42c250). UnRoll
+                // likewise copies Rolling's frame to RollingEnd while its
+                // exported counter restarts (0x47c470..0x47c498).
                 self.anim.frame
             } else if (self.puppet_synced_row() || self.switch_sync_row) && self.anim.name == name {
                 frame - self.anim.rate

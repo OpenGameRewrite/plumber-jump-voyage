@@ -9,6 +9,7 @@ pub(super) fn run() {
     lockstep_nested_choices();
     lockstep_slope_pull();
     lockstep_recovery_land_interpolation();
+    lockstep_unroll_keeps_the_model_frame();
     command_line();
     geometry_per_scenario();
     placement_constant_selection();
@@ -303,6 +304,43 @@ fn lockstep_recovery_land_interpolation() {
                 "frame {frame} {column}"
             );
         }
+    }
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_unroll_keeps_the_model_frame() {
+    // exeUnRoll copies Rolling's model frame to RollingEnd (0x47c470..0x47c498),
+    // while PlayerAnimFrameCtrl restarts the exported counter at zero.
+    let script = Script::parse(
+        "start 0 0 0 0\n30 0 1 -\n10 0 1 ZL\n1 0 1 ZL+Y\n170 0 1 ZL\n40 0 0 -\n",
+    )
+    .unwrap();
+    let free = replay(&script, options(None)).unwrap();
+    let game = TraceFile::parse(&free.to_csv()).unwrap();
+    let locked = replay(
+        &script,
+        Options {
+            lockstep: Some(&game),
+            ..options(None)
+        },
+    )
+    .unwrap();
+    let first = (0..free.rows.len())
+        .find(|&f| cell(&free.rows, f, "anim") == "RollingEnd")
+        .expect("must reach UnRoll");
+    assert_eq!(number(&free.rows, first, "anim_frame"), 0.);
+    for frame in first..first + 4 {
+        assert_eq!(
+            cell(&locked.rows, frame, "state"),
+            cell(&free.rows, frame, "state")
+        );
+        assert!(
+            (number(&locked.rows, frame, "anim_frame") - number(&free.rows, frame, "anim_frame"))
+                .abs() < 0.01,
+            "frame {frame}: {} vs {}",
+            cell(&locked.rows, frame, "anim_frame"),
+            cell(&free.rows, frame, "anim_frame"),
+        );
     }
 }
 
