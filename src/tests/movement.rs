@@ -85,6 +85,8 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    wait_snapshot_separates_slope_pull_from_travel();
+    crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();
     original_simulation_trace();
     the_spin_throw_brakes_only_along_its_front();
@@ -122,6 +124,74 @@ pub(super) fn run() {
     quicksand();
     blocked_squat_stays_crouched();
     wall_collision_and_stress();
+}
+
+#[cfg_attr(test, test)]
+fn wait_snapshot_separates_slope_pull_from_travel() {
+    // Synthetic unit normal and tangent, not game tuning. waitGround adds
+    // -normal * Gravity (0x56575c..0x56577c) after rebounding the old pull.
+    let normal = Vec3::new(0., 0.8, 0.6);
+    for (mode, clip) in [(Move::Idle, "Wait"), (Move::Crouch, "SquatWait")] {
+        for travel in [Vec3::ZERO, Vec3::X * 2.] {
+            let mut player = Player::default();
+            let snapshot = Snapshot {
+                mode: Some(mode),
+                grounded: true,
+                v: travel - normal * t::GRAVITY,
+                facing: Vec3::Z,
+                floor_contact: Some((CollisionCodes::default(), normal, 3)),
+                anim: Some((clip, 2.)),
+                state_frames: Some(2),
+                sub_steps: Some(2),
+                ..Snapshot::default()
+            };
+            player.inject(&snapshot);
+            assert_eq!(player.v, travel, "{mode:?}");
+            assert_eq!(player.units_per_frame(), snapshot.v, "{mode:?}");
+            if mode == Move::Crouch {
+                player.squat(
+                    &Orders {
+                        crouch: true,
+                        ..default()
+                    },
+                    &floor(),
+                );
+                assert_eq!(player.ground_following(), snapshot.v);
+            } else {
+                // Re-choosing Jump runs collision before its pending setup.
+                // The port must retain its ground representation through that
+                // boundary, so setup sees one pull, not pull plus false travel.
+                player.start_standard_jump();
+                player.v.y = 0.;
+                assert_eq!(player.units_per_frame(), snapshot.v);
+            }
+        }
+    }
+}
+
+#[cfg_attr(test, test)]
+fn crawl_wait_choice_restores_normal_pull() {
+    // exeWalk's no-input exit writes pure normal GravityMove and chooses
+    // Wait, even after choosing StandUp in the same update (0x484164).
+    let normal = Vec3::new(0., 0.8, 0.6);
+    let mut player = Player::default();
+    let snapshot = Snapshot {
+        mode: Some(Move::Crouch),
+        grounded: true,
+        v: -normal * GRAVITY_MOVE,
+        facing: Vec3::Z,
+        floor_contact: Some((CollisionCodes::default(), normal, 3)),
+        anim: Some(("SquatWalk", 5.)),
+        state_frames: Some(8),
+        sub_steps: Some(0),
+        ..Snapshot::default()
+    };
+    player.inject(&snapshot);
+    assert_eq!(player.v, Vec3::ZERO);
+    assert_eq!(player.units_per_frame(), snapshot.v);
+    player.squat(&Orders::default(), &floor());
+    assert_eq!(player.mode, Move::Idle);
+    assert_eq!(player.ground_following(), -normal * t::GRAVITY);
 }
 
 #[cfg_attr(test, test)]

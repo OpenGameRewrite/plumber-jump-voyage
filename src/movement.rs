@@ -2733,14 +2733,35 @@ impl Player {
         } else {
             t::GRAVITY
         };
-        if self.rotating_ground && self.grounded {
-            // A snapshot holds original full velocity; the native ground
-            // controller stores horizontal travel separately from its pull.
+        if self.grounded {
+            // A snapshot holds native actor velocity; the port stores
+            // horizontal travel separately from its floor-normal pull.
             // Preserve the independently simulated run's steering plane,
             // which predates the collision normal visible in the same row.
-            let travel = if self.mode == Move::Idle && !self.land_nerve() {
+            let travel = if self.rotating_ground && self.mode == Move::Idle && !self.land_nerve() {
                 Some(Vec3::ZERO)
-            } else if matches!(self.mode, Move::Walk | Move::Run) {
+            } else if self.mode == Move::Crouch
+                && s.sub_steps.or(s.state_frames) == Some(0)
+                && s.anim.is_some_and(|(clip, _)| clip == "SquatWalk")
+            {
+                // exeWalk's no-input branch sets only -normal * GravityMove
+                // before choosing Wait (0x484164..0x4841ac). Nested re-choice
+                // can inject this row directly; none of its XZ is travel.
+                Some(Vec3::ZERO)
+            } else if matches!(self.mode, Move::Idle | Move::Crouch)
+                && !self.land_nerve()
+                && s.sub_steps
+                    .or(s.state_frames)
+                    .is_some_and(|steps| steps > 0)
+            {
+                // Executed waitGround rows contain -normal * Gravity
+                // (0x56575c..0x56577c). Undo that addition before restoring
+                // our horizontal travel; otherwise Squat applies it twice
+                // and a deferred Jump inherits it as tangent velocity.
+                // Step-zero choices and Land's snap have different owners.
+                let normal = self.mesh_ground.unwrap_or(Vec3::Y);
+                Some((s.v + normal * self.pull).with_y(0.))
+            } else if self.rotating_ground && matches!(self.mode, Move::Walk | Move::Run) {
                 self.run_up.map(|(_, normal, _)| {
                     let travel = (s.v + normal * self.pull).with_y(0.);
                     self.run_up = Some((Vec2::new(travel.x, travel.z), normal, s.v));

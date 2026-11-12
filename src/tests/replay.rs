@@ -7,6 +7,7 @@ pub(super) fn run() {
     camera_and_buttons();
     lockstep();
     lockstep_nested_choices();
+    lockstep_slope_pull();
     command_line();
     geometry_per_scenario();
     placement_constant_selection();
@@ -281,6 +282,68 @@ fn lockstep_nested_choices() {
                 assert!(
                     (expected - actual).abs() < 0.01,
                     "run {run_frames}, frame {frame} {column}: {expected} vs {actual}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_slope_pull() {
+    // A synthetic sloped floor exercises both a completed Squat/Wait row
+    // and Wait -> Jump's deferred first step. No stage assets are needed.
+    let geometry = Arc::new(TriangleMesh::from_corners(&[
+        [
+            Vec3::new(-1000., 50., -1000.),
+            Vec3::new(-1000., -50., 1000.),
+            Vec3::new(1000., 50., -1000.),
+        ],
+        [
+            Vec3::new(1000., 50., -1000.),
+            Vec3::new(-1000., -50., 1000.),
+            Vec3::new(1000., -50., 1000.),
+        ],
+    ]));
+    for (input, expected_state) in [
+        ("10 0 0 -\n10 0 0 ZL\n", "Squat/Wait"),
+        ("10 0 0 -\n1 0 0 B\n5 0 0 -\n", "Jump/Jump"),
+        ("10 0 0 ZL\n10 0 1 ZL\n2 0 0 -\n", "Squat/StandUp"),
+    ] {
+        let script = Script::parse(&format!("start 0 0 0 0\n{input}")).unwrap();
+        let free = replay(
+            &script,
+            Options {
+                geometry: Some(geometry.clone()),
+                ..options(None)
+            },
+        )
+        .unwrap();
+        let game = TraceFile::parse(&free.to_csv()).unwrap();
+        let locked = replay(
+            &script,
+            Options {
+                geometry: Some(geometry.clone()),
+                lockstep: Some(&game),
+                ..options(None)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            cell(&free.rows, free.rows.len() - 1, "state"),
+            expected_state
+        );
+        for frame in 0..free.rows.len() {
+            assert_eq!(
+                cell(&locked.rows, frame, "state"),
+                cell(&free.rows, frame, "state")
+            );
+            for column in ["px", "py", "pz", "vx", "vy", "vz", "speed_h"] {
+                let expected = number(&free.rows, frame, column);
+                let actual = number(&locked.rows, frame, column);
+                // Existing CSV round-trip bound used by lockstep().
+                assert!(
+                    (actual - expected).abs() < 0.01,
+                    "{expected_state} frame {frame} {column}: {expected} vs {actual}"
                 );
             }
         }
