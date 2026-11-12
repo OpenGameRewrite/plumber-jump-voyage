@@ -3471,7 +3471,10 @@ impl Player {
             self.update_kick_stone(scene);
         }
         self.carry_sensor_phase(&o, scene);
-        self.update_carry(&o, advance_sources);
+        if self.is_carry() {
+            // Carry input belongs to the keeper, not the actor's buffered cap throw.
+            self.pre_throw = 0;
+        }
         self.flower_sensor_phase(scene);
         if advance_sources {
             self.dokan_sensor_phase(scene, &o);
@@ -3498,6 +3501,9 @@ impl Player {
         }
         self.restore_after_spin_cap(acting);
         self.update_sand_affect(scene);
+        // LiveActor::movement runs the actor nerve before control's updateCarry (0x420920).
+        // A state-selected Release must replace the old keeper execution (0x42e664..0x42e684).
+        self.update_carry(&o, advance_sources);
         self.finish_carry_release(scene);
         let moved = self.v;
         if self.mode != Move::Bind || self.puppet_collision {

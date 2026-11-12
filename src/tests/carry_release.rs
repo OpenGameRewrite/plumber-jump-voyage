@@ -9,6 +9,10 @@ pub(super) fn run() {
     a_new_low_ceiling_cancels_a_carrying_run();
     a_new_low_ceiling_cancels_a_carrying_skid();
     a_new_low_ceiling_cancels_a_carrying_turn();
+    a_new_low_ceiling_preempts_a_simultaneous_carry_throw();
+    a_new_low_ceiling_preempts_an_old_throw_first_step();
+    a_new_low_ceiling_preempts_an_old_throw_release_step();
+    an_ordinary_throw_reads_the_post_state_pose_and_velocity();
     a_fresh_jump_slide_landing_releases_after_one_final_air_update();
     a_fresh_fall_slide_landing_releases_after_one_final_air_update();
     a_forced_slope_slide_cancels_a_carry_before_the_slide_starts();
@@ -143,7 +147,7 @@ fn pending_release_skips_the_previous_carry_or_throw_update() {
 /// EnableStandUp failure in continuing exeWait (0x422634..0x4226b0) and exeRun
 /// (0x423164..0x4231e0), including Run's Brake/Turn children. Bring the ceiling in only after
 /// an open frame has executed the carrying child. No setNerveOnGround call drives the test.
-fn low_ceiling_cancels(mode: Move) {
+fn low_ceiling_cancels(mode: Move, throw_phase: Option<u32>, throw_pressed: bool) {
     let open = Course {
         solids: vec![slab(-0.5, "Ground", 0.)],
         ..default()
@@ -186,7 +190,14 @@ fn low_ceiling_cancels(mode: Move) {
     if mode == Move::Idle {
         p.v = p.facing * 3.;
     }
+    if let Some(step) = throw_phase {
+        p.carry.phase = 3;
+        p.carry.step = step;
+        p.carry.release_due = step > 0;
+    }
+    let expected = cancel_velocity(&p);
     order.jump = true;
+    order.throw_pressed = throw_pressed;
     p.step(&order, &low);
     assert!(!p.ceiling.enable_stand_up);
     assert_eq!(p.mode, Move::SquatBrake, "{mode:?}: ceiling precedes jump");
@@ -195,6 +206,17 @@ fn low_ceiling_cancels(mode: Move) {
     assert_eq!(p.carry.inhibition, 10);
     assert!(p.carry.upper.is_none());
     assert!(p.upper_cleared);
+    assert!(!p.events.contains(&Fx::CarryThrow));
+    assert!(
+        p.model_sub().is_none(),
+        "the old keeper must not start a throw"
+    );
+    assert_eq!((p.carry.phase, p.carry.step), (0, 0));
+    assert!(!p.carry.release_due);
+    assert!(p.carry.cancel.is_none());
+    if mode == Move::Idle {
+        assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+    }
     assert!(
         p.v.with_y(0.).length_squared() > 0.,
         "chain squat keeps tangent velocity"
@@ -211,22 +233,86 @@ fn low_ceiling_cancels(mode: Move) {
 
 #[cfg_attr(test, test)]
 fn a_new_low_ceiling_cancels_a_carrying_wait() {
-    low_ceiling_cancels(Move::Idle);
+    low_ceiling_cancels(Move::Idle, None, false);
 }
 
 #[cfg_attr(test, test)]
 fn a_new_low_ceiling_cancels_a_carrying_run() {
-    low_ceiling_cancels(Move::Run);
+    low_ceiling_cancels(Move::Run, None, false);
 }
 
 #[cfg_attr(test, test)]
 fn a_new_low_ceiling_cancels_a_carrying_skid() {
-    low_ceiling_cancels(Move::Skid);
+    low_ceiling_cancels(Move::Skid, None, false);
 }
 
 #[cfg_attr(test, test)]
 fn a_new_low_ceiling_cancels_a_carrying_turn() {
-    low_ceiling_cancels(Move::Turn);
+    low_ceiling_cancels(Move::Turn, None, false);
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_preempts_a_simultaneous_carry_throw() {
+    low_ceiling_cancels(Move::Idle, None, true);
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_preempts_an_old_throw_first_step() {
+    low_ceiling_cancels(Move::Idle, Some(0), true);
+}
+
+#[cfg_attr(test, test)]
+fn a_new_low_ceiling_preempts_an_old_throw_release_step() {
+    low_ceiling_cancels(Move::Idle, Some(5), true);
+}
+
+/// updateCarry (0x420e78..0x420ed8) uses the actor's completed movement and pose;
+/// the seed inherits that velocity at 0x29a734..0x29a758.
+#[cfg_attr(test, test)]
+fn an_ordinary_throw_reads_the_post_state_pose_and_velocity() {
+    let course = Course {
+        solids: vec![slab(-0.5, "Ground", 0.)],
+        ..default()
+    };
+    let mut p = Player::default();
+    for _ in 0..3 {
+        p.step(&Orders::default(), &course);
+    }
+    p.carry.seed = Some(seed_beside(&p, &course));
+    p.carry.held = true;
+    p.carry.phase = 2;
+    p.v = Vec3::X * 12.;
+    let order = Orders {
+        direction: Vec2::Y,
+        throw_pressed: true,
+        ..default()
+    };
+    p.step(&order, &course);
+    assert!(p.events.contains(&Fx::CarryThrow));
+    assert_eq!(p.carry.phase, 3);
+    assert_eq!(p.pose_axes().1, Vec3::Z);
+    assert_eq!(p.model_sub(), Some(("CarryFrontThrow", -1.)));
+    for _ in 0..4 {
+        p.step(
+            &Orders {
+                throw_pressed: false,
+                ..order.clone()
+            },
+            &course,
+        );
+        assert!(p.is_carry());
+    }
+    let before = cancel_velocity(&p);
+    p.step(
+        &Orders {
+            throw_pressed: false,
+            ..order
+        },
+        &course,
+    );
+    assert!(!p.is_carry());
+    assert_eq!(p.carry.seed.as_ref().unwrap().velocity, cancel_velocity(&p));
+    assert_ne!(p.carry.seed.as_ref().unwrap().velocity, before);
 }
 
 /// exeJump updates its child at 0x4240a4 before cancel 0x4241c4; exeFall at 0x425240

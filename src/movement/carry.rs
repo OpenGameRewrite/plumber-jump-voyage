@@ -298,8 +298,8 @@ impl Player {
     /// (0x4820ac), leaving an earlier pickup window. During the wind it asks `isEnableCancelAir`
     /// (0x481da4), which is false for the ground nerves. (`SpinGroundSeparate` after step 10 is the
     /// second player's throw and never runs in single play.) The air child answers through
-    /// `isEnableCancelAir` alone: false for the first 23 steps, and from the fall nerve on, which
-    /// the port runs as the fall mode.
+    /// `isEnableCancelAir` alone: false through step 22; true from step 23 and for Fall
+    /// (0x481dc4, 0x481e10..0x481e20), which the port runs as the fall mode.
     pub(super) fn spin_cap_enable_cancel_carry(&self) -> bool {
         self.mode == Move::Throw
             && !self.throwing.in_air
@@ -390,7 +390,14 @@ impl Player {
         if self.carry.held {
             self.pre_throw = 0;
         }
-        if self.carry.held && o.throw_pressed && !self.carry.picked_up && self.carry.phase < 3 {
+        // updateCarry skips action initiation for the actor's pending Squat
+        // (0x429b80..0x429b94 -> 0x420dac), but still updates the keeper itself.
+        if self.carry.held
+            && self.actor_name() != "Squat"
+            && o.throw_pressed
+            && !self.carry.picked_up
+            && self.carry.phase < 3
+        {
             if advance_sources {
                 self.carry.phase = 3;
                 self.carry.step = 0;
