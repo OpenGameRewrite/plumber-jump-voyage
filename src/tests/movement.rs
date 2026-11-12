@@ -51,6 +51,24 @@ fn lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame() {
     assert_eq!(player.anim.frame, 1.);
 }
 
+#[cfg_attr(test, test)]
+fn lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice() {
+    // Recordings read 64.8 of the 60-frame clip in the row its pose wraps in, then 10.2.
+    let mut player = Player::default();
+    player.inject(&Snapshot {
+        mode: Some(Move::FireRun),
+        grounded: true,
+        state_frames: Some(14),
+        anim: Some(("FireRun", 64.8)),
+        ..Default::default()
+    });
+    player.anim.rate = 5.4;
+    player.advance_clips();
+    player.update_loop_start();
+    assert!((player.anim.frame - 10.2).abs() < 1e-3, "{}", player.anim.frame);
+    assert!(!player.clip_wrapped, "the loop wrapped in the row before");
+}
+
 #[test]
 fn placement_constants_belong_to_each_player() {
     let mut moon = Player::default();
@@ -136,6 +154,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice();
     lockstep_pivot_completion_chooses_the_run_mode();
     lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame();
     wait_snapshot_separates_slope_pull_from_travel();

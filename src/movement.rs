@@ -2722,6 +2722,14 @@ impl Player {
             } else {
                 frame
             };
+            // A looping clip the port wraps at its length (no `loop_slack`) reads past it in
+            // the recorded row its pose wraps in (the burning run's 64.8, then 10.2): the
+            // port's counter is already at the wrapped value, and wrapping it again at the
+            // next update would start the loop's triggers a second time.
+            let frame = match self.loop_len(name) {
+                Some(length) if self.loop_slack_of(name) == 0. && frame >= length => frame - length,
+                _ => frame,
+            };
             if let Some(clockwise) = spin::clip_is_clockwise(name) {
                 self.spin_clockwise = clockwise;
             }
