@@ -3341,8 +3341,13 @@ impl Player {
         // Re-choice must not advance its blink again: show (0x94c2b4)
         // clears the outgoing animation blend when visibility returns.
         let damage = self.damage.clone();
+        // PlayerJointControlGroundPose::update follows its IK targets once per
+        // actor update (0x4541f8..0x454268). The completed row already moved
+        // them, so the repeated choice must not add a second step.
+        let ground_pose = self.joints.ground.clone();
         self.step_with_sources(o, scene, false);
         self.damage = damage;
+        self.joints.ground = ground_pose;
     }
 
     fn step_with_sources(&mut self, o: &Orders, scene: &Course, advance_sources: bool) {

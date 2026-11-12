@@ -462,8 +462,39 @@ impl JointCalc for Controls<'_> {
 }
 
 pub(super) fn self_check() {
+    lockstep_rechoice_keeps_the_completed_joint_update();
     platform_power_sways_the_body_only_when_it_changes();
     landing_on_moving_ground_adds_its_motion_to_the_impulse();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_rechoice_keeps_the_completed_joint_update() {
+    // GroundPose::update follows IK once per actor update (0x4541f8..0x454268).
+    // HipDrop/Land -> Jump0 already lowered the completed row's leg rate.
+    let scene = crate::replay::flat_floor();
+    let mut player = standing_on_ground();
+    player.joints.ground = GroundPose::settled_wait();
+    let snapshot = Snapshot {
+        mode: Some(Move::PoundLand),
+        grounded: true,
+        pos: player.pos,
+        state_frames: Some(33),
+        sub_steps: Some(4),
+        anim: Some(("HipDropLand", 3.)),
+        ..Default::default()
+    };
+    player.inject(&snapshot);
+    let orders = Orders {
+        jump: true,
+        jump_held: true,
+        ..Default::default()
+    };
+    player.step(&orders, &scene);
+    assert_eq!(player.mode, Move::PoundJump);
+    let completed = player.joints.ground.state();
+    player.inject(&snapshot);
+    player.repeat_step_for_lockstep(&orders, &scene);
+    assert_eq!(player.joints.ground.state(), completed);
 }
 
 fn standing_on_ground() -> Player {
