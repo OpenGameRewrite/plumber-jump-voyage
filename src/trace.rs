@@ -1638,6 +1638,23 @@ impl TraceFile {
         hint.last_input = Vec3::new(parts.next()?, 0., parts.next()?);
         Some(hint)
     }
+    /// Where the fall the row is part of reached the terminal speed (`FallDistance`): the height
+    /// (cm) of the first row of the unbroken run of rows moving down that fast, ground contact
+    /// ending a run after its own row.
+    fn fall_start(&self, row: usize) -> Option<f32> {
+        let fast = |at: usize| {
+            self.number(at, "vy")
+                .is_some_and(|vy| vy <= -crate::movement::TERMINAL_FALL_SPEED)
+        };
+        if !fast(row) {
+            return None;
+        }
+        let mut first = row;
+        while first > 0 && fast(first - 1) && self.cell(first - 1, "ground") != Some("1") {
+            first -= 1;
+        }
+        self.number(first, "py")
+    }
     /// The quicksand's depth after the step a row records (`PlayerSandSinkAffect::update`),
     /// rebuilt from the rows of the episode: the affect runs after the state's step on the
     /// contacts and position the previous row ends with, so the depth follows from the floor
@@ -2088,6 +2105,7 @@ impl TraceFile {
             catching: self.catching(row),
             sub: self.sub_hint(row),
             clip_started: row > 0 && self.cell(row - 1, "anim") != self.cell(row, "anim"),
+            fall_start: self.fall_start(row),
             roll_brake: self.cell(row, "state") == Some("Rolling/Brake"),
             spin_fall,
             sand: self.sand_hint(row),

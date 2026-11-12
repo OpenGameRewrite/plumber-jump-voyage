@@ -175,6 +175,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    lockstep_terminal_fall_distance_comes_from_the_rows();
     run_snapshot_separates_slope_pull_from_travel();
     lockstep_rechoice_keeps_the_footstep_counter();
     lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice();
@@ -286,6 +287,34 @@ fn run_snapshot_separates_slope_pull_from_travel() {
         assert_eq!(player.v, travel);
         assert_eq!(player.units_per_frame(), snapshot.v);
     }
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_terminal_fall_distance_comes_from_the_rows() {
+    // FallDistance counts from where the terminal speed was first reached (centimetres):
+    // every injected row of that fall, the contact row included, carries that start.
+    let mut player = Player::default();
+    let fast = Snapshot {
+        mode: Some(Move::Fall),
+        pos: Vec3::new(0., 20., 0.),
+        v: Vec3::NEG_Y * t::FALL_MAX,
+        fall_start: Some(5000.),
+        ..Snapshot::default()
+    };
+    player.inject(&fast);
+    assert_eq!(player.fall.start, Some(5000.));
+    assert_eq!(player.fall.distance, 3000.);
+    let contact = Snapshot {
+        grounded: true,
+        ..fast.clone()
+    };
+    player.inject(&contact);
+    assert_eq!(player.fall.distance, 3000.);
+    player.inject(&Snapshot {
+        fall_start: None,
+        ..fast
+    });
+    assert_eq!(player.fall.start, None);
 }
 
 #[cfg_attr(test, test)]

@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 /// Metres per original distance unit.
 pub const UNIT: f32 = 0.01;
+/// The fall speed at which the fall distance starts counting (`FallSpeedMax`).
+pub(crate) const TERMINAL_FALL_SPEED: f32 = t::FALL_MAX;
 /// Simulation rate, matching the original.
 pub const FPS: f32 = 60.;
 pub const RADIUS: f32 = 0.45;
@@ -898,6 +900,8 @@ pub struct Snapshot {
     pub sub: Option<(&'static str, f32, f32)>,
     /// The row's clip is not the previous row's: the clip started in this row.
     pub clip_started: bool,
+    /// While the rows fall at the terminal speed: the height (cm) of the first of them.
+    pub fall_start: Option<f32>,
     /// The state is the roll's brake (its clip is the unrolling clip's).
     pub roll_brake: bool,
     /// The state is the spin cap state's fall.
@@ -2883,12 +2887,15 @@ impl Player {
             }
             self.set_counter(name, *value);
         }
-        // How far the recorded fall had gone is not in the trace; one that is
-        // already at the terminal speed counts from here.
-        self.fall = FallDistance::default();
-        if !self.grounded && self.v.y <= -t::FALL_MAX {
-            self.fall.start = Some(self.pos.y);
-        }
+        // The fall distance counts from the height where the terminal speed was first reached,
+        // which the rows of that fall show (`Snapshot::fall_start`, centimetres).
+        self.fall = match s.fall_start {
+            Some(start) => FallDistance {
+                start: Some(start),
+                distance: (start - self.pos.y / UNIT).max(0.),
+            },
+            None => FallDistance::default(),
+        };
     }
     /// The cap and the spin throw as a recorded row shows them.
     fn resume_cap(&mut self, s: &Snapshot) {
