@@ -3365,9 +3365,15 @@ impl Player {
         // actor update (0x4541f8..0x454268). The completed row already moved
         // them, so the repeated choice must not add a second step.
         let ground_pose = self.joints.ground.clone();
+        // PlayerSeCtrl::update (0x463064) counts its frames moved once per update.
+        let sounds = self.sounds.clone();
+        // PlayerStainControl::update runs once per update as well (smoke starts by its timer).
+        let soot = self.soot;
         self.step_with_sources(o, scene, false);
         self.damage = damage;
         self.joints.ground = ground_pose;
+        self.sounds = sounds;
+        self.soot = soot;
     }
 
     fn step_with_sources(&mut self, o: &Orders, scene: &Course, advance_sources: bool) {

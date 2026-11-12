@@ -69,6 +69,27 @@ fn lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice() {
     assert!(!player.clip_wrapped, "the loop wrapped in the row before");
 }
 
+#[cfg_attr(test, test)]
+fn lockstep_rechoice_keeps_the_footstep_counter() {
+    // The repeated choice rebuilds a row that already updated the sound control.
+    let mut player = Player::default();
+    let run = Orders {
+        direction: Vec2::NEG_Y,
+        ..Default::default()
+    };
+    for _ in 0..12 {
+        player.step(&run, &floor());
+    }
+    let before = format!("{:?}", player.sounds);
+    let soot = player.soot;
+    player.soot.hold = 7;
+    let held = player.soot;
+    player.repeat_step_for_lockstep(&run, &floor());
+    assert_eq!(format!("{:?}", player.sounds), before);
+    assert_eq!(player.soot, held);
+    assert_ne!(held, soot);
+}
+
 #[test]
 fn placement_constants_belong_to_each_player() {
     let mut moon = Player::default();
@@ -154,6 +175,7 @@ fn until_ground(p: &mut Player, o: Orders, scene: &Course) -> f32 {
 }
 
 pub(super) fn run() {
+    lockstep_rechoice_keeps_the_footstep_counter();
     lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice();
     lockstep_pivot_completion_chooses_the_run_mode();
     lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame();
