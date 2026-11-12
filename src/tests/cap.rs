@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn run() {
     lockstep_retains_the_stay_reaction_latch();
+    lockstep_rewinds_the_cap_clip_with_its_nerve();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
@@ -41,6 +42,27 @@ fn lockstep_retains_the_stay_reaction_latch() {
     restored.update(&world);
     world.hold = true;
     assert!(!restored.update(&world).contains(&CapEvent::StayStarted));
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_rewinds_the_cap_clip_with_its_nerve() {
+    // Re-choice injects the row before the last completed one. A continuing
+    // Stay action is one update older too (exeThrowStay, 0x4055cc).
+    let mut before = returning_at(0, Vec3::new(0., 70., 1000.));
+    before.nerve = CapNerve::ThrowStay;
+    let world = far_world(None);
+    for _ in 0..8 {
+        before.update(&world);
+    }
+    let mut restored = returning_at(0, before.spot);
+    restored.nerve = CapNerve::ThrowStay;
+    restored.step = before.step - 1;
+    restored.action = before.action;
+    restored.continue_clip(&before);
+    assert_eq!(restored.clip_frame(), before.clip_frame() - 1.);
+    restored.update(&world);
+    assert_eq!(restored.clip_frame(), before.clip_frame());
+    assert_eq!(restored.clip_serial(), before.clip_serial());
 }
 
 /// The throw down of the recorded `cap-throw-rolling-down` run, on the plane the player stood on:

@@ -738,7 +738,14 @@ impl Cap {
         self.action_serial = before.action_serial + u32::from(before.action != self.action);
         if before.action == self.action {
             self.action_frame = before.action_frame;
-
+            if before.nerve == self.nerve {
+                // A player re-choice injects an older row of this actor too.
+                // Rewind the continuing action by the same nerve executions;
+                // its update will then advance it once, as in the original.
+                self.action_frame = self
+                    .action_frame
+                    .saturating_sub(before.step.saturating_sub(self.step));
+            }
         }
         if self.carry_collider {
             self.collider = before.collider.clone();
