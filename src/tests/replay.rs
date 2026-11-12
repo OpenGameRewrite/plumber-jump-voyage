@@ -6,6 +6,7 @@ pub(super) fn run() {
     scenarios();
     camera_and_buttons();
     lockstep();
+    lockstep_nested_choices();
     command_line();
     geometry_per_scenario();
     placement_constant_selection();
@@ -235,6 +236,51 @@ fn lockstep() {
                     _ => x == y,
                 };
                 assert!(close, "frame {frame} {column}: {x} vs {y}");
+            }
+        }
+    }
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_nested_choices() {
+    // NerveKeeper::update (0x959640) can expose successive step-zero rows.
+    // Squat::exeBrake's first-step velocity adjustment (0x483710..0x48391c)
+    // must survive the re-choice before LongJump::exeJump (0x474b80).
+    // Exercise both capped and uncapped launch speeds, with a changed stick
+    // on takeoff so each repeated update must use its own input frame.
+    for run_frames in [20, 50] {
+        let script = Script::parse(&format!(
+            "start 0 0 0 0\n{run_frames} 0 1 -\n1 0 1 ZL\n1 0 1 ZL+B\n2 0 0 -\n"
+        ))
+        .unwrap();
+        let free = replay(&script, options(None)).unwrap();
+        let game = TraceFile::parse(&free.to_csv()).unwrap();
+        let locked = replay(
+            &script,
+            Options {
+                lockstep: Some(&game),
+                ..options(None)
+            },
+        )
+        .unwrap();
+        for (offset, state, step) in [
+            (0, "Squat/Brake", "0"),
+            (1, "LongJump/Jump", "0"),
+            (2, "LongJump/Jump", "1"),
+        ] {
+            let frame = run_frames + offset;
+            for rows in [&free.rows, &locked.rows] {
+                assert_eq!(cell(rows, frame, "state"), state);
+                assert_eq!(cell(rows, frame, "state_step"), step);
+            }
+            for column in ["pz", "vy", "vz", "speed_h"] {
+                let expected = number(&free.rows, frame, column);
+                let actual = number(&locked.rows, frame, column);
+                // The same trace round-trip bound as lockstep().
+                assert!(
+                    (expected - actual).abs() < 0.01,
+                    "run {run_frames}, frame {frame} {column}: {expected} vs {actual}"
+                );
             }
         }
     }

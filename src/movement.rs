@@ -2823,6 +2823,7 @@ impl Player {
                 s.roll_brake,
             );
         }
+        self.resume_squat(s);
         self.resume_sand(s);
         self.resume_slope_slide(s);
         self.resume_cap(s);

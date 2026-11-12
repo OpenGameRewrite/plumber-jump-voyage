@@ -112,6 +112,24 @@ impl Player {
             |p| p.brake_first_step(),
         );
     }
+    /// Restore Brake's unexecuted first step, not just its visible mode.
+    pub(super) fn resume_squat(&mut self, snapshot: &Snapshot) {
+        if self.mode != Move::SquatBrake || snapshot.sub_steps.or(snapshot.state_frames) != Some(0)
+        {
+            return;
+        }
+        // exeBrake tests isFirstStep at 0x483710 and adjusts the incoming
+        // velocity at 0x483760..0x48391c before moveInertiaSlide (0x483ab8).
+        // A nested lockstep re-choice injects this pending Brake row before
+        // choosing LongJump, whose first step reads that velocity (0x474c48).
+        let clip = snapshot.next_clip.unwrap_or(if self.squat.skip_start_clip {
+            "SquatWait"
+        } else {
+            "SquatStart"
+        });
+        self.squat.skip_start_clip = clip == "SquatWait";
+        self.nerve.queue(clip, |p| p.brake_first_step());
+    }
     /// The first step of `exeBrake` before the slide: keep the momentum along
     /// the facing, grown by `SquatAccelRate` and dropped when it is too small
     /// to slide.
