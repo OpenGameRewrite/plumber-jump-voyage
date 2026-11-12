@@ -4330,6 +4330,14 @@ impl Player {
             facing: self.facing,
         });
     }
+    /// `al::faceToDirectionSupportUp` (0x8e9af0): the pose takes `front` with the
+    /// pose's own up (`al::calcUpDir`), unless the two are parallel (limit 0.01).
+    fn face_to_direction_support_up(&mut self, front: Vec3) {
+        let (up, _) = self.pose_axes();
+        if !pose_math::is_parallel_direction(front, up, pose_math::PARALLEL_LIMIT) {
+            self.set_pose(pose_math::quat_front_up(front, up));
+        }
+    }
     /// `updatePoseUpFront` at the end of a run step: the pose follows the
     /// floor's normal, its front is the way the player means to go.
     fn steer_pose(&mut self, up: Vec3, front: Vec3) {
@@ -4468,7 +4476,7 @@ impl Player {
             RunNerve::Turn => {
                 self.joints.run.stopped();
                 // The turn faces the other way at once and slides on.
-                self.facing = -self.brake_dir;
+                self.face_to_direction_support_up(-self.brake_dir);
                 self.events.push(Fx::TurnDust);
             }
             RunNerve::Pivot => {
@@ -4638,12 +4646,14 @@ impl Player {
             self.steer_pose(up, step.front);
             step
         } else {
-            self.pivot
-                .update(self.ground_stick(), self.facing, flat_velocity)
+            let step = self
+                .pivot
+                .update(self.ground_stick(), self.facing, flat_velocity);
+            // `PlayerActionPivotTurnControl::update` hands its front to
+            // `rs::slerpUpFront` (0x418fc0, 0x4190a0), which stores the pose.
+            self.steer_pose(self.ground_normal_or_up(), step.front);
+            step
         };
-        if self.carry.seed.is_none() && self.carry.stone.is_none() {
-            self.facing = step.front;
-        }
         self.set_h(step.velocity);
         self.v.y = -t::GRAVITY;
         self.pull = t::GRAVITY;

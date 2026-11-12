@@ -436,6 +436,23 @@ mod tests {
         assert!((player.v - along_up).length() < 1e-4, "{:?}", player.v);
     }
 
+    /// The run Turn's first step stores a pose facing the way opposite the brake
+    /// (`faceToDirectionSupportUp` 0x47f84c), so a crouch in that frame reads it.
+    #[test]
+    fn the_run_turn_stores_the_pose_a_brake_entry_reads() {
+        let mut player = Player {
+            grounded: true,
+            ..Player::default()
+        };
+        let brake_dir = Vec3::new(1., 0., 1.).normalize();
+        player.facing = brake_dir;
+        player.brake_dir = brake_dir;
+        player.enter_nerve(RunNerve::Turn);
+        assert!(player.pose_quat().is_some());
+        let (_, front) = player.pose_axes();
+        assert!((front + brake_dir).length() < 1e-5, "{front:?}");
+    }
+
     /// With no ground collided the up is the pose's (`al::calcUpDir`), not a stale
     /// mesh normal and not the world's up.
     #[test]
