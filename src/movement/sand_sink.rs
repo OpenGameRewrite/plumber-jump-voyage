@@ -359,7 +359,7 @@ impl Player {
             }
         } else if !self.is_on_ground_by(self.v) {
             self.go(Move::Fall, "Fall");
-        } else if !self.judge_sand_sink() && !self.try_force_slope_slide() {
+        } else if !self.judge_sand_sink() && !self.try_force_slope_slide(scene) {
             self.set_nerve_on_ground(o, scene); // exeSandSink 0x4257dc.
         }
     }

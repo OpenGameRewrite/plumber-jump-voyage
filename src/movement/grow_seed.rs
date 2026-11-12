@@ -384,11 +384,12 @@ impl Player {
         let Some(mesh) = scene.mesh.as_deref() else {
             return;
         };
-        let held_pose = self.carry.held.then_some(self.carry.hold).flatten();
+        let held = self.is_carry();
+        let held_pose = held.then_some(self.carry.hold).flatten();
         let Some(seed) = &mut self.carry.seed else {
             return;
         };
-        if self.carry.held {
+        if held {
             if let Some(pose) = held_pose {
                 seed.follow_hold(&pose);
             }
@@ -401,18 +402,18 @@ impl Player {
     /// throw helper (0x291934) aims it, and the seed starts its throw.
     pub(super) fn release_flower_seed(&mut self, scene: &Course) {
         let throw = self.aim_flower_seed_throw();
-        self.throw_flower_seed(throw, scene);
+        self.throw_flower_seed(throw, scene.mesh.as_deref());
     }
 
     /// What the seed reads from the player when the message arrives: the pose's front, the player's
     /// velocity (`GrowSeedUtil::throwFromPlayer`) and the player's position for the arrow test.
-    /// A hold cancel reads it where the state sends it and the seed leaves with the frame's
-    /// release (`CarryKeeper::start_cancel_and_release`).
+    /// HoldCancel applies this throw synchronously at the send (0x42e9c4 -> 0x291934).
     pub(super) fn aim_flower_seed_throw(&self) -> SeedThrow {
         let (_, front) = self.pose_axes();
         let flat_front = try_normalize_or_zero(Vec3::new(front.x, 0., front.z)).0;
+        // Non-swing release: 70 degrees at 0x292850, speed 28 at 0x292838.
         let direction = pose_math::turn_vec_to_vec_degree(flat_front, Vec3::Y, 70.);
-        let player_velocity = self.units_per_frame().with_y(0.);
+        let player_velocity = self.units_per_frame().with_y(0.); // 0x29a734..0x29a758.
         // `throwFromPlayer` normalises the turned direction and `setVelocityToDirection`
         // normalises it again before it scales it by the speed.
         let aimed = try_normalize_or_zero(try_normalize_or_zero(direction).0).0;
@@ -423,14 +424,18 @@ impl Player {
         }
     }
 
-    pub(super) fn throw_flower_seed(&mut self, throw: SeedThrow, scene: &Course) {
+    pub(super) fn throw_flower_seed(
+        &mut self,
+        throw: SeedThrow,
+        mesh: Option<&crate::geometry::TriangleMesh>,
+    ) {
         let Some(seed) = &mut self.carry.seed else {
             return;
         };
         seed.quat = pose_math::quat_front_up(throw.front, Vec3::Y);
         seed.thrown = true;
         seed.velocity = throw.velocity;
-        if let Some(mesh) = scene.mesh.as_deref() {
+        if let Some(mesh) = mesh {
             // The helper tests an arrow behind the seed (as long as the distance of its
             // outer point from the world origin) and moves the seed to the player on a hit.
             let direction = try_normalize_or_zero(throw.velocity).0;

@@ -4,7 +4,7 @@
 use super::*;
 
 pub(super) fn run() {
-    a_ground_spin_picks_an_object_up_only_once_the_cap_has_left();
+    an_active_ground_spin_picks_an_object_up_after_the_cap_has_left();
     a_carried_object_ends_the_ground_spin_through_set_nerve_on_ground();
     the_air_spin_and_the_other_refused_states_pick_nothing_up();
 }
@@ -86,12 +86,13 @@ fn spin_until_the_cap_launches(course: &Course) -> Player {
 }
 
 /// `attackSensor` (0x427818) asks `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10) while the
-/// actor nerve is SpinCap: the ground child answers true only once `isCapSpinAttack` (0x465420)
-/// is false, i.e. after the cap's throw started (`startThrow` 0x3fc660 replaces the spin-attack
-/// nerve 0x3fc59c set). The pickup then sends the actor to `setNerveOnGround` at its next
+/// actor nerve is SpinCap: the ground child answers true when `isCapSpinAttack` (0x465420)
+/// is false, before the first executed child step or after the cap's throw started (`startThrow`
+/// 0x3fc660 replaces the spin-attack nerve 0x3fc59c set). This test covers the active wind and
+/// after-launch window. The pickup sends the actor to `setNerveOnGround` at its next
 /// `exeSpinCap` (0x423a1c), which is the same step in the port.
 #[cfg_attr(test, test)]
-fn a_ground_spin_picks_an_object_up_only_once_the_cap_has_left() {
+fn an_active_ground_spin_picks_an_object_up_after_the_cap_has_left() {
     let course = stage();
     let mut p = Player::default();
     p.step(&press(), &course);
@@ -118,9 +119,10 @@ fn a_ground_spin_picks_an_object_up_only_once_the_cap_has_left() {
     assert_eq!(p.carry.upper, Some(("CarryFrontStart", 0.)));
 }
 
-/// 0x423a1c: after the state's end and the history restore, a carried actor goes to
+/// 0x423a1c: after the child's end test, a carried actor goes to
 /// `setNerveOnGround` before the water judge and the chain's cancels. Without a carry the same
-/// step stays in the spin.
+/// step stays in the spin. The binary's history restore precedes this diversion (0x4239d4);
+/// the port restores after run_state and the post-state judges.
 #[cfg_attr(test, test)]
 fn a_carried_object_ends_the_ground_spin_through_set_nerve_on_ground() {
     let course = stage();

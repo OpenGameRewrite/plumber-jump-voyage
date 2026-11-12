@@ -1,6 +1,5 @@
 //! Placement-bound flower objects and the player's independent carry keeper.
 pub use super::grow_seed::Seed;
-use super::grow_seed::SeedThrow;
 use super::push_receiver::{PushReceiver, calc_push_trans};
 use super::*;
 
@@ -80,14 +79,11 @@ pub struct Carry {
 }
 
 /// The keeper's Release nerve, chosen by `startCancelAndRelease` (0x42e9b0). A nerve chosen in a
-/// state runs in the keeper's update later in the same frame (`updateCarry` 0x420ed8, in the
-/// actor's control), and until then the keeper still holds: `isCarry` (0x42ebfc) asks the current
-/// nerve and the held sensor.
+/// state runs in a later keeper update (`updateCarry` 0x420ed8). `getCurrentNerve`
+/// (0x959780) exposes it immediately, so `isCarry` (0x42ebfc) is already false while the
+/// held sensor still awaits cleanup (0x42f2ac).
 #[derive(Clone, Copy, Debug)]
-pub(super) struct PendingCancel {
-    /// The throw the held seed started on `SensorMsgHoldCancel`, aimed where the message arrived.
-    seed_throw: Option<SeedThrow>,
-}
+pub(super) struct PendingCancel;
 
 /// The receive dispatch compares message identities; an unhandled identity falls through.
 /// SensorMsgPush and SensorMsgPushToPlayer are distinct original classes.
@@ -262,7 +258,7 @@ impl Player {
             if self.carry.lock_up == 10 {
                 // PlayerCarryKeeper::updateCollideLockUp answers true on the tenth frame and the
                 // actor cancels and releases the hold (updateCollider 0x4215c4).
-                self.start_cancel_and_release();
+                self.start_cancel_and_release(scene.mesh.as_deref());
             }
         } else {
             self.carry.lock_up = 0;
@@ -271,7 +267,7 @@ impl Player {
     }
 
     pub fn is_carry(&self) -> bool {
-        self.carry.held
+        self.carry.held && self.carry.cancel.is_none()
     }
 
     /// What the actor's state allows `attackSensor` (0x427818) to start a carry in. Both pickup
@@ -281,8 +277,9 @@ impl Player {
     /// (0x1d78940), `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10).
     ///
     /// The port starts a carry from the idle, walk, run, skid, turn, jump and fall modes and from
-    /// the ground spin once the cap has left. The binary lets the other states it does not refuse
-    /// pick an object up too (the other jump kinds, the hip drop family, the slope slide, the
+    /// the ground spin before its first child step or once the cap has left. The binary lets the
+    /// other states it does not refuse pick an object up too (the other jump kinds, the hip drop
+    /// family, the slope slide, the
     /// long jump, the sand states, the fire damage, the rise); their carry handling (animation,
     /// cancels) is not ported, and no recording picks up there.
     fn pickup_state_allows(&self) -> bool {
@@ -295,9 +292,10 @@ impl Player {
     }
 
     /// `PlayerStateSpinCap::isEnableCancelCarry` (0x481f10) for the ground child (`SpinGround`,
-    /// 0x1d7ff80): true once the cap is no longer the spin attack (`PlayerSpinCapAttack::
+    /// 0x1d7ff80): true when the cap is not the spin attack (`PlayerSpinCapAttack::
     /// isCapSpinAttack`, 0x465420), and while the state is not dead (the byte at +0x10, set by
-    /// `kill` on the child's end step). Before the cap leaves it asks `isEnableCancelAir`
+    /// `kill` on the child's end step). The cap starts its wind on the first child step
+    /// (0x4820ac), leaving an earlier pickup window. During the wind it asks `isEnableCancelAir`
     /// (0x481da4), which is false for the ground nerves. (`SpinGroundSeparate` after step 10 is the
     /// second player's throw and never runs in single play.) The air child answers through
     /// `isEnableCancelAir` alone: false for the first 23 steps, and from the fall nerve on, which
@@ -383,6 +381,12 @@ impl Player {
 
     /// Keeper update 0x42e654 / Start 0x42ef20 / Carry 0x42f028.
     pub(super) fn update_carry(&mut self, o: &Orders, advance_sources: bool) {
+        if self.carry.cancel.is_some() {
+            // update decrements +0x48 before executing the pending Release (0x42e664..0x42e684).
+            // The previous Carry/Throw nerve must not execute (getCurrentNerve 0x959780).
+            self.carry.inhibition = self.carry.inhibition.saturating_sub(1);
+            return;
+        }
         if self.carry.held {
             self.pre_throw = 0;
         }
@@ -455,8 +459,8 @@ impl Player {
     /// which the actor's control runs after the state of the frame: Mario's pose and velocity
     /// are those the state left.
     pub(super) fn finish_carry_release(&mut self, scene: &Course) {
-        if let Some(cancel) = self.carry.cancel.take() {
-            self.run_release_nerve(cancel, scene);
+        if self.carry.cancel.take().is_some() {
+            self.run_release_nerve();
         }
         if self.carry.phase == 3 && self.carry.step == 1 && self.tilt >= STICK_DEADZONE {
             // updateCarry 0x420e78..0x420ed0 runs after the state: its facing must
@@ -479,8 +483,9 @@ impl Player {
     }
 
     /// `PlayerCarryKeeper::startCancelAndRelease` (0x42e9b0), asked by the actor's states behind
-    /// `isCarry` (every one of its 32 callers tests it first): it sends `SensorMsgHoldCancel` from
-    /// the carry sensor to the held sensor, zeroes the hand and leg joint angles the keeper hands
+    /// `isCarry` (31 direct sites; updateCollider checks through updateCollideLockUp): it sends
+    /// `SensorMsgHoldCancel` from the carry sensor to the held sensor, zeroes the hand and leg
+    /// joint angles the keeper hands
     /// the joint controls and the vector at +0x50 (presentation, not modelled), and chooses the
     /// Release nerve.
     ///
@@ -495,9 +500,12 @@ impl Player {
     ///   The stone's restart is not modelled, so the keeper keeps holding it and the limit is
     ///   exposed, as for the collision lock-up cancel.
     ///
-    /// The Release nerve itself runs in the keeper's update later in this frame
-    /// ([`Self::run_release_nerve`]); until then `isCarry` still answers true.
-    pub(super) fn start_cancel_and_release(&mut self) {
+    /// HoldCancel is synchronous (0x42e9c4); Release is immediately observable through
+    /// getCurrentNerve (0x959780), before its keeper-update cleanup ([`Self::run_release_nerve`]).
+    pub(super) fn start_cancel_and_release(
+        &mut self,
+        mesh: Option<&crate::geometry::TriangleMesh>,
+    ) {
         if !self.is_carry() || self.carry.cancel.is_some() {
             return;
         }
@@ -505,23 +513,19 @@ impl Player {
             stone.limit = "stone_hold_cancel_unavailable";
             return;
         }
-        let seed_throw = self
-            .carry
-            .seed
-            .is_some()
-            .then(|| self.aim_flower_seed_throw());
-        self.carry.cancel = Some(PendingCancel { seed_throw });
+        if self.carry.seed.is_some() {
+            let throw = self.aim_flower_seed_throw();
+            self.throw_flower_seed(throw, mesh);
+        }
+        self.carry.cancel = Some(PendingCancel);
     }
 
     /// `PlayerCarryKeeper::exeRelease` (0x42f28c) after `updateNerve` switched to the Release
-    /// nerve: the held sensor is forgotten (`isCarry` turns false), unless the model is the 2D one
+    /// nerve: the held sensor is forgotten (0x42f2ac); unless the model is the 2D one
     /// the upper body animation is cleared (`clearUpperBodyAnim`, as the throw's start does),
     /// the pickup is inhibited for ten frames (+0x48, counted down by every update) and the
     /// carry-above and wall-keep flags are cleared; then the keeper waits.
-    fn run_release_nerve(&mut self, cancel: PendingCancel, scene: &Course) {
-        if let Some(throw) = cancel.seed_throw {
-            self.throw_flower_seed(throw, scene);
-        }
+    fn run_release_nerve(&mut self) {
         self.carry.held = false;
         self.carry.release_due = false;
         self.carry.phase = 0;

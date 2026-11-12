@@ -208,7 +208,7 @@ impl Player {
         pipe.target = target;
         // executePreMovementNerveChange 0x41fe6c..0x41fe7c: the bind start cancels the cap state,
         // then a carried object is cancelled and released (while the velocity is still Mario's).
-        self.start_cancel_and_release();
+        self.start_cancel_and_release(Some(mesh));
         let pipe = &mut self.pipes[source];
         pipe.bound = true;
         pipe.in_done = false;

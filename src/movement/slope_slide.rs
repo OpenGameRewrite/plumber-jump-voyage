@@ -76,11 +76,11 @@ impl Player {
     /// drop, head sliding, rise, damage, sand sink, hack end, bind and spin-cap states, and
     /// `setNerveOnGround`) cancels and releases a carried object before it chooses the slide, and
     /// before the slide's `appear` takes the velocity (0x42e9b0 behind `isCarry`).
-    pub(super) fn try_force_slope_slide(&mut self) -> bool {
+    pub(super) fn try_force_slope_slide(&mut self, scene: &Course) -> bool {
         if self.nerve.deferred || !self.on_ground_force_slide_code(self.units_per_frame()) {
             return false;
         }
-        self.start_cancel_and_release();
+        self.start_cancel_and_release(scene.mesh.as_deref());
         self.start_slope_slide();
         true
     }

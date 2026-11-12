@@ -45,7 +45,7 @@ impl Player {
         // +0x3f8 ForceSlopeSlide precedes +0x400 ForceRolling (0x4218b8..0x421918).
         if self.on_ground_force_slide_code(self.v) {
             // 0x4218c0..0x4218e8: a carried object is cancelled and released first.
-            self.start_cancel_and_release();
+            self.start_cancel_and_release(scene.mesh.as_deref());
             self.start_slope_slide();
             return GroundNerve::Changed;
         }
@@ -70,7 +70,7 @@ impl Player {
         // PreInputJump (0x4219b0..0x4219d8). A low ceiling consumes no jump.
         if !self.judge_enable_stand_up() {
             // 0x4219e0: the squat cancels and releases a carried object (0x4219ec).
-            self.start_cancel_and_release();
+            self.start_cancel_and_release(scene.mesh.as_deref());
             self.cut_velocity_ground_normal();
             return GroundNerve::Squat;
         }

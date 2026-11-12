@@ -385,7 +385,7 @@ mod tests {
         let mut p = Player::default();
         p.carry.stone = Some(Stone::new(&source()));
         p.carry.held = true;
-        p.start_cancel_and_release();
+        p.start_cancel_and_release(None);
         assert!(p.carry.cancel.is_none());
         assert!(p.is_carry());
         assert_eq!(p.fidelity_limits(), "stone_hold_cancel_unavailable");

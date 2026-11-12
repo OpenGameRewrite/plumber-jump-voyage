@@ -4,6 +4,7 @@ use super::*;
 
 pub(super) fn run() {
     the_stand_up_squat_cancels_the_hold_and_the_keeper_releases_in_the_same_frame();
+    pending_release_skips_the_previous_carry_or_throw_update();
     a_forced_slope_slide_cancels_a_carry_before_the_slide_starts();
 }
 
@@ -32,7 +33,8 @@ fn seed_beside(p: &Player, course: &Course) -> carry::Seed {
 /// judge fail, calls `startCancelAndRelease` (0x4219ec) and chooses the squat. The keeper's
 /// Release nerve then runs in the same frame's update: the seed leaves with the throw of a
 /// release (speeds 28 and 70, 0x292828), the hold is over, the pickup is inhibited for ten frames
-/// and the upper-body carry animation is cleared. Until that update `isCarry` still holds.
+/// and the upper-body carry animation is cleared. The pending Release already makes `isCarry`
+/// false (getCurrentNerve 0x959780), and the seed responds at the send (0x42e9c4).
 #[cfg_attr(test, test)]
 fn the_stand_up_squat_cancels_the_hold_and_the_keeper_releases_in_the_same_frame() {
     let open = Course {
@@ -52,10 +54,24 @@ fn the_stand_up_squat_cancels_the_hold_and_the_keeper_releases_in_the_same_frame
     // The ceiling check the stand-up judge reads (`PlayerJudgeEnableStandUp`, 0x459514).
     p.ceiling.enable_stand_up = false;
     assert!(!p.judge_enable_stand_up(), "the ceiling forbids standing");
+    let expected = cancel_velocity(&p);
     p.set_nerve_on_ground(&Orders::default(), &open);
     assert_eq!(p.mode, Move::SquatBrake);
-    assert!(p.is_carry(), "the Release nerve has not run yet");
+    assert!(!p.is_carry(), "the pending Release is already observable");
+    assert!(p.carry.held, "the held sensor awaits exeRelease");
     assert!(p.carry.cancel.is_some());
+    assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+    assert!(
+        p.carry
+            .seed
+            .as_ref()
+            .unwrap()
+            .throw_diagnostic()
+            .contains("seed_nerve=Throw/0")
+    );
+    assert_eq!(p.carry.upper, Some(("CarryFront", 0.)));
+    assert_eq!(p.carry.inhibition, 0);
+    assert!(!p.upper_cleared);
     p.finish_carry_release(&open);
     assert!(!p.is_carry());
     assert!(p.carry.cancel.is_none());
@@ -63,12 +79,55 @@ fn the_stand_up_squat_cancels_the_hold_and_the_keeper_releases_in_the_same_frame
     assert_eq!(p.carry.inhibition, 10);
     assert!(p.carry.upper.is_none());
     assert!(p.upper_cleared);
-    let seed = p.carry.seed.as_ref().unwrap();
-    assert!(
-        seed.velocity.length() > 20.,
-        "the seed flew off the hand: {:?}",
-        seed.velocity
-    );
+    assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+}
+
+/// Non-swing release: angle 70 (0x292850), speed 28 (0x292838), double normalization
+/// (0x29a71c, setVelocityToDirection at 0x29a730), then horizontal inheritance (0x29a734..0x29a758).
+fn cancel_velocity(p: &Player) -> Vec3 {
+    let front = pose_math::try_normalize_or_zero(p.pose_axes().1.with_y(0.)).0;
+    let direction = pose_math::turn_vec_to_vec_degree(front, Vec3::Y, 70.);
+    let aimed = pose_math::try_normalize_or_zero(pose_math::try_normalize_or_zero(direction).0).0;
+    aimed * 28. + p.units_per_frame().with_y(0.)
+}
+
+#[cfg_attr(test, test)]
+fn pending_release_skips_the_previous_carry_or_throw_update() {
+    let course = Course::default();
+    for phase in [1, 2, 3] {
+        let mut p = Player::default();
+        p.carry.seed = Some(seed_beside(&p, &course));
+        p.carry.held = true;
+        p.carry.phase = phase;
+        p.carry.upper = Some(("CarryFront", 7.));
+        p.carry.release_due = phase == 3;
+        p.carry.inhibition = 4;
+        p.v = Vec3::new(3., 0., 2.);
+        let expected = cancel_velocity(&p);
+        p.start_cancel_and_release(None);
+        assert!(!p.is_carry());
+        assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+        p.v = Vec3::X * 12.;
+        p.start_cancel_and_release(None);
+        p.update_carry(
+            &Orders {
+                throw_pressed: true,
+                ..default()
+            },
+            true,
+        );
+        assert_eq!((p.carry.phase, p.carry.step), (phase, 0));
+        assert_eq!(p.carry.upper, Some(("CarryFront", 7.)));
+        assert!(!p.sub.active, "the old Throw first step must not execute");
+        assert_eq!(p.carry.inhibition, 3);
+        p.finish_carry_release(&course);
+        assert!(!p.carry.held);
+        assert!(!p.carry.release_due);
+        assert_eq!(p.carry.inhibition, 10);
+        assert_eq!(p.carry.seed.as_ref().unwrap().velocity, expected);
+        p.start_cancel_and_release(None);
+        assert!(p.carry.cancel.is_none(), "no hold means no second cancel");
+    }
 }
 
 /// The forced slope slide (+0x3f8) cancels and releases the carried object in every actor nerve

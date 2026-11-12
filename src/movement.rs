@@ -3681,8 +3681,8 @@ impl Player {
                     self.respond_surface_run(scene);
                 }
             }
-            Move::Skid | Move::Turn => self.brake(o),
-            Move::SquatBrake | Move::Crouch | Move::Crawl => self.squat(o),
+            Move::Skid | Move::Turn => self.brake(o, scene),
+            Move::SquatBrake | Move::Crouch | Move::Crawl => self.squat(o, scene),
             Move::GroundSpin => self.ground_spin(o),
             Move::Throw => self.throw_state(o, scene),
             Move::GroundPound => self.hip_drop(o),
@@ -3997,7 +3997,7 @@ impl Player {
                 }
                 self.set_nerve_on_ground(o, scene); // exeSquat 0x422ae4.
             } else {
-                self.stand(o);
+                self.stand(o, scene);
             }
         } else if self.mode == Move::Idle {
             // Every nerve of the standing state settles the pose first; the
@@ -4008,13 +4008,13 @@ impl Player {
                 self.wait_pose();
                 self.land_snap = self.flat_land_snap(scene);
             }
-            self.stand(o);
+            self.stand(o, scene);
         } else if self.model_2d() {
             self.run_2d_step(o);
         } else if self.run_nerve == RunNerve::WallPush {
             self.wall_push_step(o);
         } else {
-            self.run_step(o);
+            self.run_step(o, scene);
         }
     }
     /// `PlayerStateWait::isEnableCancelAction` in the `LandStiffen` nerve: the hard landing
@@ -4029,7 +4029,7 @@ impl Player {
     }
     /// Standing: the stick starts the run (the start-run judge), which is a
     /// new nerve, chosen now and moving from its first step.
-    fn stand(&mut self, o: &Orders) {
+    fn stand(&mut self, o: &Orders, scene: &Course) {
         if self.model_2d() && self.grounded {
             // exeWait -> waitGround 0x5656ec..0x565700 rebounds with three
             // zero coefficients. A grounded 2D Wait has no Land child to stop it.
@@ -4042,7 +4042,7 @@ impl Player {
             self.set_h(Vec3::ZERO);
         }
         // (The forced slope slide comes before the state's own start-run judge.)
-        if self.try_force_slope_slide() || self.try_force_rolling() {
+        if self.try_force_slope_slide(scene) || self.try_force_rolling() {
             return;
         }
         if self.force_run.is_active() || self.tilt >= STICK_DEADZONE || self.auto_run_skate() {
@@ -4340,7 +4340,7 @@ impl Player {
     /// One step of the run nerve (`PlayerStateRunHakoniwa::exeRun`): the
     /// ground move control steers, the run cycle animates, then the nerve
     /// decides whether to brake, pivot or end.
-    fn run_step(&mut self, o: &Orders) {
+    fn run_step(&mut self, o: &Orders, scene: &Course) {
         let step = self.run_steps;
         // The floor under the player and everything the control works on in
         // its plane: the velocity (`updateNormalAndSnap`), the facing and the
@@ -4444,7 +4444,7 @@ impl Player {
         // actor's (jump, crouch, throw), which look at the state's result.
         if !ended {
             self.try_start_ground_spin();
-            if !self.try_force_slope_slide() && !self.try_force_rolling() {
+            if !self.try_force_slope_slide(scene) && !self.try_force_rolling() {
                 self.ground_actions(o);
             }
         }
@@ -4512,7 +4512,7 @@ impl Player {
     }
     /// The brake, the turn after it and the pivot on the spot: the rest of
     /// the run state's nerves.
-    fn brake(&mut self, o: &Orders) {
+    fn brake(&mut self, o: &Orders, scene: &Course) {
         let step = self.run_steps;
         self.run_steps += 1;
         match self.run_nerve {
@@ -4526,7 +4526,7 @@ impl Player {
         }
         // The actor's judges look at the state's result: the brake of this
         // frame has already slowed the player when a turning jump is chosen.
-        if self.try_force_slope_slide() || self.try_force_rolling() {
+        if self.try_force_slope_slide(scene) || self.try_force_rolling() {
             return;
         }
         if self.pre_input_jump_judges() && self.quick_turn > 0 {
@@ -5910,10 +5910,11 @@ impl Player {
             self.set_nerve_on_ground(o, scene); // exeSpinCap 0x423b18.
             return;
         }
-        // 0x423a1c: a carried object (picked up since the cap left, `carry_sensor_phase`) ends the
+        // 0x423a1c: a carried object (picked up before the first child step or after launch) ends the
         // spin at once through `setNerveOnGround` (0x423a24 -> 0x423b08), ahead of the water
-        // judge and of every cancel of the chain below. The state's end was asked before it, and
-        // the history restore (0x4239d4) before both.
+        // judge and of every cancel of the chain below. The child's end has priority. The binary
+        // restores history before this diversion (0x4239d4); the port schedules that restore
+        // after run_state and the post-state judges, in restore_after_spin_cap.
         if self.is_carry() {
             // The state ends: `PlayerStateSpinCap::kill` (0x481b08) takes a cap that has not left
             // back (`HackCap::cancelCapState`, then put on). Only the step between choosing the
@@ -5943,7 +5944,7 @@ impl Player {
         // (`spin_cap_enable_cancel_carry`).
         if !self.judge_enable_stand_up() {
             // 0x423cdc..0x423cfc: release a carried object, then the Squat nerve.
-            self.start_cancel_and_release();
+            self.start_cancel_and_release(scene.mesh.as_deref());
             self.start_squat();
         } else if self.pre_jump > 0 && self.is_on_ground_run_angle() {
             self.ground_jump(o);
@@ -6440,7 +6441,7 @@ impl Player {
         }
         // A floor with the `Slide` code takes the actor to the slope slide before any landing
         // state (`setNerveOnGround`, `tryChangeNerveFromAir`).
-        if self.try_force_slope_slide() {
+        if self.try_force_slope_slide(scene) {
             return;
         }
         // The original collider retains the incoming velocity. Restore the

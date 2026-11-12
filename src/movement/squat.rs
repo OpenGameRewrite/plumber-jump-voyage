@@ -136,13 +136,13 @@ impl Player {
     }
 
     /// One step of the squat nerve, then the actor's decisions (`exeSquat`).
-    pub(super) fn squat(&mut self, o: &Orders) {
+    pub(super) fn squat(&mut self, o: &Orders, scene: &Course) {
         match self.mode {
             Move::SquatBrake => self.squat_brake(o),
             Move::Crouch => self.squat_wait(o),
             _ => self.squat_walk(o),
         }
-        if !self.nerve.deferred && (self.try_force_slope_slide() || self.try_force_rolling()) {
+        if !self.nerve.deferred && (self.try_force_slope_slide(scene) || self.try_force_rolling()) {
             return;
         }
         self.ground_inertia.request = 1;
