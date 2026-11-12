@@ -118,39 +118,22 @@ impl Player {
         {
             return;
         }
-        // exeBrake tests isFirstStep at 0x483710 and adjusts the incoming
-        // velocity at 0x483760..0x48391c before moveInertiaSlide (0x483ab8).
-        // A nested lockstep re-choice injects this pending Brake row before
-        // choosing LongJump, whose first step reads that velocity (0x474c48).
+        // exeBrake tests isFirstStep at 0x483710, so the pending first step is
+        // queued again. A nested lockstep re-choice injects this Brake row
+        // before choosing LongJump, whose first step reads the adjusted
+        // velocity (0x474c48). The observed clip only selects the queued
+        // nerve; `skip_start_clip` is set by `appear` alone and stays as is.
         let clip = snapshot.next_clip.unwrap_or(if self.squat.skip_start_clip {
             "SquatWait"
         } else {
             "SquatStart"
         });
-        self.squat.skip_start_clip = clip == "SquatWait";
         self.nerve.queue(clip, |p| p.brake_first_step());
     }
-    /// The first step of `exeBrake` before the slide: keep the momentum along
-    /// the facing, grown by `SquatAccelRate` and dropped when it is too small
-    /// to slide.
+    /// The first step of `exeBrake` (0x483710) before the slide.
     fn brake_first_step(&mut self) {
-        let vertical = Vec3::Y * self.v.y;
-        let mut plane = self.v.with_y(0.);
-        let front = self.facing.with_y(0.).normalize_or_zero();
-        let mut along = front.dot(plane);
-        if along < 0. && !self.on_ground_skate() {
-            plane -= front * along;
-            along = 0.;
-        }
-        let speed = plane.length();
-        if speed <= t::NORMAL_MAX && along > 0. {
-            let mut slid = t::SQUAT_ACCEL_RATE * speed;
-            if slid <= t::SQUAT_BRAKE_END {
-                slid = 0.;
-            }
-            plane *= slid / speed;
-        }
-        self.v = plane + vertical;
+        let up = self.mesh_ground.unwrap_or(Vec3::Y);
+        self.v = brake_entry_velocity(self.v, self.facing, up, self.on_ground_skate());
     }
 
     /// One step of the squat nerve, then the actor's decisions (`exeSquat`).
@@ -295,5 +278,68 @@ impl Player {
                 self.backflip();
             }
         }
+    }
+}
+
+/// `exeBrake`'s first-step velocity adjustment (0x483760..0x48391c). `up` is
+/// `rs::calcGroundNormalOrUpDir` (0x4836fc) and `front` stands for
+/// `al::calcFrontDir` (0x48379c). The velocity is separated into the part
+/// along `up` and the rest (0x483788); the front is verticalized against
+/// `up` (0x4837a0..0x4837ac) and normalized (0x4837b4). Moving backwards off
+/// a skate floor drops the backward part (0x4837dc..0x483808). A rest that is
+/// no faster than `NormalMaxSpeed` (0x483854) and moves forward (0x48384c) is
+/// scaled by `SquatAccelRate` (0x483860), or stopped when that is not above
+/// `SquatBrakeEnd` (0x4838c0..0x4838c8). The part along `up` is added back
+/// unscaled (0x4838f0..0x48391c).
+fn brake_entry_velocity(velocity: Vec3, front: Vec3, up: Vec3, on_skate: bool) -> Vec3 {
+    let (along_up, mut plane) = vector_lib::separate_parallel_vertical(up, velocity);
+    let front = vector_lib::verticalize_vec(up, front).normalize_or_zero();
+    let mut along = front.dot(plane);
+    if along < 0. && !on_skate {
+        plane -= front * along;
+        along = 0.;
+    }
+    let speed = plane.length();
+    if speed <= t::NORMAL_MAX && along > 0. && speed > 0. {
+        let mut slid = t::SQUAT_ACCEL_RATE * speed;
+        if slid <= t::SQUAT_BRAKE_END {
+            slid = 0.;
+        }
+        plane *= slid / speed;
+    }
+    plane + along_up
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On a floor tilted about Z the split is by its normal: the part along the
+    /// normal is kept, the rest is scaled by `SquatAccelRate` (0x483860).
+    #[test]
+    fn brake_entry_splits_by_the_ground_normal() {
+        let up = Vec3::new(0.6, 0.8, 0.);
+        let front = Vec3::new(0.8, -0.6, 0.);
+        let rest = front * 5.;
+        let along_up = up * 2.;
+        let out = brake_entry_velocity(rest + along_up, front, up, false);
+        let expected = rest * t::SQUAT_ACCEL_RATE + along_up;
+        assert!((out - expected).length() < 1e-5, "{out:?} vs {expected:?}");
+        // A world-Y split would have scaled part of the normal component.
+        let world =
+            Vec3::Y * (rest + along_up).y + (rest + along_up).with_y(0.) * t::SQUAT_ACCEL_RATE;
+        assert!((out - world).length() > 0.1);
+    }
+
+    /// A flat facing on a slope is verticalized against the normal (0x4837a0):
+    /// backward motion is cut along the slope front, leaving the normal part.
+    #[test]
+    fn brake_entry_cuts_backward_motion_along_the_slope_front() {
+        let up = Vec3::new(0.6, 0.8, 0.);
+        let flat_facing = Vec3::X;
+        let slope_front = vector_lib::verticalize_vec(up, flat_facing).normalize();
+        let along_up = up * 1.5;
+        let out = brake_entry_velocity(-slope_front * 3. + along_up, flat_facing, up, false);
+        assert!((out - along_up).length() < 1e-5, "{out:?}");
     }
 }
