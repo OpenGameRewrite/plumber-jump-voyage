@@ -13,6 +13,7 @@ pub(super) fn run() {
     a_new_low_ceiling_preempts_an_old_throw_first_step();
     a_new_low_ceiling_preempts_an_old_throw_release_step();
     an_ordinary_throw_reads_the_post_state_pose_and_velocity();
+    carry_throw_waits_until_the_frame_after_throw_step_25();
     a_fresh_jump_slide_landing_releases_after_one_final_air_update();
     a_fresh_fall_slide_landing_releases_after_one_final_air_update();
     a_fresh_jump_mesh_slide_landing_uses_air_velocity_without_ground_pull();
@@ -327,8 +328,9 @@ fn an_ordinary_throw_reads_the_post_state_pose_and_velocity() {
                 .any(|event| matches!(event, Fx::FootLift { .. } | Fx::Step { .. }))
         );
     }
-    assert_eq!((p.carry.phase, p.carry.step), (0, 0));
+    assert_eq!((p.carry.phase, p.carry.step), (3, 25));
     p.step(&continuing, &course);
+    assert_eq!((p.carry.phase, p.carry.step), (0, 0));
     assert!(p.model_sub().is_none());
     assert_eq!(p.ended_model_sub(), Some(("CarryFrontThrow", 24.)));
     assert!(p.look.keeper_cell().starts_with("mode=1;"));
@@ -340,6 +342,49 @@ fn an_ordinary_throw_reads_the_post_state_pose_and_velocity() {
     p.step(&continuing, &course);
     assert!(p.model_sub().is_none());
     assert!(p.ended_model_sub().is_none());
+}
+
+/// exeThrow's sub identity/end query (0x42f248..0x42f258) precedes control's
+/// endSubAnim (0x420954..0x420970). All represented carry throw directions use it.
+#[cfg_attr(test, test)]
+fn carry_throw_waits_until_the_frame_after_throw_step_25() {
+    let course = Course {
+        solids: vec![slab(-0.5, "Ground", 0.)],
+        ..default()
+    };
+    for direction in [Vec2::ZERO, Vec2::Y, Vec2::X, Vec2::NEG_Y, Vec2::NEG_X] {
+        let mut p = Player::default();
+        for _ in 0..3 {
+            p.step(&Orders::default(), &course);
+        }
+        p.carry.seed = Some(seed_beside(&p, &course));
+        p.carry.held = true;
+        p.carry.phase = 2;
+        p.step(
+            &Orders {
+                direction,
+                throw_pressed: true,
+                ..default()
+            },
+            &course,
+        );
+        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", 0.)));
+        assert_eq!((p.carry.phase, p.carry.step), (3, 1));
+        let continuing = Orders {
+            direction,
+            ..default()
+        };
+        for step in 2..=25 {
+            p.step(&continuing, &course);
+            assert_eq!((p.carry.phase, p.carry.step), (3, step));
+        }
+        assert!(!p.is_carry());
+        assert_eq!(p.model_sub(), Some(("CarryFrontThrow", 24.)));
+        p.step(&continuing, &course);
+        assert_eq!((p.carry.phase, p.carry.step), (0, 0));
+        assert!(p.model_sub().is_none());
+        assert_eq!(p.ended_model_sub(), Some(("CarryFrontThrow", 24.)));
+    }
 }
 
 /// exeJump updates its child at 0x4240a4 before cancel 0x4241c4; exeFall at 0x425240

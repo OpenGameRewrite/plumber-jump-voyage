@@ -424,7 +424,11 @@ impl Player {
                 // frame ran: `finish_carry_release` does it there.
                 self.carry.release_due = true;
             }
-            if !self.carry.held && (!self.sub.active || self.sub.frame >= self.sub.length) {
+            // exeThrow's end query (0x42f248..0x42f258) and control's endSubAnim
+            // (0x420954..0x420970) read the same model end. advance_clips already
+            // retires the sub using its pre-advance frame; its newly advanced frame
+            // is for presentation and must not end this keeper one update early.
+            if !self.carry.held && !self.sub.active {
                 self.carry.phase = 0;
                 self.carry.step = 0;
                 self.carry.wall_keep = false;
