@@ -2715,7 +2715,9 @@ impl Player {
             // A puppet-started action's first sample is updateSync's counter
             // (0x42d170), one rate ahead of its model pose. Injection must restore
             // the pose counter, otherwise the following update advances it twice.
-            let frame = if (self.model_switch_row || self.counter_restarted) && self.anim.name == name {
+            let frame = if (self.model_switch_row || self.counter_restarted)
+                && self.anim.name == name
+            {
                 // copyAnimLocal starts the counter again while carrying the
                 // prior model's action pose (0x42c1cc..0x42c250). UnRoll
                 // likewise copies Rolling's frame to RollingEnd while its
@@ -2909,10 +2911,11 @@ impl Player {
         // does not expose that byte: refuse the pop until an actual catch establishes it.
         self.cap_catched =
             s.catching.is_some() && !s.throw.is_some_and(|hint| hint.winding || hint.launch);
-        if !continued_catch {
+        if !continued_catch && self.upper_catch.is_none() {
             self.catch_clip = self.clip_of_catch();
         }
-        self.upper_catch = None;
+        // The partial catch started by movement (0x41deac) survives a main
+        // or model-sub change until clearUpperBodyAnim (0x42b00c) or its end.
         self.sub = SubClip::default();
         if let Some((name, frame, length)) = s.sub {
             self.sub = SubClip {
@@ -3379,6 +3382,8 @@ impl Player {
         // actor update (0x4541f8..0x454268). The completed row already moved
         // them, so the repeated choice must not add a second step.
         let ground_pose = self.joints.ground.clone();
+        // The partial model animation advances once per actor frame as well.
+        let upper_catch = (self.upper_catch, self.catch_clip);
         // PlayerSeCtrl::update (0x463064) counts its frames moved once per update.
         let sounds = self.sounds.clone();
         // PlayerStainControl::update runs once per update as well (smoke starts by its timer).
@@ -3386,6 +3391,7 @@ impl Player {
         self.step_with_sources(o, scene, false);
         self.damage = damage;
         self.joints.ground = ground_pose;
+        (self.upper_catch, self.catch_clip) = upper_catch;
         self.sounds = sounds;
         self.soot = soot;
     }

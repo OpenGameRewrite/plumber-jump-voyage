@@ -1,6 +1,30 @@
 use super::*;
 
 #[cfg_attr(test, test)]
+fn lockstep_keeps_the_upper_body_catch() {
+    // Catch starts a partial independently of the model sub animation
+    // (0x41de94..0x41deac); only its explicit clear blends it out (0x42b00c).
+    for catching in [Some(3), None] {
+        let mut player = Player {
+            mode: Move::Jump,
+            catching,
+            catch_clip: "CatchCapJumpParts",
+            upper_catch: Some(4),
+            ..Default::default()
+        };
+        player.inject(&Snapshot {
+            mode: Some(Move::Jump),
+            catching,
+            anim: Some(("JumpReverse", 16.)),
+            ..Default::default()
+        });
+        assert_eq!(player.partial_anim(), Some(("CatchCapJumpParts", 4.)));
+        player.repeat_step_for_lockstep(&Orders::default(), &floor());
+        assert_eq!(player.partial_anim(), Some(("CatchCapJumpParts", 4.)));
+    }
+}
+
+#[cfg_attr(test, test)]
 fn lockstep_pivot_completion_chooses_the_run_mode() {
     // exePivot chooses Run, not Brake, after the pivot finishes with input
     // (0x47ef98..0x47efb4). Both children print the same Run/Run3D label.
@@ -65,7 +89,11 @@ fn lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice() {
     player.anim.rate = 5.4;
     player.advance_clips();
     player.update_loop_start();
-    assert!((player.anim.frame - 10.2).abs() < 1e-3, "{}", player.anim.frame);
+    assert!(
+        (player.anim.frame - 10.2).abs() < 1e-3,
+        "{}",
+        player.anim.frame
+    );
     assert!(!player.clip_wrapped, "the loop wrapped in the row before");
 }
 
@@ -181,6 +209,7 @@ pub(super) fn run() {
     lockstep_fire_run_row_past_the_clip_length_does_not_wrap_twice();
     lockstep_pivot_completion_chooses_the_run_mode();
     lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame();
+    lockstep_keeps_the_upper_body_catch();
     wait_snapshot_separates_slope_pull_from_travel();
     crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();
