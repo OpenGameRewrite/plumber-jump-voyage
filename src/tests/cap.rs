@@ -5,6 +5,7 @@ pub(super) fn run() {
     lockstep_rewinds_the_cap_clip_with_its_nerve();
     lockstep_spiral_entry_retains_its_launch_front();
     lockstep_keeps_the_cap_water_and_throw_parameters();
+    lockstep_return_keeps_the_completed_pose_and_action();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
@@ -25,6 +26,53 @@ pub(super) fn run() {
     a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
     the_cap_thrown_from_a_slope_flies_along_the_slope();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_return_keeps_the_completed_pose_and_action() {
+    // exeReturn tries the existing flight clip (0x406fc8) and steers from
+    // the retained model pose (0x4071f8..0x40735c), with its own speed scalar.
+    let launch = Launch {
+        front: Vec3::NEG_Z,
+        kind: Throw::Spin,
+        left: false,
+        air: false,
+        continuous: false,
+        spiral_side: -1.,
+        up: Vec3::Y,
+    };
+    let mut before = Cap::start(launch, Vec3::ZERO, 1);
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: None,
+        water: None,
+        targets: &[],
+    };
+    for _ in 0..cap_spiral::FRAMES {
+        before.update(&world);
+    }
+    assert_eq!(before.nerve, CapNerve::Return);
+    assert_eq!(before.step, 0);
+    for _ in 0..4 {
+        let mut restored = Cap::start(launch, Vec3::ZERO, 1);
+        restored.resume(&Moment {
+            nerve: before.nerve,
+            step: before.step,
+            spot: before.spot,
+            velocity: before.velocity,
+            speed: before.speed,
+            // Position deltas also contain the incoming spiral's lateral velocity.
+            return_speed: before.velocity.length(),
+            anchor: before.spot,
+            after_lock_on: false,
+        });
+        restored.continue_clip(&before);
+        let expected_events = before.update(&world);
+        assert_eq!(restored.update(&world), expected_events);
+        assert_eq!(restored.spot, before.spot);
+        assert_eq!(restored.clip_frame(), before.clip_frame());
+    }
 }
 
 #[cfg_attr(test, test)]

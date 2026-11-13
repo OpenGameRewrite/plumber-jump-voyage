@@ -748,6 +748,18 @@ impl Cap {
         if matches!(self.nerve, CapNerve::Throw | CapNerve::ThrowBrake) {
             self.action = self.flight_clip();
         }
+        if self.nerve == CapNerve::Return && before.nerve == self.nerve && before.step == self.step
+        {
+            // exeReturn keeps its prior flight action (0x406fc8), steers
+            // from its model pose (0x4071f8..0x40735c), and retains +0x288's
+            // speed scalar (0x407368..0x4073b8), apart from lateral momentum.
+            // A matching completed row can retain these independently updated
+            // values; an older row still uses resume's reconstruction.
+            self.pose = before.pose;
+            self.return_speed = before.return_speed;
+            self.action = before.action;
+            self.action_frame = before.action_frame;
+        }
         // exeThrowStay's +0x2a9 is a per-throw latch (0x405d4c..0x405d6c),
         // not a new edge each time the actor is restored from a snapshot.
         self.stay_reaction_done = before.stay_reaction_done;
