@@ -245,6 +245,7 @@ pub(super) fn run() {
     dive_roll_landing();
     forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump();
     the_touchdown_step_turns_the_facing_through_the_turn_controller();
+    every_swim_throw_names_the_plain_swim_clip();
     roll_timing_and_boost();
     roll_winds_down();
     roll_boost_needs_the_force_to_fill();
@@ -2222,4 +2223,17 @@ fn the_touchdown_step_turns_the_facing_through_the_turn_controller() {
     );
     p.land(&Orders::default(), &Course::default());
     assert_eq!(p.facing, expected);
+}
+
+/// `startCapSpinAttackSwim` (0x464f78) hands the name builder (0x464c88) a throw count of 1 and a
+/// cleared continuous flag whatever the actor's throw count is, so the second and third throws
+/// of a row play `SwimSpinCapStart` too, not the builder's `SpinCapStart<n>Right` forms.
+#[cfg_attr(test, test)]
+fn every_swim_throw_names_the_plain_swim_clip() {
+    let mut p = Player::default();
+    for (count, continuous) in [(1, false), (2, false), (3, false), (2, true), (3, true)] {
+        p.throwing.count = count;
+        p.throwing.continuous = continuous;
+        assert_eq!(p.swim_throw_clip(), "SwimSpinCapStart", "{count} {continuous}");
+    }
 }

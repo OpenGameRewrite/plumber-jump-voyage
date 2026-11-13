@@ -88,15 +88,15 @@ impl Player {
         });
     }
 
-    /// The clip `startCapSpinAttackSwim` names (`sub_464c88` builds the name from the throw
-    /// count: the plain name for the first throw, the count and the hand after it; GUESS for
-    /// the later throws of a row, which no recording reaches).
-    fn swim_throw_clip(&self) -> &'static str {
-        match (self.throwing.count, self.throwing.continuous) {
-            (1, false) => SPIN_CAP_CLIP,
-            (2, false) => "SwimSpinCapStart2Right",
-            _ => "SwimSpinCapStart3Right",
-        }
+    /// The clip `startCapSpinAttackSwim` (0x464f78) names. It calls the name builder (0x464c88)
+    /// with the base "SwimSpinCapStart", the throw count fixed at 1 (`mov w7, #1` at 0x464fcc)
+    /// and the continuous flag cleared (`strb wzr, [x19, #0x31]` at 0x464f98), so the later
+    /// throws of a row name the same clip as the first: the builder's count branch (the
+    /// hardcoded "SpinCapStart" with the count, 0x464dc8) is not reached. Only the flick throw
+    /// types (rolling, spiral, left or right, motion controls) add a suffix; the button play
+    /// this port reads has none of them.
+    pub(super) fn swim_throw_clip(&self) -> &'static str {
+        SPIN_CAP_CLIP
     }
 
     // ---- The nerves ------------------------------------------------------------------------
