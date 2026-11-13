@@ -2149,8 +2149,8 @@ fn original_simulation_trace() {
     // refusal at 0x48d62c, the rolling_throw source and real-stage lock-on.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0x3d1c5d4cb9e5c801,
-        "simulation differs from the squat brake pose revision (run Turn and Pivot store the pose)"
+        hash, 0x79669bce67ff69dd,
+        "simulation differs from the air turn controller revision (air consumers turn through PlayerActionTurnControl)"
     );
     #[cfg(not(target_os = "windows"))]
     assert_ne!(hash, 0);
