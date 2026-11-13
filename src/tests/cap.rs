@@ -11,6 +11,7 @@ pub(super) fn run() {
     the_return_after_a_trample_leaves_along_the_cap_pose();
     the_return_writes_the_pose_from_its_first_execution();
     a_cap_flying_a_fixed_front_alternates_its_pose_by_an_ulp();
+    the_rolling_return_keeps_its_wheel_axis_across_the_new_front();
     the_catch_is_the_sensor_contact();
     the_spiral_circles_the_player();
     the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
@@ -931,6 +932,32 @@ fn a_cap_flying_a_fixed_front_alternates_its_pose_by_an_ulp() {
     }
     // The odd steps are the target again.
     assert_eq!(poses[1], target);
+}
+
+/// `exeReturn`'s pose work for a cap thrown down (0x4072b4..0x40731c): the up axis is the new
+/// front crossed with the pose's own side (`al::calcSideDir`), so the model keeps rolling like a
+/// wheel; a side along the front has no cross product and the pose's own up stays. The other
+/// throws stand on the world's up (0x407284).
+#[cfg_attr(test, test)]
+fn the_rolling_return_keeps_its_wheel_axis_across_the_new_front() {
+    use crate::movement::cap_pose::CapPose;
+    let rolling = CapPose::rolling(Vec3::Z, Vec3::new(0.6, 0.8, 0.));
+    let side = rolling.world_axis(Vec3::X);
+    let front = Vec3::new(0.3, 0.1, 0.9).normalize();
+    let mut pose = rolling;
+    pose.stand_facing_across(front);
+    let wheel = front.cross(side).normalize();
+    assert!((pose.world_axis(Vec3::Y) - wheel).length() < 1e-5);
+    assert!((pose.world_axis(Vec3::Z) - front).length() < 1e-5);
+    // The ordinary throws stand upright on the same new front.
+    let mut upright = rolling;
+    let flat_front = Vec3::new(0.6, 0., 0.8);
+    upright.stand_facing(flat_front);
+    assert!((upright.world_axis(Vec3::Y) - Vec3::Y).length() < 1e-5);
+    // A front along the pose's side: no wheel axis, the pose's own up stays.
+    let mut kept = rolling;
+    kept.stand_facing_across(side);
+    assert!((kept.world_axis(Vec3::Y) - rolling.world_axis(Vec3::Y)).length() < 1e-5);
 }
 
 /// A cap in its return, `step` executions old, at `spot` (centimetres), resting there.
