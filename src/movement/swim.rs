@@ -149,10 +149,13 @@ pub(super) struct Swim {
     /// left it nor started to fall since; the jump nerve's water judge waits for that.
     pub(super) out_in_inside: bool,
     /// The velocity the swimmer had when the jump was chosen. A jump that takes off from the
-    /// floor keeps only the part of it in the floor's plane (GUESS from the pond recordings: the
-    /// jump from the bowl's slope leaves with the slope-ward speed the swimmer's pull into the
-    /// floor has in the plane, 0.824/2.195 from (-0.019, -6.106, -0.050) on the normal
-    /// (0.153, 0.901, 0.406); the exe's `PlayerStateJump::appear` is not read here).
+    /// floor keeps only the part of it in the floor's plane: `PlayerActionAirMoveControl::setup`
+    /// (0x41484c) takes the velocity, `al::verticalizeVec`s it off `calcGroundNormalOrGravityDir`
+    /// (0x4148cc..0x4148e4) and then off gravity (0x4148f0..0x414900), so the pull into a bowl's
+    /// slope leaves as slope-ward speed (0.824/2.195 from (-0.019, -6.106, -0.050) on the normal
+    /// (0.153, 0.901, 0.406) in the pond recordings). `PlayerStateJump::appear` (0x470c34) adds a
+    /// further `alongVectorNormalH` conversion only on a just-landed step (`rs::isJustLand`
+    /// 0x470c44), which a jump from the floor the swimmer has rested on does not meet.
     pub(super) jump_from_floor: Option<Vec3>,
     /// The water was entered by a hip drop (`EActionTrigger 19`, set by the actor's hip drop
     /// nerve): `appear` picks the dive.
