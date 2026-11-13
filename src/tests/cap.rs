@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn run() {
     lockstep_retains_the_stay_reaction_latch();
     lockstep_rewinds_the_cap_clip_with_its_nerve();
+    lockstep_spiral_entry_retains_its_launch_front();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
@@ -23,6 +24,44 @@ pub(super) fn run() {
     a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
     the_cap_thrown_from_a_slope_flies_along_the_slope();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_spiral_entry_retains_its_launch_front() {
+    // exeThrowSpiral copies +0x240 to +0x300 on its first execution
+    // (0x403a58..0x403a78). Placement displacement is not the launch front.
+    let launch = Launch {
+        front: Vec3::NEG_Z,
+        kind: Throw::Spin,
+        left: false,
+        air: false,
+        continuous: false,
+        spiral_side: -1.,
+        up: Vec3::Y,
+    };
+    let mut before = Cap::start(launch, Vec3::ZERO, 1);
+    let mut restored = Cap::start(
+        Launch {
+            front: Vec3::X,
+            ..launch
+        },
+        Vec3::ZERO,
+        2,
+    );
+    restored.spot = before.spot;
+    restored.pos = before.pos;
+    restored.continue_clip(&before);
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: None,
+        water: None,
+        targets: &[],
+    };
+    before.update(&world);
+    restored.update(&world);
+    assert_eq!(restored.spot, before.spot);
+    assert_eq!(restored.curve_front, before.curve_front);
 }
 
 #[cfg_attr(test, test)]

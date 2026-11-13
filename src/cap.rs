@@ -732,6 +732,11 @@ impl Cap {
     pub fn continue_clip(&mut self, before: &Cap) {
         // (The spiral keeps circling from the throw direction it began with.)
         self.curve_front = before.curve_front;
+        if self.nerve == CapNerve::ThrowSpiral && self.step == 0 {
+            // exeThrowSpiral copies the retained launch front to its curve
+            // on first execution (0x403a58..0x403a78), not the placement delta.
+            self.front = before.curve_front;
+        }
         // exeThrowStay's +0x2a9 is a per-throw latch (0x405d4c..0x405d6c),
         // not a new edge each time the actor is restored from a snapshot.
         self.stay_reaction_done = before.stay_reaction_done;
