@@ -244,6 +244,7 @@ pub(super) fn run() {
     dive_from_pound();
     dive_roll_landing();
     forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump();
+    the_touchdown_step_turns_the_facing_through_the_turn_controller();
     roll_timing_and_boost();
     roll_winds_down();
     roll_boost_needs_the_force_to_fill();
@@ -2181,4 +2182,44 @@ fn forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump() {
         !p.nerve.deferred,
         "cached ForceRolling bypasses stand-up and jump"
     );
+}
+
+/// `PlayerActionAirMoveControl::update` (0x414cec) ends with the turn controller (0x419bc0), so the
+/// touchdown step of a jump, which still runs the air child (0x4240a4), turns the facing with it.
+/// The controller keeps the side of the stick's last swing for a stick pulled exactly against the
+/// facing (`last_direction` x new direction decides the axis); the old helper always swung yaw-down.
+#[cfg_attr(test, test)]
+fn the_touchdown_step_turns_the_facing_through_the_turn_controller() {
+    let mut p = Player {
+        mode: Move::Jump,
+        grounded: true,
+        ground_contact: 1,
+        facing: Vec3::Z,
+        v: Vec3::new(0., -20., 8.),
+        stick: Vec3::NEG_Z,
+        tilt: 1.,
+        ..default()
+    };
+    p.touchdown_speed = -20.;
+    let takeoff = fall_takeoff(p.constants, p.v.y);
+    p.air.setup(&mut p.v, p.facing, &takeoff);
+    p.air_turn.reset();
+    p.air_for = Some(Move::Jump);
+    // An earlier swing of the stick toward +X is the history the reversal follows.
+    let frame = |stick| turn_control::TurnFrame {
+        actor_front: Vec3::Z,
+        actor_up: Vec3::Y,
+        stick,
+        up: Vec3::Y,
+    };
+    p.air_turn.update(frame(Vec3::X));
+    let mut turn = p.air_turn.clone();
+    turn.update(frame(Vec3::NEG_Z));
+    let expected = turn.direction;
+    assert!(
+        expected.x > 0.,
+        "the reversal follows the +X swing (yaw rising), against the old fixed yaw-down"
+    );
+    p.land(&Orders::default(), &Course::default());
+    assert_eq!(p.facing, expected);
 }

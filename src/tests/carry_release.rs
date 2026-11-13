@@ -467,7 +467,15 @@ fn fresh_slide_landing(mode: Move, real_mesh: bool, held: bool) {
             "the Jump fixture exercises its landing limit"
         );
     }
-    let front = air.turn_facing(p.facing, push);
+    // The control's update ends with its turn controller (0x414cec -> 0x419bc0).
+    let mut turn = p.air_turn.clone();
+    turn.update(turn_control::TurnFrame {
+        actor_front: p.facing,
+        actor_up: Vec3::Y,
+        stick: if air.steered() { push } else { Vec3::ZERO },
+        up: Vec3::Y,
+    });
+    let front = turn.direction;
     let expected = seed_velocity(front, velocity);
     let mut appear = Player {
         mode: Move::SlopeSlide,

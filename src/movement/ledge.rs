@@ -1024,6 +1024,8 @@ impl Player {
                 fall_max: t::FALL_MAX,
             };
             self.air.setup(&mut self.v, self.facing, &takeoff);
+            // `PlayerActionAirMoveControl::setup` ends by resetting its turn controller (0x414b70).
+            self.air_turn.reset();
             self.gravity = self.constants.wall_climb_jump_gravity;
             self.jump_power = CLIMB_JUMP_SPEED_V;
         }
@@ -1034,7 +1036,8 @@ impl Player {
         };
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
-        self.facing = self.air.turn_facing(self.facing, push);
+        // The control's update ends with the turn controller and the pose (0x414cec).
+        self.turn_in_air(push);
         if self.anim.name == "WallCatchEndJump" && self.anim_done(CLIMB_JUMP_CLIP) {
             self.play("Fall");
         }

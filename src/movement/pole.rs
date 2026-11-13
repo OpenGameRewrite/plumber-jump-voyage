@@ -941,6 +941,7 @@ impl Player {
             }
             self.air
                 .setup(&mut self.v, self.facing, &wall_jump_takeoff(self.constants));
+            self.air_turn.reset();
             self.air_for = Some(self.mode);
             self.jump_power = t::WALL_JUMP_POWER;
         }
@@ -951,7 +952,8 @@ impl Player {
         };
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
-        self.facing = self.air.turn_facing(self.facing, push);
+        // The control's update ends with the turn controller and the pose (0x414cec).
+        self.turn_in_air(push);
         let (name, length) = if top {
             ("PoleHandStandJump", HAND_STAND_JUMP_CLIP)
         } else {

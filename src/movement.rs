@@ -5825,6 +5825,7 @@ impl Player {
                 // `PlayerActionAirMoveControl::setup` with the spin's values:
                 // the small lift of every air throw.
                 p.air.setup(&mut p.v, p.facing, &spin_air_takeoff());
+                p.air_turn.reset();
                 p.air_for = Some(Move::Throw);
             }
             p.winding = true;
@@ -6093,7 +6094,7 @@ impl Player {
                 },
             );
         } else {
-            self.facing = self.air.turn_facing(self.facing, push);
+            self.turn_in_air(push);
         }
         // The actor's cancels (`PlayerActorHakoniwa::exeSpinCap`): while the air throw runs its
         // first 23 steps only the pound may cancel it (`isEnableCancelHipDrop`: once the cap has
@@ -6569,7 +6570,7 @@ impl Player {
             airborne_velocity = Some(v);
             // (`exePop` only updates the air control; the jump state turns the actor itself.)
             if self.mode != Move::CapCatchPop {
-                self.facing = self.air.turn_facing(self.facing, push);
+                self.turn_in_air(push);
             }
         }
         // Forced judges and appear read the stored actor velocity after the air child, as does
