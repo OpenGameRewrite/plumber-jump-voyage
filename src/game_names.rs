@@ -19,7 +19,8 @@
 //! * symbol: the nerve exists in the 1.0.0 symbol list of the public
 //!   decompilation project and its role is plain from its name.
 //! * guess (`?` in `--replay --states`): the rewrite's state is assigned to the
-//!   nerve by this project's reading, or no distinct nerve is known for it.
+//!   nerve by this project's reading, or no distinct nerve is known for it. No state is a
+//!   guess at present; a new one would be built with `Nerve { guess: true, .. }`.
 use crate::movement::Move;
 
 /// How a state is named in the game, and whether that name is a guess.
@@ -29,9 +30,6 @@ pub struct Nerve {
 }
 pub const fn known(name: &'static str) -> Nerve {
     Nerve { name, guess: false }
-}
-const fn guessed(name: &'static str) -> Nerve {
-    Nerve { name, guess: true }
 }
 
 /// The game's name for a state; `anim` is the clip the state is playing.
@@ -49,8 +47,10 @@ pub fn nerve(mode: Move, anim: &str) -> Nerve {
         // Consecutive and special jumps share the jump nerve; only the clip
         // and the jump counters differ in the game.
         Move::DoubleJump | Move::TripleJump => known("Jump/Jump"),
-        Move::PoundJump => guessed("Jump/Jump"),
-        Move::CapBounce | Move::CatchJump => guessed("Jump/Jump"),
+        // The pound jump and the cap bounce were logged in `Jump/Jump` (pound-jump, cap-bounce).
+        // The catch jump runs inside the same nerve: `exeJump` (0x4725a0) calls `startCatch`
+        // (0x472760) and `isJumpCapCatch` (0x472094) tests for that nerve.
+        Move::PoundJump | Move::CapBounce | Move::CatchJump => known("Jump/Jump"),
         Move::CapCatchPop => known("CapCatchPop/Pop"),
         Move::LongJump => known("LongJump/Jump"),
         Move::Backflip => known("Jump/JumpBack"),
@@ -131,7 +131,10 @@ fn idle(anim: &str) -> Nerve {
 fn ledge(anim: &str) -> Nerve {
     match anim {
         "WallCatchStart" => known("WallCatch/Start"),
-        "WallCatchEnd" | "WallCatchEndJump" => guessed("WallCatch/Climb"),
+        // `exeClimb` (0x491258) plays `WallCatchEnd` (logged as `WallCatch/Climb`); `exeJump`
+        // (0x491d1c) plays `WallCatchEndJump` in its own `Jump` nerve (`facts-wallcatch.md`).
+        "WallCatchEnd" => known("WallCatch/Climb"),
+        "WallCatchEndJump" => known("WallCatch/Jump"),
         "WallCatchMoveL" => known("WallCatch/MoveLeft"),
         "WallCatchMoveR" => known("WallCatch/MoveRight"),
         _ => known("WallCatch/Wait"),
@@ -147,7 +150,8 @@ fn pole(anim: &str) -> Nerve {
         "PoleHandStandWait" => known("PoleClimb/TopWait"),
         "PoleHandStandTurn" => known("PoleClimb/TopTurn"),
         "PoleHandStandJump" => known("PoleClimb/TopJump"),
-        "PoleHandStandEnd" => guessed("PoleClimb/TopEnd"),
+        // `exeTopEnd` (0x4789e0) plays `PoleHandStandEnd`; logged as `PoleClimb/TopEnd`.
+        "PoleHandStandEnd" => known("PoleClimb/TopEnd"),
         "WallJump" => known("PoleClimb/Jump"),
         _ => known("PoleClimb/Wait"),
     }
