@@ -737,6 +737,17 @@ impl Cap {
             // on first execution (0x403a58..0x403a78), not the placement delta.
             self.front = before.curve_front;
         }
+        // updateWaterArea retains its finder/splash/effect flags (0x400ba8).
+        // ThrowStart selects the launch parameters (0x3ff998..0x3ffb8c);
+        // surface displacement and blocked travel do not select a new throw.
+        self.water = before.water;
+        self.speed = before.speed;
+        self.cruise_frames = before.cruise_frames;
+        self.brake_step = before.brake_step;
+        self.capcatch = before.capcatch;
+        if matches!(self.nerve, CapNerve::Throw | CapNerve::ThrowBrake) {
+            self.action = self.flight_clip();
+        }
         // exeThrowStay's +0x2a9 is a per-throw latch (0x405d4c..0x405d6c),
         // not a new edge each time the actor is restored from a snapshot.
         self.stay_reaction_done = before.stay_reaction_done;

@@ -4,6 +4,7 @@ pub(super) fn run() {
     lockstep_retains_the_stay_reaction_latch();
     lockstep_rewinds_the_cap_clip_with_its_nerve();
     lockstep_spiral_entry_retains_its_launch_front();
+    lockstep_keeps_the_cap_water_and_throw_parameters();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
     the_return_after_a_trample_leaves_along_the_cap_pose();
@@ -24,6 +25,41 @@ pub(super) fn run() {
     a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
     the_cap_thrown_from_a_slope_flies_along_the_slope();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_keeps_the_cap_water_and_throw_parameters() {
+    // The water keeper and launch parameters survive position injection;
+    // movement across the surface is not a new throw (0x4024d0).
+    let launch = Launch {
+        front: Vec3::Z,
+        kind: Throw::Forward,
+        left: false,
+        air: false,
+        continuous: false,
+        spiral_side: 0.,
+        up: Vec3::Y,
+    };
+    let mut before = Cap::start(launch, Vec3::ZERO, 1);
+    before.water.submerged = true;
+    before.water.splash_found = true;
+    before.water.splash_area = true;
+    before.water.fly_effect = true;
+    let mut restored = Cap::start(
+        Launch {
+            continuous: true,
+            ..launch
+        },
+        Vec3::ZERO,
+        2,
+    );
+    restored.continue_clip(&before);
+    assert_eq!(restored.speed, before.speed);
+    assert_eq!(restored.cruise_frames, before.cruise_frames);
+    assert_eq!(restored.brake_step, before.brake_step);
+    assert_eq!(restored.capcatch, before.capcatch);
+    assert!(restored.water.submerged && restored.water.splash_found);
+    assert!(restored.water.splash_area && restored.water.fly_effect);
 }
 
 #[cfg_attr(test, test)]
