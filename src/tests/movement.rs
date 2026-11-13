@@ -2096,6 +2096,8 @@ macro_rules! snapshot {
 #[cfg_attr(test, test)]
 fn original_simulation_trace() {
     let mut hash = 0xcbf29ce484222325_u64;
+    // Optional row dump (`PJV_TRACE_DUMP=<file>`) to compare the baseline across revisions.
+    let mut dump = String::new();
     for variant in 0..3 {
         let scene = scene!(controller, variant);
         let mut p = Player::default();
@@ -2115,6 +2117,10 @@ fn original_simulation_trace() {
             };
             p.step(&o, &scene);
             assert!(p.pos.is_finite() && p.vel.is_finite());
+            if std::env::var_os("PJV_TRACE_DUMP").is_some() {
+                dump += &format!("{variant} {i} {} {:?}
+", snapshot!(p), p.events);
+            }
             for byte in snapshot!(p)
                 .bytes()
                 .chain(format!("{:?}", p.events).bytes())
@@ -2123,6 +2129,9 @@ fn original_simulation_trace() {
             }
             p.events.clear();
         }
+    }
+    if let Some(path) = std::env::var_os("PJV_TRACE_DUMP") {
+        std::fs::write(path, dump).unwrap();
     }
     // ponytail: this bit-exact baseline pins the Windows toolchain; other
     // platforms exercise the same trace but libm may round differently.
