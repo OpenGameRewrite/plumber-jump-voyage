@@ -238,11 +238,22 @@ const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
 /// The turn the bubble adds to its whole spins: the angle, flattened across the spin axis, from
 /// the actor's up to the safety point's up, wrapped to [0, 360) (calcAngleOnPlaneDegree and
 /// al::modf at 0x479e60..0x479e80).
-/// GUESS: the original's branch for a safety up parallel to the axis (arbitrary gravity, where
-/// it reads vectors only the 2D path fills) is not ported; it turns by no extra angle here.
+///
+/// When the safety up is parallel to the axis (0x479d4c, `isParallelDirection` with 0.01) the
+/// original rotates the actor's up by `makeQuatRotationRate(+0xb0, +0xbc, 1)` (0x479d70) and turns
+/// by half a revolution when the result points against the safety up (`al::sign` of their dot
+/// is negative, 0x479e48..0x479e58), else by none. Those two vectors are the actor's side and the
+/// 2D lock direction, written only for a 2D player (0x479c04..0x479ca0); the constructor zeroes
+/// them (0x4795f4..0x4795f8), and the rotation between two zero vectors is the identity
+/// (`getAxisAngleFromTwoVec` finds no axis). The 3D player of this controller therefore compares
+/// its own up with the safety up. Not ported: the 2D player's lock direction.
 fn spin_degrees(up: Vec3, target_up: Vec3, axis: Vec3) -> f32 {
     if pose_math::is_parallel_direction(target_up, axis, 0.01) {
-        return 0.;
+        return if pose_math::dot(up, target_up) < 0. {
+            180.
+        } else {
+            0.
+        };
     }
     (ground_pose::calc_angle_on_plane_degree(up, target_up, axis) + 360.) % 360. + 0.
 }
@@ -283,10 +294,22 @@ pub(super) fn self_check() {
     checks::safety_enablement_and_recovery_lifecycle();
     checks::death_judge_and_scene_restart();
     checks::rotation_oracle();
+    checks::a_safety_up_along_the_spin_axis_turns_by_half_a_revolution_when_opposed();
     checks::lockstep_keeps_inner_recovery_clock();
 }
 mod checks {
     use super::*;
+
+    /// The branch at 0x479d4c: a safety up along the spin axis turns the bubble by half a
+    /// revolution exactly when the actor's up points against it (0x479e48..0x479e58).
+    #[cfg_attr(test, test)]
+    pub(super) fn a_safety_up_along_the_spin_axis_turns_by_half_a_revolution_when_opposed() {
+        let axis = Vec3::Y;
+        assert_eq!(spin_degrees(Vec3::NEG_Y, Vec3::Y, axis), 180.);
+        assert_eq!(spin_degrees(Vec3::Y, Vec3::Y, axis), 0.);
+        // Across the axis the general formula still applies.
+        assert_eq!(spin_degrees(Vec3::Y, Vec3::X, Vec3::Z), 270.);
+    }
 
     #[cfg_attr(test, test)]
     pub(super) fn lockstep_keeps_inner_recovery_clock() {
