@@ -25,6 +25,21 @@ fn lockstep_keeps_the_upper_body_catch() {
 }
 
 #[cfg_attr(test, test)]
+fn lockstep_keeps_the_completed_swim_pose() {
+    let scene = Course {
+        water: crate::water::WaterAreas::demo_box(0., 0., 5000., 5000., 0., 5000.),
+        ..Default::default()
+    };
+    let mut player = Player::spawn_at(Vec3::new(0., -0.3, 0.), Vec3::Z);
+    player.start_swim(&scene);
+    player.step(&Orders::default(), &scene);
+    player.joints.swim.set_pitch(20.);
+    let completed = player.joints.swim;
+    player.repeat_step_for_lockstep(&Orders::default(), &scene);
+    assert_eq!(player.joints.swim, completed);
+}
+
+#[cfg_attr(test, test)]
 fn lockstep_pivot_completion_chooses_the_run_mode() {
     // exePivot chooses Run, not Brake, after the pivot finishes with input
     // (0x47ef98..0x47efb4). Both children print the same Run/Run3D label.
@@ -210,6 +225,7 @@ pub(super) fn run() {
     lockstep_pivot_completion_chooses_the_run_mode();
     lockstep_clip_started_under_a_running_sub_animation_holds_its_first_frame();
     lockstep_keeps_the_upper_body_catch();
+    lockstep_keeps_the_completed_swim_pose();
     wait_snapshot_separates_slope_pull_from_travel();
     crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();

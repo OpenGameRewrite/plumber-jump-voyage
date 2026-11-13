@@ -3382,6 +3382,9 @@ impl Player {
         // actor update (0x4541f8..0x454268). The completed row already moved
         // them, so the repeated choice must not add a second step.
         let ground_pose = self.joints.ground.clone();
+        // PlayerJointParamSwim's interpolation has already run for this row
+        // (0x486af8..0x486bc4), including surface/landing ease-off.
+        let swim_pose = self.joints.swim;
         // The partial model animation advances once per actor frame as well.
         let upper_catch = (self.upper_catch, self.catch_clip);
         // PlayerSeCtrl::update (0x463064) counts its frames moved once per update.
@@ -3391,6 +3394,7 @@ impl Player {
         self.step_with_sources(o, scene, false);
         self.damage = damage;
         self.joints.ground = ground_pose;
+        self.joints.swim = swim_pose;
         (self.upper_catch, self.catch_clip) = upper_catch;
         self.sounds = sounds;
         self.soot = soot;
