@@ -2120,8 +2120,12 @@ fn original_simulation_trace() {
             p.step(&o, &scene);
             assert!(p.pos.is_finite() && p.vel.is_finite());
             if std::env::var_os("PJV_TRACE_DUMP").is_some() {
-                dump += &format!("{variant} {i} {} {:?}
-", snapshot!(p), p.events);
+                dump += &format!(
+                    "{variant} {i} {} {:?}
+",
+                    snapshot!(p),
+                    p.events
+                );
             }
             for byte in snapshot!(p)
                 .bytes()
@@ -2234,6 +2238,10 @@ fn every_swim_throw_names_the_plain_swim_clip() {
     for (count, continuous) in [(1, false), (2, false), (3, false), (2, true), (3, true)] {
         p.throwing.count = count;
         p.throwing.continuous = continuous;
-        assert_eq!(p.swim_throw_clip(), "SwimSpinCapStart", "{count} {continuous}");
+        assert_eq!(
+            p.swim_throw_clip(),
+            "SwimSpinCapStart",
+            "{count} {continuous}"
+        );
     }
 }

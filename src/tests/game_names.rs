@@ -24,7 +24,10 @@ fn names_round_trip() {
     assert!(state_table().contains("DamageFire/Jump2nd"));
     // Every state's nerve is logged or read from its symbol; none is a guess.
     assert!(!state_table().contains(" ?"), "{}", state_table());
-    assert_eq!(nerve(Move::Ledge, "WallCatchEndJump").name, "WallCatch/Jump");
+    assert_eq!(
+        nerve(Move::Ledge, "WallCatchEndJump").name,
+        "WallCatch/Jump"
+    );
     assert_eq!(nerve(Move::Ledge, "WallCatchEnd").name, "WallCatch/Climb");
     assert!(!nerve(Move::Ledge, "WallCatchEnd").guess);
     assert!(!nerve(Move::Ledge, "WallCatchEndJump").guess);
