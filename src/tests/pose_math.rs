@@ -5,6 +5,8 @@ pub(super) fn run() {
     an_opposed_turn_takes_the_least_component_basis_axis();
     the_exes_pose_routines_agree_bit_for_bit();
     the_exes_follow_of_a_collision_part_agrees_bit_for_bit();
+    slerp_gravity_turns_a_tilted_pose_by_the_rate();
+    slerp_gravity_replaces_a_front_along_gravity_by_the_up_toward_gravity();
 }
 
 #[cfg_attr(test, test)]
@@ -253,4 +255,52 @@ fn the_exes_follow_of_a_collision_part_agrees_bit_for_bit() {
         );
     }
     assert!(!cases.is_empty(), "no cases");
+}
+
+/// `rs::slerpGravity` (0x55d6e4): the pose slerps to the one with the negated gravity as up and
+/// its own front, by the rate alone. A pose tilted 30 degrees about its side axis is turned by
+/// the rate's share of that rotation, so 0.15 leaves 0.85 of the 30 degrees.
+#[cfg_attr(test, test)]
+fn slerp_gravity_turns_a_tilted_pose_by_the_rate() {
+    let tilt = 30f32.to_radians();
+    let up = Vec3::new(0., tilt.cos(), tilt.sin());
+    let front = Vec3::new(0., -tilt.sin(), tilt.cos());
+    let pose = ActorPose::new(quat_up_front(up, front));
+    let rate = 0.15;
+    let turned = ActorPose::new(pose.slerp_gravity(rate));
+    let left = turned.up().dot(Vec3::Y).acos();
+    assert!(
+        (left - tilt * (1. - rate)).abs() < 1e-5,
+        "{left} against {}",
+        tilt * (1. - rate)
+    );
+}
+
+/// A front parallel to gravity (limit 0.01) is replaced by the pose's up (0x55d730), turned to
+/// point along gravity when it does not already (0x55d770..0x55d78c).
+#[cfg_attr(test, test)]
+fn slerp_gravity_replaces_a_front_along_gravity_by_the_up_toward_gravity() {
+    let rate = 0.15;
+    // The up already has a part along gravity (dot above zero): it is used as it is.
+    let up = Vec3::new(0., -0.005, 1.).normalize();
+    let pose = ActorPose::new(quat_up_front(up, Vec3::new(0.005, -1., 0.)));
+    assert!(is_parallel_direction(
+        pose.front(),
+        Vec3::NEG_Y,
+        PARALLEL_LIMIT
+    ));
+    assert!(dot(pose.up(), Vec3::NEG_Y) > 0.);
+    let expected = slerp(pose.calc_quat(), quat_up_front(Vec3::Y, pose.up()), rate);
+    assert!(same_quat_bits(pose.slerp_gravity(rate), expected));
+    // An up with a part against gravity is negated first.
+    let up = Vec3::new(0., 0.005, 1.).normalize();
+    let pose = ActorPose::new(quat_up_front(up, Vec3::new(0.005, -1., 0.)));
+    assert!(is_parallel_direction(
+        pose.front(),
+        Vec3::NEG_Y,
+        PARALLEL_LIMIT
+    ));
+    assert!(dot(pose.up(), Vec3::NEG_Y) < 0.);
+    let expected = slerp(pose.calc_quat(), quat_up_front(Vec3::Y, -pose.up()), rate);
+    assert!(same_quat_bits(pose.slerp_gravity(rate), expected));
 }

@@ -1024,8 +1024,6 @@ impl Player {
                 fall_max: t::FALL_MAX,
             };
             self.air.setup(&mut self.v, self.facing, &takeoff);
-            // `PlayerActionAirMoveControl::setup` ends by resetting its turn controller (0x414b70).
-            self.air_turn.reset();
             self.gravity = self.constants.wall_climb_jump_gravity;
             self.jump_power = CLIMB_JUMP_SPEED_V;
         }
@@ -1036,8 +1034,11 @@ impl Player {
         };
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
-        // The control's update ends with the turn controller and the pose (0x414cec).
-        self.turn_in_air(push);
+        // `PlayerStateWallCatch` builds its air control with the gravity-slerp flag set (`w5 = 1`,
+        // 0x48fa00, control +0x30), so the update ends with `rs::slerpGravity` and never runs the
+        // turn controller (0x41508c..0x4150a8): the facing stays what the climb left it, whatever
+        // the stick holds.
+        self.slerp_gravity(t::SLERP_QUAT_RATE);
         if self.anim.name == "WallCatchEndJump" && self.anim_done(CLIMB_JUMP_CLIP) {
             self.play("Fall");
         }

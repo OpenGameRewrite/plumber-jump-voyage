@@ -92,9 +92,11 @@ impl Player {
     /// with the base "SwimSpinCapStart", the throw count fixed at 1 (`mov w7, #1` at 0x464fcc)
     /// and the continuous flag cleared (`strb wzr, [x19, #0x31]` at 0x464f98), so the later
     /// throws of a row name the same clip as the first: the builder's count branch (the
-    /// hardcoded "SpinCapStart" with the count, 0x464dc8) is not reached. Only the flick throw
-    /// types (rolling, spiral, left or right, motion controls) add a suffix; the button play
-    /// this port reads has none of them.
+    /// hardcoded "SpinCapStart" with the count, 0x464dc8) is not reached. The builder can still
+    /// add a suffix (`DoubleUp`, `DoubleDown`, `DoubleRight`, `DoubleLeft`, `Right`, `Left`):
+    /// the two triggers `isOnSpinMoveCapThrow` and `isOnHipDropCancelThrow` and the swing
+    /// vectors that `setupAttackInfo` (0x464914) fills select them. None of those is set in
+    /// the swim states of this port, so the plain name is the one every swim throw plays.
     pub(super) fn swim_throw_clip(&self) -> &'static str {
         SPIN_CAP_CLIP
     }

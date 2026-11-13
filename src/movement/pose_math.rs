@@ -486,6 +486,24 @@ impl ActorPose {
         slerp(self.calc_quat(), target, rate)
     }
 
+    /// `rs::slerpGravity(actor, rate)` (0x55d6e4): the pose slerps toward the one whose up is the
+    /// negated gravity, keeping its own front. A front parallel to gravity (limit 0.01) is
+    /// replaced by the pose's up, turned to point along gravity (0x55d730..0x55d78c); the
+    /// target is `makeQuatUpFront(-gravity, front)` and the whole pose slerps to it by `rate`
+    /// (no limit on the angle, unlike `slerp_up_front`). Returns the quaternion to store.
+    pub fn slerp_gravity(&self, rate: f32) -> Quat {
+        let gravity = -NEGATED_GRAVITY;
+        let mut front = self.front();
+        if is_parallel_direction(front, gravity, PARALLEL_LIMIT) {
+            front = self.up();
+            if dot(front, gravity) < 0. {
+                front = -front;
+            }
+        }
+        let target = quat_up_front(NEGATED_GRAVITY, front);
+        slerp(self.calc_quat(), target, rate)
+    }
+
     /// The pose part of `rs::waitGround`: the up turns toward the floor's `normal` by at most
     /// `max_degrees`, the front stays (the pose's up when that is parallel to it), the whole
     /// slerps by `rate`. Returns the quaternion to store (not normalised).

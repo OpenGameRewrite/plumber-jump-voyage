@@ -5170,6 +5170,17 @@ impl Player {
         let stored = pose.slerp_up_front(up, front, rate, max_degrees);
         self.set_pose(stored);
     }
+    /// `rs::slerpGravity` (0x55d6e4) with the air control's rate: `PlayerActionAirMoveControl::update`
+    /// ends with it, and without the turn controller, when its flag (+0x30) is set (0x41508c..0x4150a8);
+    /// the rate is `getSlerpQuatRate` (the const's vtable slot +0x30, 0x4150a0). An upright pose is
+    /// already the slerp's target (its up is the negated gravity, its front the pose's own), so
+    /// only a tilted pose changes.
+    fn slerp_gravity(&mut self, rate: f32) {
+        if let Some(stored) = self.pose_quat() {
+            let relaxed = plane::ActorPose::new(stored).slerp_gravity(rate);
+            self.set_pose(relaxed);
+        }
+    }
     /// The turn of a body in the air and its pose: `PlayerActionTurnControl::update` turns the
     /// front (the actor's front carried to the horizontal plane) toward the stick, and
     /// `rs::slerpUpFront` relaxes a tilted pose toward the world's up and that front at the

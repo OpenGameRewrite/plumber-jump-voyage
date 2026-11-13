@@ -8,6 +8,7 @@ pub(super) fn run() {
     a_collider_on_the_floor_refuses_the_catch_whatever_the_actor_stands_on();
     letting_go_of_a_ledge();
     climbing_fast_and_the_climb_jump();
+    the_climb_jump_does_not_turn_the_facing_through_the_turn_controller();
     sliding_along_a_straight_ledge();
 }
 
@@ -270,4 +271,51 @@ fn sliding_along_a_straight_ledge() {
     assert!((p.pos.y - 3.).abs() < 0.01);
     hang(&mut p, &scene, 40, &default());
     assert_eq!(p.nerve_name().name, "WallCatch/Wait");
+}
+
+/// `PlayerStateWallCatch` builds its air control with the gravity-slerp flag set (0x48fa00,
+/// control +0x30), so the climb jump's update ends with `rs::slerpGravity` and skips the turn
+/// controller (0x41508c..0x4150a8): a stick held across the jump never turns the facing, and a
+/// tilted pose relaxes toward the world's up by the slerp rate alone.
+#[cfg_attr(test, test)]
+fn the_climb_jump_does_not_turn_the_facing_through_the_turn_controller() {
+    let scene = platform();
+    let press = Orders {
+        jump: true,
+        jump_held: true,
+        direction: Vec2::new(0., 1.),
+        stick: Vec2::new(0., 1.),
+        ..default()
+    };
+    let held = Orders {
+        jump_held: true,
+        ..press.clone()
+    };
+    let mut p = caught(&scene);
+    hang(&mut p, &scene, 8, &default());
+    let facing = p.facing;
+    p.step(&press, &scene);
+    assert_eq!(p.nerve_name().name, "WallCatch/Jump");
+    // The take-off locks the stick for 12 steps (`CLIMB_JUMP_INVALID_FRAME`); after them the
+    // stick steers the velocity, and the facing still does not follow it.
+    let mut steered = false;
+    for _ in 0..20 {
+        p.step(&held, &scene);
+        steered |= p.air.steered();
+        assert_eq!(p.facing, facing, "the stick turned the facing");
+    }
+    assert!(
+        steered && !p.grounded,
+        "the stick must reach the air control in flight"
+    );
+    // A tilted pose goes toward the world's up by the rate (0x4150a0), the front being its own.
+    let tilt = 20f32.to_radians();
+    let tilted = pose_math::quat_up_front(
+        Vec3::new(0., tilt.cos(), tilt.sin()),
+        Vec3::new(0., -tilt.sin(), tilt.cos()),
+    );
+    p.set_pose(tilted);
+    let expected = plane::ActorPose::new(tilted).slerp_gravity(t::SLERP_QUAT_RATE);
+    p.step(&held, &scene);
+    assert_eq!(p.pose_quat(), Some(expected));
 }
