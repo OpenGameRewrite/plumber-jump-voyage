@@ -1990,7 +1990,23 @@ impl TraceFile {
             self.cell(row, "state")
                 .and_then(|s| state_from_nerve(s, anim_name, speed))
         };
-        let shown = n("anim_frame");
+        // Rolling keeps the model clock: setAnimRateCommon changes its rate
+        // after updateSync sampled the separate exported counter (0x42a4a4).
+        let shown = if matches!(mode, Some(Move::Roll | Move::RollEnd))
+            && matches!(anim_name, "Rolling" | "RollingEnd")
+        {
+            self.cell(row, "anim_layers")
+                .and_then(|layers| {
+                    layers.split('|').find_map(|layer| {
+                        let (name, rest) = layer.split_once('@')?;
+                        let (frame, _) = rest.split_once('*')?;
+                        (name == anim_name).then(|| frame.parse().ok()).flatten()
+                    })
+                })
+                .unwrap_or_else(|| n("anim_frame"))
+        } else {
+            n("anim_frame")
+        };
         let moving_cycle = [
             "Move", "MoveMoon", "Walk", "Run", "RunMoon", "Dash", "DashFast",
         ]

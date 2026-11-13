@@ -8,6 +8,26 @@ pub(super) fn run() {
     geyser_collider_pose();
     run_start_clock();
     lockstep_swim_spin_attack_hint();
+    lockstep_roll_restores_the_model_clock();
+}
+
+#[cfg_attr(test, test)]
+fn lockstep_roll_restores_the_model_clock() {
+    // updateSync samples the counter before setAnimRateCommon updates the
+    // model rate (0x42a214, 0x42a374, 0x42a4a4). The port's roll clock is
+    // the model clock, so a differing counter cannot restore it.
+    let trace = TraceFile::parse(
+        "frame,state,anim,anim_frame,anim_layers\n\
+         0,Rolling/Brake,RollingEnd,9.039068,RollingEnd@9.017827*0.470251=1.000000\n\
+         1,Rolling/Rolling,Rolling,4.440242,Rolling@4.439333*0.520163=1.000000\n",
+    )
+    .unwrap();
+    assert_eq!(trace.snapshot(0).anim, Some(("RollingEnd", 9.017827)));
+    assert_eq!(trace.snapshot(1).anim, Some(("Rolling", 4.439333)));
+    // Older captures without pose layers still restore the available clock.
+    let legacy =
+        TraceFile::parse("frame,state,anim,anim_frame\n0,Rolling/Brake,RollingEnd,9\n").unwrap();
+    assert_eq!(legacy.snapshot(0).anim, Some(("RollingEnd", 9.)));
 }
 
 #[cfg_attr(test, test)]
