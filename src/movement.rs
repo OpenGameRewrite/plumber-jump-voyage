@@ -79,15 +79,11 @@ mod t {
     pub const JUMP_MOVE_MAX: f32 = 30.;
     pub const JUMP_ACCEL_FRONT: f32 = 0.5;
     pub const JUMP_ACCEL_BACK: f32 = 1.;
-    pub const JUMP_TURN_LIMIT_DEG: f32 = 6.;
-    pub const JUMP_TURN_FAST_DEG: f32 = 135.;
-    pub const JUMP_TURN_FAST_LIMIT_DEG: f32 = 25.;
     pub const PRE_INPUT_JUMP: u32 = 5;
     pub const CONTINUOUS_JUMP_TIMER: u32 = 10;
     pub const CONTINUOUS_JUMP_POWER_MIN: f32 = 19.5;
     pub const JUMP_POWER_MAX_2ND: f32 = 21.;
     pub const JUMP_POWER_3RD: f32 = 25.;
-    pub const FRICTION_AIR: f32 = 0.99;
     pub const FALL_MAX: f32 = 35.;
     pub const LONG_FALL: f32 = 3000.;
 
@@ -604,7 +600,6 @@ pub mod clip {
     pub const TURN: u32 = 12;
     pub const RUN_START: u32 = 30;
     pub const BRAKE: u32 = 5;
-    pub const JUMP_CAP_LEAP_FROG: u32 = 36;
     /// `JumpCapCatchAir` plays this clip (`ActionAnimCtrl.byml` alias).
     pub const JUMP_CAP_CATCH_COMMON: u32 = 27;
 }
@@ -2057,18 +2052,6 @@ fn present(
             _ => c.pos,
         });
     }
-}
-fn yaw(v: Vec3) -> f32 {
-    v.x.atan2(v.z)
-}
-fn wrap(a: f32) -> f32 {
-    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
-}
-/// Rotate a flat direction toward another by at most `max` radians.
-fn turn(from: Vec3, to: Vec3, max: f32) -> Vec3 {
-    let a = yaw(from);
-    let d = wrap(yaw(to) - a).clamp(-max, max);
-    Vec3::new((a + d).sin(), 0., (a + d).cos())
 }
 /// What a ground jump asks of the air control: the base speed of a jump, the
 /// jump state's limits on the take-off speed, and the extend window.
@@ -3808,7 +3791,15 @@ impl Player {
             Move::Backflip => self.back_jump_air(o),
             Move::Sideflip => self.turn_jump_air(o),
             Move::WallJump => self.wall_jump(o),
-            mode if mode.uses_air_control() => self.jump_air(o),
+            // Every state the air control flies (`WallJump` has its own port above).
+            Move::Fall
+            | Move::Jump
+            | Move::DoubleJump
+            | Move::TripleJump
+            | Move::PoundJump
+            | Move::SpinJump
+            | Move::CapBounce
+            | Move::CatchJump => self.jump_air(o),
             Move::WallSlide => self.wall_slide(o, scene),
             Move::Ledge => self.wall_catch(o, scene),
             Move::Pole => self.pole_climb(o, scene),
@@ -3817,7 +3808,6 @@ impl Player {
             Move::SpinDrop => self.spin_drop(o),
             Move::SpinFlower => self.spin_flower_step(),
             Move::CapCatchPop => self.cap_catch_pop_step(o, scene),
-            _ => self.air(o),
         }
         if std::mem::take(&mut self.ground_state_ended) {
             self.nerve.deferred = false;
@@ -5442,75 +5432,6 @@ impl Player {
         self.turn_in_air(push);
         self.air_actions(o);
     }
-    /// Free flight of the states that keep the older approximation of the
-    /// air control: the roll jump and the wall jump.
-    fn air(&mut self, o: &Orders) {
-        if self.air_actions(o) {
-            return;
-        }
-        let mut h = self.v.with_y(0.);
-        let speed = h.length();
-        if self.tilt > 0.05 {
-            let wish = self.stick;
-            let dir = h.normalize_or(self.facing);
-            let angle = wrap(yaw(wish) - yaw(dir)).abs().to_degrees();
-            let limit = if angle > t::JUMP_TURN_FAST_DEG {
-                t::JUMP_TURN_FAST_LIMIT_DEG
-            } else {
-                t::JUMP_TURN_LIMIT_DEG
-            };
-            if wish.dot(dir) < -0.2 {
-                h = dir * (speed - t::JUMP_ACCEL_BACK * self.tilt).max(0.);
-            } else {
-                let cap = self.max_air_speed.max(t::JUMP_MOVE_MIN * self.tilt);
-                let s = if speed < cap {
-                    (speed + t::JUMP_ACCEL_FRONT * self.tilt).min(cap)
-                } else {
-                    speed
-                };
-                h = turn(dir, wish, limit.to_radians()) * s;
-            }
-            if !matches!(self.mode, Move::Backflip | Move::Sideflip) {
-                self.facing = turn(self.facing, wish, 0.1);
-            }
-        } else {
-            h *= t::FRICTION_AIR;
-        }
-        self.set_h(h);
-        let extending =
-            self.jump_extend && o.jump_held && self.frame < t::EXTEND_FRAMES && self.v.y > 0.;
-        if !o.jump_held || self.frame >= t::EXTEND_FRAMES {
-            self.jump_extend = false;
-        }
-        // The first step of the three ground jumps applies the push and no
-        // gravity, whether or not jump is held (the game's first rows after a
-        // tap show the full jump power); the flips and the long jump do apply it.
-        let takeoff = self.frame == 0
-            && matches!(self.mode, Move::Jump | Move::DoubleJump | Move::TripleJump);
-        if !extending && !takeoff {
-            self.v.y -= self.gravity;
-        }
-        self.v.y = self.v.y.max(-t::FALL_MAX);
-        if self.v.y < 0. && self.gravity != self.constants.gravity_air {
-            self.gravity = self.constants.gravity_air;
-        }
-        // Jump clips end in a fall pose; then the fall loop takes over.
-        let ends: Option<u32> = match self.anim.name {
-            "Jump" | "JumpReverse" => Some(84),
-            "Jump2" => Some(42),
-            "Jump3" | "JumpBack" => Some(68),
-            "JumpTurn" => Some(60),
-            "RollingJump" => Some(28),
-            "JumpHipDrop" => Some(46),
-            "JumpCapLeapFrog" => Some(clip::JUMP_CAP_LEAP_FROG),
-            "JumpCapCatchCommon" => Some(clip::JUMP_CAP_CATCH_COMMON),
-            n if n.starts_with("SpinCapAirStart") => Some(clip::throw(n)),
-            _ => None,
-        };
-        if ends.is_some_and(|n| self.anim_done(n)) && self.v.y < 0. {
-            self.play("Fall");
-        }
-    }
     /// Airborne transitions shared by every free-flight state.
     fn air_actions(&mut self, o: &Orders) -> bool {
         if self.try_cap_catch_pop(o) {
@@ -5716,8 +5637,9 @@ impl Player {
             )
         {
             // A throw during a spin sets the trigger the cap's spin move
-            // throw reads (`PlayerTrigger::isOnSpinMoveCapThrow`); which clip
-            // and flight it picks is a guess (`throw_clip`).
+            // throw reads (`PlayerTrigger::isOnSpinMoveCapThrow`). The clip comes
+            // from the attack's name builder (`throw_clip`) and the flight is the spiral
+            // recorded in `cap-throw-spiral*` (`cap_spiral.rs`).
             Throw::Spin
         } else {
             Throw::Forward
