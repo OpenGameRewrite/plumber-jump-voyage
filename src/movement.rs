@@ -873,6 +873,8 @@ pub struct Snapshot {
     pub grounded: bool,
     /// Observed pose and floor contact, needed by pre-movement damage dispatch in lockstep.
     pub pose: Option<Quat>,
+    /// The pose is the recording's printed quaternion (six decimals), not the probe's bits.
+    pub pose_rounded: bool,
     pub floor_contact: Option<(CollisionCodes, Vec3, u32)>,
     /// SandGeyser disables collision before integration: its collider still stood at this
     /// preceding sample when collision is enabled again. Centimetres, replay-relative.
@@ -2597,9 +2599,26 @@ impl Player {
             self.collider.invalidate(self.facing.x.atan2(self.facing.z));
             self.trans_carry = s.geyser_collider_from;
         }
-        self.facing = s.facing.with_y(0.).normalize_or(self.facing);
+        // A recording without the probe's bits prints the pose rounded to six decimals. The pose
+        // the preceding step left, when it prints as the same text, is that very pose: keep it,
+        // not its rounding (a decision that reads the side axis against the camera's look
+        // direction, `rs::isPlayerSideFaceToCameraZ`, can sit within the rounding of the zero).
+        let prints_as_recorded = |own: Quat, recorded: Quat| {
+            let print = |q: Quat| q.to_array().map(|v| (f64::from(v) * 1e6).round() as i64);
+            print(own) == print(recorded)
+        };
+        let keeps_own_pose = s.pose_rounded
+            && s.pose.zip(self.pose_tilt).is_some_and(|(recorded, own)| {
+                // (A facing that turned since the pose was stored is not the pose's own.)
+                prints_as_recorded(own.pose, recorded) && own.facing == self.facing
+            });
+        if !keeps_own_pose {
+            self.facing = s.facing.with_y(0.).normalize_or(self.facing);
+        }
         self.grounded = s.grounded;
-        if let Some(pose) = s.pose {
+        if let Some(pose) = s.pose
+            && !keeps_own_pose
+        {
             self.set_pose(pose);
         }
         if let Some((codes, normal, steps)) = &s.floor_contact {

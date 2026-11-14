@@ -266,6 +266,7 @@ pub(super) fn run() {
     poles();
     a_replayed_pole_step_finds_the_keeper_as_the_row_before_left_it();
     a_replayed_throw_press_counts_once();
+    injection_keeps_the_own_pose_that_prints_as_the_recorded_one();
     slope_slide();
     burn_and_soot();
     quicksand();
@@ -2368,4 +2369,33 @@ fn a_replayed_throw_press_counts_once() {
     p.restore_collision(&before);
     p.setup_attack_info();
     assert_eq!(p.throwing.count, 2);
+}
+
+/// A recording without the probe's bits prints the quaternion to six decimals. The pose the
+/// preceding step left, when it prints as the recorded text, is the pose of the row: injection
+/// keeps it; a pose that prints differently is replaced by the recorded one.
+#[cfg_attr(test, test)]
+fn injection_keeps_the_own_pose_that_prints_as_the_recorded_one() {
+    let exact = Quat::from_xyzw(0., -0.7071068, 0., 0.7071068);
+    let printed = Quat::from_xyzw(0., -0.707107, 0., 0.707107);
+    let mut p = Player::default();
+    p.set_pose(exact);
+    let snapshot = |pose| Snapshot {
+        pose: Some(pose),
+        pose_rounded: true,
+        facing: Vec3::X,
+        ..Default::default()
+    };
+    p.inject(&snapshot(printed));
+    assert_eq!(p.pose_tilt.unwrap().pose, exact);
+    let elsewhere = Quat::from_xyzw(0., 0., 0., 1.);
+    p.inject(&snapshot(elsewhere));
+    assert_eq!(p.pose_tilt.unwrap().pose, elsewhere);
+    // The probe's own bits are always taken.
+    p.set_pose(exact);
+    p.inject(&Snapshot {
+        pose_rounded: false,
+        ..snapshot(printed)
+    });
+    assert_eq!(p.pose_tilt.unwrap().pose, printed);
 }

@@ -2121,6 +2121,7 @@ impl TraceFile {
         } else {
             None
         };
+        let pose_rounded = self.cell(row, "bits_quat").is_none();
         let pose = self
             .cell(row, "bits_quat")
             .and_then(|text| {
@@ -2153,6 +2154,7 @@ impl TraceFile {
                 )
             }),
             pose,
+            pose_rounded,
             floor_contact,
             pos: Vec3::new(n("px"), n("py"), n("pz")) * UNIT,
             v: Vec3::new(n("vx"), n("vy"), n("vz")),
