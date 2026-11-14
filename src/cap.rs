@@ -808,6 +808,13 @@ impl Cap {
             self.ground_counter = before.ground_counter;
             self.rolling = before.rolling;
             self.rolling_throw = before.rolling_throw;
+            // What the collider met in the move before is what the next step's reflection and
+            // wall reactions read (`tryCollideReflectReaction`, `tryCollideWallReaction`).
+            self.collider = before.collider.clone();
+            self.wall_last_frame = before.wall_last_frame;
+            self.floor_contact = before.floor_contact;
+            self.wall_memory = before.wall_memory;
+            self.wall_hits = before.wall_hits;
         }
         if same_throw_step
             && self.step == 0

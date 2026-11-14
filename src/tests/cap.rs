@@ -1292,6 +1292,16 @@ fn lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row() {
         put_back.continue_clip(&resting);
         assert!(put_back.rolling.is_some() && put_back.rolling_throw);
     }
+    // What the cap's collider met in its last move stays too (the next step's reflection reads it).
+    let mut touched = before.clone();
+    touched.step = 4;
+    touched.wall_memory = Vec3::X;
+    touched.wall_hits = 2;
+    let mut contact = Cap::start(launch, Vec3::ZERO, 8);
+    contact.step = 4;
+    contact.continue_clip(&touched);
+    assert_eq!(contact.wall_memory, Vec3::X);
+    assert_eq!(contact.wall_hits, 2);
     // A trample the sensor phase gave the cap in the frame of the row is still pending.
     let mut trampled = before.clone();
     trampled.trampled = Some(CapNerve::TrampleReturn);
