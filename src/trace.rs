@@ -692,7 +692,7 @@ impl Recorder {
                 let at = look_joint::translation(&matrix);
                 cells.text(&format!("{}/{}/{}", num(at.x), num(at.y), num(at.z)));
                 cells.num(p.look.joint.turn_degrees());
-                let q = look_joint::quat_of_rotation(&matrix).normalize();
+                let q = look_joint::quat_of_rotation(&matrix);
                 let q = if q.w < 0. { -q } else { q };
                 cells.text(&format!(
                     "{}/{}/{}/{}",

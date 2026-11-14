@@ -483,14 +483,60 @@ pub fn translation(m: &Mat34) -> Vec3 {
     Vec3::new(m[0][3], m[1][3], m[2][3])
 }
 
-/// The matrix `m` and the quaternion it turns into; used by the trace for `head_q`.
+/// The quaternion the reference's probe logs for a joint matrix (`head_q`).
+///
+/// It is not `sead::Matrix34CalcCommon::toQuat`: the probe normalises each ROW of the 3x3 part,
+/// then takes the textbook largest-component branch on that matrix and makes `w` non-negative
+/// (`probe-mod/src/lookat.cpp`, `quatOfMatrix34`). A joint with a non-uniform scale (the head
+/// stretches on the first frame of the run brake) has rows of different lengths, so the
+/// result is neither a unit quaternion nor the joint's rotation; the column has to be
+/// produced the same way to be comparable. The result is not normalised afterwards.
 pub fn quat_of_rotation(m: &Mat34) -> Quat {
-    let columns = [
-        Vec3::new(m[0][0], m[1][0], m[2][0]),
-        Vec3::new(m[0][1], m[1][1], m[2][1]),
-        Vec3::new(m[0][2], m[1][2], m[2][2]),
-    ];
-    to_quat(columns)
+    let mut r = [[0f32; 3]; 3];
+    for (i, row) in r.iter_mut().enumerate() {
+        let length = (m[i][0] * m[i][0] + m[i][1] * m[i][1] + m[i][2] * m[i][2]).sqrt();
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = if length > 0. {
+                m[i][j] / length
+            } else if i == j {
+                1.
+            } else {
+                0.
+            };
+        }
+    }
+    let trace = r[0][0] + r[1][1] + r[2][2];
+    let (x, y, z, w);
+    if trace > 0. {
+        let s = (trace + 1.).sqrt() * 2.;
+        w = 0.25 * s;
+        x = (r[2][1] - r[1][2]) / s;
+        y = (r[0][2] - r[2][0]) / s;
+        z = (r[1][0] - r[0][1]) / s;
+    } else if r[0][0] > r[1][1] && r[0][0] > r[2][2] {
+        let s = (1. + r[0][0] - r[1][1] - r[2][2]).sqrt() * 2.;
+        w = (r[2][1] - r[1][2]) / s;
+        x = 0.25 * s;
+        y = (r[0][1] + r[1][0]) / s;
+        z = (r[0][2] + r[2][0]) / s;
+    } else if r[1][1] > r[2][2] {
+        let s = (1. + r[1][1] - r[0][0] - r[2][2]).sqrt() * 2.;
+        w = (r[0][2] - r[2][0]) / s;
+        x = (r[0][1] + r[1][0]) / s;
+        y = 0.25 * s;
+        z = (r[1][2] + r[2][1]) / s;
+    } else {
+        let s = (1. + r[2][2] - r[0][0] - r[1][1]).sqrt() * 2.;
+        w = (r[1][0] - r[0][1]) / s;
+        x = (r[0][2] + r[2][0]) / s;
+        y = (r[1][2] + r[2][1]) / s;
+        z = 0.25 * s;
+    }
+    if w < 0. {
+        Quat::from_xyzw(-x, -y, -z, -w)
+    } else {
+        Quat::from_xyzw(x, y, z, w)
+    }
 }
 
 #[path = "../tests/look_joint.rs"]

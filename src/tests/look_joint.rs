@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn run() {
     the_head_follows_a_point_in_front_and_returns_without_one();
     the_exes_look_at_callback_agrees_bit_for_bit();
+    the_logged_head_quaternion_normalises_rows_not_the_result();
 }
 
 fn identity() -> Mat34 {
@@ -104,4 +105,26 @@ fn the_exes_look_at_callback_agrees_bit_for_bit() {
         }
     }
     assert!(calls > 0);
+}
+
+/// The probe's `head_q` normalises the matrix's rows and does not normalise the quaternion, so a
+/// stretched head (the first frame of the run brake, rows of lengths 0.98 to 1.06) logs a
+/// quaternion that is not a unit one. Expected values: the probe's `quatOfMatrix34`
+/// (`probe-mod/src/lookat.cpp`) evaluated on this matrix in double precision.
+#[cfg_attr(test, test)]
+fn the_logged_head_quaternion_normalises_rows_not_the_result() {
+    let stretched: Mat34 = [
+        [-0.75047994, -0.55082625, 0.105601676, -282.0366],
+        [0.5911422, -0.9387423, -0.27034268, 71.31575],
+        [0.26934674, -0.22050731, 0.8879844, 9.510061],
+    ];
+    let q = quat_of_rotation(&stretched);
+    let expected = [0.104_790_76, -0.124_109_82, 0.942_627_3, 0.293_233_58];
+    for (got, want) in [q.x, q.y, q.z, q.w].into_iter().zip(expected) {
+        assert!((got - want).abs() < 1e-5, "{q:?} vs {expected:?}");
+    }
+    assert!(
+        (q.length() - 1.).abs() > 1e-3,
+        "not a unit quaternion: {q:?}"
+    );
 }
