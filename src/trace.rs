@@ -1794,7 +1794,15 @@ impl TraceFile {
     /// The cap in flight, as the recording shows it at a row: its nerve and
     /// steps, where it is and how fast it moves (the move of the frame). The
     /// arrival row, where the cap already sits on the player, is not flight.
-    fn cap_moment(&self, row: usize) -> Option<crate::cap::Moment> {
+    ///
+    /// Over water a throw's step also lifts the cap's position (`changeThrowParamInWater`, which
+    /// never touches the velocity): `lift` answers how much it lifted a step begun at a spot, and
+    /// the step's velocity is the displacement without it.
+    fn cap_moment(
+        &self,
+        row: usize,
+        lift: Option<&dyn Fn(Vec3) -> f32>,
+    ) -> Option<crate::cap::Moment> {
         use crate::cap::{CapNerve, Moment};
         let flying = |row: usize| {
             let nerve = CapNerve::from_name(self.cell(row, "cap_state")?)?;
@@ -1811,7 +1819,14 @@ impl TraceFile {
         let velocity = |row: usize| -> Option<Vec3> {
             let spot = self.cap_spot(row)?;
             if row > 0 && flying(row - 1).is_some() {
-                return Some(spot - self.cap_spot(row - 1)?);
+                let before = self.cap_spot(row - 1)?;
+                let lifted = matches!(
+                    flying(row - 1),
+                    Some(CapNerve::Throw | CapNerve::ThrowBrake)
+                )
+                .then(|| lift.map_or(0., |lift| lift(before)))
+                .unwrap_or(0.);
+                return Some(spot - before - Vec3::Y * lifted);
             }
             let player = Vec3::new(
                 self.number(row, "px")?,
@@ -1977,6 +1992,14 @@ impl TraceFile {
     }
     /// The injectable player state a row records, for lockstep stepping.
     pub fn snapshot(&self, row: usize) -> Snapshot {
+        self.snapshot_over_water(row, None)
+    }
+    /// `snapshot`, with the lift a cap's throw step gets over water (see `cap_moment`).
+    pub fn snapshot_over_water(
+        &self,
+        row: usize,
+        throw_lift: Option<&dyn Fn(Vec3) -> f32>,
+    ) -> Snapshot {
         let n = |c| self.number(row, c).unwrap_or(0.);
         let anim_name = self.cell(row, "anim").unwrap_or("Wait");
         let speed = self
@@ -2124,7 +2147,7 @@ impl TraceFile {
             counters,
             run: self.run_hint(row),
             next_clip: self.next_clip(row),
-            cap: self.cap_moment(row),
+            cap: self.cap_moment(row, throw_lift),
             throw: self.throw_hint(row),
             catching: self.catching(row),
             sub: self.sub_hint(row),

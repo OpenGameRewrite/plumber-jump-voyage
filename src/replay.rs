@@ -555,7 +555,9 @@ fn snapshot_with_geometry(
     row: usize,
     course: &Course,
 ) -> crate::movement::Snapshot {
-    let mut snapshot = game.snapshot(row);
+    let throw_lift =
+        |spot| crate::cap::throw_water_lift(course.mesh.as_deref(), course.water_areas(), spot);
+    let mut snapshot = game.snapshot_over_water(row, Some(&throw_lift));
     if let Some((codes, _, _)) = &mut snapshot.floor_contact
         && let Some(mesh) = &course.mesh
     {

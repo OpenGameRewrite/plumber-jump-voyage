@@ -27,6 +27,7 @@ pub(super) fn run() {
     a_return_pressed_into_a_wall_ends_when_the_counter_passes_45();
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
     the_cap_thrown_from_a_slope_flies_along_the_slope();
+    a_recorded_throw_over_water_keeps_its_lift_out_of_the_velocity();
 }
 
 #[cfg_attr(test, test)]
@@ -1187,4 +1188,40 @@ fn the_cap_thrown_from_a_slope_flies_along_the_slope() {
         1,
     );
     assert_eq!(level.front, Vec3::Z);
+}
+
+/// `HackCap::changeThrowParamInWater` lifts the position of a throw step, never its velocity: the
+/// pool's surface (100) is 20 under a cap at 120, which draws it up by `(-20 + 50) / 4`; a sunk cap
+/// and one out of the area get nothing. A recording's rows show the lifted position, so the resumed
+/// velocity, and the speed taken from it, are the displacement without the lift.
+#[cfg_attr(test, test)]
+fn a_recorded_throw_over_water_keeps_its_lift_out_of_the_velocity() {
+    let pool = WaterAreas::demo_box(0., 0., 500., 500., 100., 1000.);
+    let lift_at = |y| crate::cap::throw_water_lift(None, &pool, Vec3::new(0., y, 0.));
+    // (The demo area's box placement rounds the surface by an ulp.)
+    assert!((lift_at(120.) - 7.5).abs() < 1e-4, "{}", lift_at(120.));
+    assert_eq!(lift_at(50.), 0.);
+    assert_eq!(
+        crate::cap::throw_water_lift(None, &pool, Vec3::new(2000., 120., 0.)),
+        0.
+    );
+    let rows = crate::trace::TraceFile::parse(
+        "frame,state,cap_state,cap_anim,cap_px,cap_py,cap_pz,cap_step,px,py,pz,fx,fz
+         0,Swim/SwimSpinCapSurface,Throw,FlyingWaitR,0,46,182,0,0,-23,0,0,1
+         1,Swim/SwimSpinCapSurface,Throw,FlyingWaitR,0,60,214,1,0,-23,0,0,1
+         2,Swim/SwimSpinCapSurface,Throw,FlyingWaitR,0,70,246,2,0,-23,0,0,1
+",
+    )
+    .unwrap();
+    let moment = |lift: Option<&dyn Fn(Vec3) -> f32>| {
+        rows.snapshot_over_water(2, lift)
+            .cap
+            .expect("a cap in flight")
+    };
+    let raw = moment(None);
+    assert_eq!(raw.velocity, Vec3::new(0., 10., 32.));
+    assert_eq!(raw.speed, Vec3::new(0., 14., 32.).length());
+    let lifted = moment(Some(&|_| 4.));
+    assert_eq!(lifted.velocity, Vec3::new(0., 6., 32.));
+    assert_eq!(lifted.speed, Vec3::new(0., 10., 32.).length());
 }

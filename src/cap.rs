@@ -407,6 +407,25 @@ struct CapWater {
     stay_flash: bool,
 }
 
+/// What `HackCap::changeThrowParamInWater` adds to the height of a cap that has not sunk: a
+/// quarter of the way to `SKIM_HEIGHT` above the surface the finder found.
+fn lift_toward_surface(finder: &SurfaceFinder) -> f32 {
+    (finder.distance + SKIM_HEIGHT).max(0.) * FLOAT_RATE
+}
+
+/// The lift a throw nerve's step added to the height of a cap that began it at `spot` (centimetres,
+/// replay-relative) and did not sink: zero out of the water areas, with no surface in reach, or
+/// once sunk. A recording shows the lifted position, so the velocity the nerve held is the row's
+/// displacement less this lift (it is added to the position, never to the velocity).
+pub fn throw_water_lift(mesh: Option<&TriangleMesh>, water: &WaterAreas, spot: Vec3) -> f32 {
+    let at = stage_frame(mesh, spot);
+    let finder = water.update_finder(at, Vec3::Y, WATER_FIND_DISTANCE);
+    if !finder.found || water.is_water(at) && Cap::deep(&finder) {
+        return 0.;
+    }
+    lift_toward_surface(&finder)
+}
+
 /// What the rolling throw keeps: the up axis the model rolls about (`+0x24c`), how long and how
 /// hard it flies, and the grounding effect (`+0x30c`: running, and called in this step).
 #[derive(Clone, Copy, Debug)]
@@ -1461,8 +1480,7 @@ impl Cap {
         if was_submerged || self.water.submerged || !self.water.finder.found {
             return;
         }
-        let lift = (self.water.finder.distance + SKIM_HEIGHT).max(0.) * FLOAT_RATE;
-        self.spot.y += lift;
+        self.spot.y += lift_toward_surface(&self.water.finder);
     }
 
     /// `HackCap::control`'s share: the skimming effect ends when the nerve is not a throw nor the
