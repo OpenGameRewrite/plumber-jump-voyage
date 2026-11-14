@@ -1911,8 +1911,12 @@ impl TraceFile {
         Some(ThrowHint {
             // HackCap's nerve set during startSpinAttack is exposed a row
             // later; -1 is the pending nerve step in the starting row.
+            // The spin state's first execution starts the spin attack (`startSpinAttack`) in the
+            // row it shows at step 1, whatever the cap's own row still says (a cap that arrived
+            // in that very step reads `Catch`).
             winding: age > 0
                 || state_runs
+                || state.starts_with("SpinCap/") && self.number(row, "state_step") == Some(1.)
                 || self.cell(row, "cap_state") == Some("")
                     && self.number(row, "cap_step") == Some(-1.),
             age: age as u32,
@@ -2061,6 +2065,19 @@ impl TraceFile {
             {
                 counters.push((format!("pre_{name}"), value as i64));
             }
+        }
+        // The cap-throw buffer the probe reads from `PlayerJudgePreInputCapThrow` (its last
+        // field, in hex, counts the frames the press stays valid). The step that consumed the
+        // press has already emptied the rewrite's own count, which a replayed step needs again.
+        if let Some(frames) = self
+            .cell(row, "pre_input")
+            .unwrap_or("")
+            .split('|')
+            .find_map(|item| item.strip_prefix("capthrow:"))
+            .and_then(|fields| fields.rsplit('/').next())
+            .and_then(|count| i64::from_str_radix(count, 16).ok())
+        {
+            counters.push(("pre_throw".to_string(), frames));
         }
         // The steps the ground states have gone on without ground under them
         // (`PlayerJudgeSpeedCheckFall`): the airborne rows before this one.

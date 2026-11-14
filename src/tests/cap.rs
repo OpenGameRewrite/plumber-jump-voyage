@@ -6,6 +6,7 @@ pub(super) fn run() {
     lockstep_spiral_entry_retains_its_launch_front();
     lockstep_keeps_the_cap_water_and_throw_parameters();
     lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row();
+    a_row_restores_the_throw_buffer_and_the_spin_attack_its_first_step_started();
     lockstep_return_keeps_the_completed_pose_and_action();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
@@ -1296,4 +1297,29 @@ fn lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row() {
     other.step = 5;
     other.continue_clip(&eased);
     assert_eq!(other.up, Vec3::Y);
+}
+
+/// The probe's cap-throw buffer (`PlayerJudgePreInputCapThrow`, the last field of `capthrow:` in
+/// hex) is the rewrite's `pre_throw`, and the spin state's first execution (step 1) has already
+/// started the spin attack in the row the cap's own state still shows as `Catch`.
+#[cfg_attr(test, test)]
+fn a_row_restores_the_throw_buffer_and_the_spin_attack_its_first_step_started() {
+    let rows = crate::trace::TraceFile::parse(
+        "frame,state,anim,cap_state,cap_anim,state_step,sub_step,pre_input
+         0,Wait/Wait,Wait,Return,FlyingWaitR,40,40,jump:1/21/2/21/0/0/3|capthrow:1/21/2/21/3/21/a|hack:1/21/0
+         1,SpinCap/SpinGround,Wait,Return,CatchCap,0,0,capthrow:1/21/2/21/3/21/0
+         2,SpinCap/SpinGround,SpinCapStart2Right,Catch,CatchCap,1,1,capthrow:1/21/2/21/3/21/0
+",
+    )
+    .unwrap();
+    let buffer = |row: usize| {
+        rows.snapshot(row)
+            .counters
+            .into_iter()
+            .find_map(|(name, value)| (name == "pre_throw").then_some(value))
+    };
+    assert_eq!(buffer(0), Some(10));
+    assert_eq!(buffer(1), Some(0));
+    assert!(!rows.snapshot(1).throw.unwrap().winding);
+    assert!(rows.snapshot(2).throw.unwrap().winding);
 }

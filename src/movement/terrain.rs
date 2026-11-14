@@ -20,6 +20,11 @@ pub(crate) struct CollisionState {
     /// The pole keeper's nerve, steps and latches (`PlayerStatePoleClimb`), which the replayed
     /// step would otherwise find already advanced by the step it repeats.
     pole: super::pole::PoleControl,
+    /// The throws in a row and the window a catch leaves for the next one
+    /// (`PlayerSpinCapAttack::setupAttackInfo`): a replayed throw press counts once.
+    throw_count: u32,
+    throw_continuous: bool,
+    catch_window: u32,
 }
 use crate::collider::Form;
 use crate::geometry::CollisionCodes;
@@ -66,6 +71,9 @@ impl Player {
             wall: self.wall,
             ground_lost: self.ground_lost,
             pole: self.pole.clone(),
+            throw_count: self.throwing.count,
+            throw_continuous: self.throwing.continuous,
+            catch_window: self.catch_window,
         }
     }
 
@@ -85,6 +93,9 @@ impl Player {
         self.wall = state.wall;
         self.ground_lost = state.ground_lost;
         self.pole = state.pole.clone();
+        self.throwing.count = state.throw_count;
+        self.throwing.continuous = state.throw_continuous;
+        self.catch_window = state.catch_window;
     }
 
     /// FloorCode22 comes from the contacted geometry, never its material or

@@ -265,6 +265,7 @@ pub(super) fn run() {
     the_splash_arrows_point_into_the_water_for_entering_and_out_of_it_for_leaving();
     poles();
     a_replayed_pole_step_finds_the_keeper_as_the_row_before_left_it();
+    a_replayed_throw_press_counts_once();
     slope_slide();
     burn_and_soot();
     quicksand();
@@ -2352,4 +2353,19 @@ fn the_cap_bounce_reads_its_rising_test_after_the_just_land_conversion() {
         p.v.with_y(0.),
         converted.with_y(0.) * t::TRAMPLE_RISING_BRAKE
     );
+}
+
+/// `setupAttackInfo` counts a throw once: the replay of a deferred choice starts from the count
+/// the row before it left, not the one the step it repeats already raised.
+#[cfg_attr(test, test)]
+fn a_replayed_throw_press_counts_once() {
+    let mut p = Player::default();
+    p.catch_window = 10;
+    p.throwing.count = 1;
+    let before = p.collision_state();
+    p.setup_attack_info();
+    assert_eq!(p.throwing.count, 2);
+    p.restore_collision(&before);
+    p.setup_attack_info();
+    assert_eq!(p.throwing.count, 2);
 }
