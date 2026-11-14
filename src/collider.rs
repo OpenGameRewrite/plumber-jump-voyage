@@ -254,6 +254,11 @@ impl Keeper {
                 index,
             });
         }
+        // The helper runs right after the keeper is made, before the body shapes are created
+        // (`PlayerColliderHakoniwa::init`: ctor 0x3f881c, helper 0x43657c, then the spheres,
+        // then `updateShape`), so the arrows are the first shapes of the keeper and
+        // `updateShape`'s greedy enclosing sphere starts from them.
+        shapes.rotate_right(3);
         // `updateShape`: the step range is the smallest range of any shape
         // (the bounding sphere is never smaller than one of them).
         let check_step = shapes

@@ -60,13 +60,16 @@ fn standing_is_held_by_the_arrows() {
 fn upright_fall_needs_to_go_below_the_floor() {
     let mesh = flat();
     let mut c = PlayerCollider::new(Form::Normal);
+    // (The pushes come out of the arrows first, as the keeper's shapes are ordered, and the
+    // landing may sit a rounding step off the surface: a few 1e-7.)
+    let on_floor = |y: f32| y.abs() < 1e-5;
     let (pos, grounded) = fall(&mut c, &mesh, 31., -31.);
     assert_eq!((pos.y, grounded), (0., false));
     let (pos, grounded) = fall(&mut c, &mesh, pos.y, -32.);
-    assert_eq!((pos.y, grounded), (0., true));
+    assert!(on_floor(pos.y) && grounded, "{pos:?}");
     // A fall from higher up, going in by 17.5 at once, ends on the surface.
     let (pos, grounded) = fall(&mut c, &mesh, 10.5, -28.);
-    assert_eq!((pos.y, grounded), (0., true));
+    assert!(on_floor(pos.y) && grounded, "{pos:?}");
 }
 
 /// The roll's hop lands exactly on the floor and is already touching it: the
@@ -298,8 +301,22 @@ fn a_reset_body_skips_the_hair_touch_at_the_start_of_its_move() {
 #[cfg_attr(test, test)]
 fn the_bounding_radius_and_the_growth_of_a_reset_collider() {
     let keeper = Keeper::new(Form::Normal);
+    // The arrows are the keeper's first three shapes (`PlayerColliderHakoniwa::init` runs the
+    // arrow helper 0x43657c before creating the spheres), and the greedy enclosing sphere of
+    // `updateShape` (0x3f8dac) depends on the order: arrows first it is 107.837, spheres first
+    // (the old order) 95.532.
     assert!(
-        (keeper.bounding_radius - 95.532).abs() < 0.01,
+        keeper.shapes[..3]
+            .iter()
+            .all(|s| matches!(s, Shape::Arrow { .. }))
+    );
+    assert!(
+        keeper.shapes[3..]
+            .iter()
+            .all(|s| matches!(s, Shape::Sphere { .. }))
+    );
+    assert!(
+        (keeper.bounding_radius - 107.837).abs() < 0.01,
         "{}",
         keeper.bounding_radius
     );
