@@ -4833,12 +4833,22 @@ impl Player {
         gravity: f32,
         then: impl FnOnce(&mut Player) + Send + Sync + 'static,
     ) {
+        self.convert_velocity_on_just_land_jump(mode);
+        self.enter_jump_state(mode, anim, power, gravity, then);
+    }
+    /// The rest of the jump state's appearance, once `convert_velocity_on_just_land_jump` has
+    /// run. A caller that reads the velocity for its own request (the jump's power, the cap
+    /// bounce's rising test) converts first, as `appear` does before every request's branch.
+    fn enter_jump_state(
+        &mut self,
+        mode: Move,
+        anim: impl Into<Option<&'static str>>,
+        power: f32,
+        gravity: f32,
+        then: impl FnOnce(&mut Player) + Send + Sync + 'static,
+    ) {
         self.hip_drop_reflect = false;
         self.pre_jump = 0;
-        if mode == Move::Jump {
-            // `appear` runs when the state is chosen, with the collider of the step before.
-            self.convert_velocity_on_just_land_jump();
-        }
         let requested_clip = anim.into();
         // Only special requests author a clip in appear. The ordinary jump selects its side
         // in exeJump's first step (0x47268c), before the take-off pose is installed.
@@ -4864,14 +4874,19 @@ impl Player {
             self.nerve.keep_clip();
         }
     }
-    /// `PlayerStateJump::appear` (0x470c34..0x470cf4), for the ordinary jump: a jump chosen on the step the collider
+    /// `PlayerStateJump::appear` (0x470c34..0x470cf4): a jump chosen on the step the collider
     /// just touched the ground (`rs::isJustLand`, 0x470c44) carries the velocity over from the
     /// plane it fell to the floor's: `al::alongVectorNormalH(v, -gravity, groundNormal)` less the
     /// floor's normal times the player constant's `Gravity` (`PlayerConst` slot 0, 3.0 at
-    /// `PlayerConst.cpp:6`, not overridden by PlayerConstMoon). Nothing else of the first step
-    /// has read the velocity yet, so the take-off sees the converted one.
-    fn convert_velocity_on_just_land_jump(&mut self) {
-        if !self.is_just_land() {
+    /// `PlayerConst.cpp:6`, not overridden by PlayerConstMoon). The block opens the one `appear`
+    /// (0x470b9c), ahead of the request table (0x18db678), so it runs for every request that
+    /// state takes: the ordinary, double and triple jumps, the cap's bounce and catch jumps, the
+    /// spin and pound jumps, the backflip and the side somersault (their clips are the state's own
+    /// nerves `exeJumpBack` 0x47392c and `exeJumpTurn` 0x473630). The long jump and the roll's jump
+    /// are `PlayerStateLongJump`, which has an `appear` of its own. The jump's first step has not
+    /// read the velocity yet, so the take-off sees the converted one.
+    fn convert_velocity_on_just_land_jump(&mut self, mode: Move) {
+        if matches!(mode, Move::LongJump | Move::RollJump) || !self.is_just_land() {
             return;
         }
         let normal = self.collided_ground_normal();
@@ -5127,6 +5142,8 @@ impl Player {
                 self.constants.jump_gravity,
             ),
         };
+        // `appear` converts the velocity the power is then read from.
+        self.convert_velocity_on_just_land_jump(mode);
         let (speed_min, speed_max) = if self.model_2d() && self.dimension.in_area {
             // calcJumpPowerMin/Max and BorderSpeedMin/Max: 0x471cdc..0x471e84.
             // Border getters0x43d02c/0x43d034 read PlayerConst's 12/18 values.
@@ -5146,7 +5163,7 @@ impl Player {
         };
         let ground_up = self.ground_pose_up_for_jump();
         let requested_clip = (kind != 0 || self.force_run.is_active()).then_some(clip);
-        self.jump_with(mode, requested_clip, power, gravity, move |p| {
+        self.enter_jump_state(mode, requested_clip, power, gravity, move |p| {
             if let Some(horizontal) = p.takeoff_h {
                 p.set_h(horizontal);
             }
@@ -6441,9 +6458,11 @@ impl Player {
         } else {
             "JumpReverse"
         };
+        // The rising test reads the velocity `appear` has converted (0x47116c, after 0x470c34).
+        self.convert_velocity_on_just_land_jump(Move::CapBounce);
         let falling = self.v.y <= 0.;
         let pushing = self.tilt >= STICK_DEADZONE;
-        self.jump_with(
+        self.enter_jump_state(
             Move::CapBounce,
             clip,
             t::TRAMPLE_HIGH_JUMP_POWER,

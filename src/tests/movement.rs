@@ -230,6 +230,7 @@ pub(super) fn run() {
     crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();
     the_jump_chosen_on_the_landing_step_carries_the_velocity_to_the_floor_plane();
+    the_cap_bounce_reads_its_rising_test_after_the_just_land_conversion();
     original_simulation_trace();
     the_spin_throw_brakes_only_along_its_front();
     state_changes_follow_the_nerve_machine();
@@ -2248,26 +2249,77 @@ fn every_swim_throw_names_the_plain_swim_clip() {
 }
 
 /// `PlayerStateJump::appear` (0x470c34..0x470cf4): only a jump chosen on the step `rs::isJustLand`
-/// holds converts the velocity (`alongVectorNormalH(v, up, normal)` less `normal * 3`).
+/// holds converts the velocity (`alongVectorNormalH(v, up, normal)` less `normal * 3`). The block
+/// opens the one `appear`, so every request of that state converts; the long jump and the roll's
+/// jump are `PlayerStateLongJump` and do not.
 #[cfg_attr(test, test)]
 fn the_jump_chosen_on_the_landing_step_carries_the_velocity_to_the_floor_plane() {
     let normal = Vec3::new(0.5, 0.5f32.mul_add(-0.5, 1.).sqrt() * 1.1547005, 0.).normalize();
     let incoming = Vec3::new(0., -9., 6.);
-    for (contact, converts) in [(1, true), (2, false)] {
-        let mut p = Player {
-            mode: Move::Fall,
-            grounded: true,
-            ground_contact: contact,
-            mesh_ground: Some(normal),
-            v: incoming,
-            ..default()
-        };
-        p.jump_with(Move::Jump, None, 18., 3., |_| {});
-        let expected = if converts {
-            pose_math::along_vector_normal_h(incoming, Vec3::Y, normal) - normal * 3.
-        } else {
-            incoming
-        };
-        assert_eq!(p.v, expected, "ground contact {contact}");
+    let converted = pose_math::along_vector_normal_h(incoming, Vec3::Y, normal) - normal * 3.;
+    let jump_state_modes = [
+        Move::Jump,
+        Move::DoubleJump,
+        Move::TripleJump,
+        Move::CapBounce,
+        Move::CatchJump,
+        Move::SpinJump,
+        Move::PoundJump,
+        Move::Sideflip,
+        Move::Backflip,
+    ];
+    let long_jump_state_modes = [Move::LongJump, Move::RollJump];
+    for (mode, in_jump_state) in jump_state_modes
+        .into_iter()
+        .map(|mode| (mode, true))
+        .chain(long_jump_state_modes.into_iter().map(|mode| (mode, false)))
+    {
+        for (contact, just_landed) in [(1, true), (2, false)] {
+            let mut p = Player {
+                mode: Move::Fall,
+                grounded: true,
+                ground_contact: contact,
+                mesh_ground: Some(normal),
+                v: incoming,
+                ..default()
+            };
+            p.jump_with(mode, None, 18., 3., |_| {});
+            let expected = if in_jump_state && just_landed {
+                converted
+            } else {
+                incoming
+            };
+            assert_eq!(p.v, expected, "{mode:?}, ground contact {contact}");
+        }
     }
+}
+
+/// The cap bounce's rising test (`PlayerStateJump::appear`, 0x47116c) reads the velocity the
+/// just-land block (0x470c34) has converted: a fall onto an uphill plane that the conversion
+/// turns into a rise brakes the bounce's horizontal speed like any other rising bounce.
+#[cfg_attr(test, test)]
+fn the_cap_bounce_reads_its_rising_test_after_the_just_land_conversion() {
+    let normal = Vec3::new(-0.6, 0.8, 0.);
+    let incoming = Vec3::new(8., -1., 0.);
+    let converted = pose_math::along_vector_normal_h(incoming, Vec3::Y, normal) - normal * 3.;
+    assert!(
+        converted.y > 0. && incoming.y <= 0.,
+        "the fixture must separate the two readings: {converted:?}"
+    );
+    let mut p = Player {
+        mode: Move::Fall,
+        grounded: true,
+        ground_contact: 1,
+        mesh_ground: Some(normal),
+        v: incoming,
+        tilt: 1.,
+        ..default()
+    };
+    p.trample_jump();
+    let (_, work) = p.nerve.start();
+    work.expect("the jump's first-step work")(&mut p);
+    assert_eq!(
+        p.v.with_y(0.),
+        converted.with_y(0.) * t::TRAMPLE_RISING_BRAKE
+    );
 }
