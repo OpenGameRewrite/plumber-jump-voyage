@@ -229,6 +229,7 @@ pub(super) fn run() {
     wait_snapshot_separates_slope_pull_from_travel();
     crawl_wait_choice_restores_normal_pull();
     skate_requires_the_contacted_floor_and_keeps_neutral_inertia();
+    the_jump_chosen_on_the_landing_step_carries_the_velocity_to_the_floor_plane();
     original_simulation_trace();
     the_spin_throw_brakes_only_along_its_front();
     state_changes_follow_the_nerve_machine();
@@ -2243,5 +2244,30 @@ fn every_swim_throw_names_the_plain_swim_clip() {
             "SwimSpinCapStart",
             "{count} {continuous}"
         );
+    }
+}
+
+/// `PlayerStateJump::appear` (0x470c34..0x470cf4): only a jump chosen on the step `rs::isJustLand`
+/// holds converts the velocity (`alongVectorNormalH(v, up, normal)` less `normal * 3`).
+#[cfg_attr(test, test)]
+fn the_jump_chosen_on_the_landing_step_carries_the_velocity_to_the_floor_plane() {
+    let normal = Vec3::new(0.5, 0.5f32.mul_add(-0.5, 1.).sqrt() * 1.1547005, 0.).normalize();
+    let incoming = Vec3::new(0., -9., 6.);
+    for (contact, converts) in [(1, true), (2, false)] {
+        let mut p = Player {
+            mode: Move::Fall,
+            grounded: true,
+            ground_contact: contact,
+            mesh_ground: Some(normal),
+            v: incoming,
+            ..default()
+        };
+        p.jump_with(Move::Jump, None, 18., 3., |_| {});
+        let expected = if converts {
+            pose_math::along_vector_normal_h(incoming, Vec3::Y, normal) - normal * 3.
+        } else {
+            incoming
+        };
+        assert_eq!(p.v, expected, "ground contact {contact}");
     }
 }

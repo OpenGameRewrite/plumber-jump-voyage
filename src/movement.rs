@@ -368,6 +368,8 @@ pub(crate) mod wall_slide;
 mod wet;
 pub use ground::turn_power;
 use ground::{GRAVITY_MOVE, GroundMove, PivotTurn, STICK_DEADZONE, SteerInput};
+/// `PlayerConst::mGravity` (`PlayerConst.cpp:6`), the value of the constant's slot 0 (`getGravity`).
+const PLAYER_CONST_GRAVITY: f32 = 3.;
 use ledge::WallCatchControl;
 use plane::along_vector_normal_h;
 use pole::PoleControl;
@@ -4831,6 +4833,10 @@ impl Player {
     ) {
         self.hip_drop_reflect = false;
         self.pre_jump = 0;
+        if mode == Move::Jump {
+            // `appear` runs when the state is chosen, with the collider of the step before.
+            self.convert_velocity_on_just_land_jump();
+        }
         let requested_clip = anim.into();
         // Only special requests author a clip in appear. The ordinary jump selects its side
         // in exeJump's first step (0x47268c), before the take-off pose is installed.
@@ -4855,6 +4861,20 @@ impl Player {
             // The first-step work starts an ordinary jump's clip itself.
             self.nerve.keep_clip();
         }
+    }
+    /// `PlayerStateJump::appear` (0x470c34..0x470cf4), for the ordinary jump: a jump chosen on the step the collider
+    /// just touched the ground (`rs::isJustLand`, 0x470c44) carries the velocity over from the
+    /// plane it fell to the floor's: `al::alongVectorNormalH(v, -gravity, groundNormal)` less the
+    /// floor's normal times the player constant's `Gravity` (`PlayerConst` slot 0, 3.0 at
+    /// `PlayerConst.cpp:6`, not overridden by PlayerConstMoon). Nothing else of the first step
+    /// has read the velocity yet, so the take-off sees the converted one.
+    fn convert_velocity_on_just_land_jump(&mut self) {
+        if !self.is_just_land() {
+            return;
+        }
+        let normal = self.collided_ground_normal();
+        self.v = pose_math::along_vector_normal_h(self.v, Vec3::Y, normal)
+            - normal * PLAYER_CONST_GRAVITY;
     }
     fn leave_ground(&mut self, mode: Move, power: f32, gravity: f32) {
         // The jump nerve's first step resets its water judge (`PlayerJudgeOutInWater`).
