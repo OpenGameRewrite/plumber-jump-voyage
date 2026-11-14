@@ -2363,8 +2363,10 @@ fn the_cap_bounce_reads_its_rising_test_after_the_just_land_conversion() {
 /// the row before it left, not the one the step it repeats already raised.
 #[cfg_attr(test, test)]
 fn a_replayed_throw_press_counts_once() {
-    let mut p = Player::default();
-    p.catch_window = 10;
+    let mut p = Player {
+        catch_window: 10,
+        ..default()
+    };
     p.throwing.count = 1;
     let before = p.collision_state();
     p.setup_attack_info();
@@ -2379,8 +2381,8 @@ fn a_replayed_throw_press_counts_once() {
 /// keeps it; a pose that prints differently is replaced by the recorded one.
 #[cfg_attr(test, test)]
 fn injection_keeps_the_own_pose_that_prints_as_the_recorded_one() {
-    let exact = Quat::from_xyzw(0., -0.7071068, 0., 0.7071068);
-    let printed = Quat::from_xyzw(0., -0.707107, 0., 0.707107);
+    let exact = Quat::from_xyzw(0., 0.25881904, 0., 0.9659258);
+    let printed = Quat::from_xyzw(0., 0.258819, 0., 0.965926);
     let mut p = Player::default();
     p.set_pose(exact);
     let snapshot = |pose| Snapshot {
