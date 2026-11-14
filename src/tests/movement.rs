@@ -2451,8 +2451,10 @@ fn a_replayed_step_finds_the_caps_pending_nerve_as_the_row_before_left_it() {
     p.restore_collision(&before);
     assert_eq!(p.cap.as_ref().unwrap().pending_nerve(), None);
     p.cap = None;
+    p.cap_serial = 9;
     p.restore_collision(&before);
     assert!(p.cap.is_some());
+    assert_eq!(p.cap_serial, 0);
 }
 
 /// The cap reads the throw button as the frame before left it: a replayed step reads the same

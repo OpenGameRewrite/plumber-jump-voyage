@@ -32,6 +32,9 @@ pub(crate) struct CollisionState {
     /// the player's update, so a replayed step starts from this one, not from the cap the step it
     /// repeats already moved.
     cap: Option<Cap>,
+    /// The serial the next cap action gets: a cap the replay starts again is the same cap, whose
+    /// clip starts were already recorded.
+    cap_serial: u32,
     /// The throw button as the frame before left it, which the cap reads (`update_cap`).
     throw_held_before: bool,
 }
@@ -85,6 +88,7 @@ impl Player {
             throw_continuous: self.throwing.continuous,
             catch_window: self.catch_window,
             cap: self.cap.clone(),
+            cap_serial: self.cap_serial,
             throw_held_before: self.throw_held_before,
         }
     }
@@ -110,6 +114,7 @@ impl Player {
         self.throwing.continuous = state.throw_continuous;
         self.catch_window = state.catch_window;
         self.cap = state.cap.clone();
+        self.cap_serial = state.cap_serial;
         self.throw_held_before = state.throw_held_before;
     }
 
