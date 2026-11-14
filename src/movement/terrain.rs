@@ -27,6 +27,8 @@ pub(crate) struct CollisionState {
     throw_count: u32,
     throw_continuous: bool,
     catch_window: u32,
+    /// The nerve the cap was given in that step and takes in the next (see `Cap::pending_nerve`).
+    cap_pending: Option<crate::cap::CapNerve>,
 }
 use crate::collider::Form;
 use crate::geometry::CollisionCodes;
@@ -77,6 +79,7 @@ impl Player {
             throw_count: self.throwing.count,
             throw_continuous: self.throwing.continuous,
             catch_window: self.catch_window,
+            cap_pending: self.cap.as_ref().and_then(Cap::pending_nerve),
         }
     }
 
@@ -100,6 +103,9 @@ impl Player {
         self.throwing.count = state.throw_count;
         self.throwing.continuous = state.throw_continuous;
         self.catch_window = state.catch_window;
+        if let Some(cap) = &mut self.cap {
+            cap.set_pending_nerve(state.cap_pending);
+        }
     }
 
     /// FloorCode22 comes from the contacted geometry, never its material or

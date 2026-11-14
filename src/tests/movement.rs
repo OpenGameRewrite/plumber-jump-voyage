@@ -266,6 +266,8 @@ pub(super) fn run() {
     poles();
     a_replayed_pole_step_finds_the_keeper_as_the_row_before_left_it();
     a_replayed_throw_press_counts_once();
+    a_replayed_step_finds_the_caps_pending_nerve_as_the_row_before_left_it();
+    injection_keeps_the_cap_jump_the_preceding_step_started();
     injection_keeps_the_own_pose_that_prints_as_the_recorded_one();
     slope_slide();
     burn_and_soot();
@@ -2398,4 +2400,53 @@ fn injection_keeps_the_own_pose_that_prints_as_the_recorded_one() {
         ..snapshot(printed)
     });
     assert_eq!(p.pose_tilt.unwrap().pose, printed);
+}
+
+/// The jump off the cap is the actor's `Jump` nerve in a recording; injection of the row that
+/// shows it, in the step the preceding step reached, keeps the request (its gravity) that chose it.
+#[cfg_attr(test, test)]
+fn injection_keeps_the_cap_jump_the_preceding_step_started() {
+    let mut p = Player {
+        mode: Move::CapBounce,
+        gravity: 1.0,
+        frame: 1,
+        ..default()
+    };
+    let row = |frames| Snapshot {
+        mode: Some(Move::Jump),
+        state_frames: Some(frames),
+        ..Default::default()
+    };
+    p.inject(&row(1));
+    assert_eq!(p.mode, Move::CapBounce);
+    assert_eq!(p.gravity, 1.0);
+    // Another step of the state is not the one the own state reached.
+    p.inject(&row(5));
+    assert_eq!(p.mode, Move::Jump);
+}
+
+/// The nerve the sensor phase gave the cap rewinds with the deferred-choice replay: the repeated
+/// step must be able to give it again.
+#[cfg_attr(test, test)]
+fn a_replayed_step_finds_the_caps_pending_nerve_as_the_row_before_left_it() {
+    let launch = Launch {
+        front: Vec3::Z,
+        kind: Throw::Forward,
+        left: false,
+        air: false,
+        continuous: false,
+        spiral_side: 1.,
+        up: Vec3::Y,
+    };
+    let mut p = Player {
+        cap: Some(Cap::start(launch, Vec3::ZERO, 1)),
+        ..default()
+    };
+    let before = p.collision_state();
+    p.cap
+        .as_mut()
+        .unwrap()
+        .set_pending_nerve(Some(crate::cap::CapNerve::Trample));
+    p.restore_collision(&before);
+    assert_eq!(p.cap.as_ref().unwrap().pending_nerve(), None);
 }

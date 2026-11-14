@@ -677,6 +677,14 @@ impl Cap {
         self.trampled = Some(CapNerve::Trample);
         true
     }
+    /// The nerve a trample or touch jump gave the cap in the sensor phase, which it takes at its
+    /// next update (hidden to a recording, which shows it a frame later).
+    pub fn pending_nerve(&self) -> Option<CapNerve> {
+        self.trampled
+    }
+    pub fn set_pending_nerve(&mut self, nerve: Option<CapNerve>) {
+        self.trampled = nerve;
+    }
     /// `HackCap::receiveMsg` for `PlayerCapTouchJump` on the `Catch` sensor (0x407eb8..0x407f38,
     /// gates 0x4082dc..0x408414): any non-foot `Player` sensor of the player that touches the
     /// cap's `Catch` sphere (the sender, `PlayerActorHakoniwa::attackSensor` 0x428028, tests every
@@ -815,6 +823,12 @@ impl Cap {
             self.velocity = before.velocity;
             self.front = before.front;
             self.contact_probe = before.contact_probe;
+        }
+        // A trample or touch jump the sensor phase gave the cap in the frame of this row names its
+        // nerve only in the next one (the row still shows the stay): the pending nerve is the
+        // cap's own, a row cannot show it.
+        if before.nerve == self.nerve {
+            self.trampled = before.trampled;
         }
         // exeThrowStay's +0x2a9 is a per-throw latch (0x405d4c..0x405d6c),
         // not a new edge each time the actor is restored from a snapshot.

@@ -2632,7 +2632,13 @@ impl Player {
             // boundary. Keep the independently simulated source/KCL normal.
             self.mesh_ground = Some(self.collider.ground_normal);
         }
-        if let Some(mode) = s.mode {
+        // The jump off the cap (`PlayerStateJump` request 11, `trample_jump`) is the actor's `Jump`
+        // nerve in a recording: the request that chose its gravity and window is the state's own.
+        // The one the preceding step started, in the same step of the state, is that jump.
+        let continues_cap_jump = self.mode == Move::CapBounce
+            && s.mode == Some(Move::Jump)
+            && s.state_frames == Some(self.frame);
+        if let Some(mode) = s.mode.filter(|_| !continues_cap_jump) {
             self.mode = mode;
             if matches!(
                 mode,

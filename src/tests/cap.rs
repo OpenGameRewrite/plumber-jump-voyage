@@ -1292,6 +1292,12 @@ fn lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row() {
         put_back.continue_clip(&resting);
         assert!(put_back.rolling.is_some() && put_back.rolling_throw);
     }
+    // A trample the sensor phase gave the cap in the frame of the row is still pending.
+    let mut trampled = before.clone();
+    trampled.trampled = Some(CapNerve::TrampleReturn);
+    let mut put_back = Cap::start(launch, Vec3::ZERO, 7);
+    put_back.continue_clip(&trampled);
+    assert_eq!(put_back.trampled, Some(CapNerve::TrampleReturn));
     // Another nerve step is another cap state: nothing is kept.
     let mut other = Cap::start(launch, Vec3::ZERO, 4);
     other.step = 5;
