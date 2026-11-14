@@ -264,6 +264,7 @@ pub(super) fn run() {
     a_trample_in_the_water_hops_the_swimmer_up();
     the_splash_arrows_point_into_the_water_for_entering_and_out_of_it_for_leaving();
     poles();
+    a_replayed_pole_step_finds_the_keeper_as_the_row_before_left_it();
     slope_slide();
     burn_and_soot();
     quicksand();
@@ -1704,6 +1705,35 @@ fn poles() {
         "{:?}",
         p.pos
     );
+}
+
+/// A deferred state choice is replayed from the row before it, and the pole keeper goes back
+/// with the collision bookkeeping: the nerve the step before had chosen runs again, not the one
+/// the step being repeated already advanced to.
+#[cfg_attr(test, test)]
+fn a_replayed_pole_step_finds_the_keeper_as_the_row_before_left_it() {
+    let floor = floor();
+    let mut pole = floor.clone();
+    pole.poles.push(Pole {
+        center: Vec3::ZERO,
+        height: 8.,
+    });
+    let mut p = Player {
+        pos: Vec3::new(0., 2., 0.9),
+        grounded: false,
+        mode: Move::Fall,
+        v: Vec3::new(0., -1., -3.),
+        ..default()
+    };
+    while p.mode != Move::Pole {
+        frames(&mut p, Orders::default(), &pole, 1);
+    }
+    let caught = p.collision_state();
+    let nerve = p.pole_nerve();
+    frames(&mut p, Orders::default(), &pole, 20);
+    assert_ne!(p.pole_nerve(), nerve);
+    p.restore_collision(&caught);
+    assert_eq!(p.pole_nerve(), nerve);
 }
 
 #[cfg_attr(test, test)]

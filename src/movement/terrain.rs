@@ -8,7 +8,7 @@
 //! need them: slope slides, wall jumps, materials).
 use super::*;
 
-/// Collision bookkeeping for replaying a deferred state choice a second time.
+/// Collision and pole bookkeeping for replaying a deferred state choice a second time.
 /// It must belong to the same preceding row as the injected actor pose.
 #[derive(Clone)]
 pub(crate) struct CollisionState {
@@ -17,6 +17,9 @@ pub(crate) struct CollisionState {
     ground: Option<Vec3>,
     wall: Vec3,
     ground_lost: u32,
+    /// The pole keeper's nerve, steps and latches (`PlayerStatePoleClimb`), which the replayed
+    /// step would otherwise find already advanced by the step it repeats.
+    pole: super::pole::PoleControl,
 }
 use crate::collider::Form;
 use crate::geometry::CollisionCodes;
@@ -62,6 +65,7 @@ impl Player {
             ground: self.mesh_ground,
             wall: self.wall,
             ground_lost: self.ground_lost,
+            pole: self.pole.clone(),
         }
     }
 
@@ -80,6 +84,7 @@ impl Player {
         self.mesh_ground = state.ground;
         self.wall = state.wall;
         self.ground_lost = state.ground_lost;
+        self.pole = state.pole.clone();
     }
 
     /// FloorCode22 comes from the contacted geometry, never its material or

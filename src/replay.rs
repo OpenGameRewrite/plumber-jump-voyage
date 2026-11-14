@@ -1020,7 +1020,13 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             // choosing AreaAnimWait; replaying the preceding row starts it twice.
             let area_started = game.cell(last, "state") == Some("Wait/AreaAnimWait")
                 && game.number(last, "anim_frame") == Some(0.);
+            // `PlayerStatePoleClimb::appear` starts the catch clip itself (the row's events
+            // name it at step 0): its first step is not still to come.
+            let pole_caught = game.cell(last, "state") == Some("PoleClimb/Start")
+                && game.cell(last, "anim") == Some("PoleCatch")
+                && game.number(last, "anim_frame") == Some(0.);
             let just_chosen = !area_started
+                && !pole_caught
                 && game
                     .number(last, "sub_step")
                     .or(game.number(last, "state_step"))
