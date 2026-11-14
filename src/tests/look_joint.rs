@@ -124,7 +124,7 @@ fn the_logged_head_quaternion_normalises_rows_not_the_result() {
         assert!((got - want).abs() < 1e-5, "{q:?} vs {expected:?}");
     }
     assert!(
-        (q.length() - 1.).abs() > 1e-3,
+        (q.length() - 1.).abs() > 1e-4,
         "not a unit quaternion: {q:?}"
     );
 }

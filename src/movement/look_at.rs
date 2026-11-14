@@ -340,8 +340,34 @@ impl LookAt {
     /// The head joint, turned. `animated` is the head's world matrix as the animation leaves it
     /// and `actor` the player's pose matrix.
     pub fn turn_head(&mut self, animated: &mut Mat34, actor: &Mat34) {
+        // The callback turns a rotation: the head's own scale (the stretch of the run brake's
+        // first frame) is not in the matrix it works on and is put back on the columns after.
+        // The first Brake frame of candle-look shows it: the game's logged head rotation is
+        // the turn applied on the left of the scaled matrix, which is what turning the
+        // unscaled one and scaling it afterwards gives.
+        let scale = column_lengths(animated);
+        let usable = scale.iter().all(|length| *length > 0.);
+        if usable {
+            for row in animated.iter_mut() {
+                for (cell, length) in row.iter_mut().zip(scale) {
+                    *cell /= length;
+                }
+            }
+        }
         self.joint.apply(animated, actor);
+        if usable {
+            for row in animated.iter_mut() {
+                for (cell, length) in row.iter_mut().zip(scale) {
+                    *cell *= length;
+                }
+            }
+        }
     }
+}
+
+/// The lengths of the matrix's three rotation columns (the scale it carries).
+fn column_lengths(m: &Mat34) -> [f32; 3] {
+    [0, 1, 2].map(|c| ((m[0][c] * m[0][c] + m[1][c] * m[1][c]) + m[2][c] * m[2][c]).sqrt())
 }
 
 #[path = "../tests/look_at.rs"]

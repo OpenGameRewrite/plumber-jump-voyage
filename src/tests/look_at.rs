@@ -8,6 +8,7 @@ pub(super) fn run() {
     the_keeper_takes_a_target_in_reach_and_asks_for_it();
     the_keeper_drops_a_target_that_leaves_the_gate_after_forty_frames();
     a_nearer_sensor_replaces_the_target_and_a_state_without_look_ends_it();
+    the_head_scale_is_kept_out_of_the_turn_and_put_back_on_the_columns();
 }
 
 fn sensor(name: &str, at: Vec3) -> LookSensor {
@@ -179,4 +180,48 @@ fn clipping_invalidates_the_holder_until_the_sensor_returns() {
     look.set_invalid_sensors(Vec::new());
     look.step(&actor, false, &sensors);
     assert_eq!(look.candidate, Some(0));
+}
+
+/// The first Brake frame of candle-look: the head joint arrives stretched. The game's logged
+/// rotation is the turn applied to the unscaled matrix and the scale put back on its columns
+/// (a turn applied to the scaled matrix would shear it).
+#[cfg_attr(test, test)]
+fn the_head_scale_is_kept_out_of_the_turn_and_put_back_on_the_columns() {
+    let (cos, sin) = (0.3f32.cos(), 0.3f32.sin());
+    let rotation: Mat34 = [[cos, -sin, 0., 10.], [sin, cos, 0., 80.], [0., 0., 1., 5.]];
+    let scale = [0.93f32, 1.16, 0.93];
+    let mut scaled = rotation;
+    for row in scaled.iter_mut() {
+        for (cell, factor) in row.iter_mut().zip(scale) {
+            *cell *= factor;
+        }
+    }
+    let actor = actor_at(Vec3::ZERO);
+    let turned = |animated: Mat34| {
+        let mut look = LookAt::default();
+        let mut joint = animated;
+        for _ in 0..4 {
+            look.joint.request(Vec3::new(120., 90., 150.));
+            look.joint.end_frame();
+            joint = animated;
+            look.turn_head(&mut joint, &actor);
+        }
+        joint
+    };
+    let plain = turned(rotation);
+    let stretched = turned(scaled);
+    assert!(
+        plain[0][..3] != rotation[0][..3],
+        "the head must have turned"
+    );
+    for row in 0..3 {
+        for (column, factor) in scale.into_iter().enumerate() {
+            let want = plain[row][column] * factor;
+            assert!(
+                (stretched[row][column] - want).abs() < 1e-4,
+                "row {row} column {column}: {stretched:?} vs {plain:?}"
+            );
+        }
+        assert_eq!(stretched[row][3], scaled[row][3]);
+    }
 }
