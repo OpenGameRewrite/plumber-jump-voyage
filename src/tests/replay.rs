@@ -534,17 +534,20 @@ fn lockstep_slope_pull() {
                 cell(&free.rows, frame, "state")
             );
             for column in ["px", "py", "pz", "vx", "vy", "vz", "speed_h"] {
-                // The player settles onto the slope in the first ten frames, before any input:
-                // the step that lands it is decided at the 1e-5 level the csv round trip loses
-                // from the position, so its height there is not a lockstep subject.
-                if column == "py" && frame < 10 {
-                    continue;
-                }
                 let expected = number(&free.rows, frame, column);
                 let actual = number(&locked.rows, frame, column);
                 // Existing CSV round-trip bound used by lockstep().
+                let mut bound = 0.01;
+                if column == "py" && frame < 10 {
+                    // The player settles onto the slope in the first ten frames, before any
+                    // input: the step that lands it is decided at the 1e-5 level the csv round
+                    // trip loses from the position, so one settling step may flip a whole row of
+                    // the sink-and-snap (0.0136 at frame 4, the largest seen). Its height there
+                    // is held to that settling, not to the round-trip bound.
+                    bound = 0.02;
+                }
                 assert!(
-                    (actual - expected).abs() < 0.01,
+                    (actual - expected).abs() < bound,
                     "{expected_state} frame {frame} {column}: {expected} vs {actual}"
                 );
             }
