@@ -5,6 +5,7 @@ pub(super) fn run() {
     lockstep_rewinds_the_cap_clip_with_its_nerve();
     lockstep_spiral_entry_retains_its_launch_front();
     lockstep_keeps_the_cap_water_and_throw_parameters();
+    lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row();
     lockstep_return_keeps_the_completed_pose_and_action();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
@@ -1224,4 +1225,54 @@ fn a_recorded_throw_over_water_keeps_its_lift_out_of_the_velocity() {
     let lifted = moment(Some(&|_| 4.));
     assert_eq!(lifted.velocity, Vec3::new(0., 6., 32.));
     assert_eq!(lifted.speed, Vec3::new(0., 10., 32.).length());
+}
+
+/// A row shows where a flying cap is, not the axes the terrain helper eases from step to step nor
+/// the direction `startThrow` gave it: a cap put back from a row of the same nerve step keeps the
+/// ones the cap before it had, and the first row of a throw keeps its launch motion rather than
+/// the displacement from an assumed throw point.
+#[cfg_attr(test, test)]
+fn lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row() {
+    let launch = Launch {
+        front: Vec3::new(-0.0293, 0., 1.).normalize(),
+        kind: Throw::Forward,
+        left: false,
+        air: false,
+        continuous: false,
+        spiral_side: 1.,
+        up: Vec3::Y,
+    };
+    let before = Cap::start(launch, Vec3::ZERO, 1);
+    let mut restored = Cap::start(
+        Launch {
+            front: Vec3::Z,
+            ..launch
+        },
+        Vec3::ZERO,
+        2,
+    );
+    restored.spot = before.spot;
+    restored.pos = before.pos;
+    restored.velocity = Vec3::new(0., 19., 23.);
+    restored.continue_clip(&before);
+    assert_eq!(restored.velocity, before.velocity);
+    assert_eq!(restored.front, before.front);
+
+    // Later in the flight the row's own velocity stands, and the eased axes are the cap's.
+    let mut eased = before.clone();
+    eased.step = 4;
+    eased.up = Vec3::new(0., 0.8, 0.6);
+    eased.ground_counter = 3;
+    let mut later = Cap::start(launch, Vec3::ZERO, 3);
+    later.step = 4;
+    later.velocity = Vec3::new(1., 2., 3.);
+    later.continue_clip(&eased);
+    assert_eq!(later.velocity, Vec3::new(1., 2., 3.));
+    assert_eq!(later.up, eased.up);
+    assert_eq!(later.ground_counter, 3);
+    // Another nerve step is another cap state: nothing is kept.
+    let mut other = Cap::start(launch, Vec3::ZERO, 4);
+    other.step = 5;
+    other.continue_clip(&eased);
+    assert_eq!(other.up, Vec3::Y);
 }

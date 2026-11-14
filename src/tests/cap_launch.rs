@@ -8,6 +8,7 @@ pub(super) fn run() {
     a_ground_throw_hands_the_cap_the_collided_ground_normal();
     a_throw_from_level_ground_keeps_the_horizontal_front();
     a_swim_throw_keeps_the_up_axis_it_stored();
+    a_pending_launch_survives_the_row_that_shows_it();
     the_slope_throw_direction_lies_across_the_ground_normal();
     the_first_step_takes_the_direction_across_the_ground_the_cap_is_handed();
     the_collider_alone_decides_the_ground_a_ground_spin_hands_over();
@@ -804,4 +805,50 @@ fn a_jump_pressed_on_the_end_step_waits_for_the_forced_slide() {
     let (before, slid) = ground_spin_end_step(&slide, Vec2::ZERO, &slide, &jump);
     assert_eq!(before.0, Move::Throw);
     assert_eq!(slid.mode, Move::SlopeSlide);
+}
+
+/// A row that shows the cap's launch pending only says that one is: the launch the preceding step
+/// handed it (the direction `startThrow` took from the stick, not the row's facing) stays.
+#[cfg_attr(test, test)]
+fn a_pending_launch_survives_the_row_that_shows_it() {
+    let mut p = Player {
+        facing: Vec3::Z,
+        ..default()
+    };
+    let launch = p.throw_launch(Throw::Forward, false, Vec3::Y, false);
+    let aimed = Vec3::new(-0.03, 0., 1.).normalize();
+    p.launch = Some(Launch {
+        front: aimed,
+        ..launch
+    });
+    p.inject(&Snapshot {
+        mode: Some(Move::Throw),
+        facing: Vec3::Z,
+        throw: Some(ThrowHint {
+            winding: false,
+            age: 0,
+            launch: true,
+            kind: Throw::Forward,
+            count: 1,
+            continuous: false,
+        }),
+        ..Default::default()
+    });
+    assert_eq!(p.launch.as_ref().unwrap().front, aimed);
+    // Without the pending launch the row's own facing is the best the row can say.
+    let mut fresh = Player::default();
+    fresh.inject(&Snapshot {
+        mode: Some(Move::Throw),
+        facing: Vec3::Z,
+        throw: Some(ThrowHint {
+            winding: false,
+            age: 0,
+            launch: true,
+            kind: Throw::Forward,
+            count: 1,
+            continuous: false,
+        }),
+        ..Default::default()
+    });
+    assert_eq!(fresh.launch.as_ref().unwrap().front, Vec3::Z);
 }

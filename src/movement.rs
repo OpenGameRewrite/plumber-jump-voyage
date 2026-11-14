@@ -2889,7 +2889,7 @@ impl Player {
     /// The cap and the spin throw as a recorded row shows them.
     fn resume_cap(&mut self, s: &Snapshot) {
         let previous = self.cap.take();
-        self.launch = None;
+        let pending_launch = self.launch.take();
         self.winding = false;
         self.winding_age = 0;
         let continued_catch = self.catching.is_some() && s.catching.is_some();
@@ -2941,7 +2941,9 @@ impl Player {
             up: Vec3::Y,
         };
         if s.throw.is_some_and(|hint| hint.launch) {
-            self.launch = Some(launch);
+            // A launch the preceding step handed the cap (its direction, up axis and side are the
+            // throw frame's own) stays: the row only says that one is pending.
+            self.launch = pending_launch.or(Some(launch));
         }
         if let Some(moment) = &s.cap {
             let launch = Launch {

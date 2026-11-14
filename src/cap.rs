@@ -779,6 +779,34 @@ impl Cap {
             self.action = before.action;
             self.action_frame = before.action_frame;
         }
+        let same_throw_step = before.nerve == self.nerve
+            && before.step == self.step
+            && matches!(
+                self.nerve,
+                CapNerve::Throw
+                    | CapNerve::ThrowBrake
+                    | CapNerve::ThrowRolling
+                    | CapNerve::ThrowRollingBrake
+                    | CapNerve::ThrowSpiral
+            );
+        if same_throw_step {
+            // A row shows where the cap is, not the axes the terrain helper (0x401d0c) eases
+            // from step to step: its up axis, the pose it gave the cap, the ground counter, and
+            // the rolling plan. They are the cap's own, as the step just before this row left them.
+            self.up = before.up;
+            self.pose = before.pose;
+            self.ground_counter = before.ground_counter;
+            self.rolling = before.rolling;
+        }
+        if same_throw_step && self.step == 0 {
+            // The first row of a throw has no row before it, so the motion it carries is only a
+            // guess from the throw point. The cap this player has just started kept what
+            // `HackCap::startThrow` gave it: the direction and the speed along it. The row's
+            // spot stays the observed one.
+            self.velocity = before.velocity;
+            self.front = before.front;
+            self.contact_probe = before.contact_probe;
+        }
         // exeThrowStay's +0x2a9 is a per-throw latch (0x405d4c..0x405d6c),
         // not a new edge each time the actor is restored from a snapshot.
         self.stay_reaction_done = before.stay_reaction_done;
