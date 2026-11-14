@@ -557,6 +557,9 @@ pub mod clip {
             "StartSpinJumpL" | "StartSpinJumpR" | "RestartSpinJumpL" | "RestartSpinJumpR" => {
                 Some(8.)
             }
+            // The wall slide's clip (recorded `anim_len` 48, force-waterfall-airpass: the counter
+            // shows 48 at row 119 and 1 at row 120). Only the left-hand clip is recorded.
+            "WallSlideL" => Some(48.),
             // The swim clips (recorded `anim_len`).
             "SwimStandSurface" => Some(46.),
             "SwimSurfaceNormal" => Some(38.),
@@ -577,9 +580,8 @@ pub mod clip {
             "PoleFall" | "PoleTurn" | "PoleHandStandTurn" | "PoleHandStandWait" | "PoleWait" => 1.,
             // The swim's loops show their length for a row (38, then 1).
             "SpinJumpLoop" | "GrabCeilWait" | "SandWait" | "SandWalk" | "SwimStandSurface"
-            | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" | "WaitCold" | "WaitVeryCold" => {
-                1.
-            }
+            | "SwimSurfaceNormal" | "SwimStandWait" | "SwimWalk" | "WaitCold" | "WaitVeryCold"
+            | "WallSlideL" => 1.,
             // The spin jump's body clips (length 8) read 1..8 in every recorded row, never 0
             // after the start: updateSync (0x42d170) gives the counter the model's frame plus
             // its rate, so it shows the length for the row the pose wraps in.

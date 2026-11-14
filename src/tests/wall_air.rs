@@ -7,6 +7,7 @@ pub(super) fn run() {
     wall_history();
     ledge_fall_waits_for_the_judge();
     a_wall_slide_on_a_stage_holds_one_more_step_after_the_wall_is_gone();
+    the_wall_slide_clip_loops_over_its_recorded_length();
     fall_distance_counts_from_the_terminal_speed();
     lockstep_wall_keep_completion();
 }
@@ -201,4 +202,12 @@ fn a_wall_slide_on_a_stage_holds_one_more_step_after_the_wall_is_gone() {
         }
     }
     panic!("the slide never lost the wall (slid: {slid})");
+}
+
+/// force-waterfall-airpass rows 119/120: the slide's clip (`anim_len` 48) shows its length for a row
+/// and wraps to 1 in the next, while the slide goes on.
+#[cfg_attr(test, test)]
+fn the_wall_slide_clip_loops_over_its_recorded_length() {
+    assert_eq!(clip::loop_length("WallSlideL"), Some(48.));
+    assert_eq!(clip::loop_slack("WallSlideL"), 1.);
 }
