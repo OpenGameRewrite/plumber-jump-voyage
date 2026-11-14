@@ -6761,11 +6761,14 @@ impl Player {
             }
             self.mark_toy_sand_floor(scene);
         }
-        if self.mode == Move::WallSlide
+        if scene.mesh.is_none()
+            && self.mode == Move::WallSlide
             && (self.wall == Vec3::ZERO || self.grounded)
             && !self.grounded
         {
-            // Lost the wall: keep falling.
+            // The toy course's rule: lost the wall, keep falling. On a stage mesh the wall slide
+            // ends in its own step (`PlayerStateNormalWallSlide::followNormal` reads the contact
+            // the last move left, so the state holds one more step after the wall is gone).
             self.go(Move::Fall, "Fall");
         }
         // Stay glued to ramps and steps down (the box solids' own rule; the

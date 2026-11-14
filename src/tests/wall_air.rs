@@ -6,6 +6,7 @@ pub(super) fn run() {
     helpers();
     wall_history();
     ledge_fall_waits_for_the_judge();
+    a_wall_slide_on_a_stage_holds_one_more_step_after_the_wall_is_gone();
     fall_distance_counts_from_the_terminal_speed();
     lockstep_wall_keep_completion();
 }
@@ -147,4 +148,57 @@ fn fall_distance_counts_from_the_terminal_speed() {
     assert_eq!(fall.distance, 70.);
     fall.update(895., -3., true, false);
     assert_eq!(fall, FallDistance::default());
+}
+
+/// A wall quad in the plane z = `z` (cm), both windings so either side is a wall.
+fn wall(x: [f32; 2], y: [f32; 2], z: f32) -> Vec<[[Vec3; 3]; 2]> {
+    let corner = |x, y| Vec3::new(x, y, z);
+    let front = [
+        [corner(x[0], y[0]), corner(x[1], y[0]), corner(x[0], y[1])],
+        [corner(x[1], y[1]), corner(x[0], y[1]), corner(x[1], y[0])],
+    ];
+    let back = front.map(|[a, b, c]| [a, c, b]);
+    vec![front, back]
+}
+
+/// `PlayerStateNormalWallSlide::followNormal` reads the contact the last move left, so on a stage
+/// the slide holds for the step in which the wall is gone and ends in the next one (the game's
+/// force-waterfall-airpass row 126 is still WallAir/Slide with no wall contact, row 127 Fall).
+#[cfg_attr(test, test)]
+fn a_wall_slide_on_a_stage_holds_one_more_step_after_the_wall_is_gone() {
+    let quads: Vec<_> = wall([-1000., 1000.], [-3000., 400.], -200.)
+        .into_iter()
+        .flatten()
+        .collect();
+    let mesh = TriangleMesh::from_corners(&quads);
+    let scene = Course {
+        mesh: Some(Arc::new(mesh)),
+        ..default()
+    };
+    let mut p = Player {
+        pos: Vec3::new(0., 3., -1.2),
+        grounded: false,
+        v: Vec3::new(0., -2., -8.),
+        mode: Move::Fall,
+        facing: Vec3::NEG_Z,
+        ..default()
+    };
+    let mut slid = false;
+    let mut lost_at = None;
+    for step in 0..2000 {
+        p.step(&Orders::default(), &scene);
+        slid |= p.mode == Move::WallSlide;
+        if slid && lost_at.is_none() && p.touched.wall_contact.is_none() {
+            lost_at = Some(step);
+            assert_eq!(
+                p.mode,
+                Move::WallSlide,
+                "the slide holds in the step the wall is gone"
+            );
+        } else if lost_at.is_some() {
+            assert_eq!(p.mode, Move::Fall, "and ends in the next one");
+            return;
+        }
+    }
+    panic!("the slide never lost the wall (slid: {slid})");
 }
