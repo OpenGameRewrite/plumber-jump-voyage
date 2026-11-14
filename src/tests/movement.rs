@@ -266,6 +266,7 @@ pub(super) fn run() {
     poles();
     a_replayed_pole_step_finds_the_keeper_as_the_row_before_left_it();
     a_replayed_throw_press_counts_once();
+    a_replayed_step_reads_the_throw_button_of_the_frame_before();
     a_replayed_step_finds_the_caps_pending_nerve_as_the_row_before_left_it();
     injection_keeps_the_cap_jump_the_preceding_step_started();
     injection_keeps_the_own_pose_that_prints_as_the_recorded_one();
@@ -2449,4 +2450,21 @@ fn a_replayed_step_finds_the_caps_pending_nerve_as_the_row_before_left_it() {
         .set_pending_nerve(Some(crate::cap::CapNerve::Trample));
     p.restore_collision(&before);
     assert_eq!(p.cap.as_ref().unwrap().pending_nerve(), None);
+    p.cap = None;
+    p.restore_collision(&before);
+    assert!(p.cap.is_some());
+}
+
+/// The cap reads the throw button as the frame before left it: a replayed step reads the same
+/// one the first run of that step did, not the one the step it repeats left.
+#[cfg_attr(test, test)]
+fn a_replayed_step_reads_the_throw_button_of_the_frame_before() {
+    let mut p = Player {
+        throw_held_before: true,
+        ..default()
+    };
+    let before = p.collision_state();
+    p.throw_held_before = false;
+    p.restore_collision(&before);
+    assert!(p.throw_held_before);
 }

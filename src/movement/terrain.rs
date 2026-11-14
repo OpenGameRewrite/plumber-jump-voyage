@@ -27,8 +27,13 @@ pub(crate) struct CollisionState {
     throw_count: u32,
     throw_continuous: bool,
     catch_window: u32,
-    /// The nerve the cap was given in that step and takes in the next (see `Cap::pending_nerve`).
-    cap_pending: Option<crate::cap::CapNerve>,
+    /// The cap as that step left it, with what a row cannot show (the nerve it was given and
+    /// takes in the next step, its eased axes and pose, the stay's latches): the cap belongs to
+    /// the player's update, so a replayed step starts from this one, not from the cap the step it
+    /// repeats already moved.
+    cap: Option<Cap>,
+    /// The throw button as the frame before left it, which the cap reads (`update_cap`).
+    throw_held_before: bool,
 }
 use crate::collider::Form;
 use crate::geometry::CollisionCodes;
@@ -79,7 +84,8 @@ impl Player {
             throw_count: self.throwing.count,
             throw_continuous: self.throwing.continuous,
             catch_window: self.catch_window,
-            cap_pending: self.cap.as_ref().and_then(Cap::pending_nerve),
+            cap: self.cap.clone(),
+            throw_held_before: self.throw_held_before,
         }
     }
 
@@ -103,9 +109,8 @@ impl Player {
         self.throwing.count = state.throw_count;
         self.throwing.continuous = state.throw_continuous;
         self.catch_window = state.catch_window;
-        if let Some(cap) = &mut self.cap {
-            cap.set_pending_nerve(state.cap_pending);
-        }
+        self.cap = state.cap.clone();
+        self.throw_held_before = state.throw_held_before;
     }
 
     /// FloorCode22 comes from the contacted geometry, never its material or
