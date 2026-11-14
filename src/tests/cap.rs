@@ -7,6 +7,7 @@ pub(super) fn run() {
     lockstep_keeps_the_cap_water_and_throw_parameters();
     lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row();
     a_row_restores_the_throw_buffer_and_the_spin_attack_its_first_step_started();
+    the_throw_frame_is_read_from_the_rows_own_step();
     lockstep_return_keeps_the_completed_pose_and_action();
     straight_throw_matches_the_recording();
     a_wall_at_an_angle_turns_the_cap();
@@ -1338,4 +1339,38 @@ fn a_row_restores_the_throw_buffer_and_the_spin_attack_its_first_step_started() 
     assert_eq!(buffer(1), Some(0));
     assert!(!rows.snapshot(1).throw.unwrap().winding);
     assert!(rows.snapshot(2).throw.unwrap().winding);
+}
+
+/// The throw frame is read from the row's own step counter: no later row's cap state is needed
+/// (the old rule looked ahead for `Throw`), and the first throw's air, second and swim variants
+/// each leave on their own frame (`getThrowFrameGround`/`Air`, one past it in the printed counter).
+#[cfg_attr(test, test)]
+fn the_throw_frame_is_read_from_the_rows_own_step() {
+    let launch = |state: &str, anim: &str, state_step: u32, sub_step: u32| {
+        // The row is the last of the trace: nothing follows it.
+        let rows = crate::trace::TraceFile::parse(&format!(
+            "frame,state,anim,cap_state,state_step,sub_step\n0,{state},{anim},SpinAttack,{state_step},{sub_step}\n"
+        ))
+        .unwrap();
+        rows.snapshot(0).throw.unwrap().launch
+    };
+    assert!(launch("SpinCap/SpinGround", "SpinCapStart", 13, 13));
+    assert!(!launch("SpinCap/SpinGround", "SpinCapStart", 12, 12));
+    assert!(launch("SpinCap/SpinAir", "SpinCapAirStart", 9, 9));
+    assert!(launch("SpinCap/SpinGround", "SpinCapStart2Right", 8, 8));
+    assert!(launch("SpinCap/SpinGround", "SpinCapStartDoubleUp", 8, 8));
+    assert!(launch("SpinCap/SpinGround", "SpinCapStart3", 3, 3));
+    // The swim spin counts the nerve's steps, not the state's.
+    assert!(launch(
+        "Swim/SwimSpinCapSurface",
+        "SwimSpinCapStart",
+        33,
+        13
+    ));
+    assert!(!launch(
+        "Swim/SwimSpinCapSurface",
+        "SwimSpinCapStart",
+        13,
+        12
+    ));
 }

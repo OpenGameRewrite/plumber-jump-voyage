@@ -1920,11 +1920,24 @@ impl TraceFile {
                 || self.cell(row, "cap_state") == Some("")
                     && self.number(row, "cap_step") == Some(-1.),
             age: age as u32,
-            launch: age > 0
-                && matches!(
-                    self.cell(row + 1, "cap_state"),
-                    Some("Throw" | "ThrowSpiral" | "ThrowRolling")
-                ),
+            // The cap leaves on the throw frame while it is still the spin attack: the state's
+            // own step counter says so (the swim spin counts its own nerve's steps). The row's
+            // counter is one past the step that threw, so it needs no later row's cap state.
+            launch: age > 0 && {
+                let swim = state.starts_with("Swim/");
+                let throw_frame = if swim {
+                    crate::movement::SWIM_SPIN_CAP_THROW_FRAME
+                } else {
+                    crate::movement::throw_frame_of(
+                        kind,
+                        count,
+                        continuous,
+                        state == "SpinCap/SpinAir",
+                    )
+                };
+                let steps = self.number(row, if swim { "sub_step" } else { "state_step" });
+                steps == Some((throw_frame + 1) as f32)
+            },
             kind,
             count,
             continuous,

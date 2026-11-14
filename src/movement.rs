@@ -335,6 +335,7 @@ mod squat;
 mod swim;
 #[path = "movement/swim_const.rs"]
 mod swim_const;
+pub use swim_const::SPIN_CAP_THROW_FRAME as SWIM_SPIN_CAP_THROW_FRAME;
 #[path = "movement/swim_dive.rs"]
 mod swim_dive;
 #[path = "movement/swim_dive_in.rs"]
@@ -932,6 +933,21 @@ pub struct ThrowHint {
     pub kind: Throw,
     pub count: u32,
     pub continuous: bool,
+}
+/// The throw frame of a spin throw (`PlayerSpinCapAttack::getThrowFrameGround` / `getThrowFrameAir`):
+/// the continuous throw leaves first, then the swings and the second throw, then the air throw,
+/// then the ground throw. A recorded row's step counter is this number plus one on the row of the
+/// throw, because it counts the step after the throw step ran.
+pub fn throw_frame_of(kind: Throw, count: u32, continuous: bool, air: bool) -> u32 {
+    if continuous {
+        t::SPIN_CAP_THROW_FRAME_CONTINUOUS
+    } else if kind != Throw::Forward || count == 2 {
+        t::SPIN_CAP_THROW_FRAME_SWING
+    } else if air {
+        t::SPIN_CAP_THROW_FRAME_AIR
+    } else {
+        t::SPIN_CAP_THROW_FRAME
+    }
 }
 /// The run's hidden state as far as a recorded row shows it: the pose's place
 /// in the cycle, its weights, and the turn in progress.
@@ -5927,15 +5943,7 @@ impl Player {
     /// The step of the throw state at which the cap leaves
     /// (`PlayerSpinCapAttack::getThrowFrameGround` and `getThrowFrameAir`).
     fn throw_frame(&self, kind: Throw, air: bool) -> u32 {
-        if self.throwing.continuous {
-            t::SPIN_CAP_THROW_FRAME_CONTINUOUS
-        } else if kind != Throw::Forward || self.throwing.count == 2 {
-            t::SPIN_CAP_THROW_FRAME_SWING
-        } else if air {
-            t::SPIN_CAP_THROW_FRAME_AIR
-        } else {
-            t::SPIN_CAP_THROW_FRAME
-        }
+        throw_frame_of(kind, self.throwing.count, self.throwing.continuous, air)
     }
     /// The throw state (`PlayerStateSpinCap`): `exeSpinGround` or `exeSpinAir`, whichever child
     /// `appear` started (0x481958: `setNerve` at 0x481ad4 / 0x481af0 choose it, and nothing in

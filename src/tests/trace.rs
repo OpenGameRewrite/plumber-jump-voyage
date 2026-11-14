@@ -36,8 +36,8 @@ fn lockstep_swim_spin_attack_hint() {
     // (0x485830..0x48584c); its SpinAttack rows must retain the winding latch.
     for state in ["Swim/SwimSpinCapSurface", "Swim/SwimSpinCap"] {
         let trace = TraceFile::parse(&format!(
-            "frame,state,anim,cap_state\n0,{state},SwimSpinCapStart,SpinAttack\n\
-             1,{state},SwimSpinCapStart,SpinAttack\n2,{state},SwimSpinCapStart,Throw\n"
+            "frame,state,anim,cap_state,sub_step\n0,{state},SwimSpinCapStart,SpinAttack,12\n\
+             1,{state},SwimSpinCapStart,SpinAttack,13\n2,{state},SwimSpinCapStart,Throw,14\n"
         ))
         .unwrap();
         let hint = trace.snapshot(1).throw.expect("the swim spin attack");
