@@ -1270,6 +1270,27 @@ fn lockstep_keeps_the_axes_and_launch_motion_of_the_cap_before_the_row() {
     assert_eq!(later.velocity, Vec3::new(1., 2., 3.));
     assert_eq!(later.up, eased.up);
     assert_eq!(later.ground_counter, 3);
+    // The rolling plan (and with it the grounding effect and the tilted collider) lasts through the
+    // stay and the return that follow a rolling throw.
+    let rolled = Cap::start(
+        Launch {
+            kind: Throw::Down,
+            ..launch
+        },
+        Vec3::ZERO,
+        5,
+    );
+    assert!(rolled.rolling.is_some());
+    for nerve in [CapNerve::ThrowStay, CapNerve::Return] {
+        let mut resting = rolled.clone();
+        resting.nerve = nerve;
+        resting.step = 2;
+        let mut put_back = Cap::start(launch, Vec3::ZERO, 6);
+        put_back.nerve = nerve;
+        put_back.step = 2;
+        put_back.continue_clip(&resting);
+        assert!(put_back.rolling.is_some() && put_back.rolling_throw);
+    }
     // Another nerve step is another cap state: nothing is kept.
     let mut other = Cap::start(launch, Vec3::ZERO, 4);
     other.step = 5;

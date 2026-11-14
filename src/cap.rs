@@ -788,6 +788,8 @@ impl Cap {
                     | CapNerve::ThrowRolling
                     | CapNerve::ThrowRollingBrake
                     | CapNerve::ThrowSpiral
+                    | CapNerve::ThrowStay
+                    | CapNerve::Return
             );
         if same_throw_step {
             // A row shows where the cap is, not the axes the terrain helper (0x401d0c) eases
@@ -797,8 +799,15 @@ impl Cap {
             self.pose = before.pose;
             self.ground_counter = before.ground_counter;
             self.rolling = before.rolling;
+            self.rolling_throw = before.rolling_throw;
         }
-        if same_throw_step && self.step == 0 {
+        if same_throw_step
+            && self.step == 0
+            && matches!(
+                self.nerve,
+                CapNerve::Throw | CapNerve::ThrowRolling | CapNerve::ThrowSpiral
+            )
+        {
             // The first row of a throw has no row before it, so the motion it carries is only a
             // guess from the throw point. The cap this player has just started kept what
             // `HackCap::startThrow` gave it: the direction and the speed along it. The row's
