@@ -764,7 +764,12 @@ impl Recorder {
             p.trigger_frame(),
             looping(p.anim.name),
         );
-        if let Some((from, to, with_cap)) = advance.scan {
+        // `PlayerAnimator::startSubAnim` starts the sub clip as the model actor's action
+        // (`al::startAction`), and the actor's action sounds read the model's action frame: while
+        // another clip plays as the sub animation, the main clip's frame sounds do not run.
+        // The cursor still follows the main clip, so they are not caught up when it resumes.
+        let main_covered = p.model_sub().is_some_and(|(name, _)| name != p.anim.name);
+        if let Some((from, to, with_cap)) = advance.scan.filter(|_| !main_covered) {
             self.action(
                 (false, p.anim.name, from, to, advance.replay),
                 advance.previous,
@@ -790,7 +795,7 @@ impl Recorder {
                 }
             }
         }
-        if advance.loop_start {
+        if advance.loop_start && !main_covered {
             self.action(
                 (false, p.anim.name, -1., 0., true),
                 "",
