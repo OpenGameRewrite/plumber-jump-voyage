@@ -297,6 +297,30 @@ pub struct Emitter {
 }
 
 impl Emitter {
+    /// The texture slot whose picture is the particle's sprite.
+    ///
+    /// Slot 0 is the sprite, except where it is a scrolling modulation map (noise, cloud pattern,
+    /// UV distortion, wave index: the data animates its scroll) and slot 1 holds an ordinary
+    /// picture: the shape, and the flip-book grid and pattern, then belong to slot 1, which is
+    /// where the data puts them (smoke atlases, dust, flames). Drawing the modulation map as the
+    /// sprite fills the whole quad. The shader that modulates slot 1 by slot 0 is not decoded,
+    /// so that modulation is not applied.
+    pub fn sprite_texture(&self) -> Option<&TextureSlot> {
+        let first = self.textures.first().and_then(|t| t.as_ref());
+        let second = self.textures.get(1).and_then(|t| t.as_ref());
+        match (first, second) {
+            (Some(first), Some(second))
+                if first.animated[0] != 0
+                    && first.scroll != [0., 0.]
+                    && !second.name.contains("nrm")
+                    && !second.name.contains("normal") =>
+            {
+                Some(second)
+            }
+            (first, _) => first,
+        }
+    }
+
     /// The key animation of the given kind, when present and enabled.
     pub fn attachment(&self, kind: &str) -> Option<&Attachment> {
         self.attachments

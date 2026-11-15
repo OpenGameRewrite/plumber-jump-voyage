@@ -7,7 +7,10 @@
 //!
 //! A small material combines the texture with the particle's two colours the
 //! way the original's particle shader does (see `Combiner`): colour 0 and
-//! alpha ride in the vertex colour, colour 1 in the tangent attribute.
+//! alpha ride in the vertex colour; colour 1 is split into its direction (the
+//! tangent attribute, with the sprite's roll in `w`) and its length (`uv_b`),
+//! because Bevy's mesh vertex stage re-normalises every tangent and would
+//! otherwise turn any HDR colour 1 into a unit-length one.
 use crate::effect_data::{Blend, Emitter, Mesh as MeshData};
 use crate::effect_sim::Draw;
 use bevy::{
@@ -71,7 +74,8 @@ fn received(n: vec3<f32>) -> vec3<f32> {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let texel = textureSample(particle_texture, particle_sampler, in.uv);
     let first = in.color.rgb;
-    let second = in.world_tangent.xyz;
+    // Bevy has already normalised the tangent; the colour's length rode in uv_b.
+    let second = in.world_tangent.xyz * in.uv_b.x;
     var rgb = first;
     if settings.y == 2u {
         rgb = mix(first, second, texel.r);
@@ -222,8 +226,10 @@ pub struct View {
 pub struct Geometry {
     pub positions: Vec<[f32; 3]>,
     pub colors: Vec<[f32; 4]>,
-    /// Second colour, in the tangent attribute.
+    /// Direction of the second colour (tangent xyz) and the sprite's roll (w).
     pub second: Vec<[f32; 4]>,
+    /// Length of the second colour (`uv_b.x`; the vertex stage normalises the tangent).
+    pub second_length: Vec<[f32; 2]>,
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
@@ -253,12 +259,17 @@ impl Geometry {
     fn vertex(&mut self, position: Vec3, paint: &Paint, uv: [f32; 2]) -> u32 {
         self.positions.push(position.to_array());
         self.colors.push(paint.color);
-        self.second.push([
-            paint.color1[0],
-            paint.color1[1],
-            paint.color1[2],
-            paint.roll,
-        ]);
+        let color1 = Vec3::from_array(paint.color1);
+        let length = color1.length();
+        // A zero vector is the one tangent Bevy leaves alone; its length is zero too.
+        let direction = if length > 0. {
+            color1 / length
+        } else {
+            Vec3::ZERO
+        };
+        self.second
+            .push([direction.x, direction.y, direction.z, paint.roll]);
+        self.second_length.push([length, 0.]);
         self.uvs.push(uv);
         self.positions.len() as u32 - 1
     }
@@ -424,7 +435,7 @@ impl Painter {
         }
         let mut groups: HashMap<BatchKey, Vec<usize>> = HashMap::new();
         for (index, (_, emitter)) in draws.iter().enumerate() {
-            let slot = emitter.textures.first().and_then(|t| t.as_ref());
+            let slot = emitter.sprite_texture();
             let texture = match slot {
                 Some(slot) if installed.contains(&slot.name) => Some(slot.name.clone()),
                 // A texture that is not installed would draw as a white square.
@@ -585,6 +596,7 @@ impl Painter {
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, geometry.positions)
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, geometry.colors)
             .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, geometry.second)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, geometry.second_length)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs)
             .with_inserted_indices(Indices::U32(geometry.indices))
         };
@@ -695,4 +707,5 @@ pub fn self_check() {
     assert_eq!(geometry.indices[6..], [4, 5, 6]);
     assert_eq!(geometry.uvs[5], [1., 0.5], "mesh uvs map into the tile");
     assert_eq!(geometry.second.len(), 7);
+    assert_eq!(geometry.second_length.len(), 7);
 }

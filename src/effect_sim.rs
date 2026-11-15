@@ -663,7 +663,7 @@ impl Instance {
             let tint1 = tint(emitter.color.tint1);
             let (tint, tint_alpha) = (Vec3::new(tint0[0], tint0[1], tint0[2]), tint0[3]);
             let tint1 = Vec3::new(tint1[0], tint1[1], tint1[2]);
-            let slot = emitter.textures.first().and_then(|t| t.as_ref());
+            let slot = emitter.sprite_texture();
             let boost = animated(emitter, "EAA0", self.age).map_or(1., |a| a.x);
             for p in &run.particles {
                 let t = channel_time(
