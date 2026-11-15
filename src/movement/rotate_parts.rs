@@ -59,7 +59,11 @@ impl RotatePart {
             _ => (q.y, Vec3::Y),
         };
         let own_axis = pose_math::rotate_by_quat(unit, q);
-        s *= if self.axis == 0 { own_axis.x } else { own_axis.y };
+        s *= if self.axis == 0 {
+            own_axis.x
+        } else {
+            own_axis.y
+        };
         let w = c * q.w - s * lane;
         let turned = s * q.w + c * lane;
         let length = (w * w + turned * turned).sqrt();
@@ -145,6 +149,7 @@ impl RotatePart {
 pub(super) fn self_check() {
     local_x_source_carries_a_point();
     local_y_source_turns_a_point_about_the_vertical();
+    standing_front_turns_with_a_turntable();
 }
 #[cfg_attr(test, test)]
 fn local_x_source_carries_a_point() {
@@ -194,4 +199,27 @@ fn local_y_source_turns_a_point_about_the_vertical() {
     let carried = r.force_at(position + Vec3::X * 300.);
     assert!(carried.z > 4. && carried.y == 0.);
     assert_eq!(r.force_at(position), Vec3::ZERO);
+}
+
+/// Standing on the turntable (`rs::waitGround` -> `al::followRotateFrontAxisUp`): the front is
+/// carried through the part's previous and current matrices, so one -0.8 degree execution turns
+/// a front along +Z by sin(-0.8 degrees) toward -X (the recorded run starts at -0.0140).
+#[cfg_attr(test, test)]
+fn standing_front_turns_with_a_turntable() {
+    let mut r = RotatePart {
+        id: "test".into(),
+        part: 0,
+        axis: 1,
+        position: Vec3::new(4850., 1050., -2650.),
+        speed: -80.,
+        executions: 0,
+        quat: Quat::IDENTITY,
+        previous: PartFrame::new([1., 0., 0., 4850., 0., 1., 0., 1050., 0., 0., 1., -2650.])
+            .unwrap(),
+    };
+    r.tick();
+    let standing = pose_math::ActorPose::new(Quat::IDENTITY);
+    let turned = standing.follow_part(&r.previous.inverse, &r.frame().base);
+    let front = pose_math::ActorPose::new(turned).front();
+    assert!((front.x + 0.013_962_18).abs() < 1e-6 && front.y == 0. && front.z > 0.999);
 }
