@@ -127,8 +127,8 @@ pub struct TriangleMesh {
     /// The hit sensors of the stage's placed actors the head can look at (the export's
     /// `look_sensors`), in the replay's frame.
     pub look_sensors: Vec<crate::movement::look_at::LookSensor>,
-    /// Static hosts' InitClipping spheres: host, stage centre and radius.
-    pub look_clipping: Vec<(String, Vec3, f32)>,
+    /// Static hosts' InitClipping spheres.
+    pub look_clipping: Vec<LookClip>,
     /// Settled, initially lit candlestands; positions stay in absolute stage centimetres.
     pub candle_fire: Vec<Vec3>,
     pub grab_ceil_bars: Vec<crate::movement::grab_ceil::GrabCeilBar>,
@@ -147,6 +147,18 @@ pub struct TriangleMesh {
     geyser_curves: Option<serde_json::Value>,
 }
 
+/// A static host's InitClipping sphere: its stage centre and radius, and the look sensors the
+/// host loses when the camera clips it.
+#[derive(Clone, Debug)]
+pub struct LookClip {
+    pub host: String,
+    pub centre: Vec3,
+    pub radius: f32,
+    /// Indices into `look_sensors` of the placement the sphere belongs to. `None` for an export
+    /// that names only the host: the sphere then clips every sensor of that host.
+    pub sensors: Option<Vec<usize>>,
+}
+
 /// `N` floats from a JSON array (`None` when absent, short or not numbers).
 fn floats<const N: usize>(value: Option<&serde_json::Value>) -> Option<[f32; N]> {
     let list = value?.as_array()?;
@@ -161,18 +173,18 @@ fn floats<const N: usize>(value: Option<&serde_json::Value>) -> Option<[f32; N]>
 }
 
 /// The export's `look_sensors`: `{host, name, type, radius, position: [x, y, z]}` in the stage's
-/// own coordinates, moved to the replay's frame.
-fn look_sensors_from_export(
+/// own coordinates, moved to the replay's frame, each with the placement id the export gave it.
+fn look_sensor_entries(
     list: &serde_json::Value,
     origin: [f64; 3],
-) -> Vec<crate::movement::look_at::LookSensor> {
+) -> Vec<(Option<String>, crate::movement::look_at::LookSensor)> {
     let Some(list) = list.as_array() else {
         return Vec::new();
     };
     list.iter()
         .filter_map(|item| {
             let position = floats::<3>(item.get("position"))?;
-            Some(crate::movement::look_at::LookSensor {
+            let sensor = crate::movement::look_at::LookSensor {
                 host: item.get("host")?.as_str()?.to_string(),
                 name: item.get("name")?.as_str()?.to_string(),
                 kind: item.get("type")?.as_u64()? as u32,
@@ -183,6 +195,47 @@ fn look_sensors_from_export(
                 ),
                 stage_position: Vec3::from(position),
                 radius: item.get("radius")?.as_f64()? as f32,
+            };
+            let id = item.get("id").and_then(|id| id.as_str()).map(String::from);
+            Some((id, sensor))
+        })
+        .collect()
+}
+
+fn look_sensors_from_export(
+    list: &serde_json::Value,
+    origin: [f64; 3],
+) -> Vec<crate::movement::look_at::LookSensor> {
+    look_sensor_entries(list, origin)
+        .into_iter()
+        .map(|(_, sensor)| sensor)
+        .collect()
+}
+
+/// The export's `look_clipping`, with each sphere tied to the sensors of its placement when it
+/// names the placement (`id`).
+fn look_clips_from_export(
+    clipping: &serde_json::Value,
+    entries: &[(Option<String>, crate::movement::look_at::LookSensor)],
+) -> Vec<LookClip> {
+    clipping
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let sensors = item.get("id").and_then(|id| id.as_str()).map(|id| {
+                entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (owner, _))| owner.as_deref() == Some(id))
+                    .map(|(index, _)| index)
+                    .collect()
+            });
+            Some(LookClip {
+                host: item["host"].as_str()?.to_owned(),
+                centre: Vec3::from(floats::<3>(item.get("position"))?),
+                radius: item["radius"].as_f64()? as f32,
+                sensors,
             })
         })
         .collect()
@@ -296,6 +349,7 @@ impl TriangleMesh {
             .as_array()
             .ok_or("geometry: no triangle list")?;
         let origin = [origin.x as f64, origin.y as f64, origin.z as f64];
+        let look_entries = look_sensor_entries(&root["look_sensors"], origin);
         let mut mesh = Self {
             codes,
             objects,
@@ -372,19 +426,8 @@ impl TriangleMesh {
                 .as_array()
                 .cloned()
                 .unwrap_or_default(),
-            look_sensors: look_sensors_from_export(&root["look_sensors"], origin),
-            look_clipping: root["look_clipping"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| {
-                    Some((
-                        item["host"].as_str()?.to_owned(),
-                        Vec3::from(floats::<3>(item.get("position"))?),
-                        item["radius"].as_f64()? as f32,
-                    ))
-                })
-                .collect(),
+            look_clipping: look_clips_from_export(&root["look_clipping"], &look_entries),
+            look_sensors: look_entries.into_iter().map(|(_, sensor)| sensor).collect(),
             candle_fire: root["candlestands"]
                 .as_array()
                 .into_iter()
@@ -563,6 +606,11 @@ impl TriangleMesh {
         for source in root["cap_switches"].as_array().into_iter().flatten() {
             let mut switch = crate::movement::cap_switch::CapSwitch::load(source)?;
             switch.relative = mesh.relative_vec(switch.position);
+            // The switch's Body sensor is a head look-at candidate like the other placed hosts.
+            let body = switch.body_stage_position();
+            switch.look_sensor = Some(mesh.look_sensors.len());
+            mesh.look_sensors
+                .push(switch.body_look_sensor(body, mesh.relative_vec(body)));
             mesh.cap_switches.push(switch);
         }
         for source in root["cap_trampolines"].as_array().into_iter().flatten() {

@@ -586,21 +586,24 @@ pub(crate) fn update_static_clipping(player: &mut Player, course: &Course, view:
         let up = side.cross(forward);
         let slope = (view.fov_deg.to_radians() * 0.5).tan();
         let radius_limit = (slope * slope + 1.).sqrt() * 300.;
-        for (host, center, radius) in &mesh.look_clipping {
-            let delta = mesh.relative_vec(*center) - view.position * 100.;
+        for clip in &mesh.look_clipping {
+            let delta = mesh.relative_vec(clip.centre) - view.position * 100.;
             let dot = |a: Vec3, b: Vec3| (a.x * b.x + a.y * b.y) + a.z * b.z;
-            let limit = (slope * slope + 1.).sqrt() * radius;
+            let limit = (slope * slope + 1.).sqrt() * clip.radius;
             let horizontal = slope * (16. / 9.);
-            let side_limit = (horizontal * horizontal + 1.).sqrt() * radius;
+            let side_limit = (horizontal * horizontal + 1.).sqrt() * clip.radius;
             if dot(delta, up).abs() > dot(delta, forward) * slope + limit
                 || dot(delta, side).abs() > dot(delta, forward) * horizontal + side_limit
             {
-                invalid.extend(
-                    mesh.look_sensors
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, s)| (&s.host == host).then_some(i)),
-                );
+                match &clip.sensors {
+                    Some(owned) => invalid.extend(owned),
+                    None => invalid.extend(
+                        mesh.look_sensors
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, s)| (s.host == clip.host).then_some(i)),
+                    ),
+                }
             }
         }
         for (i, fire) in mesh.candle_fire.iter().enumerate() {

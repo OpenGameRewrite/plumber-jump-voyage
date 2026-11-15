@@ -4021,6 +4021,13 @@ impl Player {
         {
             self.look.disregard_candidate(scene.look_sensors().len());
         }
+        for switch in &self.cap_switches {
+            if let Some(index) = switch.look_sensor
+                && !switch.sensors_valid()
+            {
+                self.look.invalidate_sensor(index);
+            }
+        }
         for (i, f) in self.rocket.flowers.iter().enumerate() {
             if f.clipped {
                 self.look

@@ -101,10 +101,10 @@ fn squared_distance(a: Vec3, b: Vec3) -> f32 {
 }
 
 /// `rs::tryCalcLookAtTargetInDistance` for a host that does not answer `PlayerLookAtPosition`:
-/// the sensor's position when it is within `GATE_DISTANCE` of `origin`.
-fn within_gate(sensor: &LookSensor, origin: Vec3) -> Option<Vec3> {
+/// the sensor's position when the sensor is valid and within `GATE_DISTANCE` of `origin`.
+fn within_gate(sensor: &LookSensor, valid: bool, origin: Vec3) -> Option<Vec3> {
     let limit = (0. + GATE_DISTANCE) * (0. + GATE_DISTANCE);
-    (squared_distance(sensor.position, origin) <= limit).then_some(sensor.position)
+    (valid && squared_distance(sensor.position, origin) <= limit).then_some(sensor.position)
 }
 
 /// The holder, keeper and joint controller of the player's look-at.
@@ -122,7 +122,11 @@ pub struct LookAt {
     /// Where the eye sensor was after the previous step: the overlap of a frame is decided with
     /// the sensor positions of the frame before.
     previous_eye: Option<Vec3>,
+    /// Sensors the game reports as invalid (clipped host, `al::invalidateHitSensors`): they are no
+    /// candidates and fail the distance gate.
     invalid_sensors: Vec<usize>,
+    /// Sensors whose host answered `PlayerDisregard`: no candidates, but still valid.
+    disregarded: Vec<usize>,
     /// The head joint's position after the previous model calculation (cm), which the keeper
     /// reads when it chooses.
     head: Option<Vec3>,
@@ -152,6 +156,7 @@ impl Default for LookAt {
             joint: HeadLookAt::default(),
             previous_eye: None,
             invalid_sensors: Vec::new(),
+            disregarded: Vec::new(),
             head: None,
         }
     }
@@ -168,18 +173,33 @@ impl LookAt {
         }
     }
 
-    /// PlayerEyeSensorHitHolder::clear drops a sensor invalidated by actor clipping.
+    /// PlayerEyeSensorHitHolder::clear drops a sensor invalidated by actor clipping. The list is
+    /// the whole set of the frame: the disregarded sensors are asked for again.
     pub fn set_invalid_sensors(&mut self, invalid: Vec<usize>) {
         if self.candidate.is_some_and(|i| invalid.contains(&i)) {
             self.candidate = None;
         }
         self.invalid_sensors = invalid;
+        self.disregarded.clear();
+    }
+
+    /// A host invalidated its hit sensor (`al::invalidateHitSensors`): the holder drops it and the
+    /// keeper's distance gate refuses it, but a target the keeper already has stays until then.
+    pub fn invalidate_sensor(&mut self, index: usize) {
+        if !self.invalid_sensors.contains(&index) {
+            self.invalid_sensors.push(index);
+        }
+        if self.candidate == Some(index) {
+            self.candidate = None;
+        }
     }
 
     /// PlayerDisregard clears the eye holder's candidate; the joint keeper
     /// retains its existing target until its own distance/lifetime rule ends it.
     pub fn disregard_candidate(&mut self, index: usize) {
-        self.invalid_sensors.push(index);
+        if !self.disregarded.contains(&index) {
+            self.disregarded.push(index);
+        }
         if self.candidate == Some(index) {
             self.candidate = None;
         }
@@ -206,6 +226,10 @@ impl LookAt {
         });
     }
 
+    fn is_valid(&self, index: usize) -> bool {
+        !self.invalid_sensors.contains(&index)
+    }
+
     fn head_position(&self, feet: Vec3) -> Vec3 {
         self.head
             .unwrap_or(feet + Vec3::new(0., GUESSED_HEAD_HEIGHT, 0.))
@@ -219,12 +243,12 @@ impl LookAt {
             return;
         }
         if let Some(current) = self.target
-            && let Some(point) = within_gate(&sensors[current], head)
+            && let Some(point) = within_gate(&sensors[current], self.is_valid(current), head)
             && squared_distance(point, head) <= squared_distance(sensors[candidate].position, head)
         {
             return;
         }
-        if within_gate(&sensors[candidate], head).is_some() {
+        if within_gate(&sensors[candidate], self.is_valid(candidate), head).is_some() {
             self.target = Some(candidate);
             self.counter = -1;
         }
@@ -250,7 +274,7 @@ impl LookAt {
         let point = if ungated {
             Some(sensor.position)
         } else {
-            within_gate(sensor, head)
+            within_gate(sensor, self.is_valid(target), head)
         };
         match point {
             Some(point) => {
@@ -285,7 +309,7 @@ impl LookAt {
         let overlap_from = self.previous_eye.unwrap_or(eye);
         self.previous_eye = Some(eye);
         for (index, sensor) in sensors.iter().enumerate() {
-            if self.invalid_sensors.contains(&index) {
+            if !self.is_valid(index) || self.disregarded.contains(&index) {
                 continue;
             }
             let reach = EYE_RADIUS + sensor.radius;

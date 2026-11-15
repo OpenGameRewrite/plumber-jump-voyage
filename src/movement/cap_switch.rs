@@ -27,6 +27,8 @@ const FOLLOW_ROLL_DEGREES: f32 = 270.;
 /// `al::isNearZero`'s default `0.001f` tolerance (`MathUtil.h`); the source tests the normalized
 /// HatTarget-to-player vector, so this is only a zero-direction check, not a distance threshold.
 const NEAR_ZERO: f32 = 0.001;
+/// `al::HitSensorType::MapObj`, the type `InitSensor.byml` gives the Body sensor.
+const MAP_OBJ_SENSOR: u32 = 12;
 const HIT_REACTION: &str = "HitReaction";
 const KEEP_CLIP: &str = "HitReactionKeepFront";
 const FRONT_CLIP: &str = "HitReactionFront";
@@ -64,6 +66,10 @@ struct Action {
 #[derive(Clone)]
 pub struct CapSwitch {
     pub id: String,
+    /// The name the game logs for the actor (`UnitConfig.DisplayName`).
+    host: String,
+    /// Index of the Body sensor among the stage's look sensors, set by the stage loader.
+    pub look_sensor: Option<usize>,
     /// The placement's translation, and the same position relative to the replay's start (set by
     /// the stage loader).
     pub position: Vec3,
@@ -151,6 +157,11 @@ impl CapSwitch {
         };
         Ok(Self {
             id: p["Id"].as_str().ok_or("switch id")?.into(),
+            host: p["UnitConfig"]["DisplayName"]
+                .as_str()
+                .ok_or("switch host")?
+                .into(),
+            look_sensor: None,
             position: Vec3::new(component("X")?, component("Y")?, component("Z")?),
             relative: Vec3::ZERO,
             body_radius: sensors[0]["Radius"].as_f64().ok_or("switch radius")? as f32,
@@ -177,6 +188,30 @@ impl CapSwitch {
             },
             initial: true,
         })
+    }
+
+    /// The Body sensor as a candidate of the player's head look-at (`InitSensor.byml`: a `MapObj`
+    /// sensor above the actor), in the replay's frame.
+    pub fn body_look_sensor(&self, stage: Vec3, relative: Vec3) -> look_at::LookSensor {
+        look_at::LookSensor {
+            host: self.host.clone(),
+            name: "Body".into(),
+            kind: MAP_OBJ_SENSOR,
+            position: relative,
+            stage_position: stage,
+            radius: self.body_radius,
+        }
+    }
+
+    /// The Body sensor's stage position: the placement raised by the sensor's offset.
+    pub fn body_stage_position(&self) -> Vec3 {
+        self.position + Vec3::Y * self.body_offset
+    }
+
+    /// `exeOnWait` invalidates the actor's hit sensors on its first execution
+    /// (`al::invalidateHitSensors`); the switch never turns off again here.
+    pub fn sensors_valid(&self) -> bool {
+        !(self.nerve == SwitchNerve::OnWait && self.step > 0)
     }
 
     /// `receiveMsg` CapStartLockOn: accepted in OffWait.
