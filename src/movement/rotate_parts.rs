@@ -1,4 +1,5 @@
-//! Autonomous local-X RotateMapParts; assist/switch timelines are unsupported.
+//! Autonomous RotateMapParts turning about its local X or Y axis (`RotateAxis` 0/1) from an
+//! identity placement; the Z axis, assist and switch timelines are unsupported.
 use super::{pose_math, *};
 use crate::prism::{PartFrame, transform_point};
 use std::collections::HashMap;
@@ -7,6 +8,8 @@ use std::collections::HashMap;
 pub struct RotatePart {
     pub id: String,
     pub part: usize,
+    /// `RotateAxis` of the placement: 0 turns about local X, 1 about local Y (a turntable).
+    pub axis: u8,
     pub position: Vec3,
     pub speed: f32,
     pub executions: u32,
@@ -40,26 +43,38 @@ impl RotatePart {
         let local = transform_point(&self.previous.inverse, p.to_array());
         Vec3::from_array(transform_point(&self.frame().base, local)) - p
     }
+    /// `al::rotateQuatLocalDirDegree` (`MathUtil.cpp`): the rotation about the quaternion's own
+    /// axis is multiplied in front and the product normalized. A placement that starts at the
+    /// identity keeps only the axis component and `w`, so the other products drop out; the
+    /// operation order of the stored quaternion is the one of the original, not an accumulated
+    /// angle.
     pub fn tick(&mut self) {
         self.previous = self.frame();
         let half = ((self.speed / 100.) * pose_math::DEGREES_TO_RADIANS) * 0.5;
         let mut s = pose_math::sinf(half);
         let c = pose_math::cosf(half);
-        // Local X stays world X for this focused initial orientation. Keep
-        // sead's product and normalization order rather than accumulating angles.
         let q = self.quat;
-        s *= pose_math::rotate_by_quat(Vec3::X, q).x;
-        let w = c * q.w - s * q.x;
-        let x = s * q.w + c * q.x;
-        let length = (w * w + x * x).sqrt();
+        let (lane, unit) = match self.axis {
+            0 => (q.x, Vec3::X),
+            _ => (q.y, Vec3::Y),
+        };
+        let own_axis = pose_math::rotate_by_quat(unit, q);
+        s *= if self.axis == 0 { own_axis.x } else { own_axis.y };
+        let w = c * q.w - s * lane;
+        let turned = s * q.w + c * lane;
+        let length = (w * w + turned * turned).sqrt();
         let inv = if length > 0. { 1. / length } else { 1. };
-        self.quat = Quat::from_xyzw(inv * x, 0., 0., inv * w);
+        self.quat = if self.axis == 0 {
+            Quat::from_xyzw(inv * turned, 0., 0., inv * w)
+        } else {
+            Quat::from_xyzw(0., inv * turned, 0., inv * w)
+        };
         self.executions += 1;
     }
     pub fn seed(&mut self, row: &HashMap<String, String>) -> Result<(), String> {
         let get = |k: &str| row.get(k).map(String::as_str).ok_or("rotor seed field");
         if get("id")? != self.id
-            || get("axis")? != "0"
+            || get("axis")? != self.axis.to_string()
             || get("phase")? != "Rotate"
             || get("speed_bits")? != format!("{:08x}", self.speed.to_bits())
             || [
@@ -97,9 +112,14 @@ impl RotatePart {
         for _ in 0..count {
             self.tick();
         }
+        // The first recorded sample follows a collision-part synchronisation: the part's
+        // previous matrix is its current one (later samples carry the last current matrix).
+        self.previous = self.frame();
+        // The probe reads the quaternion back through `al::calcQuat` (the matrix), as `diagnostic`
+        // does, not the stored one: they can differ in the last bit.
+        let read_back = pose_math::to_quat(pose_math::quat_to_axes(self.quat));
         if get("quat_bits")?
-            != self
-                .quat
+            != read_back
                 .to_array()
                 .map(|v| format!("{:08x}", v.to_bits()))
                 .join(",")
@@ -124,12 +144,14 @@ impl RotatePart {
 
 pub(super) fn self_check() {
     local_x_source_carries_a_point();
+    local_y_source_turns_a_point_about_the_vertical();
 }
 #[cfg_attr(test, test)]
 fn local_x_source_carries_a_point() {
     let mut r = RotatePart {
         id: "test".into(),
         part: 0,
+        axis: 0,
         position: Vec3::new(100., 200., 300.),
         speed: 50.,
         executions: 0,
@@ -146,4 +168,30 @@ fn local_x_source_carries_a_point() {
     );
     assert_eq!(r.force_at(r.position), Vec3::ZERO);
     assert!(r.force_at(r.position + Vec3::Z * 700.).y < 0.);
+}
+
+/// A turntable (`RotateAxis` 1, speed -80 as in Lava Clock Ex obj312): the first execution
+/// reads back as the recorded quaternion, and the surface carries a point sideways.
+#[cfg_attr(test, test)]
+fn local_y_source_turns_a_point_about_the_vertical() {
+    let position = Vec3::new(4850., 1050., -2650.);
+    let mut r = RotatePart {
+        id: "test".into(),
+        part: 0,
+        axis: 1,
+        position,
+        speed: -80.,
+        executions: 0,
+        quat: Quat::IDENTITY,
+        previous: PartFrame::new([1., 0., 0., 4850., 0., 1., 0., 1050., 0., 0., 1., -2650.])
+            .unwrap(),
+    };
+    r.tick();
+    let read_back = pose_math::to_quat(pose_math::quat_to_axes(r.quat));
+    assert_eq!(read_back.y.to_bits(), 0xbbe4c30f);
+    assert_eq!(read_back.w.to_bits(), 0x3f7ffe67);
+    assert_eq!((read_back.x, read_back.z), (0., 0.));
+    let carried = r.force_at(position + Vec3::X * 300.);
+    assert!(carried.z > 4. && carried.y == 0.);
+    assert_eq!(r.force_at(position), Vec3::ZERO);
 }

@@ -551,6 +551,7 @@ fn rotational_jump_displacement_uses_the_actor_point_without_normal_projection()
     mesh.rotate_parts.push(RotatePart {
         id: "test".into(),
         part: 0,
+        axis: 0,
         position: Vec3::ZERO,
         speed: 50.,
         executions: 1,

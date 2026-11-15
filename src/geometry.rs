@@ -733,8 +733,11 @@ impl TriangleMesh {
                 .iter()
                 .position(|o| o["id"] == id)
                 .ok_or("rotor object")?;
-            if source["axis"] != 0
-                || source["class"] != "RotateMapParts"
+            let axis = source["axis"]
+                .as_u64()
+                .filter(|a| *a <= 1)
+                .ok_or("unsupported rotor axis")? as u8;
+            if source["class"] != "RotateMapParts"
                 || floats(root["objects"][object].get("rotate")) != Some([0.; 3])
                 || floats(root["objects"][object].get("scale")) != Some([1.; 3])
             {
@@ -745,6 +748,7 @@ impl TriangleMesh {
                 .push(crate::movement::rotate_parts::RotatePart {
                     id: id.into(),
                     part,
+                    axis,
                     position: Vec3::from_array(
                         floats(root["objects"][object].get("translate")).ok_or("rotor position")?,
                     ),

@@ -1,4 +1,4 @@
-"""Add placed BlockBrick/BlockQuestion head look-at sensors and the camera clipping of the look hosts.
+"""Add placed BlockBrick/BlockQuestion/NoteObjFirst head look-at sensors and the camera clipping of the look hosts.
 
     py tools/export-look-hosts.py <geometry.json> --romfs <romfs>
 
@@ -13,9 +13,18 @@ facts of the user's own stage decide which sensors that is, and neither is in th
   radius and its placement centre are exported as a `look_clipping` sphere tied to the placement
   `id`, for the blocks and for the stage's `CoinCollect` placements (the empties the save leaves).
 
+* A placed `NoteObjFirst` (the first note of a note chain) offers its `MapObj` Body sensor too:
+  `NoteObj::receiveMsg` (0x2d0c0c) answers the target-marker, item, cap, Yoshi and weapon
+  messages only, not `PlayerDisregard` or `PlayerLookAtPosition`. `NoteObj::init` (0x2d07e8)
+  moves the actor by the placement's `DisplayTranslate` (`al::tryAddDisplayOffset`), and with a
+  `Start` link widens the clipping sphere to the placement's `ShadowLength` (default 1500, 10000
+  for `IsLongShadow`; `al::expandClippingRadiusByShadowLength` with no offset takes the larger of
+  the two radii and keeps the centre).
+
 Only unlinked, unrotated (about X and Z), unit-scale placements named after their class are
-exported. Running it again replaces its own entries. `NearClipDistance`, group and far clipping
-are not exported: the camera-side planes are all `replay::update_static_clipping` knows.
+exported (a note keeps its `ShineActor`, `Start` and `ViewGroup` links). Running it again
+replaces its own entries. `NearClipDistance`, group and far clipping are not exported: the
+camera-side planes are all `replay::update_static_clipping` knows.
 """
 import argparse
 import importlib.util
@@ -28,6 +37,9 @@ SENSOR_TYPES = {'MapObj': 12}
 # class -> (the name the game logs for the actor, its object archive)
 BLOCKS = {'BlockBrick': ('レンガブロック', 'BlockBrick'), 'BlockQuestion': ('ハテナブロック', 'BlockQuestion')}
 COIN_HOST = 'コレクトコイン空'
+NOTE_FIRST = 'NoteObjFirst'
+SHADOW_LENGTH = 1500.
+LONG_SHADOW_LENGTH = 10000.
 
 
 def f32(value):
@@ -68,6 +80,27 @@ def main():
                                   type=SENSOR_TYPES[sensor['Type']], radius=sensor['Radius'],
                                   position=[position[0], f32(position[1] + sensor.get('Y', 0.)), position[2]]))
             clips.append(dict(source=SOURCE, id=obj['Id'], host=host, position=position, radius=radius))
+
+    archive = outfits.archive(args.romfs / 'ObjectData' / (NOTE_FIRST + '.szs'))
+    sensors = [s for s in outfits.byml(archive['InitSensor.byml']) if s['Type'] == 'MapObj']
+    note_radius = outfits.byml(archive['InitClipping.byml'])['Radius']
+    for obj in placements.get('ObjectList', []):
+        if (obj['UnitConfigName'] != NOTE_FIRST or obj.get('ModelName') is not None
+                or set(obj.get('Links', {})) - {'ShineActor', 'Start', 'ViewGroup'}
+                or any(obj['Rotate'][a] != 0 for a in 'XZ') or any(obj['Scale'][a] != 1 for a in 'XYZ')):
+            continue
+        host = obj['UnitConfig']['DisplayName']
+        offset = obj['UnitConfig']['DisplayTranslate']
+        position = [f32(obj['Translate'][a] + offset[a]) for a in 'XYZ']
+        for sensor in sensors:
+            looks.append(dict(source=SOURCE, id=obj['Id'], **{'class': NOTE_FIRST}, host=host, name=sensor['Name'],
+                              type=SENSOR_TYPES[sensor['Type']], radius=sensor['Radius'],
+                              position=[position[0], f32(position[1] + sensor.get('Y', 0.)), position[2]]))
+        radius = note_radius
+        if 'Start' in obj.get('Links', {}):
+            length = LONG_SHADOW_LENGTH if obj.get('IsLongShadow') else obj.get('ShadowLength', SHADOW_LENGTH)
+            radius = max(radius, length)
+        clips.append(dict(source=SOURCE, id=obj['Id'], host=host, position=position, radius=radius))
 
     # The save leaves a CoinCollectEmpty at every collected CoinCollect placement; every world's
     # archive must agree on the clipping radius.
