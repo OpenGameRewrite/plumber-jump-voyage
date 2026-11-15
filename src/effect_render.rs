@@ -459,7 +459,7 @@ impl Painter {
                 .get(1)
                 .and_then(|t| t.as_ref())
                 .filter(|slot| {
-                    slot.name.ends_with("nrm")
+                    (slot.name.ends_with("nrm") || slot.name.contains("normal"))
                         && installed.contains(&slot.name)
                         && matches!(emitter.render.billboard, 0 | 1 | 2 | 6 | 7)
                         && emitter.render.blend == Blend::Cutout
