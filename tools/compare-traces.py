@@ -597,7 +597,7 @@ def exported_look_hosts(game_path, geometry_path):
         return None
     hosts = {sensor["host"] for sensor in geometry.get("look_sensors", [])} | {source["host"] for source in geometry.get("rocket_flowers", [])}
     hosts.update(source["placement"]["UnitConfig"]["DisplayName"]
-                 for key in ("cap_trampolines", "signboards") for source in geometry.get(key, []))
+                 for key in ("cap_trampolines", "signboards", "cap_switches") for source in geometry.get(key, []))
     if geometry.get("pukupuku", {}).get("id") == "obj473":
         hosts.add(geometry["pukupuku"]["host"])
     return hosts
