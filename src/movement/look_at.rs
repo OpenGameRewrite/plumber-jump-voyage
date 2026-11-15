@@ -100,8 +100,9 @@ fn squared_distance(a: Vec3, b: Vec3) -> f32 {
     (dx * dx + dy * dy) + dz * dz
 }
 
-/// `rs::tryCalcLookAtTargetInDistance` for a host that does not answer `PlayerLookAtPosition`:
-/// the sensor's position when the sensor is valid and within `GATE_DISTANCE` of `origin`.
+/// `rs::tryCalcLookAtTargetInDistance` (0x564878) for a host that does not answer
+/// `PlayerLookAtPosition`: the sensor's position when the sensor is valid and within
+/// `GATE_DISTANCE` of `origin`. (A dead host fails it too; no host of the replays dies.)
 fn within_gate(sensor: &LookSensor, valid: bool, origin: Vec3) -> Option<Vec3> {
     let limit = (0. + GATE_DISTANCE) * (0. + GATE_DISTANCE);
     (valid && squared_distance(sensor.position, origin) <= limit).then_some(sensor.position)

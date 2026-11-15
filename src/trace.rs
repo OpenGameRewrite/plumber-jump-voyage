@@ -764,8 +764,8 @@ impl Recorder {
             p.trigger_frame(),
             looping(p.anim.name),
         );
-        // `PlayerAnimator::startSubAnim` starts the sub clip as the model actor's action
-        // (`al::startAction`), and the actor's action sounds read the model's action frame: while
+        // `PlayerAnimator::startSubAnim` (0x42a74c, its tail 0x42a7f0..0x42a808) starts the sub
+        // clip as the model actor's action (`al::startAction`), and the actor's action sounds read the model's action frame: while
         // another clip plays as the sub animation, the main clip's frame sounds do not run.
         // The cursor still follows the main clip, so they are not caught up when it resumes.
         let main_covered = p.model_sub().is_some_and(|(name, _)| name != p.anim.name);
