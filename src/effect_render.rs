@@ -709,4 +709,14 @@ pub fn self_check() {
     assert_eq!(geometry.uvs[5], [1., 0.5], "mesh uvs map into the tile");
     assert_eq!(geometry.second.len(), 7);
     assert_eq!(geometry.second_length.len(), 7);
+    // Colour 1 splits into a unit direction and its length, so the vertex stage's
+    // normalisation of the tangent does not change its brightness.
+    let bright = Paint {
+        color1: [3., 0., 4.],
+        ..paint
+    };
+    let mut split = Geometry::default();
+    split.quad(Vec3::ZERO, Vec3::X, Vec3::Y, &bright);
+    assert_eq!(split.second_length[0][0], 5.);
+    assert!((Vec3::from_slice(&split.second[0][..3]) - Vec3::new(0.6, 0., 0.8)).length() < 1e-6);
 }

@@ -561,6 +561,43 @@ pub fn self_check() {
         Library::from_bytes(hostile).is_none(),
         "huge emission rates are refused"
     );
+    // Which texture slot holds the sprite.
+    let slot = |name: &str, scrolls: bool| {
+        Some(TextureSlot {
+            name: name.into(),
+            animated: [scrolls as u8, 0, 0],
+            scroll: if scrolls { [0.001, 0.] } else { [0., 0.] },
+            ..Default::default()
+        })
+    };
+    let with = |textures| Emitter {
+        textures,
+        ..Default::default()
+    };
+    let sprite = with(vec![slot("noise00", true), slot("dust00", false)]);
+    assert_eq!(
+        sprite.sprite_texture().unwrap().name,
+        "dust00",
+        "a scrolling map is no sprite"
+    );
+    let sprite = with(vec![slot("smokeA", false), slot("smokeAnrm", false)]);
+    assert_eq!(
+        sprite.sprite_texture().unwrap().name,
+        "smokeA",
+        "slot 1 stays a normal map"
+    );
+    let sprite = with(vec![None, slot("sonicanimation00", false)]);
+    assert_eq!(
+        sprite.sprite_texture().unwrap().name,
+        "sonicanimation00",
+        "an empty slot 0"
+    );
+    let sprite = with(vec![slot("noise00", true), slot("circlenormal", false)]);
+    assert_eq!(
+        sprite.sprite_texture().unwrap().name,
+        "noise00",
+        "slot 1 is a normal map"
+    );
     let broken_mesh =
         br#"{"version":1,"meshes":{"0x1":{"position":[[0,0,0]],"triangles":[[0,1,2]]}}}"#;
     assert!(
