@@ -8,6 +8,7 @@ pub(super) fn run() {
     the_keeper_takes_a_target_in_reach_and_asks_for_it();
     the_keeper_drops_a_target_that_leaves_the_gate_after_forty_frames();
     a_nearer_sensor_replaces_the_target_and_a_state_without_look_ends_it();
+    an_invalid_sensor_fails_the_gate_but_a_disregarded_one_does_not();
     the_head_scale_is_kept_out_of_the_turn_and_put_back_on_the_columns();
 }
 
@@ -180,6 +181,34 @@ fn clipping_invalidates_the_holder_until_the_sensor_returns() {
     look.set_invalid_sensors(Vec::new());
     look.step(&actor, false, &sensors);
     assert_eq!(look.candidate, Some(0));
+}
+
+/// `rs::tryCalcLookAtTargetInDistance` refuses a sensor that is not valid; a host that only
+/// answered `PlayerDisregard` keeps a sensor valid, and the keeper keeps its target either way
+/// until its first forty frames are over.
+#[cfg_attr(test, test)]
+fn an_invalid_sensor_fails_the_gate_but_a_disregarded_one_does_not() {
+    let sensors = [sensor("switch", Vec3::new(0., 90., 300.))];
+    let actor = actor_at(Vec3::ZERO);
+    let frames_asked = |invalidate: fn(&mut LookAt)| {
+        let mut look = LookAt::default();
+        look.set_head_position(Vec3::new(0., 90., 0.));
+        look.step(&actor, true, &sensors);
+        invalidate(&mut look);
+        let mut asked = 0;
+        for _ in 0..60 {
+            look.step(&actor, true, &sensors);
+            asked += i32::from(look.requested_sensor().is_some());
+        }
+        (asked, look.requested_sensor())
+    };
+    // Invalidated after it was taken: asked through the ungated frames, then dropped.
+    assert_eq!(frames_asked(|look| look.invalidate_sensor(0)), (40, None));
+    // Disregarded: still within reach and valid, so the request goes on.
+    assert_eq!(
+        frames_asked(|look| look.disregard_candidate(0)),
+        (60, Some(0))
+    );
 }
 
 /// The first Brake frame of candle-look: the head joint arrives stretched. The game's logged

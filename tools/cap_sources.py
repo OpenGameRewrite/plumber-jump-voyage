@@ -54,6 +54,7 @@ class Evidence:
     def __init__(self, geometry, cap, collider, sources, messages, rewrite, rows, preroll):
         self.frames, self.rebound, self.lockon, self.attack, self.error = set(), set(), set(), set(), None
         self.reflect = self.keeps = self.start = self.probes = None
+        self.lock_class = self.lock_id = None
         try:
             self.verify(geometry, cap, collider, sources, messages, rewrite, rows, preroll)
         except (ValueError, KeyError, TypeError, IndexError, StopIteration, struct.error) as error:
@@ -112,6 +113,8 @@ class Evidence:
                 raise ValueError(f'native source {f}')
         self.verify_messages(messages, sign_ids, hanger_ids, switch_ids, own)
         if lock_ids:
+            self.lock_id = lock_ids[0]
+            self.lock_class = 'CapHanger' if hanger_ids else 'CapSwitchSave'
             self.verify_lock_on(messages, cap, lock_ids[0], bool(hanger_ids))
         else:
             self.verify_rebound(messages, cap, collider)
@@ -300,10 +303,21 @@ class Evidence:
             raise ValueError('rebound sample frames')
 
     def reason(self, frame, text):
+        return self.accepted(frame, text) is not None
+
+    def accepted(self, frame, text):
+        """(label, why) of a Rebound/LockOn flag the verified run explains, else None."""
         if frame not in self.frames:
-            return False
-        return ((text.startswith('Cappy Rebound') and frame in self.rebound)
-                or (text.startswith('Cappy LockOn') and frame in self.lockon))
+            return None
+        if text.startswith('Cappy Rebound') and frame in self.rebound:
+            return ('exported SignBoardNormal Rebound',
+                    'accepted CapReflectCollide of obj454, ordered four-step zero-velocity exeRebound, '
+                    'verified collider identity')
+        if text.startswith('Cappy LockOn') and frame in self.lockon:
+            return (f'exported {self.lock_class} LockOn',
+                    f'{self.lock_id}: CapStartLockOn/InitCapTarget accepted once, CapKeepLockOn every execution, '
+                    'then tryReturn; the rewrite simulated the source from its exported placement and sensors')
+        return None
 
     def contact(self, frame, c):
         if frame not in self.frames or c['who'] != 'cap' or c['kind'] != 'a' or c['message'] or c['answer']:
@@ -359,7 +373,7 @@ def self_check():
     args = fixture()
     evidence = Evidence(*args)
     assert evidence.frames == set(range(16)) and evidence.rebound == {2, 3, 4, 5}, evidence.error
-    for change in ('stage', 'answer', 'sender', 'wall', 'rebound', 'message', 'placement', 'hanger'):
+    for change in ('stage', 'answer', 'sender', 'wall', 'rebound', 'message', 'placement', 'hanger', 'switch'):
         bad = deepcopy(args)
         if change == 'stage':
             bad[0]['scenario'] = 2
@@ -381,6 +395,15 @@ def self_check():
                                                          Scale=dict(X=1., Y=1., Z=1.), Rotate=dict(X=0., Y=90., Z=0.),
                                                          Translate=dict(X=0., Y=0., Z=0.)),
                                           sensors=HANGER_SENSORS, initial_phase='WaitPending')]
+        elif change == 'switch':
+            # A switch placement other than the recorded obj2025 is refused with an otherwise
+            # complete record (the sign alone would be accepted).
+            bad[0]['cap_switches'] = [dict(placement=dict(UnitConfigName='CapSwitchSave', Id='obj2026',
+                                                          IsLinkDest=False, IsConnectToCollision=False,
+                                                          IsNoReaction=False, Links={'RiseParts': []},
+                                                          **SWITCH_PLACEMENT),
+                                           sensors=SWITCH_SENSORS, initial_phase='WaitPending',
+                                           hack_cap=dict(JointName='HatTarget', LockOnOnly=True))]
         else:
             bad[0]['signboards'][0]['placement']['Translate']['X'] = -4799.
         assert not Evidence(*bad).frames, change

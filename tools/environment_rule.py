@@ -494,9 +494,8 @@ class Judge:
             self._floor_height(f, reason)
         elif reason.startswith("horizontal displacement differs"):
             self._displacement(f, reason)
-        elif self._cap_sources.reason(f, reason):
-            v.accept(f, "exported SignBoardNormal Rebound",
-                     "accepted CapReflectCollide of obj454, ordered four-step zero-velocity exeRebound, verified collider identity")
+        elif (cap_source := self._cap_sources.accepted(f, reason)) is not None:
+            v.accept(f, *cap_source)
         else:
             v.refuse(f, reason)
 
@@ -594,7 +593,7 @@ class Judge:
                 v.accept(f, "exported RocketFlower equipment", "placement-bound sensors and independently reproduced pickup, watcher phase, refresh and expiry")
                 continue
             if self._cap_sources.contact(f, c):
-                v.accept(f, "exported SignBoardNormal perception", "stage/scenario-bound sign/hanger placements, original sensors, ordered source lifecycle and only whitelisted perception queries")
+                v.accept(f, "exported cap-interaction source perception", "stage/scenario-bound sign/hanger/switch placements, original sensors, ordered source lifecycle and only whitelisted perception queries")
                 continue
             if c["who"] == "cap":
                 v.refuse(f, f"Cappy's {c['kind']} contact with {host}{where}")
