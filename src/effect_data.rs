@@ -299,7 +299,7 @@ pub struct Emitter {
 impl Emitter {
     /// The texture slot whose picture is the particle's sprite.
     ///
-    /// Slot 0 is the sprite, except where it is a scrolling modulation map (noise, cloud pattern,
+    /// Slot 0 is the sprite, except where it is empty or a scrolling modulation map (noise, cloud pattern,
     /// UV distortion, wave index: the data animates its scroll) and slot 1 holds an ordinary
     /// picture: the shape, and the flip-book grid and pattern, then belong to slot 1, which is
     /// where the data puts them (smoke atlases, dust, flames). Drawing the modulation map as the
@@ -308,12 +308,16 @@ impl Emitter {
     pub fn sprite_texture(&self) -> Option<&TextureSlot> {
         let first = self.textures.first().and_then(|t| t.as_ref());
         let second = self.textures.get(1).and_then(|t| t.as_ref());
+        let picture =
+            |slot: &TextureSlot| !slot.name.contains("nrm") && !slot.name.contains("normal");
         match (first, second) {
+            // An empty slot 0 (absent, or the "noimage" placeholder) leaves the picture to slot 1.
+            (None, Some(second)) if picture(second) => Some(second),
+            (Some(first), Some(second)) if first.name == "noimage" && picture(second) => {
+                Some(second)
+            }
             (Some(first), Some(second))
-                if first.animated[0] != 0
-                    && first.scroll != [0., 0.]
-                    && !second.name.contains("nrm")
-                    && !second.name.contains("normal") =>
+                if first.animated[0] != 0 && first.scroll != [0., 0.] && picture(second) =>
             {
                 Some(second)
             }

@@ -451,7 +451,9 @@ impl Painter {
                 }
             }
             // Smoke carries a normal map beside its picture; flat sprites facing
-            // the camera are lit by it.
+            // the camera are lit by it. The smoke's stretched mesh shards (billboard 6)
+            // take the same lighting: the data pairs them with the same texture and normal
+            // map, and the meshes carry no normals of their own (an inference, not a decoded rule).
             let normal = emitter
                 .textures
                 .get(1)
@@ -459,8 +461,7 @@ impl Painter {
                 .filter(|slot| {
                     slot.name.ends_with("nrm")
                         && installed.contains(&slot.name)
-                        && matches!(emitter.render.billboard, 0 | 1 | 2 | 7)
-                        && emitter.render.mesh.is_none()
+                        && matches!(emitter.render.billboard, 0 | 1 | 2 | 6 | 7)
                         && emitter.render.blend == Blend::Cutout
                 })
                 .map(|slot| slot.name.clone());
