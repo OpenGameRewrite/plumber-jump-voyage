@@ -918,10 +918,13 @@ def compare(game_path, rewrite_path, tol_overrides=None, ignore_events=(), locks
         for name in CAP_CATEGORICAL + list(CAP_NUMERIC):
             kind = "categorical" if name in CAP_CATEGORICAL else "numeric"
             cres, _ = new_result(name, kind)
-            if not both:
+            # A drift column (the cap's position) stops at the first contaminated frame, so its own
+            # frame set can be shorter than the frames the cap is out on.
+            own = [f for f in both if f in cres.game]
+            if not own:
                 cres.not_comparable("no frame has the cap out on both sides")
                 continue
-            for f in both:
+            for f in own:
                 if kind == "categorical":
                     cres.add(f, None, [] if cres.game[f] == cres.rewrite[f]
                              else [f"{cres.game[f] or 'none'} vs {cres.rewrite[f] or 'none'}"])
