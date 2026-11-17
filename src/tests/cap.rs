@@ -53,6 +53,7 @@ fn lockstep_return_keeps_the_completed_pose_and_action() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     for _ in 0..cap_spiral::FRAMES {
         before.update(&world);
@@ -146,6 +147,7 @@ fn lockstep_spiral_entry_retains_its_launch_front() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     before.update(&world);
     restored.update(&world);
@@ -217,6 +219,7 @@ fn the_throw_down_rolls_along_the_floor() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     let at = |cap: &Cap| cap.pos / UNIT;
     // Row 74: the start, the drop onto the floor and the clip the start began.
@@ -282,6 +285,7 @@ fn the_spiral_circles_the_player() {
             mesh: None,
             water: None,
             targets: &[],
+            cap_hits: &[],
         };
         assert!(cap.update(&world).is_empty());
         let (found, name, clip) = spot(&cap);
@@ -305,6 +309,7 @@ fn the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     let tilted = Vec3::new(0.6, 0.8, 0.);
     let mut cap = Cap::start(
@@ -369,6 +374,7 @@ fn the_catch_is_the_sensor_contact() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     // 220 away it comes to about 140 from the body in this frame: touching.
     assert!(returning(220.).update(&world).contains(&CapEvent::Caught));
@@ -408,6 +414,7 @@ fn straight_throw_matches_the_recording() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     let z = |cap: &Cap| cap.pos.z / UNIT;
     assert!((z(&cap) - 182.).abs() < 1e-3 && (cap.pos.y / UNIT - 70.).abs() < 1e-3);
@@ -482,6 +489,7 @@ fn a_wall_at_an_angle_turns_the_cap() {
         mesh: Some(&mesh),
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     let mut hits = 0;
     let mut deepest = f32::MIN;
@@ -512,6 +520,7 @@ fn the_return_writes_the_pose_from_its_first_execution() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     for distance in [150., 300.] {
         let mut cap = Cap::start(
@@ -575,6 +584,7 @@ fn the_return_after_a_trample_leaves_along_the_cap_pose() {
         mesh: None,
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     while cap.state_name() != "ThrowStay" {
         cap.update(&world);
@@ -891,6 +901,7 @@ fn a_cap_thrown_into_a_slope_turns_onto_it_and_raises_the_reaction() {
         mesh: Some(&mesh),
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     let mut turns = Vec::new();
     for _ in 0..40 {
@@ -1000,6 +1011,7 @@ fn far_world(mesh: Option<&TriangleMesh>) -> CapWorld<'_> {
         mesh,
         water: None,
         targets: &[],
+        cap_hits: &[],
     }
 }
 
@@ -1080,6 +1092,7 @@ fn a_return_pressed_into_a_wall_ends_when_the_counter_passes_45() {
         mesh: Some(&mesh),
         water: None,
         targets: &[],
+        cap_hits: &[],
     };
     let mut cap = returning_at(0, Vec3::new(300., 75., 0.));
     let mut ended = None;

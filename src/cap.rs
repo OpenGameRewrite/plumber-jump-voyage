@@ -64,6 +64,8 @@ const START_DISTANCE: f32 = 150.;
 /// The cap's `Attack` sensor (`PlayerFunction::initCapModelActor` 0x4464a4): radius 100, raised 20.
 const ATTACK_SENSOR_RADIUS: f32 = 100.;
 const ATTACK_SENSOR_HEIGHT: f32 = 20.;
+/// The trampoline's CapHit sensor (`CapTrampoline/InitSensor.byml`).
+const CAP_HIT_RADIUS: f32 = 110.;
 /// `followTarget`: the interpolation runs 4 steps with weight 0.25 each; the other counter stops at 10.
 const LOCK_ON_INTERPOLATION_STEPS: u32 = 4;
 const LOCK_ON_WEIGHT: f32 = 0.25;
@@ -316,6 +318,9 @@ pub enum CapEvent {
     Reflected(usize),
     /// An accepted `CapStartLockOn`: index of the exported CapHanger.
     LockedOn(usize),
+    /// An accepted `CapAttack` on an exported trampoline's CapHit: its index. The cap goes to
+    /// Rebound and its hit reaction `帽子ヒット` stops the scene.
+    Attacked(usize),
     /// A rejected `CapKeepLockOn` made the cap return (`tryReturn`).
     LockReturn,
     /// The return ended away from the player (`exeReturn`'s tail, see `cap_return`): the cap
@@ -344,6 +349,17 @@ pub struct CapWorld<'a> {
     pub water: Option<&'a WaterAreas>,
     /// The exported actors the cap can lock onto (hangers, switches).
     pub targets: &'a [LockTarget],
+    /// The CapHit sensors of the exported trampolines (`CapAttack` receivers).
+    pub cap_hits: &'a [CapHitTarget],
+}
+
+/// What the cap needs of an exported trampoline's CapHit sensor (centimetres, start-relative).
+#[derive(Clone, Copy, Debug)]
+pub struct CapHitTarget {
+    /// The sensor's centre.
+    pub centre: Vec3,
+    /// The source takes a cap attack now: open nerves and no cooldown.
+    pub accepts: bool,
 }
 
 /// What the cap needs of an exported lock-on target (centimetres, start-relative).
@@ -503,6 +519,10 @@ pub struct Cap {
     /// it, from this spot with this velocity, is replayed when a source needs the contact.
     contact_probe: Option<(Vec3, Vec3)>,
     lock_on: Option<LockOn>,
+    /// The hosts that accepted a `CapAttack` in this throw (`HackCap +0x1a0`, the recent-host
+    /// ring): `attackSensor` ignores them from then on (0x407a28..0x407a2c), indexes of the
+    /// exported trampolines.
+    attacked: Vec<usize>,
     /// A cap put back into a lock-on (or the return after it) keeps the collider of the row before:
     /// the collision is off meanwhile, so the history is the throw's.
     carry_collider: bool,
@@ -604,6 +624,7 @@ impl Cap {
             wall_last_frame: false,
             contact_probe: None,
             lock_on: None,
+            attacked: Vec::new(),
             carry_collider: false,
             collision_off_steps: 0,
             wall_hits: 0,
@@ -987,6 +1008,13 @@ impl Cap {
         {
             events.push(CapEvent::LockedOn(index));
         }
+        // The same sensor phase for a returning cap meeting a trampoline's CapHit: accepted, the
+        // actor sets Rebound (0x407ab4..0x407b54) and the cap's own nerve runs it this frame.
+        if self.nerve == CapNerve::Return
+            && let Some(index) = self.try_attack_trampoline(world)
+        {
+            events.push(CapEvent::Attacked(index));
+        }
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events, world),
             CapNerve::ThrowBrake => self.throw_brake(&mut events, world),
@@ -1200,6 +1228,32 @@ impl Cap {
         self.nerve = CapNerve::LockOn;
         self.step = 0;
         self.phase = phase_of(CapNerve::LockOn);
+        Some(index)
+    }
+
+    /// `HackCap::attackSensor` (0x4076fc) for a cap in `Return` against the CapHit sensor of an
+    /// exported trampoline: the Attack sensor (a sphere of 100 raised 20 along the cap's up axis)
+    /// strictly overlapping it, the host not yet struck in this throw, no `CapReflect` or lock-on
+    /// answer, and `CapAttack` accepted. `CapIgnoreCollisionCheck` is refused by a trampoline, so
+    /// the original also asks the wall-and-ceiling arrow between the two sensors
+    /// (`calcStrikeArrowCollideWallAndCeilingBetweenAttackSensor`, 0x4078d0); that test is NOT
+    /// ported: the evidence validator refuses a hit whose sensor segment crosses a wall or ceiling
+    /// triangle of the exported stage. Only the `Return` nerve is ported (0x407924). The `+0x290`
+    /// counter that Rebound's exit sets (0x4079c8) is not either: the host list already blocks
+    /// the one trampoline of these stages.
+    fn try_attack_trampoline(&mut self, world: &CapWorld) -> Option<usize> {
+        let attack = self.spot + self.pose.world_axis(Vec3::Y) * ATTACK_SENSOR_HEIGHT;
+        let (index, _) = world.cap_hits.iter().enumerate().find(|(index, hit)| {
+            hit.accepts
+                && !self.attacked.contains(index)
+                && (hit.centre - attack).length_squared()
+                    < (ATTACK_SENSOR_RADIUS + CAP_HIT_RADIUS).powi(2)
+        })?;
+        self.attacked.push(index);
+        self.nerve = CapNerve::Rebound;
+        self.step = 0;
+        self.phase = phase_of(CapNerve::Rebound);
+        self.returning = false;
         Some(index)
     }
 

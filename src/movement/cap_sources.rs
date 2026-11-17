@@ -52,6 +52,14 @@ impl Player {
         hangers.chain(switches).collect()
     }
 
+    /// The CapHit sensor of every exported trampoline, in the cap's event order.
+    pub(super) fn cap_hit_targets(&self) -> Vec<crate::cap::CapHitTarget> {
+        self.trampolines
+            .iter()
+            .map(cap_trampoline::Trampoline::cap_hit_target)
+            .collect()
+    }
+
     /// One execution of every lock-on target's nerve; a switch's activation stops the scene.
     pub(super) fn tick_lock_on_sources(&mut self, keep_input: bool) {
         let player = self.position_cm();

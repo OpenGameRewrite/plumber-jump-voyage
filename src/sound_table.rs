@@ -327,6 +327,11 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
             cap: true,
             name: "CapBounceHit",
         }],
+        // The reaction an accepted CapAttack asks of the cap (`rs::requestHitReactionToAttacker`).
+        Fx::CapHit => vec![Cue::Reaction {
+            cap: true,
+            name: "CapHit",
+        }],
         // `HackCap::prepareLockOn` raises the cap-set reaction; `tryReturn` the return's.
         Fx::CapLockOn => vec![Cue::Reaction {
             cap: true,

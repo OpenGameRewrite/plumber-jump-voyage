@@ -1039,6 +1039,8 @@ pub enum Fx {
     CapWallHit(f32),
     /// An exported actor accepted the cap's `CapReflectCollide`: its hit reaction.
     CapReflect,
+    /// An exported trampoline accepted the cap's `CapAttack`: the reaction `帽子ヒット`.
+    CapHit,
     /// A hanger accepted the cap's `CapStartLockOn` (`帽子セット`).
     CapLockOn,
     /// The cap's lock-on ended and it returns (`帽子戻し`).
@@ -6229,6 +6231,7 @@ impl Player {
             return;
         }
         let targets = self.lock_targets();
+        let cap_hits = self.cap_hit_targets();
         let Some(cap) = &mut self.cap else {
             return;
         };
@@ -6254,6 +6257,7 @@ impl Player {
             mesh: scene.mesh.as_deref(),
             water: Some(scene.water_areas()),
             targets: &targets,
+            cap_hits: &cap_hits,
         };
         let moments = cap.update(&world);
         self.cap_serial = cap.clip_serial();
@@ -6278,6 +6282,13 @@ impl Player {
                     self.events.push(Fx::CapLockOn);
                 }
                 CapEvent::LockReturn => self.events.push(Fx::CapLockReturn),
+                CapEvent::Attacked(index) => {
+                    self.trampolines[index].receive_cap_attack();
+                    self.events.push(Fx::CapHit);
+                    // MarioCapCommonInfo/ActorHitReactionCtrl.byml, 帽子ヒット:
+                    // IsStopSceneForHitEffect with StopSceneFrame 2.
+                    self.rocket.request_scene_stop(2);
+                }
                 CapEvent::Reflected(index) => {
                     self.signboards[index].reflect();
                     self.events.push(Fx::CapReflect);

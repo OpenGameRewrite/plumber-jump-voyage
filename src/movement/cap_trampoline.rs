@@ -1,10 +1,29 @@
 //! Stationary CapTrampoline and its RequestPlayerSpinJump (1.0.0).
+//!
+//! Phases: 0 Wait, 1 Open, 2 Jump, 3 OpenStart, 4 ReOpen. Three routes reach Mario:
+//! the actor's own attack sensor (`attackSensor` 0x24332c, power 60/50, cooldown-gated),
+//! the TrampleHit receive route for a hip drop (`receiveMsg` 0x243710, power 68/55, no
+//! cooldown test, answers false to the hip-drop message) and, for a closed source, the
+//! CapHit Reflect (a bounce, not a spin jump). A cap attack on CapHit (0x243910) restarts the
+//! source in ReOpen with the cooldown that blocks the first route.
 use super::*;
+
+/// `ReOpen` action of the original `CapTrampoline.bfres` (clip length in frames).
+const REOPEN_FRAMES: i32 = 27;
+/// The nerve gate of `attackSensor` and `receiveMsg` (0x243348..0x243364, 0x2435e4..0x243618):
+/// Wait takes the closed-state branch; Open, Jump, OpenStart and ReOpen the open one.
+const WAIT: u8 = 0;
+const OPEN: u8 = 1;
+const JUMP: u8 = 2;
+const OPEN_START: u8 = 3;
+const RE_OPEN: u8 = 4;
 
 #[derive(Clone, Debug)]
 pub struct Trampoline {
     pub id: String,
     pub position: Vec3,
+    /// The same position relative to the replay's start (set by the stage loader).
+    pub relative: Vec3,
     pub moon: bool,
     pub continue_open: bool,
     pub phase: u8,
@@ -38,6 +57,7 @@ impl Trampoline {
         Ok(Self {
             id: p["Id"].as_str().ok_or("trampoline id")?.into(),
             position: Vec3::new(component("X")?, component("Y")?, component("Z")?),
+            relative: Vec3::ZERO,
             moon: p["IsMoon"].as_bool().ok_or("trampoline moon")?,
             continue_open: p["IsContinueOpen"]
                 .as_bool()
@@ -54,14 +74,56 @@ impl Trampoline {
         })
     }
 
-    fn accepts(&self, feet: Vec3, velocity: Vec3, min_speed: f32) -> bool {
-        if self.phase != 1 || self.cooldown > 0 {
-            return false;
-        }
+    /// Mario's foot (sphere 40, raised 40) strictly overlapping TrampleHit (120, lowered 20)
+    /// with the attacker's speed and direction toward the sensor (`calcDirBetweenSensors`):
+    /// the tests shared by both routes, which differ in the speed floor.
+    fn foot_hits_trample_sensor(&self, feet: Vec3, velocity: Vec3, min_speed: f32) -> bool {
         let delta = self.position - Vec3::Y * 20. - (feet + Vec3::Y * 40.);
         pose_math::squared_length(delta) < 160. * 160.
             && vector_lib::length(velocity) >= min_speed
             && pose_math::dot(velocity, delta) >= 0.
+    }
+
+    /// `attackSensor` 0x24332c: every nerve but Wait, speed 1.45, no cooldown.
+    fn accepts(&self, feet: Vec3, velocity: Vec3, min_speed: f32) -> bool {
+        self.phase != WAIT
+            && self.cooldown <= 0
+            && self.foot_hits_trample_sensor(feet, velocity, min_speed)
+    }
+
+    /// Whether `receiveMsg` 0x243910 takes a cap attack on CapHit: the open nerves, no cooldown.
+    pub fn accepts_cap_attack(&self) -> bool {
+        self.phase != WAIT && self.cooldown <= 0
+    }
+
+    /// `receiveMsg` 0x243924..0x24398c: cooldown 10, close counter 300, ReOpen (0x1ce4ec0).
+    pub fn receive_cap_attack(&mut self) {
+        self.cooldown = 10;
+        self.close_counter = 300;
+        self.phase = RE_OPEN;
+        self.step = -1;
+    }
+
+    /// The Foot sphere (centre raised 40) of the TrampleHit route, `receiveMsg` 0x243710..0x243838:
+    /// every nerve but Wait and Jump (0x243754), speed 8.5; there is no cooldown test.
+    fn receive_hip_drop(&mut self, feet: Vec3, velocity: Vec3) -> bool {
+        if matches!(self.phase, WAIT | JUMP) || !self.foot_hits_trample_sensor(feet, velocity, 8.5)
+        {
+            return false;
+        }
+        self.close_counter = 300; // 0x2438f4
+        self.phase = JUMP; // 0x243904
+        self.step = -1;
+        true
+    }
+
+    /// What the cap sees of this source: its CapHit sensor (110, raised 60) and whether it takes
+    /// a cap attack now.
+    pub fn cap_hit_target(&self) -> crate::cap::CapHitTarget {
+        crate::cap::CapHitTarget {
+            centre: self.relative + Vec3::Y * 60.,
+            accepts: self.accepts_cap_attack(),
+        }
     }
 
     // receiveMsg 0x24362c..0x2436ec: Wait/CapHit Reflect. InitSensor
@@ -69,7 +131,7 @@ impl Trampoline {
     fn receive_hip_drop_reflect(&mut self, feet: Vec3) -> bool {
         let foot = feet + Vec3::Y * 40.;
         let cap_hit = self.position + Vec3::Y * 60.;
-        if self.phase != 0
+        if self.phase != WAIT
             || self.cooldown > 0
             || pose_math::squared_length(foot - cap_hit) >= 150. * 150.
             || foot.y <= cap_hit.y - 100.
@@ -78,17 +140,22 @@ impl Trampoline {
         }
         self.cooldown = 10; // 0x2436c0
         self.close_counter = 300; // 0x2436d8
-        self.phase = 3; // OpenStart, 0x2436e0..0x2436e8
+        self.phase = OPEN_START; // OpenStart, 0x2436e0..0x2436e8
         self.step = -1;
         true
     }
 
+    /// The float table at 0x18869b8 `[60, 50, 68, 55]`: attack route, then hip-drop route, by IsMoon.
     fn power(&self) -> f32 {
         if self.moon { 50. } else { 60. }
     }
 
+    fn hip_drop_power(&self) -> f32 {
+        if self.moon { 55. } else { 68. }
+    }
+
     fn launch(&mut self, normal_attack: bool) {
-        self.phase = 2;
+        self.phase = JUMP;
         self.step = -1;
         self.close_counter = 300;
         if normal_attack {
@@ -103,17 +170,22 @@ impl Trampoline {
         }
         // OpenStart15 (original CapTrampoline action metadata), exeOpenStart
         // 0x243a54..0x243a78 tests its end and selects Open.
-        if self.phase == 3 && self.step == 15 {
-            self.phase = 1;
+        if self.phase == OPEN_START && self.step == 15 {
+            self.phase = OPEN;
             self.step = -1;
         }
-        if self.phase == 1 && !self.continue_open && self.step >= 0 {
+        // ReOpen27 (original action metadata) ends the nerve like OpenStart's.
+        if self.phase == RE_OPEN && self.step == REOPEN_FRAMES {
+            self.phase = OPEN;
+            self.step = -1;
+        }
+        if self.phase == OPEN && !self.continue_open && self.step >= 0 {
             // exeOpen 0x243a88: finite opening consumes its close counter.
             self.close_counter -= 1;
         }
         // Jump's 19-frame action is tested after the animation update.
-        if self.phase == 2 && self.step == 19 {
-            self.phase = 1;
+        if self.phase == JUMP && self.step == 19 {
+            self.phase = OPEN;
             self.step = -1;
         }
         self.step += 1;
@@ -170,6 +242,12 @@ impl Player {
             } else {
                 source.tick();
             }
+            // The hip-drop message (`PlayerObjHipDrop`, after Reflect and the own-cap variant
+            // were refused) arrives after the actor's update of the frame, so the cooldown
+            // has already counted down; the receiver answers false whatever Mario does.
+            if hip_drop && request.is_none() && source.receive_hip_drop(feet, velocity) {
+                request = Some(source.hip_drop_power());
+            }
         }
         if reflect {
             self.request_hip_drop_reflect();
@@ -216,6 +294,7 @@ mod checks {
         let mut source = Trampoline {
             id: "closed".into(),
             position: Vec3::ZERO,
+            relative: Vec3::ZERO,
             moon: false,
             continue_open: false,
             phase: 0,
@@ -261,6 +340,7 @@ mod checks {
         let mut s = Trampoline {
             id: "test".into(),
             position: Vec3::ZERO,
+            relative: Vec3::ZERO,
             moon: false,
             continue_open: true,
             phase: 1,

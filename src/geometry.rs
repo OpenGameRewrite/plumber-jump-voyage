@@ -614,8 +614,9 @@ impl TriangleMesh {
             mesh.cap_switches.push(switch);
         }
         for source in root["cap_trampolines"].as_array().into_iter().flatten() {
-            mesh.trampolines
-                .push(crate::movement::cap_trampoline::Trampoline::load(source)?);
+            let mut trampoline = crate::movement::cap_trampoline::Trampoline::load(source)?;
+            trampoline.relative = mesh.relative_vec(trampoline.position);
+            mesh.trampolines.push(trampoline);
             let p = &source["placement"];
             let origin = mesh.trampolines.last().unwrap().position;
             for (name, radius, y) in [
