@@ -31,6 +31,17 @@ STONE_ID = 'obj1837'
 EYE = 'Eye'
 
 
+# Message-name fragments of the families KickStone::receiveMsg tests: the attack list (0x2ab8b4-0x2aba18)
+# in the nerves that run it (Wait, Fall, Roll, Water), the hold handlers (0x2b6ad8, 0x2b6c04, 0x2b6ddc)
+# in Hold. Fall counts whole although the source reaches the attack list only from step 15.
+ATTACK_NERVES = ('Wait', 'Fall', 'Roll', 'Water')
+ATTACK_FAMILY = ('Kick', 'HipDrop', 'FireBall', 'CapAttack', 'EnemyAttack', 'Explosion', 'TRex', 'Tsukkun',
+                 'Gamane', 'Gunetter', 'AmiiboKoopa', 'KuriboGirl', 'Packun', 'Sphinx', 'KillByHomeDemo')
+HOLD_FAMILY = ('PlayerDisregard', 'Push', 'PlayerCarryKeepDemo', 'PlayerCarryShineGetStart', 'PlayerCarryShineGetEnd',
+               'PlayerCarryCameraSubjectiveStart', 'PlayerCarryCameraSubjectiveEnd', 'PlayerCarryWarp',
+               'HoldCancel', 'HoldRelease', 'PlayerReleaseDemo', 'ExplosionReflectBomb', 'PlayerCarryFront')
+
+
 def gate(geometry):
     """The exported placement the Rust port accepts (movement/kick_stone.rs `sources`), or None."""
     if not geometry or (geometry.get('stage'), geometry.get('scenario')) != ('ForestWorldHomeStage', 1):
@@ -49,6 +60,19 @@ def gate(geometry):
                 and source.get('collider') == dict(Radius=60., Y=5.)):
             return source
     return None
+
+
+def stone_ignores(message, nerve):
+    """Whether KickStone::receiveMsg (0x2ab494) answers a Mario-sensor message false without acting on it.
+
+    The attack/kick family is tested only while the stone waits, rolls or falls (0x2ab844-0x2ab8b0); the
+    held stone answers its hold family (cancel, release, carry demos, disregard, push) and everything else
+    falls through to false (0x2abe04). A message of a family the nerve handles is therefore never called
+    inert here: it needs its own simulation.
+    """
+    if nerve in ATTACK_NERVES and any(token in message for token in ATTACK_FAMILY):
+        return False
+    return not (nerve == 'Hold' and message.split('SensorMsg')[-1] in HOLD_FAMILY)
 
 
 def lifecycle(state):
@@ -130,14 +154,18 @@ class Evidence:
                 throw_hand = (previous.get('keeper_pending_n_name') or previous.get('keeper_current_n_name')) == 'Throw'
                 if not exact_vector(words(hold_matrix(attachment, throw_hand)), attachment['hold_matrix_bits']):
                     raise ValueError('original attachment does not follow the hold-matrix equation')
-            if held and not self.payload_matches(state, payloads.get(frame)):
+            # The held collider runs inside the Hold nerve's execute (0x2ad014): on every frame whose current
+            # nerve is Hold, including the one that requests the release, and on no other.
+            pushes = obj['current_n_name'] == 'Hold'
+            if pushes and not self.payload_matches(state, payloads.get(frame)):
                 self.rejected[frame] = 'held collider feedback differs'
                 continue
-            if not self.messages_match(frame, events[frame], state, observed, held, keeper):
-                self.rejected[frame] = 'message or answer not explained by source'
+            unexplained = self.messages_match(frame, events[frame], state, observed, pushes, keeper)
+            if unexplained:
+                self.rejected[frame] = 'message or answer not explained by source: ' + unexplained
                 continue
             frames.add(frame)
-            if held:
+            if pushes:
                 pushing.add(frame)
         self.frames, self.pushing, self.identity = frames, pushing, identity
 
@@ -163,37 +191,48 @@ class Evidence:
         return (payload is not None and payload['message_type'] == 'al::SensorMsgCollidePush'
                 and exact_vector(state.get('stone_push', ''), payload['payload_bits']))
 
-    def messages_match(self, frame, events, state, observed, held, keeper):
-        """Every message of Mario's physical sensors, with the answer the source gives it."""
+    def messages_match(self, frame, events, state, observed, pushes, keeper):
+        """Every message between Mario's physical sensors and the stone, with the answer the source gives it."""
         previous = observed.get(frame - 1, (None, 0))[0]
-        picked_up = observed[frame][0] == 'Hold' and previous != 'Hold'
-        released = previous == 'Hold' and observed[frame][0] != 'Hold'
+        nerve = observed[frame][0]
+        picked_up = nerve == 'Hold' and previous != 'Hold'
+        released = previous == 'Hold' and nerve != 'Hold'
         for event in events:
-            if not event['kind'].endswith('_after'):
-                continue
+            if event['kind'] not in ('object_receive_after', 'mario_receive_after', 'mario_push_after'):
+                continue  # before-events carry no answer; send/push-translation rows carry no message
             to_stone = event['kind'] == 'object_receive_after'
+            if to_stone and event['sender_id'] != 'Mario':
+                # PaintObj confirmations, target-marker queries and the stone's own look-at traffic come from
+                # sensors that are not Mario's: no Mario contact, and the stone answers them false (0x2ab494).
+                continue
             mario_sensor = event['sender_sensor'] if to_stone else event['receiver_sensor']
             if mario_sensor == EYE:
                 continue
             message = event['message_type']
             if to_stone:
-                if event['receiver_id'] != STONE_ID or event['sender_id'] != 'Mario':
-                    return False
-                expected = {'al::SensorMsgPlayerCarryFront': picked_up and event['sender_sensor'] == 'Body',
-                            'al::SensorMsgPlayerRelease': released and state.get('keeper') == '3/6/0'
-                            and event['keeper_current_n_name'] == 'Throw' and event['keeper_step'] == '5'}.get(message, False)
+                if event['receiver_id'] != STONE_ID:
+                    return f'{message} reaches {event["receiver_id"]}'
+                if message == 'al::SensorMsgPlayerCarryFront':
+                    expected = picked_up and event['sender_sensor'] == 'Body'
+                elif message == 'al::SensorMsgPlayerRelease':
+                    expected = (released and state.get('keeper') == '3/6/0'
+                                and event['keeper_current_n_name'] == 'Throw' and event['keeper_step'] == '5')
+                elif not stone_ignores(message, nerve):
+                    return f'{message} is handled in {nerve}'
+                else:
+                    expected = False
             else:
                 if event['sender_id'] != STONE_ID or event['receiver_id'] != 'Mario':
-                    return False
+                    return f'{message} from {event["sender_id"]}'
                 if message == 'al::SensorMsgCollidePush':
-                    expected = held and event['sender_sensor'] == 'Body' and event['receiver_sensor'] == 'Body'
+                    expected = pushes and event['sender_sensor'] == 'Body' and event['receiver_sensor'] == 'Body'
                 else:
                     expected = mario_answer(message, event['receiver_sensor'])
                     if expected is None:
-                        return False
+                        return f'{message} has no source answer'
             if event['answer'] != str(int(expected)):
-                return False
-        return True
+                return f"{message} {mario_sensor} answered {event['answer']}, expected {int(expected)}"
+        return None
 
     def contact(self, frame, contact):
         """Whether one typed contact row of Mario with the stone is covered by the proved frame."""
@@ -228,6 +267,12 @@ def self_check():
                                         dict(message_type='al::SensorMsgCollidePush', payload_bits='00000000,00000000,00000000'))
     assert not Evidence.payload_matches({'stone_push': '00000000/00000000/00000000'}, None)
     assert lifecycle({'stone_nerve': 'Hold/20'}) == ('Hold', 20) and lifecycle({}) is None
+    # The kick family acts on a waiting, falling or rolling stone, never on a held one; the hold family is the reverse.
+    assert stone_ignores('al::SensorMsgPlayerAttackKick', 'Hold')
+    assert not stone_ignores('al::SensorMsgPlayerAttackKick', 'Wait')
+    assert not stone_ignores('rs::SensorMsgPlayerHipDropAttack', 'Roll')
+    assert not stone_ignores('al::SensorMsgHoldCancel', 'Hold') and stone_ignores('al::SensorMsgHoldCancel', 'Fall')
+    assert stone_ignores('rs::SensorMsgPlayerCapPush', 'Hold') and stone_ignores('al::SensorMsgPlayerItemGet', 'Fall')
 
 
 if __name__ == '__main__':
