@@ -611,11 +611,19 @@ mod tests {
             // The motion drifts once it differs, so only its first difference is a finding; a flag or
             // nerve difference is reported on every frame.
             if !drifted && stone.position != vec3(sample, "pos") {
-                diffs.push(format!("pos {:?} vs {:?}", stone.position, vec3(sample, "pos")));
+                diffs.push(format!(
+                    "pos {:?} vs {:?}",
+                    stone.position,
+                    vec3(sample, "pos")
+                ));
                 drifted = true;
             }
             if !drifted && stone.velocity != vec3(sample, "vel") {
-                diffs.push(format!("vel {:?} vs {:?}", stone.velocity, vec3(sample, "vel")));
+                diffs.push(format!(
+                    "vel {:?} vs {:?}",
+                    stone.velocity,
+                    vec3(sample, "vel")
+                ));
                 drifted = true;
             }
             if nerve != sample["nerve"] {
@@ -627,7 +635,11 @@ mod tests {
                 ("ceiling", &stone.collider.ceiling, "ceiling"),
             ] {
                 if contact.is_present() != (sample[key] == "1") {
-                    diffs.push(format!("{name} {} vs {}", contact.is_present(), sample[key]));
+                    diffs.push(format!(
+                        "{name} {} vs {}",
+                        contact.is_present(),
+                        sample[key]
+                    ));
                 }
             }
             if !diffs.is_empty() {
@@ -639,8 +651,14 @@ mod tests {
             }
         }
         assert!(stone.limit.is_empty(), "{}", stone.limit);
-        assert!(report.is_empty(), "{}", report.join("
-"));
+        assert!(
+            report.is_empty(),
+            "{}",
+            report.join(
+                "
+"
+            )
+        );
     }
 
     #[test]

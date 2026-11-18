@@ -273,6 +273,25 @@ def self_check():
     assert not stone_ignores('rs::SensorMsgPlayerHipDropAttack', 'Roll')
     assert not stone_ignores('al::SensorMsgHoldCancel', 'Hold') and stone_ignores('al::SensorMsgHoldCancel', 'Fall')
     assert stone_ignores('rs::SensorMsgPlayerCapPush', 'Hold') and stone_ignores('al::SensorMsgPlayerItemGet', 'Fall')
+    # Message judging on synthetic frames: an inert kick on a held stone passes, the same kick on a waiting
+    # stone (the source handles it there), a Mario answer the source does not give, or a stranger's
+    # message do not.
+    def event(kind, message, sender, sensor, receiver, answer, receiver_sensor='Body'):
+        return dict(kind=kind, message_type=message, sender_id=sender, sender_sensor=sensor, receiver_id=receiver,
+                    receiver_sensor=receiver_sensor, answer=answer, keeper_current_n_name='Wait', keeper_step='0')
+    judge = Evidence(None, None, None, None, None, None, None)
+    kick = event('object_receive_after', 'al::SensorMsgPlayerAttackKick', 'Mario', 'Foot', STONE_ID, '0')
+    assert judge.messages_match(5, [kick], {}, {5: ('Hold', 3)}, True, {}) is None
+    assert judge.messages_match(5, [kick], {}, {5: ('Wait', 3)}, False, {})
+    stranger = event('object_receive_after', 'rs::SensorMsgConfirmPaintObj', 'unknown', 'Body', STONE_ID, '0')
+    assert judge.messages_match(5, [stranger], {}, {5: ('Wait', 3)}, False, {}) is None
+    hit = event('mario_receive_after', 'al::SensorMsgPlayerItemGet', STONE_ID, 'Body', 'Mario', '0', 'Head')
+    assert judge.messages_match(5, [hit], {}, {5: ('Fall', 3)}, False, {}) is None
+    hit['answer'] = '1'
+    assert judge.messages_match(5, [hit], {}, {5: ('Fall', 3)}, False, {})
+    unknown = event('mario_receive_after', 'rs::SensorMsgHit', STONE_ID, 'Body', 'Mario', '0')
+    assert judge.messages_match(5, [unknown], {}, {5: ('Fall', 3)}, False, {})
+
 
 
 if __name__ == '__main__':
