@@ -414,21 +414,27 @@ return rather than fabricating a respawn.
 The exporter also accepts original KickStone placements and their INITIAL joint
 orientation/kick count. Forest scenario 1 obj1837 now has its own native source:
 Front pickup (FrontWallKeep is rejected), `(0,30,65)` attachment, radius60/Y5
-collider, held radius18, collider-derived CollidePush, release collision expansion
-and the deterministic Fall prefix. The independent keeper also evaluates the
+collider, held radius18, collider-derived CollidePush, and release collision
+expansion. The independent keeper also evaluates the
 collide-lock-up condition. Front keeps zero hand angles; the flower's existing
 FrontWallKeep contract keeps its 30-degree hand bend.
 
-The source stops before its first unseeded global RNG consumer in the landing
-reaction and reports `stone_runtime_rng_unavailable`; the environment judge
-refuses that frame and every subsequent frozen-source frame even without contacts.
-Wall rebound, water, restart, obstruction cancellation and entry to Roll have
-separate unsupported limits. The fixture's IsRandomKickCount=false skips the
-actor-local init generator, but does not establish the shared runtime RNG order.
-The original stone recording contains no attachment-matrix events; sampled held
-poses and flight velocity retain small f32 differences. No stone contact waiver,
-new numeric margin or full-source PASS is granted. A finite input can measure a
-prefix, but cannot turn this full recording into a strict PASS.
+Fall applies the surface-normal rebound and enters Roll when that rebound drops
+below six (0x2ac15c). The first ground response changes the joint rotation scale
+from -0.4 to 0.7 (0x2ac204, 0x2ac290). The shared RNG draw at 0x2ac5e8 feeds the
+landing effect matrix. The velocity write at 0x2ac738 uses the tangent and rebound
+computed before that draw. Landing presentation and the shared RNG sequence remain
+outside this motion port.
+
+Roll uses the collision-normal rebound helper (0x8e5f98), ground-directed gravity
+and drag (0x2acb10), then settles into Wait on static terrain (0x2acda4–0x2ace14).
+The environment judge still refuses every frame with an unsupported stone
+operation, including wall rebound in Fall, water, restart, moving-platform rest
+and hold cancellation. The fixture contains 172 attachment matrices in
+`game.carry_mario.csv` covering rows 81 through 252. The stone applies its local
+offset with the separate products and additions at 0x93571c. Held and released
+poses still differ at f32 precision, with a contact discrepancy at entry to Roll.
+The contact evidence gate still refuses the full fixture.
 Forest PaintObj confirmation is accepted only as a rejected message from the
 exported scenario-1 obj7234 floor, with its placement, sensor and KCL identity
 proved. Other PaintObj compositions receive no exemption.

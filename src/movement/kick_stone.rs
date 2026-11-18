@@ -1,6 +1,5 @@
-//! KickStone's front hold and deterministic Fall prefix (SMO 1.0.0).
-//! Runtime landing effects consume the shared RNG; without its independent context the
-//! actor stops at that call, exposes a fidelity limit and cannot certify the later roll.
+//! KickStone's front hold, release, and motion on static ground (SMO 1.0.0).
+//! The shared random draw in the landing reaction affects its presentation matrix.
 use super::actor_collider::ActorCollider;
 use super::carry::hex_vec;
 use super::pose_math::{self, dot, squared_length, try_normalize_or_zero};
@@ -74,6 +73,7 @@ enum Nerve {
     Wait,
     Hold,
     Fall,
+    Roll,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +91,8 @@ pub struct Stone {
     hold_updates: u32,
     pub push: Vec3,
     pub limit: &'static str,
-    contact_age: u32,
+    rolling_forward: bool,
+    roll_ground_grace: u32,
 }
 
 impl Stone {
@@ -110,7 +111,8 @@ impl Stone {
             hold_updates: 0,
             push: Vec3::ZERO,
             limit: "",
-            contact_age: 0,
+            rolling_forward: false,
+            roll_ground_grace: 0,
         }
     }
 
@@ -153,10 +155,16 @@ impl Stone {
                 // The actor enters its independent hold state on its next movement.
                 self.collider.set_radius((RADIUS * HOLD_SCALE).min(40.));
                 self.collider.invalidate(self.position, self.pose[1]);
+            } else if nerve == Nerve::Roll {
+                self.roll_ground_grace = 5;
+            } else if nerve == Nerve::Wait {
+                // The static connector's resetPosition at 0x2abf98 clears contact history.
+                self.collider.invalidate(self.position, self.pose[1]);
             }
         }
         match self.nerve {
-            Nerve::Wait => {} // IsConnectToCollision=false: initial Wait has offCollide.
+            // 0x2abf4c: offCollide on initial Wait, stationary connector after Roll.
+            Nerve::Wait => {}
             Nerve::Hold => {
                 let Some(hold) = hold else {
                     return;
@@ -195,33 +203,19 @@ impl Stone {
                 self.push = push;
                 self.hold_updates = (self.hold_updates + 1).min(1000);
             }
-            Nerve::Fall => {
-                // MoveType0 parameter pointers in 0x1d0a728, exeFall 0x2ac15c.
-                self.velocity.y -= 2.;
-                self.velocity *= 0.99;
-                self.joint = roll_quat(self.joint, self.velocity * -0.4, Vec3::Y, RADIUS);
-                if self.collider.wall.is_present() {
-                    // Wall rebound and its reaction have not been established by this prefix.
-                    self.limit = "stone_wall_rebound_unavailable";
+            Nerve::Fall | Nerve::Roll => {
+                if matches!(self.floor_code(mesh), "DamageFire" | "Needle" | "Poison") {
+                    // 0x2ac020 can destroy the stone before the movement state runs.
+                    self.limit = "stone_hazard_unavailable";
                     return;
                 }
-                self.contact_age += 1;
-                if self.collider.floor.is_present() {
-                    let normal = self.collider.floor.hit.normal;
-                    let parallel = normal * dot(self.velocity, normal);
-                    let rebound = parallel * -0.55;
-                    let rebound_speed = squared_length(rebound).sqrt();
-                    if rebound_speed >= 6. && (rebound_speed > 15. || self.contact_age >= 15) {
-                        // 0x2ac5e8 consumes the global RNG before writing the rebound velocity.
-                        self.limit = "stone_runtime_rng_unavailable";
-                        return;
-                    }
-                    if rebound_speed < 6. {
-                        self.limit = "stone_roll_unavailable";
-                        return;
-                    }
-                    self.contact_age = 0;
-                    self.velocity = (self.velocity - parallel) + rebound;
+                if self.nerve == Nerve::Fall {
+                    self.exe_fall(mesh);
+                } else {
+                    self.exe_roll(mesh);
+                }
+                if !self.limit.is_empty() || self.pending == Some(Nerve::Wait) {
+                    return;
                 }
                 self.position +=
                     self.collider
@@ -229,6 +223,119 @@ impl Stone {
             }
         }
         self.step += 1;
+    }
+
+    fn floor_code<'a>(&self, mesh: &'a crate::geometry::TriangleMesh) -> &'a str {
+        if !self.collider.floor.is_present() {
+            return "";
+        }
+        let triangle = &mesh.triangles[self.collider.floor.hit.face as usize];
+        &mesh.codes[triangle.attribute as usize].floor
+    }
+
+    /// 0x2ac15c with the MoveType0 parameters at 0x1d0a728.
+    fn exe_fall(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        self.velocity.y -= 2.;
+        self.velocity *= 0.99;
+        let roll_scale = if self.rolling_forward { 0.7 } else { -0.4 };
+        self.joint = roll_quat(self.joint, self.velocity * roll_scale, Vec3::Y, RADIUS);
+        if self.collider.wall.is_present() {
+            self.limit = "stone_wall_rebound_unavailable";
+            return;
+        }
+        let normal = self.collider.floor.hit.normal;
+        // isOnGround(0), 0x8d8074, also checks the direction of travel.
+        if !self.collider.floor.is_present() || dot(self.velocity, normal) > 0. {
+            return;
+        }
+        self.rolling_forward = true; // 0x2ac290 selects 0.7 in the next Fall step.
+        let (parallel, tangent) = vector_lib::separate_parallel_vertical(normal, self.velocity);
+        let rebound = if self.floor_code(mesh) == "Slide" {
+            // 0x2ac4b8–0x2ac54c: full rebound, at least 15 along the floor normal.
+            if vector_lib::length(parallel) < 15. {
+                normal * 15.
+            } else {
+                -parallel
+            }
+        } else {
+            parallel * -0.55
+        };
+        if vector_lib::length(rebound) < 6. {
+            self.velocity = tangent;
+            self.pending = Some(Nerve::Roll);
+        } else {
+            // 0x2ac5e8 only feeds the hit reaction matrix. 0x2ac738 sets velocity from
+            // the tangent and rebound computed before the reaction call.
+            self.velocity = tangent + rebound;
+        }
+    }
+
+    /// 0x2acb10: contact rebound, ground-directed gravity, drag, roll, and rest.
+    fn exe_roll(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        let mut normals = Vec3::ZERO;
+        for contact in [
+            self.collider.floor,
+            self.collider.wall,
+            self.collider.ceiling,
+        ] {
+            if contact.is_present() {
+                normals += contact.hit.normal;
+            }
+        }
+        // calcCollidedNormalSum 0x8d8a00 and reboundVelocityFromCollision 0x8e5f98.
+        normals *= 1. / 3.;
+        if !vector_lib::is_near_zero(normals, 0.001) {
+            let normal = pose_math::normalize(normals);
+            let speed = dot(normal, self.velocity);
+            if speed < 0. {
+                let into = normal * speed;
+                self.velocity -= into;
+                if speed < -5. {
+                    self.velocity -= into * 0.8;
+                }
+            }
+        }
+
+        let ground = self.collider.floor;
+        let down = if ground.is_present() {
+            -ground.hit.normal
+        } else {
+            Vec3::NEG_Y
+        };
+        // addVelocityToDirection 0x8e3914 normalizes the supplied direction.
+        self.velocity += try_normalize_or_zero(down).0 * 2.;
+        if ground.is_present() && ground.hit.normal.y < 0.898_794_05 {
+            // 0x2acc28: project the normal off world up on slopes steeper than 26°.
+            self.velocity += vector_lib::verticalize_vec(Vec3::Y, ground.hit.normal) * 2.;
+        }
+        self.velocity *= 0.925;
+        self.joint = roll_quat(self.joint, self.velocity * 0.7, -down, RADIUS);
+
+        if ground.is_present() {
+            self.roll_ground_grace = 5;
+            let tangent = vector_lib::verticalize_vec(down, self.velocity);
+            if vector_lib::length(tangent) < 0.1 {
+                // 0x2acda4–0x2ace14: settle on the ground's collision part.
+                let triangle = &mesh.triangles[ground.hit.face as usize];
+                if let Some(local) = triangle.local {
+                    let part = local.part as usize;
+                    if mesh.key_move_parts.iter().any(|s| s.part == part)
+                        || mesh.rotate_parts.iter().any(|s| s.part == part)
+                        || mesh.geysers.iter().any(|s| s.part == part)
+                    {
+                        self.limit = "stone_moving_rest_unavailable";
+                        return;
+                    }
+                }
+                self.velocity = Vec3::ZERO;
+                self.pending = Some(Nerve::Wait);
+            }
+        } else {
+            self.roll_ground_grace -= 1;
+            if self.roll_ground_grace == 0 {
+                self.pending = Some(Nerve::Fall);
+            }
+        }
     }
 
     pub(super) fn release(&mut self, mesh: &crate::geometry::TriangleMesh, front: Vec3) {
@@ -243,6 +350,7 @@ impl Stone {
             .collide(mesh, self.position, self.pose[1], Vec3::ZERO);
         self.pose = pose_math::quat_to_axes(quat);
         self.velocity = self.pose[2] * 22.5 + self.pose[1] * 32.5;
+        self.rolling_forward = false; // 0x2abcac selects -0.4 until the first ground response.
         self.pending = Some(Nerve::Fall);
     }
 
@@ -260,15 +368,17 @@ impl Stone {
             Nerve::Wait => "Wait",
             Nerve::Hold => "Hold",
             Nerve::Fall => "Fall",
+            Nerve::Roll => "Roll",
         };
         format!(
-            ";stone={}/{};stone_velocity={};stone_quat={quat};stone_joint={joint};stone_nerve={nerve}/{};stone_radius={:08x};stone_push={};stone_limit={}",
+            ";stone={}/{};stone_velocity={};stone_quat={quat};stone_joint={joint};stone_nerve={nerve}/{};stone_radius={:08x};stone_push={};stone_ground={};stone_limit={}",
             self.id,
             hex_vec(self.position),
             hex_vec(self.velocity),
             if self.pending.is_some() { 0 } else { self.step },
             self.collider.radius().to_bits(),
             hex_vec(self.push),
+            u8::from(self.collider.floor.is_present()),
             self.limit
         )
     }
@@ -410,7 +520,7 @@ mod tests {
         stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
         assert!(stone.velocity.y < 32.5);
         assert!(stone.position.z > 0.);
-        stone.limit = "stone_runtime_rng_unavailable";
+        stone.limit = "stone_wall_rebound_unavailable";
         let position = stone.position;
         let velocity = stone.velocity;
         stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
@@ -432,5 +542,35 @@ mod tests {
         assert_eq!(stone.position, Vec3::ZERO);
         assert!(stone.push.length_squared() > 0.);
         assert!(stone.collider.floor.is_present());
+    }
+
+    #[test]
+    fn floor_response_rebounds_before_roll_and_settles_on_static_ground() {
+        let mesh = crate::geometry::TriangleMesh::from_corners(&[[
+            Vec3::new(-1000., 0., -1000.),
+            Vec3::new(0., 0., 1000.),
+            Vec3::new(1000., 0., -1000.),
+        ]]);
+        let mut stone = Stone::new(&source());
+        stone.position = Vec3::new(0., 70., 0.);
+        stone.collider.invalidate(stone.position, Vec3::Y);
+        stone.nerve = Nerve::Fall;
+        stone.velocity = Vec3::new(0., -30., 3.);
+        stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
+        assert!(stone.collider.floor.is_present());
+        stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
+        assert!(stone.velocity.y > 15.);
+        assert!(stone.limit.is_empty());
+        assert!(stone.rolling_forward);
+
+        for _ in 0..240 {
+            stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
+            if stone.nerve == Nerve::Wait {
+                break;
+            }
+        }
+        assert_eq!(stone.nerve, Nerve::Wait);
+        assert_eq!(stone.velocity, Vec3::ZERO);
+        assert!(stone.can_pick_up());
     }
 }

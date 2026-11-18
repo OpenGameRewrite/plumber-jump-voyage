@@ -250,9 +250,7 @@ class Judge:
         self._trampoline = TrampolineEvidence(geometry, trampolines, spin_player, spin_messages, rewrite_rows, game_rows, preroll or {}, cap_samples)
         self._cap_sources = CapSourceEvidence(geometry, cap_samples, cap_collider, cap_sources, cap_messages, rewrite_rows, game_rows, preroll or {})
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
-        # KickStone's deterministic port stops before the first unseeded global RNG
-        # consumer. Absence of later Mario contacts cannot certify the frozen source.
-        # This grants no contact exception; stone's held/flight evidence remains unproved.
+        # Absence of later Mario contacts cannot certify a stopped KickStone source.
         for f, row in rewrite_rows.items():
             source = dict(part.split('=', 1) for part in row.get('carry_source', '').split(';') if '=' in part)
             if source.get('stone') and source.get('stone_limit'):
@@ -1069,5 +1067,5 @@ def self_check():
     assert not in_death_area(dict(area, shape="Unknown"), [0, -10, 0])
     assert ranges([1, 2, 3, 5, 7, 8]) == "1-3,5,7-8"
     # A stopped independent actor remains unproved even after every contact ends.
-    frozen = {0: dict(carry_source='stone=obj1837/00000000/00000000/00000000;stone_limit=stone_runtime_rng_unavailable')}
+    frozen = {0: dict(carry_source='stone=obj1837/00000000/00000000/00000000;stone_limit=stone_wall_rebound_unavailable')}
     assert 0 in judge_run({0: dict(contacts='')}, frozen, {}).refused

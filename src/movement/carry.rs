@@ -568,14 +568,20 @@ impl Player {
             };
         let rotation = hold_matrix(spine, position);
         self.carry.hold_matrix = Some(rotation);
-        let offset = if self.carry.stone.is_some() {
+        let stone = self.carry.stone.is_some();
+        let offset = if stone {
             super::kick_stone::HOLD_OFFSET
         } else {
             Vec3::new(0., -30., 40.)
         };
         let mut pose = rotation;
         for row in &mut pose {
-            row[3] += row[2].mul_add(offset.z, row[1].mul_add(offset.y, row[0] * offset.x));
+            row[3] += if stone {
+                // calcTransLocalOffsetByMtx 0x93571c, called by the hold nerve at 0x2b7314.
+                (row[0] * offset.x + row[1] * offset.y) + row[2] * offset.z
+            } else {
+                row[2].mul_add(offset.z, row[1].mul_add(offset.y, row[0] * offset.x))
+            };
         }
         self.carry.hold = Some(pose);
     }
