@@ -16,6 +16,10 @@ The probe lists every overlap as contamination. This module proves what each ove
   hold nerve (0x2abc98); the rest of the traffic from Mario's body sensors reaches no handler. The
   rewrite simulates both transitions, and the lifecycle it simulates (nerve and step from the pickup
   on, the keeper's phase/step/held state, the hold matrix) must equal the recorded one.
+* Traffic from senders that are not Mario's body (the stone's own look-at queries, PaintObj and target-marker
+  probes) is judged against the same dispatch (`stone_answer`): the messages no nerve tests are answered false,
+  and the one that is tested, PlayerDisregard, is answered true exactly while the stone is held. A query whose
+  answer depends on a nerve the frame does not pin down is refused rather than assumed.
 
 Observations only validate the simulation, they never drive it. The stone's position is not claimed
 here: the contacts' consequences (messages, answers, push payload, keeper and nerve lifecycle) are.
@@ -75,6 +79,29 @@ def stone_ignores(message, nerve):
     return not (nerve == 'Hold' and message.split('SensorMsg')[-1] in HOLD_FAMILY)
 
 
+# Messages the stone's non-Mario traffic carries that no nerve of KickStone::receiveMsg tests: they reach the
+# fall-through at 0x2abe04 (only IgnoreIgnitionBomb is asked there), so every nerve answers them false.
+UNTESTED = ('ConfirmPaintObj', 'PlayerLookAtPosition', 'PlayerDisregardTargetMarker', 'TargetMarkerPosition')
+
+
+def stone_answer(message, holding):
+    """The answer KickStone::receiveMsg (0x2ab494) gives to a message sent by something other than Mario.
+
+    `holding` is whether the stone is in its Hold nerve when the message arrives (None: not known).
+    PlayerDisregard is the one such message the dispatch answers: the Hold path calls
+    MapObjStatePlayerHold::receiveMsgNoRelease (0x2b6ad8), whose first test (0x2b6b00) tail-calls al::isNerve on
+    the hold state with the only nerve it has (set by its constructor 0x2b6894 and by appear 0x2b6a3c), so it is
+    true while held; the other nerves never test it (0x2abe04: false). Returns None when the source does not
+    settle the answer.
+    """
+    stem = message.split('SensorMsg')[-1]
+    if stem in UNTESTED:
+        return False
+    if stem == 'PlayerDisregard' and holding is not None:
+        return holding
+    return None
+
+
 def lifecycle(state):
     """The simulated nerve name and step (`Hold/20`), or None."""
     nerve, _, step = state.get('stone_nerve', '').partition('/')
@@ -86,6 +113,7 @@ class Evidence:
 
     def __init__(self, geometry, objects, mario, messages, rewrite, rows, preroll):
         self.frames, self.pushing, self.identity, self.error = set(), set(), None, None
+        self.stones = {STONE_ID}  # every KickStone of the stage; only STONE_ID has an observed nerve
         self.rejected = {}  # frame -> why the frame is not proved (for the judge's report)
         try:
             self.verify(geometry, objects, mario, messages, rewrite, rows)
@@ -98,6 +126,7 @@ class Evidence:
         if source is None or not objects or not mario or not messages or not rewrite or not rows:
             return
         initial = [o for o in objects if o['kind'] == 'init' and o['phase'] == 'init' and o['id'] == STONE_ID]
+        self.stones |= {o['id'] for o in objects if o['class'] == 'KickStone'}
         place = source['placement']
         position = [place['Translate'][a] for a in 'XYZ']
         if len(initial) != 1 or initial[0]['dead'] != '0' or [float(x) for x in initial[0]['pos_values'].split('/')] != position:
@@ -203,7 +232,10 @@ class Evidence:
             to_stone = event['kind'] == 'object_receive_after'
             if to_stone and event['sender_id'] != 'Mario':
                 # PaintObj confirmations, target-marker queries and the stone's own look-at traffic come from
-                # sensors that are not Mario's: no Mario contact, and the stone answers them false (0x2ab494).
+                # sensors that are not Mario's: no Mario contact, but the stone still answers them (0x2ab494).
+                unexplained = self.query_mismatch(event, frame, events, observed)
+                if unexplained:
+                    return unexplained
                 continue
             mario_sensor = event['sender_sensor'] if to_stone else event['receiver_sensor']
             if mario_sensor == EYE:
@@ -232,6 +264,37 @@ class Evidence:
                         return f'{message} has no source answer'
             if event['answer'] != str(int(expected)):
                 return f"{message} {mario_sensor} answered {event['answer']}, expected {int(expected)}"
+        return None
+
+    def query_mismatch(self, event, frame, events, observed):
+        """Why a message to a stone from a sender other than Mario's body has an unproved answer, or None."""
+        message, receiver = event['message_type'], event['receiver_id']
+        if receiver not in self.stones:
+            return f'{message} reaches {receiver}'
+        holding = self.holding_at(event, frame, events, observed) if receiver == STONE_ID else None
+        expected = stone_answer(message, holding)
+        if expected is None:
+            return f'{message} to {receiver}: the source does not settle its answer here'
+        if event['answer'] != str(int(expected)):
+            return f"{message} to {receiver} answered {event['answer']}, expected {int(expected)}"
+        return None
+
+    @staticmethod
+    def holding_at(event, frame, events, observed):
+        """Whether the stone is held when `event` arrives (None when the frame does not pin it down).
+
+        A frame's observation is taken after its messages, so the nerve a message meets is the previous frame's
+        observation. When the frame changes it, the only change into or out of Hold is Mario's PlayerCarryFront
+        or PlayerRelease answered true: messages ordered before it meet the old nerve, later ones the new one.
+        """
+        end = observed[frame][0] == 'Hold'
+        start = end if frame - 1 not in observed else observed[frame - 1][0] == 'Hold'
+        if start == end:
+            return end
+        for other in events:
+            if (other['kind'] == 'object_receive_after' and other['sender_id'] == 'Mario' and other['answer'] == '1'
+                    and other['message_type'] in ('al::SensorMsgPlayerCarryFront', 'al::SensorMsgPlayerRelease')):
+                return end if int(other['order']) < int(event['order']) else start
         return None
 
     def contact(self, frame, contact):
@@ -276,15 +339,43 @@ def self_check():
     # Message judging on synthetic frames: an inert kick on a held stone passes, the same kick on a waiting
     # stone (the source handles it there), a Mario answer the source does not give, or a stranger's
     # message do not.
-    def event(kind, message, sender, sensor, receiver, answer, receiver_sensor='Body'):
+    def event(kind, message, sender, sensor, receiver, answer, receiver_sensor='Body', order=0):
         return dict(kind=kind, message_type=message, sender_id=sender, sender_sensor=sensor, receiver_id=receiver,
-                    receiver_sensor=receiver_sensor, answer=answer, keeper_current_n_name='Wait', keeper_step='0')
+                    receiver_sensor=receiver_sensor, answer=answer, keeper_current_n_name='Wait', keeper_step='0',
+                    order=str(order))
     judge = Evidence(None, None, None, None, None, None, None)
+    judge.stones.add('obj1838')
     kick = event('object_receive_after', 'al::SensorMsgPlayerAttackKick', 'Mario', 'Foot', STONE_ID, '0')
     assert judge.messages_match(5, [kick], {}, {5: ('Hold', 3)}, True, {}) is None
     assert judge.messages_match(5, [kick], {}, {5: ('Wait', 3)}, False, {})
     stranger = event('object_receive_after', 'rs::SensorMsgConfirmPaintObj', 'unknown', 'Body', STONE_ID, '0')
     assert judge.messages_match(5, [stranger], {}, {5: ('Wait', 3)}, False, {}) is None
+    stranger['answer'] = '1'
+    assert judge.messages_match(5, [stranger], {}, {5: ('Wait', 3)}, False, {})
+    # The stone's own PlayerDisregard query: true while held, false otherwise, and in the pickup frame it depends
+    # on whether it came before the CarryFront that starts the hold. Another stone's nerve is unknown: refused.
+    own = event('object_receive_after', 'al::SensorMsgPlayerDisregard', STONE_ID, 'Body', STONE_ID, '1', order=9)
+    assert judge.messages_match(5, [own], {}, {4: ('Hold', 3), 5: ('Hold', 4)}, True, {}) is None
+    own['answer'] = '0'
+    assert judge.messages_match(5, [own], {}, {4: ('Hold', 3), 5: ('Hold', 4)}, True, {})
+    assert judge.messages_match(5, [own], {}, {4: ('Wait', 3), 5: ('Wait', 4)}, False, {}) is None
+    own['answer'] = '1'
+    assert judge.messages_match(5, [own], {}, {4: ('Wait', 3), 5: ('Wait', 4)}, False, {})
+    pickup = event('object_receive_after', 'al::SensorMsgPlayerCarryFront', 'Mario', 'Body', STONE_ID, '1', order=5)
+    states = {4: ('Wait', 3), 5: ('Hold', 0)}
+    before, after = dict(own, order='3', answer='0'), dict(own, order='7', answer='1')
+    assert judge.messages_match(5, [before, pickup, after], {}, states, False, {}) is None
+    assert judge.messages_match(5, [dict(before, answer='1'), pickup], {}, states, False, {})
+    assert judge.messages_match(5, [pickup, dict(after, answer='0')], {}, states, False, {})
+    assert judge.messages_match(5, [before], {}, states, False, {})  # nerve changed by something not in the frame
+    other = event('object_receive_after', 'al::SensorMsgPlayerDisregard', STONE_ID, 'Body', 'obj1838', '0')
+    assert judge.messages_match(5, [other], {}, {5: ('Wait', 3)}, False, {})
+    paint = event('object_receive_after', 'rs::SensorMsgConfirmPaintObj', 'unknown', 'Body', 'obj1838', '0')
+    assert judge.messages_match(5, [paint], {}, {5: ('Wait', 3)}, False, {}) is None
+    paint['receiver_id'] = 'obj9999'
+    assert judge.messages_match(5, [paint], {}, {5: ('Wait', 3)}, False, {})
+    mystery = event('object_receive_after', 'rs::SensorMsgNoSuchQuery', 'unknown', 'Body', STONE_ID, '0')
+    assert judge.messages_match(5, [mystery], {}, {5: ('Wait', 3)}, False, {})
     hit = event('mario_receive_after', 'al::SensorMsgPlayerItemGet', STONE_ID, 'Body', 'Mario', '0', 'Head')
     assert judge.messages_match(5, [hit], {}, {5: ('Fall', 3)}, False, {}) is None
     hit['answer'] = '1'
