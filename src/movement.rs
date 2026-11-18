@@ -6012,9 +6012,12 @@ impl Player {
                 max_speed: t::NORMAL_MAX,
                 accel_frames: t::ACCEL_FRAMES as i32,
             });
-            if steer.front.length_squared() > 0.5 {
-                self.facing = steer.front;
-            }
+            // SpinCap enables the ground control's turn tilt (+0xbb at
+            // 0x481844); updateNormalMove applies calcTilt before
+            // updatePoseUpFront (0x418294..0x4182d0). Run disables that flag,
+            // but its appearance retains this outgoing pose.
+            let pose_up = self.spin_ground_move.turn.tilted_up(steer.up, 20.);
+            self.steer_pose(pose_up, steer.front);
             self.set_h(steer.velocity);
         }
         self.v.y = -GRAVITY_MOVE;
