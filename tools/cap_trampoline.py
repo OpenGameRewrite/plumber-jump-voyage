@@ -26,6 +26,7 @@ def overlap(a, b, radius):
 
 
 def cap_sensor(cap, name):
+    # PlayerFunction::initCapModelActor (0x4464a4): Eye500 at origin, Attack100/Y20.
     position = vector(cap['pos_bits'])
     if name == 'Eye':
         return position, 500.

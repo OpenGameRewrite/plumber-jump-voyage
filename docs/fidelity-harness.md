@@ -235,7 +235,9 @@ No actor side file drives native simulation. This composition's final comparison
 status is recorded in the local power68 handoff; recording coverage alone is not
 an assertion of complete movement fidelity.
 
-Moon55 has source-derived coverage only. Outgoing cap attacks, closed cap opening,
+Moon55 has source-derived coverage only. Multi-host attack sequencing, including
+HackCap +0x290 after Rebound, is outside the certified single-host Return path.
+Outgoing cap attacks, closed cap opening,
 closing completion, connected sources, spin DownFall/re-entry and the boss cap
 sender remain outside this port. Installed Mario/Cappy models need no modification.
 Rendered replay uses the same source but has no trampoline mesh or original stage
