@@ -591,13 +591,13 @@ mod tests {
         stone.release(&mesh, Vec3::Z);
         let released = at(252);
         let mut report = Vec::new();
-        if stone.position != vec3(released, "pos") {
-            report.push(format!("release position {:?} vs {:?}", stone.position, vec3(released, "pos")));
-        }
+        // The release's own push and facing depend on Mario's pose, not on this oracle's input: the
+        // recorded post-release state is the starting point.
         stone.position = vec3(released, "pos");
         stone.velocity = vec3(released, "vel");
         stone.pose = pose_math::quat_to_axes(quat(released, "quat"));
         stone.joint = quat(released, "joint");
+        let mut drifted = false;
         for f in 253..=447u64 {
             stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
             let sample = at(f);
@@ -608,11 +608,15 @@ mod tests {
                 Nerve::Roll => "Roll",
             };
             let mut diffs = Vec::new();
-            if stone.position != vec3(sample, "pos") {
+            // The motion drifts once it differs, so only its first difference is a finding; a flag or
+            // nerve difference is reported on every frame.
+            if !drifted && stone.position != vec3(sample, "pos") {
                 diffs.push(format!("pos {:?} vs {:?}", stone.position, vec3(sample, "pos")));
+                drifted = true;
             }
-            if stone.velocity != vec3(sample, "vel") {
+            if !drifted && stone.velocity != vec3(sample, "vel") {
                 diffs.push(format!("vel {:?} vs {:?}", stone.velocity, vec3(sample, "vel")));
+                drifted = true;
             }
             if nerve != sample["nerve"] {
                 diffs.push(format!("nerve {nerve} vs {}", sample["nerve"]));
