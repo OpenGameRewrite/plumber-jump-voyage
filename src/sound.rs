@@ -280,6 +280,11 @@ fn play(
                     }
                 }
                 Cue::CapPlay(name) => ctx.start(true, name, None, &mut t),
+                Cue::CapParameter(name, parameter) => {
+                    let speed = std::mem::replace(&mut ctx.speed, parameter);
+                    ctx.start(true, name, None, &mut t);
+                    ctx.speed = speed;
+                }
                 Cue::Reaction { cap, name } => ctx.reaction(cap, name, &mut t),
             }
         }

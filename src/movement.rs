@@ -1037,6 +1037,7 @@ pub enum Fx {
     /// The cap turned along a wall (the number is how square the hit was) or onto the surface
     /// its terrain helper found (the turn's angle in degrees).
     CapWallHit(f32),
+    CapWallStop(f32),
     /// An exported actor accepted the cap's `CapReflectCollide`: its hit reaction.
     CapReflect,
     /// An exported trampoline accepted the cap's `CapAttack`: the reaction `帽子ヒット`.
@@ -3430,6 +3431,14 @@ impl Player {
         (self.upper_catch, self.catch_clip) = upper_catch;
         self.sounds = sounds;
         self.soot = soot;
+    }
+
+    /// Restore the independently completed cap after reconstructing only Mario's nerve choice.
+    pub(crate) fn restore_completed_cap(&mut self, cap: Option<Cap>) {
+        if let Some(cap) = &cap {
+            self.cap_serial = cap.clip_serial();
+        }
+        self.cap = cap;
     }
 
     fn step_with_sources(&mut self, o: &Orders, scene: &Course, advance_sources: bool) {
@@ -6297,6 +6306,7 @@ impl Player {
                     self.rocket.request_scene_stop(2);
                 }
                 CapEvent::WallHit(strength) => self.events.push(Fx::CapWallHit(strength)),
+                CapEvent::WallStopped(speed) => self.events.push(Fx::CapWallStop(speed)),
                 CapEvent::TerrainTurn(degrees) => self.events.push(Fx::CapWallHit(degrees)),
                 CapEvent::Staying => self.events.push(Fx::CapStay),
                 CapEvent::WaterFly => self.events.push(Fx::CapWaterFly),

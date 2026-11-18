@@ -10,7 +10,7 @@ SENSORS = {'Body': (76., 0.), 'CapHit': (110., 60.),
            'TrampleHit': (120., -20.), 'Attack': (200., 0.)}
 PLAYER = {('Foot', '3'): (40., 40.), ('Body', '1'): (50., 75.),
           ('Head', '1'): (40., 110.), ('Carry', '2'): (130., 100.),
-          ('Eye', '5'): (800., 80.), ('HipDropKnockDown', '2'): (150., 0.)}
+          ('Eye', '5'): (800., 80.), ('SpinAttack', '2'): (130., 100.), ('HipDropKnockDown', '2'): (150., 0.)}
 
 
 def vector(cell):
@@ -23,6 +23,20 @@ def squared(v):
 
 def overlap(a, b, radius):
     return squared([f32(x-y) for x, y in zip(a, b)]) < f32(radius*radius)
+
+
+def cap_sensor(cap, name):
+    position = vector(cap['pos_bits'])
+    if name == 'Eye':
+        return position, 500.
+    # sead quaternion rotation of local Y, the same operation as the native pose.
+    x,y,z,w = vector(cap['quat_bits'])
+    tx,ty,tz = -z,w,x
+    minus_dot = -y
+    up = [f32(f32(f32(y*tz)+f32(f32(w*tx)-f32(z*ty)))-f32(x*minus_dot)),
+          f32(f32(f32(f32(z*tx)+f32(w*ty))-f32(x*tz))-f32(y*minus_dot)),
+          f32(f32(f32(w*tz)+f32(f32(x*ty)-f32(y*tx)))-f32(z*minus_dot))]
+    return [f32(p+f32(v*20.)) for p,v in zip(position,up)], 100.
 
 
 class Source:
@@ -47,12 +61,32 @@ class Source:
         foot = [feet[0], f32(feet[1]+40.), feet[2]]
         delta = [f32(a-b) for a, b in zip(centre, foot)]
         toward = f32(f32(f32(velocity[0]*delta[0])+f32(velocity[1]*delta[1]))+f32(velocity[2]*delta[2]))
-        accepted = (self.phase == 1 and self.cooldown <= 0
+        accepted = (self.phase != 0 and self.cooldown <= 0
                     and squared(delta) < 160.*160.
                     and f32(math.sqrt(squared(velocity))) >= f32(1.45) and toward >= 0.)
         if accepted:
             self.phase, self.step, self.cooldown, self.close = 2, -1, 10, 300
         return accepted
+
+    def cap_attack(self, position, attack):
+        # receiveMsg 0x243910..0x24398c; the cap's Attack radius100 against CapHit110.
+        centre = [position[0], f32(position[1]+60.), position[2]]
+        if self.phase == 0 or self.cooldown > 0 or not overlap(attack, centre, 210.):
+            return False
+        self.phase, self.step, self.cooldown, self.close = 4, -1, 10, 300
+        return True
+
+    def hip_drop(self, position, feet, velocity):
+        # receiveMsg 0x243710..0x24390c: Jump rejects; cooldown does not gate this route.
+        centre = [position[0], f32(position[1]-20.), position[2]]
+        foot = [feet[0], f32(feet[1]+40.), feet[2]]
+        delta = [f32(a-b) for a,b in zip(centre,foot)]
+        toward = f32(f32(f32(velocity[0]*delta[0])+f32(velocity[1]*delta[1]))+f32(velocity[2]*delta[2]))
+        if (self.phase in (0,2) or not overlap(foot,centre,160.)
+                or f32(math.sqrt(squared(velocity))) < 8.5 or toward < 0.):
+            return False
+        self.phase, self.step, self.close = 2, -1, 300
+        return True
 
     def tick(self):
         if self.initial:
@@ -64,6 +98,8 @@ class Source:
             self.phase, self.step = 1, -1
         if self.phase == 3 and self.step == 15:
             self.phase, self.step = 1, -1
+        if self.phase == 4 and self.step == 27:
+            self.phase, self.step = 1, -1
         if self.phase == 1 and not self.continue_open and self.step >= 0:
             self.close -= 1  # exeOpen 0x243b24..0x243b34
         self.step += 1
@@ -73,16 +109,17 @@ class Source:
 
 
 class Evidence:
-    def __init__(self, geometry, actors, player, messages, rewrite, rows, preroll):
+    def __init__(self, geometry, actors, player, messages, rewrite, rows, preroll, cap=None):
         self.frames, self.identity, self.messages, self.previous = set(), None, set(), {}
         self.error = None
         try:
-            self.verify(geometry, actors, player, messages, rewrite, rows, preroll)
+            self.rebound, self.cap_previous = set(), {}
+            self.verify(geometry, actors, player, messages, rewrite, rows, preroll, cap)
         except (ValueError, KeyError, TypeError, IndexError, StopIteration, OverflowError, struct.error) as error:
             self.frames, self.identity, self.messages = set(), None, set()
             self.error = str(error)
 
-    def verify(self, geometry, actors, player, messages, rewrite, rows, preroll):
+    def verify(self, geometry, actors, player, messages, rewrite, rows, preroll, cap=None):
         if not all((geometry, actors, player, messages, rewrite, rows, preroll)):
             return
         if (geometry['stage'], geometry['scenario']) != ('TrampolineWallCatchExStage', 1):
@@ -133,16 +170,37 @@ class Evidence:
         identity = None
         frames, allowed = set(), set()
         power, stay, spinning = 0., 0, False
-        reflects = set()
+        reflects, cap_hits = set(), set()
+        caps = {int(r['frame']): r for r in cap or [] if r['kind'] == 'sample'}
+        struck = False
         for f in range(first, last+1):
             r, m, g = samples[f], players[f], original[f]
             previous = original.get(f-1)
             feet = vector(previous['bits_pos']) if previous else None
             velocity = vector(previous['bits_vel']) if previous else None
+            cap_hit = False
+            prior_cap = caps.get(f-1)
+            if previous and not previous.get('cap_state'):
+                struck = False
+            if prior_cap and prior_cap['hidden'] == '0':
+                if prior_cap['dropped'] != '0':
+                    raise ValueError('cap samples dropped')
+                self.cap_previous[f] = prior_cap
+                if previous['cap_state'] == 'Return' and not struck:
+                    cap_hit = source.cap_attack(position, cap_sensor(prior_cap, 'Attack')[0])
+                    if cap_hit:
+                        cap_hits.add(f)
+                        struck = True
             request = source.attack(position, feet, velocity) if previous else False
             source.tick()
             wait_step = source.step
+            action_phase = source.phase
+            action_step = source.step
             reflect = (source.reflect(position, feet) if previous and previous['state'] == 'HipDrop/Fall' else False)
+            hip_drop = (source.hip_drop(position, feet, velocity)
+                        if previous and previous['state'] == 'HipDrop/Fall' and not request else False)
+            request_power = 68. if hip_drop else 60.
+            request = request or hip_drop
             if spinning and not request and previous.get('ground') == '1':
                 # exeJumpSpinFlower 0x472fd8..0x472ff4 ends the child;
                 # exeJump 0x4240a4..0x4240d8 counts/clears then setNerveOnGround.
@@ -150,7 +208,7 @@ class Evidence:
                     raise ValueError(f'spin grounded exit {f}')
                 spinning = False
             if request:
-                power, spinning = 60., True
+                power, spinning = request_power, True
             if spinning:
                 if request or (velocity[1] >= 0. and abs(velocity[1]) >= f32(.001)):
                     stay = 80
@@ -160,7 +218,7 @@ class Evidence:
             identity = identity or current
             if current != identity or r['zone'] or r['registry_dropped'] != '0':
                 raise ValueError('identity/drop')
-            nerve = {0:'1ce4ea0', 1:'1ce4ea8', 2:'1ce4eb0', 3:'1ce4eb8'}[source.phase]
+            nerve = {0:'1ce4ea0', 1:'1ce4ea8', 2:'1ce4eb0', 3:'1ce4eb8', 4:'1ce4ec0'}[source.phase]
             if (r['pending_n'] or '0') not in ('0', nerve) or (r['pending_n'] if r['pending_n'] != '0' else r['current_n']) != nerve:
                 raise ValueError(f'nerve {f}')
             if (int(r['step']) != source.step or int(r['cooldown']) != source.cooldown
@@ -174,6 +232,7 @@ class Evidence:
             # Original CapTrampoline.bfres: Wait2, Jump19, OpenStart15, Open46. Nerve changes retain the
             # completed action until the new nerve's first execution.
             animation, animation_frame = (
+                ('ReOpen', action_step-1) if action_phase == 4 else
                 ('Wait', (wait_step-1) % 2) if source.phase == 0 or reflect else
                 ('OpenStart', source.step-1) if source.phase == 3 else
                 ('Jump', source.step-1) if source.phase == 2 else
@@ -212,9 +271,12 @@ class Evidence:
                 if (e['sender_id'] != p['Id'] or e['sender_actor'] != identity[0]
                         or e['sender_generation'] != identity[1] or e['sender_sensor'] != 'TrampleHit'
                         or e['receiver_id'] != 'Mario' or e['receiver_sensor'] != 'Foot'
-                        or e['power_bits'] != bits(60.) or e['request_type'] != '13'
-                        or e['request_power_bits'] != bits(60.)):
+                        or e['power_bits'] != bits(request_power) or e['request_type'] != '13'
+                        or e['request_power_bits'] != bits(request_power)):
                     raise ValueError('request identity/power')
+            self.verify_cap_hit(f, events[f], cap_hit, prior_cap, p, identity)
+            if hip_drop:
+                self.verify_hip_drop(events[f])
             for e in events[f]:
                 if e['kind'] != 'mario_receive_after':
                     continue
@@ -232,11 +294,11 @@ class Evidence:
                 if msg not in ('al::SensorMsgPush', 'rs::SensorMsgPushToFish', 'rs::SensorMsgPushToPlayer', 'rs::SensorMsgRequestPlayerSpinJump', 'rs::SensorMsgRequestSphinxJump', 'rs::SensorMsgCapTrampolineAttack'):
                     raise ValueError('unproved Mario message type')
                 allowed.add((f, own, other, msg, e['answer']))
-            if closed and previous:
+            if (closed or cap_hits) and previous:
                 # ActorHitReactionCtrl/StompHit StopSceneFrame2; HitReactionKeeper
                 # 0x90cb80..0x90cb8c supplies delay2, SceneStopCtrl 0x9cf150.
-                if int(g['game_frame']) - int(previous['game_frame']) != (3 if f-2 in reflects else 1):
-                    raise ValueError('unproved pad/scene-stop clock')
+                if int(g['game_frame']) - int(previous['game_frame']) != (3 if f-2 in reflects or f-1 in cap_hits else 1):
+                    raise ValueError(f'unproved pad/scene-stop clock {f}')
             if power and (m['jump_launch_bits'] != bits(power) or int(m['stay_counter']) != stay
                           or m['jump_b4'] != '0' or m['jump_b6'] != '0'):
                 raise ValueError('retained spin launch/exit fields')
@@ -248,6 +310,60 @@ class Evidence:
                     self.previous[f] = feet
         self.frames, self.identity, self.messages = frames, (p['UnitConfig']['DisplayName'], *identity), allowed
         self.position = position
+        self.rebound = {f+k for f in cap_hits for k in range(3)}
+        if self.rebound != {f for f,g in rows.items() if g.get('cap_state') == 'Rebound'}:
+            raise ValueError('cap Rebound schedule')
+        for hit in cap_hits:
+            for k in range(4):
+                sample = caps[hit+k]
+                if (sample['current_n_name'] != ('Rebound' if k < 3 else 'Return')
+                        or sample['pending_n_name'] or int(sample['step']) != (k+1 if k < 3 else 0)
+                        or not exact_vector(sample['velocity_bits'], '00000000,00000000,00000000')
+                        or not exact_vector(sample['pos_bits'], caps[hit-1]['pos_bits'])):
+                    raise ValueError('cap Rebound execution/position')
+
+    @staticmethod
+    def verify_cap_hit(frame, events, hit, cap, placement, identity):
+        accepted = [e for e in events if e['kind'] == 'object_receive_after'
+                    and e['message_type'] == 'rs::SensorMsgCapAttack' and e['answer'] == '1']
+        if len(accepted) != int(hit):
+            raise ValueError(f'cap hit schedule {frame}')
+        if not hit:
+            return
+        e = accepted[0]
+        if (e['receiver_id'] != placement['Id'] or e['receiver_actor'] != identity[0]
+                or e['receiver_generation'] != identity[1] or e['receiver_sensor'] != 'CapHit'
+                or e['sender_id'] != 'other' or e['sender_sensor'] != 'Attack'
+                or e['sender_radius_bits'] != bits(100.)
+                or e['source_pending_n'] != '1ce4ec0' or e['source_step'] != '-1'
+                or e['source_cooldown'] != '10' or e['source_close_counter'] != '300'):
+            raise ValueError('cap hit identity/state')
+        if not exact_vector(e['sender_centre_bits'], ','.join(bits(v) for v in cap_sensor(cap, 'Attack')[0])):
+            raise ValueError('cap hit sensor pose')
+        kinds = ['send_before', 'object_receive_before', 'object_receive_after', 'send_after']
+        dispatch = [x for x in events if x['message_type'] == e['message_type']
+                    and x['sender_sensor'] == 'Attack' and x['receiver_sensor'] == 'CapHit']
+        if ([x['kind'] for x in dispatch] != kinds
+                or [x['answer'] for x in dispatch] != ['-1','-1','1','1']):
+            raise ValueError('cap hit dispatch ordering')
+
+    @staticmethod
+    def verify_hip_drop(events):
+        # The accepted request is nested in an ObjHipDrop receive that still returns false.
+        msg = 'al::SensorMsgPlayerAttackObjHipDrop'
+        dispatch = [e for e in events if e['message_type'] == msg
+                    and e['sender_sensor'] == 'Foot' and e['receiver_sensor'] == 'TrampleHit']
+        requests = [e for e in events if e['kind'] == 'spin_request_after' and e['answer'] == '1']
+        if ([e['kind'] for e in dispatch] != ['send_before','object_receive_before','object_receive_after','send_after']
+                or [e['answer'] for e in dispatch] != ['-1','-1','0','0'] or len(requests) != 1
+                or not int(dispatch[1]['order']) < int(requests[0]['order']) < int(dispatch[2]['order'])):
+            raise ValueError('hip-drop nested false/accepted dispatch')
+
+    def accepted(self, frame, reason):
+        if frame in self.frames and frame in self.rebound and reason.startswith('Cappy Rebound'):
+            return ('exported CapTrampoline Rebound',
+                    'obj1088 CapHit accepted CapAttack; independently simulated source cooldown and cap reaction')
+        return None
 
     @staticmethod
     def verify_reflect(frame, events, placement, identity, player, game):
@@ -281,10 +397,23 @@ class Evidence:
         if frame not in self.frames or not self.identity:
             return False
         host, token, _generation = self.identity
-        if (c['who'] != 'player' or c['host_class'] != 'CapTrampoline'
+        if (c['who'] not in ('player', 'cap') or c['host_class'] != 'CapTrampoline'
                 or c['host'] != host or c['actor'] != token or c['other_type'] != '12'
                 or c['other'] not in SENSORS):
             return False
+        if c['who'] == 'cap':
+            cap = self.cap_previous.get(frame)
+            own = {'Attack':'4', 'Eye':'0'}
+            if not cap or own.get(c['self']) != c['self_type']:
+                return False
+            point, radius = cap_sensor(cap, c['self'])
+            other_radius, y = SENSORS[c['other']]
+            centre = [self.position[0], f32(self.position[1]+y), self.position[2]]
+            if not overlap(point, centre, radius+other_radius):
+                return False
+            return ((c['kind'] == 'a' and not c['message'] and not c['answer'])
+                    or (c['kind'] == 'r' and c['self'] == c['other'] == 'Attack'
+                        and c['message'] == 'rs::SensorMsgCapTrampolineAttack' and c['answer'] == '0'))
         own = PLAYER.get((c['self'], c['self_type']))
         feet = self.previous.get(frame)
         if not own or feet is None:
@@ -304,6 +433,17 @@ class Evidence:
 
 def self_check():
     from copy import deepcopy
+
+    reopened = Source()
+    reopened.initial = False
+    assert not reopened.cap_attack([0.,0.,0.], [210.,60.,0.])
+    assert reopened.cap_attack([0.,0.,0.], [0.,60.,0.])
+    reopened.tick()
+    assert (reopened.phase, reopened.step, reopened.cooldown) == (4,1,9)
+    assert not reopened.attack([0.,0.,0.], [0.,80.,0.], [0.,-45.,0.])
+    assert not reopened.hip_drop([0.,0.,0.], [0.,80.,0.], [0.,-8.,0.])
+    assert reopened.hip_drop([0.,0.,0.], [0.,80.,0.], [0.,-45.,0.])
+    assert (reopened.phase, reopened.step, reopened.cooldown) == (2,-1,9)
 
     closed = Source(True)
     assert not closed.reflect([0., 0., 0.], [0., -80., 0.])
@@ -343,7 +483,7 @@ def self_check():
         if frame == 0:
             assert source.attack(pos, feet, [0., -45., 0.])
         source.tick()
-        nerve = {0:'1ce4ea0', 1:'1ce4ea8', 2:'1ce4eb0', 3:'1ce4eb8'}[source.phase]
+        nerve = {0:'1ce4ea0', 1:'1ce4ea8', 2:'1ce4eb0', 3:'1ce4eb8', 4:'1ce4ec0'}[source.phase]
         actors.append(dict(frame=str(frame), id='obj1088', kind='sample', actor='10',
                            generation='3', zone='', registry_dropped='0',
                            current_n='0' if frame == -1 else nerve,

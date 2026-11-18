@@ -222,6 +222,8 @@ pub enum Cue {
     Hold(&'static str),
     /// Start a sound of Cappy's own audio keeper.
     CapPlay(&'static str),
+    /// Cappy's direct parameterized play (`startSeWithParam`).
+    CapParameter(&'static str, f32),
     Reaction {
         cap: bool,
         name: &'static str,
@@ -353,6 +355,13 @@ pub fn fx_cues(fx: Fx, context: FxContext) -> Vec<Cue> {
                 name: "コリジョン衝突方向転換",
             },
             Cue::CapPlay("HitCol"),
+        ],
+        Fx::CapWallStop(speed) => vec![
+            Cue::Reaction {
+                cap: true,
+                name: "コリジョン衝突停止",
+            },
+            Cue::CapParameter("HitWall", speed),
         ],
         Fx::Catch => vec![Cue::Reaction {
             cap: true,

@@ -9,11 +9,11 @@
 //! The spin-move throw (`exeThrowSpiral`, `cap_spiral.rs`) and the throw down at the end of a
 //! ground pound (`exeThrowRolling` and its brake, `cap_rolling.rs`) have their own nerves;
 //! the re-throw after a catch is the player's (`PlayerJudgePreInputCapThrow`).
-//! Cappy's other wall reactions (a head-on hit that stops it, the rebound of the spiral and the
+//! Cappy's other wall reactions (the rebound of the spiral and the
 //! rolling throw, the lock-on, the attack on what it hits), its floor reactions, the stick
 //! steering of a throw in progress and the throws of the motion controls (`DoubleUp`,
 //! `ThrowAppend`, `Rethrow`) have no counterpart yet.
-//! The ordinary SignBoardNormal reflection and four-execution zero-velocity Rebound
+//! The ordinary head-on wall stop, SignBoardNormal reflection and zero-velocity Rebound
 //! are ported (0x401914, 0x406c0c). `redirect()` remains an invented flick
 //! shortcut; this round deliberately leaves it unchanged.
 //!
@@ -25,6 +25,7 @@
 use crate::collider::{Location, PlayerCollider};
 use crate::geometry::TriangleMesh;
 use crate::movement::cap_pose::{CapPose, direction_of, horizontal_length, length};
+use crate::movement::vector_lib;
 use crate::movement::{Throw, UNIT};
 use crate::movement::{cap_ground, cap_return, cap_rolling, cap_spiral};
 use crate::water::{SurfaceFinder, WaterAreas};
@@ -311,6 +312,8 @@ pub enum CapEvent {
     /// reaction, its effect and the sound `HitCol`, which is louder the
     /// squarer the hit (the cosine of the angle).
     WallHit(f32),
+    /// `stayWallHit`: the incoming speed is the HitWall sound parameter.
+    WallStopped(f32),
     /// The throw nerves' terrain helper (`0x401d0c`) turned the cap onto the surface its collider
     /// touched, by this many degrees: the same collision reaction and sound.
     TerrainTurn(f32),
@@ -789,6 +792,8 @@ impl Cap {
         // ThrowStart selects the launch parameters (0x3ff998..0x3ffb8c);
         // surface displacement and blocked travel do not select a new throw.
         self.water = before.water;
+        // HackCap's recent-hit host ring survives lockstep placement within this throw.
+        self.attacked.clone_from(&before.attacked);
         self.speed = before.speed;
         self.cruise_frames = before.cruise_frames;
         self.brake_step = before.brake_step;
@@ -883,6 +888,13 @@ impl Cap {
         {
             self.action = before.action;
             self.action_frame = before.action_frame;
+            if !before.attacked.is_empty() {
+                // A Return CapAttack's exeRebound does not turn the cap. The completed pose,
+                // not an orientation reconstructed from its now-zero velocity, starts Return.
+                self.pose = before.pose;
+                self.front = before.front;
+                self.up = before.up;
+            }
         }
     }
     /// Put the cap into a recorded moment (lockstep).
@@ -1089,17 +1101,16 @@ impl Cap {
     /// last frame, at the start of the throw and brake nerves: a wall at an
     /// angle (`0x409624`) turns the cap along it at the speed it had and moves
     /// it one centimetre into the wall (the collider pushes it back out); a
-    /// head-on wall stops the cap in the original (`stayWallHit`), which is
-    /// not reproduced here.
-    fn wall_reaction(&mut self, events: &mut Vec<CapEvent>) {
+    /// head-on wall stops it in ThrowStay (`stayWallHit`, 0x409a40..0x409aa0).
+    fn wall_reaction(&mut self, events: &mut Vec<CapEvent>) -> bool {
         let Some(wall) = &self.collider.wall else {
-            return;
+            return false;
         };
         if wall.location != Location::Face {
-            return;
+            return false;
         }
         let Some(normal) = wall.normal.with_y(0.).try_normalize() else {
-            return;
+            return false;
         };
         // The same wall as the last reaction's, met again right away, is no
         // new hit. The original decides this with a trigger word of the cap
@@ -1109,12 +1120,21 @@ impl Cap {
             || self.wall_memory.dot(normal) <= SAME_WALL;
         let alignment = self.front.dot(normal).abs();
         if alignment >= SLIDE_LIMIT {
-            return;
+            // tryCollideWallReaction 0x401c70..0x401d04: failed slide, cap-up dot
+            // wall < .5 enters stayWallHit. Upright wall/ordinary single play.
+            if crate::movement::pose_math::dot(self.up, wall.normal) < 0.5 {
+                events.push(CapEvent::WallStopped(vector_lib::length(self.velocity)));
+                self.velocity = Vec3::ZERO;
+                self.spiral_side = 0.;
+                self.capcatch = false;
+                return true;
+            }
+            return false;
         }
         let speed = self.velocity.length();
         let along = self.velocity - normal * self.velocity.dot(normal);
         let Some(front) = along.try_normalize() else {
-            return;
+            return false;
         };
         self.spot -= normal;
         if alignment > GRAZE_LIMIT && first {
@@ -1125,6 +1145,7 @@ impl Cap {
         if first {
             self.wall_memory = normal;
         }
+        false
     }
     /// `HackCap::exeThrow`: fly on at the speed the throw set, until the
     /// cruise frames are used up.
@@ -1166,7 +1187,9 @@ impl Cap {
         if let Some(next) = self.reflect_collision(world.mesh, events) {
             return Some(next);
         }
-        self.wall_reaction(events);
+        if self.wall_reaction(events) {
+            return Some(CapNerve::ThrowStay);
+        }
         self.follow_terrain(world.mesh, events);
         self.pose.face_back_along(self.front, self.up);
         self.change_throw_param_in_water(world, events);
@@ -1234,13 +1257,9 @@ impl Cap {
     /// `HackCap::attackSensor` (0x4076fc) for a cap in `Return` against the CapHit sensor of an
     /// exported trampoline: the Attack sensor (a sphere of 100 raised 20 along the cap's up axis)
     /// strictly overlapping it, the host not yet struck in this throw, no `CapReflect` or lock-on
-    /// answer, and `CapAttack` accepted. `CapIgnoreCollisionCheck` is refused by a trampoline, so
-    /// the original also asks the wall-and-ceiling arrow between the two sensors
-    /// (`calcStrikeArrowCollideWallAndCeilingBetweenAttackSensor`, 0x4078d0); that test is NOT
-    /// ported: the evidence validator refuses a hit whose sensor segment crosses a wall or ceiling
-    /// triangle of the exported stage. Only the `Return` nerve is ported (0x407924). The `+0x290`
-    /// counter that Rebound's exit sets (0x4079c8) is not either: the host list already blocks
-    /// the one trampoline of these stages.
+    /// answer, and `CapAttack` accepted. `CapIgnoreCollisionCheck` is refused by a trampoline:
+    /// 0x8f1d88 tests the sensor segment against non-ground faces, unless shorter than the cap's
+    /// collider radius. This receiver currently supports the Return branch (0x407924).
     fn try_attack_trampoline(&mut self, world: &CapWorld) -> Option<usize> {
         let attack = self.spot + self.pose.world_axis(Vec3::Y) * ATTACK_SENSOR_HEIGHT;
         let (index, _) = world.cap_hits.iter().enumerate().find(|(index, hit)| {
@@ -1248,6 +1267,16 @@ impl Cap {
                 && !self.attacked.contains(index)
                 && (hit.centre - attack).length_squared()
                     < (ATTACK_SENSOR_RADIUS + CAP_HIT_RADIUS).powi(2)
+                && (vector_lib::length(hit.centre - attack) < COLLIDER_RADIUS
+                    || world.mesh.is_none_or(|mesh| {
+                        crate::collider::arrow_strikes_filtered(
+                            mesh,
+                            attack,
+                            hit.centre - attack,
+                            crate::collider::FaceFilter::NotFloors,
+                        )
+                        .is_empty()
+                    }))
         })?;
         self.attacked.push(index);
         self.nerve = CapNerve::Rebound;
@@ -1443,7 +1472,9 @@ impl Cap {
         if let Some(next) = self.reflect_collision(world.mesh, events) {
             return Some(next);
         }
-        self.wall_reaction(events);
+        if self.wall_reaction(events) {
+            return Some(CapNerve::ThrowStay);
+        }
         self.follow_terrain(world.mesh, events);
         self.pose.face_back_along(self.front, self.up);
         self.change_throw_param_in_water(world, events);

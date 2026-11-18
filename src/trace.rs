@@ -839,6 +839,9 @@ impl Recorder {
                         self.play(false, name, speed, &mut events, &mut mix)
                     }
                     Cue::CapPlay(name) => self.play(true, name, speed, &mut events, &mut mix),
+                    Cue::CapParameter(name, parameter) => {
+                        self.play(true, name, parameter, &mut events, &mut mix)
+                    }
                     Cue::Rated(name) => self.play(false, name, p.anim.rate, &mut events, &mut mix),
                     Cue::Reaction { cap, name } => {
                         self.reaction(cap, name, speed, &mut events, &mut mix)

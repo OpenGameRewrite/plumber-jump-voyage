@@ -84,14 +84,14 @@ impl Trampoline {
             && pose_math::dot(velocity, delta) >= 0.
     }
 
-    /// `attackSensor` 0x24332c: every nerve but Wait, speed 1.45, no cooldown.
+    /// `attackSensor` 0x24332c: every supported nerve but Wait, speed 1.45, cooldown <= 0.
     fn accepts(&self, feet: Vec3, velocity: Vec3, min_speed: f32) -> bool {
         self.phase != WAIT
             && self.cooldown <= 0
             && self.foot_hits_trample_sensor(feet, velocity, min_speed)
     }
 
-    /// Whether `receiveMsg` 0x243910 takes a cap attack on CapHit: the open nerves, no cooldown.
+    /// Whether `receiveMsg` 0x243910 takes a cap attack on CapHit: open nerves, cooldown <= 0.
     pub fn accepts_cap_attack(&self) -> bool {
         self.phase != WAIT && self.cooldown <= 0
     }
@@ -284,6 +284,7 @@ impl Player {
 pub(super) fn self_check() {
     checks::attack_preempts_hip_drop_and_obeys_strict_contact_boundaries();
     checks::closed_reflect_opens_once_and_launches_the_shared_jump();
+    checks::cap_hit_blocks_normal_send_but_not_the_hip_drop_receiver();
 }
 
 mod checks {
@@ -364,5 +365,38 @@ mod checks {
         assert_eq!((s.phase, s.step, s.cooldown), (1, 0, 0));
         assert!(!s.accepts(Vec3::Y * 100., Vec3::NEG_Y * 45., 1.45));
         assert!(!s.accepts(feet, Vec3::Y * 45., 1.45));
+    }
+
+    #[cfg_attr(test, test)]
+    pub(super) fn cap_hit_blocks_normal_send_but_not_the_hip_drop_receiver() {
+        let mut source = Trampoline {
+            id: "test".into(),
+            position: Vec3::ZERO,
+            relative: Vec3::ZERO,
+            moon: false,
+            continue_open: true,
+            phase: OPEN,
+            step: 20,
+            cooldown: 0,
+            close_counter: 300,
+            initial: false,
+        };
+        assert!(source.accepts_cap_attack());
+        source.receive_cap_attack();
+        source.tick();
+        assert_eq!(
+            (source.phase, source.step, source.cooldown),
+            (RE_OPEN, 1, 9)
+        );
+        assert!(!source.accepts_cap_attack());
+        let feet = Vec3::Y * 80.;
+        assert!(!source.accepts(feet, Vec3::NEG_Y * 45., 1.45));
+        assert!(!source.receive_hip_drop(feet, Vec3::NEG_Y * 8.));
+        assert!(source.receive_hip_drop(feet, Vec3::NEG_Y * 45.));
+        assert_eq!(source.hip_drop_power(), 68.);
+        assert_eq!((source.phase, source.step, source.cooldown), (JUMP, -1, 9));
+        assert!(!source.receive_hip_drop(feet, Vec3::NEG_Y * 45.));
+        source.moon = true;
+        assert_eq!(source.hip_drop_power(), 55.);
     }
 }

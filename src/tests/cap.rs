@@ -31,6 +31,54 @@ pub(super) fn run() {
     the_rolling_stand_follows_the_throw_type_not_the_rolling_state();
     the_cap_thrown_from_a_slope_flies_along_the_slope();
     a_recorded_throw_over_water_keeps_its_lift_out_of_the_velocity();
+    a_returning_cap_attacks_a_trampoline_once_and_respects_the_wall_arrow();
+}
+
+#[cfg_attr(test, test)]
+fn a_returning_cap_attacks_a_trampoline_once_and_respects_the_wall_arrow() {
+    let targets = [CapHitTarget {
+        centre: Vec3::new(0., 20., 100.),
+        accepts: true,
+    }];
+    let world = CapWorld {
+        cap_hits: &targets,
+        ..far_world(None)
+    };
+    let mut cap = returning_at(4, Vec3::ZERO);
+    assert_eq!(cap.update(&world), vec![CapEvent::Attacked(0)]);
+    assert_eq!((cap.nerve, cap.step), (CapNerve::Rebound, 1));
+    assert_eq!(cap.velocity, Vec3::ZERO);
+    let mut restored = returning_at(4, Vec3::ZERO);
+    restored.continue_clip(&cap);
+    assert_eq!(restored.pose.read_back(), cap.pose.read_back());
+    assert!(restored.update(&world).is_empty());
+
+    let wall = TriangleMesh::from_corners(&[[
+        Vec3::new(-500., -500., 50.),
+        Vec3::new(0., 500., 50.),
+        Vec3::new(500., -500., 50.),
+    ]]);
+    let blocked = CapWorld {
+        mesh: Some(&wall),
+        ..world
+    };
+    assert!(
+        returning_at(4, Vec3::ZERO)
+            .try_attack_trampoline(&blocked)
+            .is_none()
+    );
+    let tangent = [CapHitTarget {
+        centre: Vec3::new(0., 20., 210.),
+        accepts: true,
+    }];
+    assert!(
+        returning_at(4, Vec3::ZERO)
+            .try_attack_trampoline(&CapWorld {
+                cap_hits: &tangent,
+                ..world
+            })
+            .is_none()
+    );
 }
 
 #[cfg_attr(test, test)]

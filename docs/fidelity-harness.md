@@ -203,10 +203,41 @@ spinflower-land (480) and trampoline-closed-hipdrop35 (160) pass strict free and
 camera-fed lockstep with zero excluded frames. The environment rule checks the
 retained launch fields through Land/Wait, including the combo clear.
 
-Power68 (Moon55) belongs to the alternate hip-drop receive path in the original
-source; it remains runtime-unverified and unported. Closing completion, cap-hit
-reopening, connected sources, spin DownFall/re-entry and the boss cap sender
-remain outside this port. Installed Mario/Cappy models need no modification.
+**Cap-hit reopening and hip-drop68.** The cap's returning Attack sphere (radius100,
+20 along its model up) meets CapHit (radius110, placement Y+60) before Mario's
+Foot reaches TrampleHit. CapTrampoline::receiveMsg (0x243910..0x24398c) accepts
+CapAttack at cooldown<=0, requests the attacker reaction, writes cooldown10 and
+close counter300, and chooses ReOpen. Control (0x2439c0) decrements the cooldown;
+ReOpen's original action is27 frames (exeReOpen 0x243ba4..0x243bfc).
+The normal attack send is blocked while the cooldown is positive. The hip-drop
+receive route (0x243710..0x24390c) rejects Jump, requires speed>=8.5 toward the
+sensor and uses the literal68/55 pair at0x18869c0. Its accepted nested type13
+request still returns false to the original ObjHipDrop message.
+
+HackCap::attackSensor's Return branch (0x407924..0x407b54) checks the recent-hit
+host ring and the non-ground collision arrow between sensors (0x8f1d88). An
+accepted hit chooses Rebound before that actor's execution: zero velocity,
+ReboundStart, then Return after exeRebound step3 (0x406c48..0x406f28).
+MarioCapCommonInfo/ActorHitReactionCtrl defines CapHit's two stopped scene ticks.
+Logical replay rows remain player updates; source samples, typed dispatch and
+the game-frame gap validate the stop separately. The cap's host ring survives
+lockstep placement. The original head-on wall stop used by this approach is
+ported from tryCollideWallReaction/stayWallHit (0x401c70..0x401d04,
+0x409a40..0x409aa0), including its reaction and parameterized HitWall sound.
+
+The620-frame spinflower-hipdrop68 recording retains the pilot input through203,
+then steers away from the source for an ordinary landing. Both repetitions are
+deterministic under the harness's exact nonvisual/player-effect-call contract.
+The validator additionally binds cap Attack to original cap pose/sensor words,
+checks source ReOpen/cooldown, ordered accepted CapAttack, the nested false
+ObjHipDrop/accepted68 request, zero-velocity Rebound and retained launch fields.
+No actor side file drives native simulation. This composition's final comparison
+status is recorded in the local power68 handoff; recording coverage alone is not
+an assertion of complete movement fidelity.
+
+Moon55 has source-derived coverage only. Outgoing cap attacks, closed cap opening,
+closing completion, connected sources, spin DownFall/re-entry and the boss cap
+sender remain outside this port. Installed Mario/Cappy models need no modification.
 Rendered replay uses the same source but has no trampoline mesh or original stage
 presentation; native movement PASS does not establish lighting/material/audio parity.
 

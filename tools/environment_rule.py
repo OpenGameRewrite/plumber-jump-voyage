@@ -247,7 +247,7 @@ class Judge:
         self._grabceil = GrabCeilEvidence(geometry, grabceil_bars, rewrite_rows, grabceil_seed,
                                          grabceil_messages, game_rows, preroll or {}, start)
         self._rocket = RocketEvidence(geometry, rocket_flowers, rocket_watcher, rocket_seed, rewrite_rows, game_rows, preroll or {}, start)
-        self._trampoline = TrampolineEvidence(geometry, trampolines, spin_player, spin_messages, rewrite_rows, game_rows, preroll or {})
+        self._trampoline = TrampolineEvidence(geometry, trampolines, spin_player, spin_messages, rewrite_rows, game_rows, preroll or {}, cap_samples)
         self._cap_sources = CapSourceEvidence(geometry, cap_samples, cap_collider, cap_sources, cap_messages, rewrite_rows, game_rows, preroll or {})
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
         # KickStone's deterministic port stops before the first unseeded global RNG
@@ -494,6 +494,8 @@ class Judge:
             self._floor_height(f, reason)
         elif reason.startswith("horizontal displacement differs"):
             self._displacement(f, reason)
+        elif (trampoline := self._trampoline.accepted(f, reason)) is not None:
+            v.accept(f, *trampoline)
         elif (cap_source := self._cap_sources.accepted(f, reason)) is not None:
             v.accept(f, *cap_source)
         else:

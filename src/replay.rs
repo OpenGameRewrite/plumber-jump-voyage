@@ -1019,6 +1019,10 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             && frame - 1 < game.rows.len()
         {
             let last = frame - 1;
+            // A returning cap can already have changed an independently owned trampoline.
+            // Reconstruct Mario's deferred choice without undoing that completed cap update
+            // and attempting its sensor dispatch again against the source's new cooldown.
+            let source_cap = (!player.trampolines.is_empty()).then(|| player.cap.clone());
             // tryChangeAreaAnim starts its clip immediately before silently
             // choosing AreaAnimWait; replaying the preceding row starts it twice.
             let area_started = game.cell(last, "state") == Some("Wait/AreaAnimWait")
@@ -1120,6 +1124,9 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
                     &orders,
                     previous_moving_scene.as_ref().unwrap_or(&course),
                 );
+                if let Some(cap) = source_cap {
+                    player.restore_completed_cap(cap);
+                }
                 player.set_spin_input(spin);
                 player.events.clear();
             }
