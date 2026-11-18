@@ -235,6 +235,15 @@ No actor side file drives native simulation. This composition's final comparison
 status is recorded in the local power68 handoff; recording coverage alone is not
 an assertion of complete movement fidelity.
 
+Ground SpinCap also retains the ground controller's turn tilt. Its constructor
+sets GroundMove +0xbb (0x481844), while Run clears it (0x47e7f8).
+updateNormalMove (0x418294..0x4182d0) applies calcTilt (0x41a6d0), using
+getTiltPoseDegreeMax's original 20 degrees (0x43cea4, 0x438088), before
+updatePoseUpFront (0x4189fc) calls rs::slerpUpFront (0x55cda8). Reusing that
+pose path fixes the free hipdrop68 floor contact at row 97; the outgoing pose
+must survive the transition to Run. Lockstep still has pose/history differences
+and is not certified by the free replay result.
+
 Moon55 has source-derived coverage only. Multi-host attack sequencing, including
 HackCap +0x290 after Rebound, is outside the certified single-host Return path.
 Outgoing cap attacks, closed cap opening,

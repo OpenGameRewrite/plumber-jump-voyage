@@ -25,6 +25,7 @@ pub(super) fn run() {
     a_crouch_press_does_not_cancel_a_ground_throw_under_an_open_ceiling();
     a_ground_spin_under_a_low_ceiling_squats_ahead_of_a_jump();
     a_moving_ground_spin_ends_in_the_run_with_its_velocity();
+    a_turning_ground_throw_tilts_the_pose_and_hands_it_to_run();
     a_low_ceiling_on_the_end_step_squats_with_the_velocity_cut();
     a_jump_pressed_on_the_end_step_waits_for_the_forced_slide();
 }
@@ -851,4 +852,51 @@ fn a_pending_launch_survives_the_row_that_shows_it() {
         ..Default::default()
     });
     assert_eq!(fresh.launch.as_ref().unwrap().front, Vec3::Z);
+}
+
+/// SpinCap enables GroundMove's turn tilt (+0xbb, 0x481844); updateNormalMove
+/// applies calcTilt then updatePoseUpFront (0x418294..0x4182d0). The run's
+/// appearance must inherit that pose rather than flattening it.
+#[cfg_attr(test, test)]
+fn a_turning_ground_throw_tilts_the_pose_and_hands_it_to_run() {
+    let scene = floor_under_ceiling_at(3.);
+    let mut p = Player::default();
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            throw_held: true,
+            ..default()
+        },
+        &scene,
+    );
+    let held = Orders {
+        direction: Vec2::X,
+        throw_held: true,
+        ..default()
+    };
+    let mut tilted = false;
+    let mut before_run = Vec3::Y;
+    for step in 0..60 {
+        let held = Orders {
+            direction: if step < 18 { Vec2::Y } else { Vec2::X },
+            ..held
+        };
+        before_run = p.pose_axes().0;
+        p.step(&held, &scene);
+        if p.mode != Move::Throw {
+            break;
+        }
+        tilted |= p.pose_axes().0 != Vec3::Y;
+    }
+    assert!(
+        tilted,
+        "the turning SpinCap ground control must tilt the actor"
+    );
+    assert_eq!(p.mode, Move::Run);
+    assert_ne!(before_run, Vec3::Y);
+    assert_ne!(
+        p.pose_axes().0,
+        Vec3::Y,
+        "run appearance retains outgoing tilt"
+    );
 }
