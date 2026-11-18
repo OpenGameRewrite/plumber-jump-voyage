@@ -544,6 +544,101 @@ mod tests {
         assert!(stone.collider.floor.is_present());
     }
 
+    /// Oracle: from the recorded state at the release, the port's flight, rebounds, roll and rest
+    /// match the recording bit for bit (`PJV_STONE_CASES`: a local export of the actor samples that
+    /// only supplies the starting state and the expected results, never the replay's inputs).
+    #[test]
+    fn flight_roll_and_rest_follow_the_recorded_stone_from_the_release_state() {
+        let Ok(path) = std::env::var("PJV_STONE_CASES") else {
+            return;
+        };
+        let cases: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let origin = cases["origin"].as_array().unwrap();
+        let origin = Vec3::new(
+            origin[0].as_f64().unwrap() as f32,
+            origin[1].as_f64().unwrap() as f32,
+            origin[2].as_f64().unwrap() as f32,
+        );
+        let text = std::fs::read_to_string(cases["geometry"].as_str().unwrap()).unwrap();
+        let mesh = crate::geometry::TriangleMesh::from_json(&text, origin).unwrap();
+        let frames = cases["frames"].as_array().unwrap();
+        let at = |f: u64| frames.iter().find(|c| c["f"] == f).unwrap();
+        let bits = |c: &serde_json::Value, key: &str| -> Vec<f32> {
+            c[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| f32::from_bits(x.as_u64().unwrap() as u32))
+                .collect()
+        };
+        let vec3 = |c: &serde_json::Value, key: &str| {
+            let v = bits(c, key);
+            Vec3::new(v[0], v[1], v[2])
+        };
+        let quat = |c: &serde_json::Value, key: &str| {
+            let v = bits(c, key);
+            Quat::from_xyzw(v[0], v[1], v[2], v[3])
+        };
+        let held = at(251);
+        let mut stone = Stone::new(&Source {
+            id: "obj1837".into(),
+            position: vec3(held, "pos"),
+            joint: quat(held, "joint"),
+        });
+        stone.pose = pose_math::quat_to_axes(quat(held, "quat"));
+        stone.nerve = Nerve::Hold;
+        stone.release(&mesh, Vec3::Z);
+        let released = at(252);
+        let mut report = Vec::new();
+        if stone.position != vec3(released, "pos") {
+            report.push(format!("release position {:?} vs {:?}", stone.position, vec3(released, "pos")));
+        }
+        stone.position = vec3(released, "pos");
+        stone.velocity = vec3(released, "vel");
+        stone.pose = pose_math::quat_to_axes(quat(released, "quat"));
+        stone.joint = quat(released, "joint");
+        for f in 253..=447u64 {
+            stone.update(&mesh, None, false, Vec3::ZERO, Vec3::Z);
+            let sample = at(f);
+            let nerve = match stone.pending.unwrap_or(stone.nerve) {
+                Nerve::Wait => "Wait",
+                Nerve::Hold => "Hold",
+                Nerve::Fall => "Fall",
+                Nerve::Roll => "Roll",
+            };
+            let mut diffs = Vec::new();
+            if stone.position != vec3(sample, "pos") {
+                diffs.push(format!("pos {:?} vs {:?}", stone.position, vec3(sample, "pos")));
+            }
+            if stone.velocity != vec3(sample, "vel") {
+                diffs.push(format!("vel {:?} vs {:?}", stone.velocity, vec3(sample, "vel")));
+            }
+            if nerve != sample["nerve"] {
+                diffs.push(format!("nerve {nerve} vs {}", sample["nerve"]));
+            }
+            for (name, contact, key) in [
+                ("ground", &stone.collider.floor, "ground"),
+                ("wall", &stone.collider.wall, "wall"),
+                ("ceiling", &stone.collider.ceiling, "ceiling"),
+            ] {
+                if contact.is_present() != (sample[key] == "1") {
+                    diffs.push(format!("{name} {} vs {}", contact.is_present(), sample[key]));
+                }
+            }
+            if !diffs.is_empty() {
+                report.push(format!("f{f}: {}", diffs.join("; ")));
+            }
+            // Later frames start from the port's own state; the first mismatch is the finding.
+            if report.len() > 12 {
+                break;
+            }
+        }
+        assert!(stone.limit.is_empty(), "{}", stone.limit);
+        assert!(report.is_empty(), "{}", report.join("
+"));
+    }
+
     #[test]
     fn floor_response_rebounds_before_roll_and_settles_on_static_ground() {
         let mesh = crate::geometry::TriangleMesh::from_corners(&[[

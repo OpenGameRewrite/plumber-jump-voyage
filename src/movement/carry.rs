@@ -557,6 +557,10 @@ impl Player {
         }
         use crate::skeleton_pose::Joint;
         let spine = joints[Joint::Spine2 as usize];
+        if std::env::var_os("PJV_HOLD_DUMP").is_some() {
+            let w = |m: &look_joint::Mat34| m.iter().flatten().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join("/");
+            eprintln!("HOLDDBG {} {} {} {}", w(&spine), w(&joints[Joint::HandL as usize]), w(&joints[Joint::HandR as usize]), self.carry.origin.to_array().map(|x| format!("{:08x}", x.to_bits())).join("/"));
+        }
         let left = look_joint::translation(&joints[Joint::HandL as usize]) + self.carry.origin;
         let right = look_joint::translation(&joints[Joint::HandR as usize]) + self.carry.origin;
         let position =
@@ -594,6 +598,10 @@ impl Player {
             return String::new();
         }
         let mut out = self.carry.diagnostic.clone();
+        if std::env::var_os("PJV_HOLD_DUMP").is_some() {
+            let (up, front) = self.pose_axes(); let side = Vec3::ZERO;
+            out.push_str(&format!(";dbg_front={};dbg_up={};dbg_side={}", hex_vec(front), hex_vec(up), hex_vec(side)));
+        }
         out.push_str(&format!(
             ";keeper={}/{}/{}",
             self.carry.phase,

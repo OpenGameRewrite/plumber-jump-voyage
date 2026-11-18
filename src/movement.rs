@@ -5295,6 +5295,10 @@ impl Player {
             up: Vec3::Y,
         });
         let turned = self.air_turn.direction;
+        if std::env::var_os("PJV_HOLD_DUMP").is_some() {
+            let b = |v: Vec3| v.to_array().map(|x| format!("{:08x}", x.to_bits())).join("/");
+            eprintln!("TURNDBG front={} up={} stick={} turned={} stored={:?}", b(actor_front), b(actor_up), b(stick), b(turned), self.pose_quat().map(|q| q.to_array().map(|x| format!("{:08x}", x.to_bits()))));
+        }
         match self.pose_quat() {
             Some(stored) => {
                 let relaxed = plane::ActorPose::new(stored).slerp_up_front(

@@ -37,6 +37,7 @@ from rocket_flower import Evidence as RocketEvidence
 from coin_chameleon import Evidence as CoinChameleonEvidence
 from pukupuku import Evidence as PukupukuEvidence
 from carry_objects import Evidence as CarryEvidence, mario_answer
+from kick_stone import Evidence as StoneEvidence
 from cap_sources import Evidence as CapSourceEvidence
 from cap_trampoline import Evidence as TrampolineEvidence
 from collections import OrderedDict
@@ -250,6 +251,8 @@ class Judge:
         self._trampoline = TrampolineEvidence(geometry, trampolines, spin_player, spin_messages, rewrite_rows, game_rows, preroll or {}, cap_samples)
         self._cap_sources = CapSourceEvidence(geometry, cap_samples, cap_collider, cap_sources, cap_messages, rewrite_rows, game_rows, preroll or {})
         self._carry = CarryEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
+        self._stone = StoneEvidence(geometry, carry_objects, carry_mario, carry_messages, rewrite_rows, game_rows, preroll or {})
+        self._paint_tokens = None
         # Absence of later Mario contacts cannot certify a stopped KickStone source.
         for f, row in rewrite_rows.items():
             source = dict(part.split('=', 1) for part in row.get('carry_source', '').split(';') if '=' in part)
@@ -586,6 +589,11 @@ class Judge:
             if self._trampoline.contact(f, c):
                 v.accept(f, "exported CapTrampoline", "stage/scenario-bound obj1088 or obj1043, exact source sensors/counters, independent native source and ordered spin/Reflect dispatch")
                 continue
+            if self._stone.contact(f, c):
+                v.accept(f, "exported KickStone carry/release",
+                         "placement-bound obj1837, simulated pickup/hold/release lifecycle and keeper, exact held collider feedback, "
+                         "and only messages Mario's dispatch (0x428810) and the stone's (0x2ab494) answer false")
+                continue
             if self._carry.contact(f, c):
                 v.accept(f, "exported flower carry/push", "placement identity, source state, typed dispatch and independently simulated receiver/keeper")
                 continue
@@ -636,6 +644,20 @@ class Judge:
                     continue
                 self._physical_overlap(f, host, where, host_class=c["host_class"])
 
+    def _grounded_paint_tokens(self, host, base):
+        """Actor tokens of the PaintObj on frames whose logged floor is that static placement (all of them,
+        and only one token, or none: an ambiguous identity proves nothing)."""
+        if self._paint_tokens is None:
+            tokens = set()
+            for g, hosts in self._hosts.items():
+                floor = hosts.get('ground', {})
+                if (floor.get('host') == host and floor.get('base') == base
+                        and floor.get('moving') == '0' and floor.get('parts_flag') != '0'):
+                    tokens.update(c['actor'] for c in parse_contacts(self.rows[g].get('contacts'))
+                                  if c['host_class'] == 'PaintObj' and c['host'] == host and c['who'] == 'player')
+            self._paint_tokens = tokens if len(tokens) == 1 else set()
+        return self._paint_tokens
+
     def _paint_contact(self, f, contact):
         if self._paint_floor is None or self._start is None or not self.verdict.geometry_replay:
             return False
@@ -644,8 +666,14 @@ class Judge:
         base = tuple(float(f'{f32(f32(x)-f32(s)):.6f}') for x,s in zip(position, self._start))
         if (contact['host_class'] != 'PaintObj' or contact['who'] != 'player'
                 or contact['host'] != host or contact['other'] != 'Body'
-                or contact['other_type'] != '9' or not re.fullmatch(r'[1-9][0-9]*', contact['actor'])
-                or floor.get('host') != host or floor.get('base') != base
+                or contact['other_type'] != '9' or not re.fullmatch(r'[1-9][0-9]*', contact['actor'])):
+            return False
+        if not floor:
+            # Airborne: no floor host is logged. The actor token is the host's identity; it must be the
+            # one the grounded frames of this run bound to the exported static placement.
+            if self.rows[f].get('ground') != '0' or contact['actor'] not in self._grounded_paint_tokens(host, base):
+                return False
+        elif (floor.get('host') != host or floor.get('base') != base
                 or floor.get('moving') != '0' or floor.get('parts_flag') == '0'):
             return False
         if contact['kind'] in ('r','p'):
@@ -869,6 +897,8 @@ def self_check():
     check_rocket()
     from coin_chameleon import self_check as check_coins
     check_coins()
+    from kick_stone import self_check as check_stone
+    check_stone()
     _check_candlestands()
 
     def rows(count=6, **overrides):
