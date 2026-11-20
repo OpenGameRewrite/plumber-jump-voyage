@@ -155,6 +155,7 @@ pub fn install(app: &mut App, driver: Driver) {
                     for source in &mut mesh.rotate_parts {
                         source.tick();
                     }
+                    mesh.tick_conveyors();
                     mesh.update_key_move_collision();
                 }
                 d.finished += 1;

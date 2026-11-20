@@ -221,7 +221,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, cap_samples=None, cap_collider=None, cap_sources=None, cap_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, conveyors=None, conveyor_steps=None, conveyor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, cap_samples=None, cap_collider=None, cap_sources=None, cap_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -284,6 +284,9 @@ class Judge:
         from rotate_parts import Evidence as RotorEvidence
         self._rotor = RotorEvidence(geometry, rotors, rotor_messages, press_mario, rolling, rewrite_rows, game_rows, preroll or {}, start)
         self._rotor_hosts = {r['host'] for r in (geometry or {}).get('rotate_parts', [])} if rotors else set()
+        from conveyor_parts import Evidence as ConveyorEvidence
+        self._conveyor = ConveyorEvidence(geometry, conveyors, conveyor_steps, conveyor_messages, press_mario, rolling, rewrite_rows, game_rows, preroll or {}, start)
+        self._conveyor_hosts = {r['host'] for r in (geometry or {}).get('conveyor_parts', [])} if conveyors else set()
         from external_force import Evidence as ForceEvidence
         self._force = ForceEvidence(geometry, force_areas, press_mario, rewrite_rows, game_rows, preroll or {})
         force_frames = {int(r['frame']) for r in (force_areas or []) if r.get('kind') == 'call' and int(r['frame']) >= 0}
@@ -707,6 +710,10 @@ class Judge:
                 if self._rotor.surface(f,surface,host):
                     continue
                 return False, "rotor lacks independently reproduced phase/identity evidence"
+            if host['host'] in self._conveyor_hosts:
+                if self._conveyor.surface(f,surface,host):
+                    continue
+                return False, "conveyor lacks independently reproduced offset/identity evidence"
             if self._geysers.floor(f, host, self._start):
                 continue
             if host["moving"] == "1" or host["parts_flag"] == "0":
@@ -727,6 +734,8 @@ class Judge:
                 return False
             if any(self._rotor.surface(f,surface,self._hosts.get(f,{}).get(surface,{})) for surface in surfaces):
                 v.accept(f, f"exported {self._rotor.id} " + label, "independent local-axis source, exact current/previous collision matrices and registered raw KCL identity")
+            elif any(self._conveyor.surface(f,surface,self._hosts.get(f,{}).get(surface,{})) for surface in surfaces):
+                v.accept(f, f"exported {self._conveyor.id} conveyor " + label, "independent ConveyerMapParts offset source, exact current/previous step collision matrices and registered raw KCL identity")
             elif any(self._press.surface(f, surface, self._hosts.get(f, {}).get(surface, {})) for surface in surfaces):
                 v.accept(f, "exported KeyMoveMapParts " + label,
                          "placement-bound moving raw KCL with independently verified phase and reproduced collider flags")
@@ -748,6 +757,9 @@ class Judge:
             return
         if self._rotor.riding(f):
             v.accept(f, f"exported {self._rotor.id} floor", "verified rotating source and raw support identity")
+            return
+        if self._conveyor.riding(f):
+            v.accept(f, f"exported {self._conveyor.id} conveyor floor", "verified conveyor source and raw support identity")
             return
         landing = prev is not None and not prev.get("floor_y") and bool(row and row.get("floor_y"))
         if landing:
@@ -799,6 +811,9 @@ class Judge:
             return
         if self._rotor.riding(f):
             v.accept(f, f"exported {self._rotor.id} carry", "verified rotating source and raw support identity")
+            return
+        if self._conveyor.riding(f):
+            v.accept(f, f"exported {self._conveyor.id} conveyor carry", "verified conveyor source and raw support identity")
             return
         flags = self._flags(f)
         tilt = self._normal_off_vertical(f)

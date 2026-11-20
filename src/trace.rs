@@ -1449,7 +1449,7 @@ impl TraceFile {
                     .map_err(|e| e.to_string())?,
             );
         }
-        for extension in ["press_parts.csv", "rotors.csv"] {
+        for extension in ["press_parts.csv", "rotors.csv", "conveyors.csv"] {
             let side = std::path::Path::new(path).with_extension(extension);
             if side.exists() {
                 let text = std::fs::read_to_string(side).map_err(|e| e.to_string())?;
@@ -1477,6 +1477,18 @@ impl TraceFile {
                         .collect();
                     let frame = row.get("frame").ok_or("part frame")?.clone();
                     if first.as_ref().is_some_and(|f| f != &frame) {
+                        // A conveyor's second sample tells whether its first one was taken after
+                        // the host's update of its own frame (the same offset twice).
+                        if extension == "conveyors.csv"
+                            && let Some(seed) = trace
+                                .press_seed
+                                .iter_mut()
+                                .rev()
+                                .find(|r| r.get("id") == row.get("id"))
+                            && let Some(next) = row.get("offset_bits")
+                        {
+                            seed.insert("second_offset_bits".into(), next.clone());
+                        }
                         break;
                     }
                     first = Some(frame);

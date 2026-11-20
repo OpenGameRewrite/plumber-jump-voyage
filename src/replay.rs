@@ -669,6 +669,7 @@ fn tick_geysers(course: &mut Course, player: &Player) {
         for part in &mut mesh.rotate_parts {
             part.tick();
         }
+        mesh.tick_conveyors();
         mesh.update_key_move_collision();
         let feet = mesh.to_game_vec(player.position_cm());
         for bar in &mut mesh.grab_ceil_bars {
@@ -748,7 +749,11 @@ pub(crate) fn seed_key_move_parts(
             }
             part.seed(row)?;
         }
-        for part in &mut mesh.rotate_parts {
+        for part in mesh
+            .rotate_parts
+            .iter_mut()
+            .filter(|p| p.axis != crate::movement::rotate_parts::DRIVEN)
+        {
             let row = game
                 .press_seed
                 .iter()
@@ -760,6 +765,20 @@ pub(crate) fn seed_key_move_parts(
                 return Err("rotor preroll mismatch".into());
             }
             part.seed(row)?;
+        }
+        let hosts: Vec<String> = mesh.conveyors.iter().map(|c| c.id.clone()).collect();
+        for id in hosts {
+            let row = game
+                .press_seed
+                .iter()
+                .find(|r| r.get("id") == Some(&id))
+                .ok_or("missing conveyor seed")?;
+            if row.get("frame").and_then(|s| s.parse::<i64>().ok())
+                != Some(-(script.preroll_frames() as i64))
+            {
+                return Err("conveyor preroll mismatch".into());
+            }
+            mesh.seed_conveyor(row)?;
         }
         mesh.update_key_move_collision();
     }

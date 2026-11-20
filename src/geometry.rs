@@ -140,6 +140,8 @@ pub struct TriangleMesh {
     pub key_move_parts: Vec<crate::movement::key_move_parts::KeyMovePart>,
     pub force_areas: Vec<crate::movement::external_velocity::ForceArea>,
     pub rotate_parts: Vec<crate::movement::rotate_parts::RotatePart>,
+    /// Hosts of the driven step parts held in `rotate_parts` (`ConveyerMapParts`).
+    pub conveyors: Vec<crate::movement::conveyor_parts::ConveyorHost>,
     pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
     pub pukupuku_look: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
@@ -300,8 +302,13 @@ impl TriangleMesh {
                 false
             }
         });
+        self.conveyors.retain(|c| ids.contains(&c.id));
+        let hosts: Vec<String> = self.conveyors.iter().map(|c| format!("{}/", c.id)).collect();
         self.rotate_parts.retain(|s| {
-            if ids.contains(&s.id) {
+            if ids.contains(&s.id)
+                || s.axis == crate::movement::rotate_parts::DRIVEN
+                    && hosts.iter().any(|h| s.id.starts_with(h.as_str()))
+            {
                 true
             } else {
                 self.inactive_source_parts.push(s.part);
@@ -759,6 +766,52 @@ impl TriangleMesh {
                     previous: mesh.parts[part].clone(),
                 });
         }
+        for source in root["conveyor_parts"].as_array().into_iter().flatten() {
+            let id = source["id"].as_str().ok_or("conveyor id")?;
+            if source["class"] != "ConveyerMapParts" {
+                return Err("unsupported conveyor class".into());
+            }
+            let objects = root["objects"].as_array().ok_or("conveyor objects")?;
+            let count = source["steps"].as_u64().ok_or("conveyor steps")? as usize;
+            let mut steps = Vec::new();
+            for i in 0..count {
+                let step_id = format!("{id}/{i}");
+                let object = objects
+                    .iter()
+                    .position(|o| o["id"] == step_id.as_str())
+                    .ok_or("conveyor step object")?;
+                let part = object_part[object].ok_or("conveyor step raw KCL")? as usize;
+                steps.push(mesh.rotate_parts.len());
+                mesh.rotate_parts
+                    .push(crate::movement::rotate_parts::RotatePart {
+                        id: step_id,
+                        part,
+                        axis: crate::movement::rotate_parts::DRIVEN,
+                        position: Vec3::from_array(
+                            floats(objects[object].get("translate")).ok_or("step position")?,
+                        ),
+                        speed: 0.,
+                        executions: 0,
+                        quat: bevy::prelude::Quat::IDENTITY,
+                        previous: mesh.parts[part].clone(),
+                    });
+            }
+            let keys = source["keys"]
+                .as_array()
+                .ok_or("conveyor keys")?
+                .iter()
+                .map(|k| floats(Some(k)).map(Vec3::from_array).ok_or("conveyor key"))
+                .collect::<Result<Vec<_>, _>>()?;
+            mesh.conveyors
+                .push(crate::movement::conveyor_parts::ConveyorHost::new(
+                    id.into(),
+                    steps,
+                    source["speed"].as_f64().ok_or("conveyor speed")? as f32,
+                    source["interval"].as_f64().ok_or("conveyor interval")? as f32,
+                    source["start_rate"].as_f64().ok_or("conveyor start rate")? as f32,
+                    &keys,
+                ));
+        }
         mesh.moving_triangles = mesh
             .triangles
             .iter()
@@ -775,6 +828,22 @@ impl TriangleMesh {
             })
             .collect();
         Ok(mesh)
+    }
+
+    /// `ConveyerMapParts::exeMove` of every conveyor: the steps follow the advanced offset.
+    pub fn tick_conveyors(&mut self) {
+        for host in &mut self.conveyors {
+            host.tick(&mut self.rotate_parts, &mut self.disabled_parts);
+        }
+    }
+
+    pub fn seed_conveyor(&mut self, row: &HashMap<String, String>) -> Result<(), String> {
+        let host = self
+            .conveyors
+            .iter_mut()
+            .find(|c| row.get("id") == Some(&c.id))
+            .ok_or("missing conveyor seed")?;
+        host.seed(row, &mut self.rotate_parts, &mut self.disabled_parts)
     }
 
     pub fn update_key_move_collision(&mut self) {

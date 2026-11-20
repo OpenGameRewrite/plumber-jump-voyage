@@ -4,11 +4,15 @@ use super::{pose_math, *};
 use crate::prism::{PartFrame, transform_point};
 use std::collections::HashMap;
 
+/// `RotatePart::axis` of a part driven by a host actor.
+pub const DRIVEN: u8 = 2;
+
 #[derive(Clone, Debug)]
 pub struct RotatePart {
     pub id: String,
     pub part: usize,
-    /// `RotateAxis` of the placement: 0 turns about local X, 1 about local Y (a turntable).
+    /// `RotateAxis` of the placement: 0 turns about local X, 1 about local Y (a turntable). 2 marks a
+    /// part whose pose a host actor sets (a `ConveyerStep`, see `conveyor_parts.rs`): it never turns.
     pub axis: u8,
     pub position: Vec3,
     pub speed: f32,
@@ -49,6 +53,9 @@ impl RotatePart {
     /// operation order of the stored quaternion is the one of the original, not an accumulated
     /// angle.
     pub fn tick(&mut self) {
+        if self.axis == DRIVEN {
+            return;
+        }
         self.previous = self.frame();
         let half = ((self.speed / 100.) * pose_math::DEGREES_TO_RADIANS) * 0.5;
         let mut s = pose_math::sinf(half);
@@ -74,6 +81,20 @@ impl RotatePart {
             Quat::from_xyzw(0., inv * turned, 0., inv * w)
         };
         self.executions += 1;
+    }
+    /// A driven part moves to the pose its host computed this frame; the last pose becomes the
+    /// previous collision matrix.
+    pub fn drive(&mut self, position: Vec3) {
+        self.previous = self.frame();
+        self.position = position;
+        self.executions += 1;
+    }
+    /// A driven part at a recorded sample: the previous and the current collision position.
+    pub fn place(&mut self, previous: Vec3, current: Vec3) {
+        self.position = previous;
+        self.previous = self.frame();
+        self.position = current;
+        self.executions = 1;
     }
     pub fn seed(&mut self, row: &HashMap<String, String>) -> Result<(), String> {
         let get = |k: &str| row.get(k).map(String::as_str).ok_or("rotor seed field");
@@ -133,6 +154,9 @@ impl RotatePart {
         Ok(())
     }
     pub fn diagnostic(&self) -> String {
+        if self.axis == DRIVEN {
+            return format!("{}/Step/{}", self.id, self.executions);
+        }
         let read_back = pose_math::to_quat(pose_math::quat_to_axes(self.quat));
         format!(
             "{}/Rotate/{}/{}",

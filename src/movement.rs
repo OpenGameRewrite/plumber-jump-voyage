@@ -256,6 +256,7 @@ mod grab_ceil_find;
 mod ground;
 mod ground_inertia;
 mod grow_seed;
+pub mod conveyor_parts;
 pub mod key_move_parts;
 pub mod kick_stone;
 mod on_ground;
@@ -3466,6 +3467,7 @@ impl Player {
                     m.rotate_parts
                         .iter()
                         .map(|p| p.diagnostic())
+                        .chain(m.conveyors.iter().map(|c| c.diagnostic()))
                         .collect::<Vec<_>>()
                         .join("|")
                 })
@@ -7064,6 +7066,7 @@ pub fn self_check() {
     joint_controls::self_check();
     external_velocity::self_check();
     rotate_parts::self_check();
+    conveyor_parts::self_check();
     press::self_check();
     force_run::self_check();
     rocket_flower::self_check();
