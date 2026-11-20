@@ -134,7 +134,7 @@ def main():
             moved = list(tri)
             for corner in range(3):
                 for k in range(3):
-                    moved[corner * 3 + k] = round(tri[corner * 3 + k] + delta[k], 3)
+                    moved[corner * 3 + k] = tri[corner * 3 + k] + delta[k]
             moved[13] = first + i
             new_triangles.append(moved)
     geometry['objects'] = objects + new_objects
