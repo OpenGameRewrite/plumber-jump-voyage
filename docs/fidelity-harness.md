@@ -508,12 +508,15 @@ row remains frame 0, and `--bits` numbers the idle steps `-N` through `-1`.
 Zero skips those steps. The count must fit an unsigned 32-bit integer.
 `relax N` replays the probe's `PH_RELAX`: when the stage's default entry lies in a 2D area the
 first update after the placement runs the 2D to 3D dimension change, which moves the player, so the
-probe lets N updates pass (60 in the recordings) and places the player again. The replay does the
+probe lets updates pass (60 in the recordings) and places the player again. The replay does the
 same on the stage as seeded and keeps only what the second placement does not reset: the saved
 ground force of `PlayerExternalVelocity` (`rs::resetCollision` 0x565ce8 and `rs::resetMarioDynamics`
-0x56b680 touch the collider and the cap dynamics). On a moving belt that force is the belt's speed,
-so the first airborne updates of the recorded start are still carried by it. The probe relaxes by
-itself; the directive only tells the replay.
+0x56b680 touch the collider and the cap dynamics) and the external velocity of a wind that blew
+meanwhile (`ground_inertia.rs`). On a moving belt that force is the belt's speed, so the first airborne
+updates of the recorded start are still carried by it. The probe relaxes by itself; the directive only
+tells the replay. N is the number of updates the replay's actors run before the second placement: the
+probe's 60 for an actor that ran all along (the conveyor's belt, `relax 60`), fewer for an actor the
+first placement woke up (the wind source of `wind-balcony-neutral` ran 59, see "Wind (`AirCurrent`) replay").
 `game.preroll.csv` is observation data for diagnostics and environment judging;
 the replay computes its own preroll and never injects those samples.
 
@@ -1043,6 +1046,14 @@ what the rewrite replays.
   contact, its `isHostMoved` flags and its position). Without the geometry replay
   these runs stay refused. A log from an older probe has no hosts; its entries are
   accepted by the replay alone and the report says the hosts were not verified.
+* **The balcony wind is accepted** (`tools/air_current.py`) only for the exported `SnowWorldTownStage`
+  scenario 1 `SnowWorldBalconyZone` obj265 `AirCurrent` placement (the exporter writes the zone name), the
+  Mario sensors Foot/Body/Head/Carry/HipDropKnockDown against its `Attack` sensor, and
+  `rs::SensorMsgByugoBlow`. Per frame the rule evaluates the source in f32 from the placement alone (force
+  helper 0x212fe0, rate 0x212f5c, sensor spheres, Mario's receiver 0x428810, `ExternalForceKeeper`,
+  `PlayerExternalVelocity::update`) and requires the recorded calls (sensors, order, force bits, answers,
+  sensor positions), the recorded external velocity, and the rewrite's own pose, nerve step, sensors, sends
+  and velocity to equal it. Any other `AirCurrent` contact stays refused.
 * **`floor height changed`** is accepted on the frame a fall lands (the previous floor
   sample is older than the previous frame: the intended drop), refused when the floor
   under a stationary player changes height on a flat floor (a moving floor), and
@@ -1911,24 +1922,52 @@ entry inside a 2D area runs the 2D to 3D change in the first update after the te
 player. The local probe therefore sets the current world from `WorldList::tryFindWorldIndexByStageName`
 for a sub stage and places the player twice (the second time 60 updates after the first; the scenario states it as `relax 60`).
 
-### Open item: wind (`AirCurrent`) replay
+### Wind (`AirCurrent`) replay
 
 The wind of WindBlowExStage, the Snow bonus rooms and Special2WorldLava is the `AirCurrent` actor, which
 the decompilation does not contain (it is `nullptr` in `ProjectActorFactory`; the executable's own symbols
-start at 0x21297c). Static reading so far: `AirCurrent` sends `rs::sendMsgByugoBlow` (0x57ef20) from its
-attack sensor (0x212e40, `isSensorEnemyAttack`, blow power taken from the nerve rate) and, through
-`sendBlowMsgToCollision` (0x213724), five arrows to collision parts; Mario's
-`ExternalForceKeeper::receiveMsg` (0x551e40) consumes the message and `PlayerExternalVelocity::update`
-(0x440dec) scales it by 0.275. The placement of WindBlowExStage obj82 is periodic (BlowFrame 120,
-WaitFrame 120). The waterfall `ExtForceArea` is a different path (`rs::calcExtForceAreaVelocity`).
+start at 0x21297c). `src/movement/air_current.rs` runs its nerve chain (Sleep, BlowSign/BlowStart, Blow,
+BlowEnd, Wait: 0x213270..0x213b18) and force (`attackSensor` 0x212e40, helper 0x212fe0, rate 0x212f5c) from
+the placement; `external_velocity.rs` is the receiving side: `ExternalForceKeeper::receiveMsg` (0x551e40,
+componentwise extrema, force = min + max) and `PlayerExternalVelocity::update` (0x440dec, `v * drag +
+force * 0.275`, drag 0.95 on the ground and 0.955 in the air), added as `(last + external) + area` to the
+velocity in `updateCollider` (0x42104c). `PlayerSeCtrl::update` (0x463064) holds no `FallWhoosh_loop` while
+`PlayerExternalVelocity::isExistForce` (0x4412a8) is true. `tools/export-air-currents.py` adds the placement
+(zone translation composed, zone name) to a geometry export. The waterfall `ExtForceArea` is a different
+path (`rs::calcExtForceAreaVelocity`) in the same update function. Not ported: a switched or key-moved
+source, the collision arrows (`sendBlowMsgToCollision` 0x213724) and the actor's clipping; the BlowEnd
+and Wait phases run from the source but no recording covers them.
 
 The local recording `wind-balcony-neutral` samples the continuous vertical current from
 `SnowWorldBalconyZone` obj265 in `SnowWorldTownStage` scenario 1. With neutral input, the player
 was airborne throughout the 330 measured frames. Two repetitions agree on the `FIDWIND` host samples
 and `FIDWINDCALL` message evidence. The first preroll sample has an overflow from the probe's
-placement settling period. The remaining samples have complete wind-call coverage.
-
+placement settling period (121 calls dropped). The remaining samples have complete wind-call coverage.
 A separate diagnostic at `WindBlowExStage` obj119 covers a full 121-sample Blow phase and the
 following BlowEnd. The player falls off the tower and the stage reloads, leaving a frame-counter
-gap. This diagnostic remains outside the dashboard. Wind sensor contact still causes the
-environment rule to refuse the balcony recording.
+gap. This diagnostic remains outside the dashboard.
+
+Timing of the probe's wind rows. A sample's calls come from the sensor phase of the previous frame: they read
+Mario's pose of the previous row and the nerve step one below the sampled one, and the rewrite's row holds that
+step (the recorded step at frame f is the rewrite's `wind=` step plus one). The probe's counters fix this
+independently of the trajectory: the first sample's buffer holds 64 kept plus 121 dropped calls = 5 sensors x
+37 phases, one per Blow step 1..37, and the sampled step is 38.
+
+`relax 59` for the wind scenario. [V] The source chain takes Sleep 1 + BlowStart 21 updates before Blow
+(0x213270, 0x213550), so 37 sending phases mean the actor ran 22 + 37 = 59 updates before the first
+sample's flush; `relax N` is the replay's updates before the second placement, hence 59 (the first sample's
+own update is the 60th, step 38). [V] The probe's loop (`++g.relax >= 60` in `afterMovement`) places the
+player 60 updates after the first placement and the first sample is the next update (`FIDP upd=295`), so
+the player ran 61 updates since the first placement and the actor 60 (counting the first sample's).
+[I] The missing update is the first one after the first placement, which runs the 2D to 3D dimension change
+(`FID teleport relax (2D keeper busy)`), and the wind source, clipped far from the old position, was not
+running before the placement; no probe row covers those updates. The same reading gives the conveyor's
+`relax 60`: the belt stood in front of the spawn and ran during the whole relaxing, and its recorded state
+is seeded at the second placement, so no count is derived from it (the relaxing only keeps the saved
+ground force). The wind scenario is not fitted to its trace: the count comes from the probe's call counter
+and the chain lengths, and `tools/air_current.py` refuses a replay whose nerve step differs (relax 58 and
+60 are refused, checked). What stays open is why the first update is the one the actor misses.
+
+Recorded-trace result: the local run passes free and lockstep (0 failing columns). The `quat_bits`
+column of `game.winds.csv` is one ulp off the quaternion the pose keeper holds when the helper runs (the
+front vector derived from the placement's is the recorded one), so it is not compared.
