@@ -247,7 +247,15 @@ fn keys_place_steps_end_to_end() {
     let (first, exists) = host.step_pose(0., 0);
     assert_eq!((first.z, exists), (-14100., true));
     assert_eq!(host.step_pose(0., 2).0.z, -15700.);
-    let (hidden, exists) = host.step_pose(2000., 2);
+    // `setTransByCoord` hides a step only past the total distance (`newCoord > total`).
+    let (edge, exists) = host.step_pose(2000., 2);
+    assert_eq!((edge.z, exists), (-17700., true));
+    let (hidden, exists) = host.step_pose(2100., 2);
     assert!(!exists);
     assert_eq!(hidden.z, -17700.);
+    // A step wraps from the end of the belt to its start at `PartsInterval * count`.
+    assert_eq!(
+        (host.step_coord(798., 4), host.step_coord(802., 4)),
+        (3998., 2.)
+    );
 }
