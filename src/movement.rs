@@ -260,6 +260,7 @@ mod ground_inertia;
 mod grow_seed;
 pub mod key_move_parts;
 pub mod kick_stone;
+pub mod killer;
 mod on_ground;
 mod press;
 pub mod pukupuku;
@@ -1224,6 +1225,8 @@ pub struct Player {
     /// `PlayerCounterForceRun`: set by RocketFlower equipment.
     force_run: force_run::ForceRun,
     pub rocket: rocket_flower::RocketFlowers,
+    /// The Killer launchers of the stage, their Killers and the switches that start them.
+    pub killers: killer::Killers,
     pub trampolines: Vec<cap_trampoline::Trampoline>,
     pub signboards: Vec<sign_board::SignBoard>,
     pub cap_hangers: Vec<cap_hanger::CapHanger>,
@@ -1597,6 +1600,7 @@ impl Default for Player {
             stage_carry: None,
             force_run: force_run::ForceRun::default(),
             rocket: default(),
+            killers: default(),
             trampolines: default(),
             signboards: default(),
             cap_hangers: default(),
@@ -3582,6 +3586,7 @@ impl Player {
         // frame starts now.
         // The cap updates before the player does, within the same frame.
         if advance_sources {
+            self.tick_killers(scene);
             self.tick_rocket_flowers(scene);
         }
         self.update_cap(&o, scene);
@@ -4038,6 +4043,7 @@ impl Player {
             && self.age > 1;
         let actor = self.pose_matrix();
         let sensors = self.rocket_look_sensors(scene.look_sensors(), scene.mesh.as_deref());
+        let killer_sensors = self.killer_sensor_count(scene.mesh.as_deref());
         if scene
             .mesh
             .as_ref()
@@ -4068,9 +4074,17 @@ impl Player {
         }) || (self.carry.stone.is_some()
             && (self.is_carry() || self.carry.held_during_sensor_phase))
         {
-            self.look.invalidate_source_sensor(sensors.len() - 1);
+            self.look
+                .invalidate_source_sensor(sensors.len() - 1 - killer_sensors);
         }
-        self.look.step(&actor, enabled, &sensors);
+        for (i, killer) in self.killers.sensors().iter().enumerate() {
+            if !killer.alive {
+                self.look
+                    .invalidate_sensor(sensors.len() - killer_sensors + i);
+            }
+        }
+        self.look
+            .step_with_moving(&actor, enabled, &sensors, sensors.len() - killer_sensors);
         self.run_state_frame();
         self.update_joint_controls();
     }
@@ -7074,6 +7088,7 @@ pub fn self_check() {
     look_at::self_check();
     damage::self_check();
     key_move_parts::self_check();
+    killer::self_check();
     ground_inertia::self_check();
     joint_controls::self_check();
     external_velocity::self_check();

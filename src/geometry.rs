@@ -144,6 +144,10 @@ pub struct TriangleMesh {
     pub conveyors: Vec<crate::movement::conveyor_parts::ConveyorHost>,
     /// Placed `AirCurrent` wind sources (the export's `air_currents`), absolute stage centimetres.
     pub air_currents: Vec<crate::movement::air_current::AirCurrent>,
+    /// Placed switch-started `KillerLauncher`s and the `SwitchKeepOnArea`s that start them
+    /// (the export's `killer_launchers` and `switch_areas`), absolute stage centimetres.
+    pub killer_launchers: Vec<crate::movement::killer::LauncherSource>,
+    pub switch_areas: Vec<crate::movement::killer::SwitchAreaSource>,
     pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
     pub pukupuku_look: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
@@ -841,6 +845,47 @@ impl TriangleMesh {
                     whole("delay_frame")?,
                     source["force_calc"].as_bool().ok_or("air current force")?,
                 ));
+        }
+        for source in root["killer_launchers"].as_array().into_iter().flatten() {
+            let whole = |key: &str| {
+                source[key]
+                    .as_i64()
+                    .and_then(|v| i32::try_from(v).ok())
+                    .ok_or(format!("killer launcher {key}"))
+            };
+            mesh.killer_launchers
+                .push(crate::movement::killer::LauncherSource {
+                    matrix: floats::<12>(source.get("matrix")).ok_or("killer launcher matrix")?,
+                    wait_frame: whole("wait_frame")?,
+                    alive_frame: whole("alive_frame")?,
+                    delay_frame: whole("delay_frame")?,
+                    switch: source["switch"]
+                        .as_str()
+                        .ok_or("killer launcher switch")?
+                        .into(),
+                });
+        }
+        for source in root["switch_areas"].as_array().into_iter().flatten() {
+            let shape = source["shape"]
+                .as_str()
+                .and_then(crate::water::Shape::from_model)
+                .ok_or("switch area shape")?;
+            mesh.switch_areas
+                .push(crate::movement::killer::SwitchAreaSource {
+                    area: crate::water::Area {
+                        shape,
+                        matrix: floats::<12>(source.get("matrix")).ok_or("switch area matrix")?,
+                        scale: Vec3::from_array(
+                            floats::<3>(source.get("scale")).ok_or("switch area scale")?,
+                        ),
+                        priority: -1,
+                        ignore: false,
+                    },
+                    switch: source["switch"]
+                        .as_str()
+                        .ok_or("switch area switch")?
+                        .into(),
+                });
         }
         mesh.moving_triangles = mesh
             .triangles
