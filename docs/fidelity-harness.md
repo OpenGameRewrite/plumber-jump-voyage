@@ -1911,7 +1911,7 @@ entry inside a 2D area runs the 2D to 3D change in the first update after the te
 player. The local probe therefore sets the current world from `WorldList::tryFindWorldIndexByStageName`
 for a sub stage and places the player twice (the second time 60 updates after the first; the scenario states it as `relax 60`).
 
-### Open item: wind (`AirCurrent`) is not recorded
+### Open item: wind (`AirCurrent`) replay
 
 The wind of WindBlowExStage, the Snow bonus rooms and Special2WorldLava is the `AirCurrent` actor, which
 the decompilation does not contain (it is `nullptr` in `ProjectActorFactory`; the executable's own symbols
@@ -1922,9 +1922,13 @@ attack sensor (0x212e40, `isSensorEnemyAttack`, blow power taken from the nerve 
 (0x440dec) scales it by 0.275. The placement of WindBlowExStage obj82 is periodic (BlowFrame 120,
 WaitFrame 120). The waterfall `ExtForceArea` is a different path (`rs::calcExtForceAreaVelocity`).
 
-No wind scenario was recorded: the five-recording budget of the conveyor task was spent on the belt
-(a crash of the sub-stage's coin archive, two spawn displacements of the 2D entry, one effect left
-over from the placement and the promoted run). The local probe already has the passive observer
-(`FIDWIND` host rows and `FIDWINDCALL` for every `rs::sendMsgByugoBlow` call, nerve vtables of the
-blow cycle); a wind site needs one recording of Mario standing in a blown area, then a port of the
-message, its power and the nerve phases from that evidence.
+The local recording `wind-balcony-neutral` samples the continuous vertical current from
+`SnowWorldBalconyZone` obj265 in `SnowWorldTownStage` scenario 1. With neutral input, the player
+was airborne throughout the 330 measured frames. Two repetitions agree on the `FIDWIND` host samples
+and `FIDWINDCALL` message evidence. The first preroll sample has an overflow from the probe's
+placement settling period. The remaining samples have complete wind-call coverage.
+
+A separate diagnostic at `WindBlowExStage` obj119 covers a full 121-sample Blow phase and the
+following BlowEnd. The player falls off the tower and the stage reloads, leaving a frame-counter
+gap. This diagnostic remains outside the dashboard. Wind sensor contact still causes the
+environment rule to refuse the balcony recording.
