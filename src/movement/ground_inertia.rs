@@ -66,12 +66,9 @@ impl Player {
         self.ground_inertia
             .update(self.is_on_ground_by(self.units_per_frame()), force);
     }
-    /// What a teleport leaves of the previous standing: the probe's placement resets the collision
-    /// and the cap dynamics (`rs::resetCollision` 0x565ce8, `rs::resetMarioDynamics` 0x56b680) and
-    /// nothing of `PlayerExternalVelocity`, so the saved ground force, the external and the area
-    /// velocity (a wind that blew during the relaxing) and the forces not yet applied survive it.
-    /// The collider's contact does not: the first update after the placement reads no ground
-    /// (`Player::start_in_air`), whether the relaxing ended on a belt or in a current.
+    /// The probe's placement preserves the `PlayerExternalVelocity` accumulators and pending
+    /// forces. It resets collision and joint dynamics (0x565ce8 and 0x56b680). The old ground
+    /// result is invalidated at 0x42fe8c. See `Player::start_in_air`.
     pub fn inertia_kept_by_teleport(&self) -> KeptInertia {
         KeptInertia {
             ground: self.ground_inertia.clone(),

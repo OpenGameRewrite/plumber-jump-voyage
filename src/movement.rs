@@ -2193,10 +2193,10 @@ impl Player {
         });
         player
     }
-    /// The probe's teleport put the player in the air, over no floor the collider reaches (the
-    /// collision was reset with it): no ground contact is counted when the first step runs, so
-    /// the fall judge counts that step as one without ground (recorded: the fall state is
-    /// chosen in the fifth step, not the sixth).
+    /// Start the next update with no ground contact. The probe's placement calls
+    /// `rs::resetCollision` (0x565ce8), which invalidates the ground result in
+    /// `PlayerCollider::onInvalidate` (0x42fe8c). `rs::isOnGround` reads that result
+    /// at 0x5687b0. The airborne recording enters Fall on the fifth step.
     pub fn start_in_air(&mut self) {
         self.grounded = false;
         self.ground_contact = 0;

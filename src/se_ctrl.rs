@@ -15,7 +15,9 @@
 //! - **Rolling** starts `Roll` each time the rolling clip passes its sixth frame.
 //! - **Falling fast** holds `FallWhoosh_loop` every frame the vertical speed is
 //!   30 units a frame down or more, counting the frames it has held, unless an external
-//!   force acts, the player is dead or in water (`PlayerSeCtrl::update` 0x463064, 0x4640f4..0x464128).
+//!   force acts, the player is dead or in water. `PlayerSeCtrl::update` (0x462b58)
+//!   calls `isExistForce` (0x4412a8) at 0x4640f4 and clears the loop counter at
+//!   0x464178 when the result is true.
 //! - **The water around the camera**: a sound when the camera dips into the water or comes
 //!   out of it, and an ambience held every frame the camera and the player are both under.
 //! - **The swim stroke** (`SwimStand`) sounds when its clip begins or loops (its frame went

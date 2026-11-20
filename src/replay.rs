@@ -1042,8 +1042,8 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         }
         player = placed_player(script, &options, &course)?;
         player.keep_inertia_through_teleport(kept);
-        // The second placement reset the collision too: the first update reads no ground contact,
-        // over a floor within reach or not (`rs::resetCollision` 0x565ce8).
+        // The second placement invalidates the previous ground result (`rs::resetCollision`
+        // 0x565ce8, `PlayerCollider::onInvalidate` 0x42fe8c), so the next ground query starts clear.
         player.start_in_air();
     }
     let floor = options

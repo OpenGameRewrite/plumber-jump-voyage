@@ -36,8 +36,8 @@ pin this independently of the trajectory: the first sample's buffer (kept + drop
 (one per sensor Mario overlaps) for every phase from Blow step 1 up to the step before the sampled one, so the
 sampled step is that count plus one; `verify` refuses a recording whose counters say otherwise. The nerve chain's
 length before Blow (Sleep 1 + BlowStart 21 updates, 0x213270/0x213550) turns that count into the number of
-updates the actor ran before the sample, which is what the replay's `relax` has to reproduce (see
-docs/fidelity-harness.md).
+updates the actor ran before the sample. The replay's `relax` is calibrated to the step counter
+for this recording. The mapping to the probe's settle loop is [I] (see docs/fidelity-harness.md).
 """
 import math
 import struct
@@ -45,8 +45,9 @@ import struct
 STAGE, SCENARIO = 'SnowWorldTownStage', 1
 ZONE_NAME, ZONE_ID, ID = 'SnowWorldBalconyZone', 'obj534', 'obj265'
 HOST_NAME = '気流発生オブジェ'
-# Mario's sensors in registry order: name, offset up from the actor, radius (PlayerActorHakoniwa InitSensor),
-# and whether `receiveMsg` answers true (the PlayerAttack sensors are refused before the message is looked at).
+# Registry order and fields Name, Y (defaults to zero), Radius in InitSensor.byml inside
+# romfs/ObjectData/PlayerActorHakoniwa.szs. The boolean is the receiveMsg answer
+# for this setup (PlayerAttack sensors are refused at 0x428844).
 SENSORS = (('Foot', 40., 40., True), ('Body', 75., 50., True), ('Head', 110., 40., True),
            ('Carry', 100., 130., False), ('HipDropKnockDown', 0., 150., False))
 # Sensors the rewrite evaluates (the two attack sensors only ever answer false).
@@ -54,6 +55,7 @@ NATIVE_SENSORS = SENSORS[:3]
 # States in which receiveMsg resets the external velocity and answers false instead (0x428810).
 REFUSING_STATES = ('Dead', 'Bind', 'Hack', 'Demo', 'Abyss')
 MESSAGE = 'rs::SensorMsgByugoBlow'
+# PlayerExternalVelocity constructor 0x440b84, drag at 0x440bb4 and sensitivity at 0x440be8.
 SENSITIVITY, GROUND_DRAG, AIR_DRAG = 0.275, 0.95, 0.955
 
 

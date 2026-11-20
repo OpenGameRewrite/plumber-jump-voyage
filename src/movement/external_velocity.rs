@@ -5,9 +5,8 @@
 use super::*;
 use crate::water::{Area, WaterAreas};
 
-/// `PlayerExternalVelocity` constructor 0x440b84: how much of a new force enters the velocity
-/// (`+0x68` on the ground, `+0x6c` in the air) and how much of the old velocity stays (`+0x58`,
-/// `+0x5c`).
+/// `PlayerExternalVelocity` constructor 0x440b84 sets sensitivity at 0x440be8 and drag
+/// at 0x440bb4. `update` (0x440e48..0x440e68) selects ground or air fields.
 const SENSITIVITY: f32 = 0.275;
 const GROUND_DRAG: f32 = 0.95;
 const AIR_DRAG: f32 = 0.955;
@@ -52,8 +51,8 @@ impl ForceKeeper {
 
 /// The sensors of the upright 3D player that reach `PlayerExternalVelocity::receiveMsgPlayer`:
 /// `PlayerActorHakoniwa::receiveMsg` 0x428810 answers false for the PlayerAttack sensors (Carry,
-/// HipDropKnockDown: `isSensorPlayerAttack`, 0x428844). Name, offset up from the actor and radius
-/// are the PlayerActorHakoniwa InitSensor entries.
+/// HipDropKnockDown: `isSensorPlayerAttack`, 0x428844). `Name`, `Y` offset and `Radius`
+/// are from `InitSensor.byml` inside `romfs/ObjectData/PlayerActorHakoniwa.szs`.
 const BLOWN_SENSORS: [(&str, f32, f32); 3] =
     [("Foot", 40., 40.), ("Body", 75., 50.), ("Head", 110., 40.)];
 
