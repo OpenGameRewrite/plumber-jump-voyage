@@ -92,7 +92,7 @@ def replay(exe, script, game, out, geometry=None):
         command += ["--geometry", geometry]
     done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     if done.returncode != 0:
-        return (done.stderr or done.stdout).strip()[-400:]
+        return done.stderr.strip()[-400:] or done.stdout.strip()[-400:] or f"exit code {done.returncode}"
     return None
 
 
@@ -295,8 +295,11 @@ def main():
         rewrite = os.path.join(folder, "rewrite.csv")
         geometry_path = replay_geometry(script, game, geometry)
         error = replay(exe, script, game, rewrite, geometry_path)
-        if error:
-            skipped.append((name, f"the replay failed: {error}"))
+        if error is not None:
+            table.append((name, "", "EXE_ERROR", "", ""))
+            sections.append(f"\n## {name} — EXE_ERROR\n\nThe replay failed.\n\n"
+                            + "\n".join(f"> {line}" for line in error.splitlines()) + "\n")
+            print(f"{name}: EXE_ERROR ({error})", flush=True)
             continue
         try:
             report = compare.compare(game, rewrite, allow_contaminated=args.allow_contaminated, geometry_path=geometry_path)
