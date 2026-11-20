@@ -5632,9 +5632,6 @@ impl Player {
         // A throw during the pound turns it into a dive.
         if self.pre_throw > 0 || o.throw_pressed {
             self.pre_throw = 0;
-            if self.tilt > 0.1 {
-                self.facing = self.stick;
-            }
             self.dive();
             return;
         }
@@ -5721,10 +5718,10 @@ impl Player {
     }
     fn dive(&mut self) {
         self.change(Move::Dive, "HeadSlidingStart", |p| {
-            let mut h = p.v.with_y(0.).normalize_or(p.facing);
-            if p.tilt > 0.1 {
-                h = p.stick;
-            }
+            // `PlayerStateHeadSliding::exeDive`'s first step (0x46fe78..0x46fe94): the horizontal
+            // part of the velocity, or the actor's front when there is none. The stick is not read.
+            let (along, moving) = pose_math::try_normalize_or_zero(p.v.with_y(0.));
+            let h = if moving { along } else { p.facing };
             p.facing = h;
             let up = p.v.y.max(0.) + p.constants.head_sliding_jump;
             p.v = h * p.constants.head_sliding_speed + Vec3::Y * up;

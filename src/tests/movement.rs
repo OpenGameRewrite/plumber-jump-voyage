@@ -842,9 +842,14 @@ fn dive_from_pound() {
         &floor,
     );
     assert_eq!(chosen(&p), (Move::Dive, "HeadSlidingStart"));
-    // The dive's push is the state's first step.
+    // The dive's push is the state's first step. The pound start stopped the player, so the
+    // push points along the actor's front (`PlayerStateHeadSliding::exeDive` reads no stick):
+    // the stick held during the throw does not turn it.
+    let front = p.facing;
     p.step(&Orders::default(), &floor);
-    assert!(p.vel.x > 10. && p.vel.y > 0.);
+    assert!(p.vel.y > 0.);
+    assert!((p.vel.with_y(0.).normalize() - front).length() < 1e-4);
+    assert!(p.vel.x.abs() < 1e-3);
     until_landed(&mut p, Orders::default(), &floor);
     // Without the stick a dive lands like any jump: the wait state's landing
     // clip, which stops the player (the recorded `dive-no-stick`).
