@@ -1910,3 +1910,21 @@ then asks for world-dependent archives (`CoinCollectEmpty2D_<letter>`) of the wr
 entry inside a 2D area runs the 2D to 3D change in the first update after the teleport, which moves the
 player. The local probe therefore sets the current world from `WorldList::tryFindWorldIndexByStageName`
 for a sub stage and places the player twice (the second time 60 updates after the first; the scenario states it as `relax 60`).
+
+### Open item: wind (`AirCurrent`) is not recorded
+
+The wind of WindBlowExStage, the Snow bonus rooms and Special2WorldLava is the `AirCurrent` actor, which
+the decompilation does not contain (it is `nullptr` in `ProjectActorFactory`; the executable's own symbols
+start at 0x21297c). Static reading so far: `AirCurrent` sends `rs::sendMsgByugoBlow` (0x57ef20) from its
+attack sensor (0x212e40, `isSensorEnemyAttack`, blow power taken from the nerve rate) and, through
+`sendBlowMsgToCollision` (0x213724), five arrows to collision parts; Mario's
+`ExternalForceKeeper::receiveMsg` (0x551e40) consumes the message and `PlayerExternalVelocity::update`
+(0x440dec) scales it by 0.275. The placement of WindBlowExStage obj82 is periodic (BlowFrame 120,
+WaitFrame 120). The waterfall `ExtForceArea` is a different path (`rs::calcExtForceAreaVelocity`).
+
+No wind scenario was recorded: the five-recording budget of the conveyor task was spent on the belt
+(a crash of the sub-stage's coin archive, two spawn displacements of the 2D entry, one effect left
+over from the placement and the promoted run). The local probe already has the passive observer
+(`FIDWIND` host rows and `FIDWINDCALL` for every `rs::sendMsgByugoBlow` call, nerve vtables of the
+blow cycle); a wind site needs one recording of Mario standing in a blown area, then a port of the
+message, its power and the nerve phases from that evidence.
