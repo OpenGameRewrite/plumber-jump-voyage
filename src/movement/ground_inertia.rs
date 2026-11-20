@@ -16,10 +16,6 @@ pub struct KeptInertia {
     external: Vec3,
     area: Vec3,
     keeper: external_velocity::ForceKeeper,
-    /// The contact flags of the collider: a placement does not clear them either.
-    grounded: bool,
-    ground_contact: u32,
-    hop_contact: bool,
 }
 impl GroundInertia {
     fn update(&mut self, grounded: bool, force: Vec3) {
@@ -73,18 +69,15 @@ impl Player {
     /// What a teleport leaves of the previous standing: the probe's placement resets the collision
     /// and the cap dynamics (`rs::resetCollision` 0x565ce8, `rs::resetMarioDynamics` 0x56b680) and
     /// nothing of `PlayerExternalVelocity`, so the saved ground force, the external and the area
-    /// velocity (a wind that blew during the relaxing), the forces not yet applied and the
-    /// collider's contact flags (the first update after the placement reads the contact the
-    /// relaxing ended with) survive it.
+    /// velocity (a wind that blew during the relaxing) and the forces not yet applied survive it.
+    /// The collider's contact does not: the first update after the placement reads no ground
+    /// (`Player::start_in_air`), whether the relaxing ended on a belt or in a current.
     pub fn inertia_kept_by_teleport(&self) -> KeptInertia {
         KeptInertia {
             ground: self.ground_inertia.clone(),
             external: self.external_velocity,
             area: self.area_velocity,
             keeper: self.external_keeper.clone(),
-            grounded: self.grounded,
-            ground_contact: self.ground_contact,
-            hop_contact: self.hop_contact,
         }
     }
     pub fn keep_inertia_through_teleport(&mut self, kept: KeptInertia) {
@@ -92,9 +85,6 @@ impl Player {
         self.external_velocity = kept.external;
         self.area_velocity = kept.area;
         self.external_keeper = kept.keeper;
-        self.grounded = kept.grounded;
-        self.ground_contact = kept.ground_contact;
-        self.hop_contact = kept.hop_contact;
     }
     pub(super) fn feedback_ground_inertia(&mut self, front_only: bool) {
         let (_, front) = self.pose_axes();

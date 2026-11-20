@@ -513,8 +513,9 @@ same on the stage as seeded and keeps only what the second placement does not re
 ground force of `PlayerExternalVelocity` (`rs::resetCollision` 0x565ce8 and `rs::resetMarioDynamics`
 0x56b680 touch the collider and the cap dynamics) and the external velocity of a wind that blew
 meanwhile (`ground_inertia.rs`). On a moving belt that force is the belt's speed, so the first airborne
-updates of the recorded start are still carried by it. The probe relaxes by itself; the directive only
-tells the replay. N is the number of updates the replay's actors run before the second placement: the
+updates of the recorded start are still carried by it. The collider's reset also means that the first
+update after the second placement reads no ground contact (`Player::start_in_air`), whether the relaxing
+ended on a belt or in a current. The probe relaxes by itself; the directive only tells the replay. N is the number of updates the replay's actors run before the second placement: the
 probe's 60 for an actor that ran all along (the conveyor's belt, `relax 60`), fewer for an actor the
 first placement woke up (the wind source of `wind-balcony-neutral` ran 59, see "Wind (`AirCurrent`) replay").
 `game.preroll.csv` is observation data for diagnostics and environment judging;
