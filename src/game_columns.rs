@@ -166,6 +166,12 @@ pub fn collision_cell(p: &Player) -> String {
     if !p.area_source.is_empty() {
         items.push(p.area_source.clone());
     }
+    if !p.wind_update.is_empty() {
+        items.push(p.wind_update.clone());
+    }
+    if !p.wind_source.is_empty() {
+        items.push(p.wind_source.clone());
+    }
     if !p.rotate_sources.is_empty() {
         items.push(format!("rotors={}", p.rotate_sources));
         if !p.ground_source.is_empty() {

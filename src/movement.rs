@@ -230,6 +230,7 @@ pub type ControllerState = (
 );
 mod abyss;
 mod actor_collider;
+pub mod air_current;
 mod bind;
 mod cap_catch_pop;
 mod cap_sources;
@@ -1502,6 +1503,12 @@ pub struct Player {
     ground_inertia: ground_inertia::GroundInertia,
     area_velocity: Vec3,
     pub area_source: String,
+    /// `PlayerExternalVelocity::mExternalVelocity` and the `ByugoBlow` forces `ExternalForceKeeper`
+    /// collected since the last update (`external_velocity.rs`).
+    external_velocity: Vec3,
+    external_keeper: external_velocity::ForceKeeper,
+    pub wind_source: String,
+    pub wind_update: String,
     pub ground_source: String,
     /// Ground steering of the run and its pivot on the spot.
     ground: GroundMove,
@@ -1743,6 +1750,10 @@ impl Default for Player {
             ground_inertia: ground_inertia::GroundInertia::default(),
             area_velocity: Vec3::ZERO,
             area_source: String::new(),
+            external_velocity: Vec3::ZERO,
+            external_keeper: external_velocity::ForceKeeper::default(),
+            wind_source: String::new(),
+            wind_update: String::new(),
             ground_source: String::new(),
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
@@ -3485,6 +3496,7 @@ impl Player {
         }
         self.update_ground_inertia(scene);
         if advance_sources {
+            self.update_external_velocity(scene);
             self.update_area_velocity(scene);
         }
         self.death.update_judge(self.is_dead());
@@ -7065,6 +7077,7 @@ pub fn self_check() {
     ground_inertia::self_check();
     joint_controls::self_check();
     external_velocity::self_check();
+    air_current::self_check();
     rotate_parts::self_check();
     conveyor_parts::self_check();
     press::self_check();

@@ -331,11 +331,10 @@ impl Player {
             velocity = self.ground_following();
             self.ground_move = Some((Vec2::new(self.v.x, self.v.z), self.pull, velocity));
         }
-        if self.ground_inertia.last != Vec3::ZERO {
-            velocity += self.ground_inertia.last;
-        }
-        if self.area_velocity != Vec3::ZERO {
-            velocity += self.area_velocity;
+        // updateCollider adds PlayerExternalVelocity's total to the actor's velocity.
+        let external = self.total_external_velocity();
+        if external != Vec3::ZERO {
+            velocity += external;
         }
         // ObjSnapForce is a receive-side latch. Ineligible GrabCeil updates
         // retain it, including the entry message, until updateCollider consumes it.
@@ -363,7 +362,8 @@ impl Player {
         // their own numerical residuals are investigated separately.
         let absolute = (mesh.pukupuku.is_some()
             || !mesh.rotate_parts.is_empty()
-            || !mesh.kick_stones.is_empty())
+            || !mesh.kick_stones.is_empty()
+            || !mesh.air_currents.is_empty())
         .then(|| {
             let at = self
                 .stage_translation
@@ -393,7 +393,7 @@ impl Player {
         } else {
             self.v.y
         };
-        if mesh.parts.is_empty() {
+        if mesh.parts.is_empty() && mesh.air_currents.is_empty() {
             self.pos += Vec3::new(velocity.x, drop, velocity.z) * UNIT;
             if outcome.collided {
                 let correction = outcome.pos - (start + velocity);

@@ -1,6 +1,60 @@
-//! ExtForceArea and the player's area-velocity accumulator (1.0.0).
+//! `PlayerExternalVelocity` (1.0.0 0x440dec): the player's external-velocity accumulators. The
+//! `ByugoBlow` one (`ExternalForceKeeper`, fed by `AirCurrent`, see `air_current.rs`) and the
+//! ExtForceArea one (waterfalls) are two terms of the same update; the actor adds their total
+//! to its velocity in `updateCollider` (0x420f24, 0x42104c..0x42105c).
 use super::*;
 use crate::water::{Area, WaterAreas};
+
+/// `PlayerExternalVelocity` constructor 0x440b84: how much of a new force enters the velocity
+/// (`+0x68` on the ground, `+0x6c` in the air) and how much of the old velocity stays (`+0x58`,
+/// `+0x5c`).
+const SENSITIVITY: f32 = 0.275;
+const GROUND_DRAG: f32 = 0.95;
+const AIR_DRAG: f32 = 0.955;
+
+/// `ExternalForceKeeper` (0x551e40): the componentwise extrema of the forces a frame's messages
+/// brought, both starting from zero; the force is their sum (`calcForce` 0x551f64).
+#[derive(Clone, Debug, Default)]
+pub(super) struct ForceKeeper {
+    min: Vec3,
+    max: Vec3,
+    /// `PlayerExternalVelocity::mExternalForce` (+0x4c): the force the last update took from them.
+    applied: Vec3,
+}
+
+impl ForceKeeper {
+    /// `receiveMsg` for `ByugoBlow`: the compare-and-select keeps the old extremum only when it
+    /// is strictly beyond the new force.
+    fn receive(&mut self, force: Vec3) {
+        let lower = |old: f32, new: f32| if old < new { old } else { new };
+        let upper = |old: f32, new: f32| if old > new { old } else { new };
+        self.min = Vec3::new(
+            lower(self.min.x, force.x),
+            lower(self.min.y, force.y),
+            lower(self.min.z, force.z),
+        );
+        self.max = Vec3::new(
+            upper(self.max.x, force.x),
+            upper(self.max.y, force.y),
+            upper(self.max.z, force.z),
+        );
+    }
+
+    fn force(&self) -> Vec3 {
+        self.min + self.max
+    }
+
+    fn reset(&mut self) {
+        self.min = Vec3::ZERO;
+        self.max = Vec3::ZERO;
+    }
+}
+
+/// The sensors of the upright 3D player that reach `PlayerExternalVelocity::receiveMsgPlayer`:
+/// `PlayerActorHakoniwa::receiveMsg` 0x428810 answers false for the PlayerAttack sensors (Carry,
+/// HipDropKnockDown: `isSensorPlayerAttack`, 0x428844). Name, offset up from the actor and radius
+/// are the PlayerActorHakoniwa InitSensor entries.
+const BLOWN_SENSORS: [(f32, f32); 3] = [(40., 40.), (75., 50.), (110., 40.)];
 
 #[derive(Clone, Debug)]
 pub struct ForceArea {
@@ -76,16 +130,111 @@ impl ForceArea {
 }
 
 impl Player {
+    /// The player's absolute stage position, the way the area and the wind sources read it.
+    fn stage_position(&self, mesh: &crate::geometry::TriangleMesh) -> Vec3 {
+        self.stage_translation
+            .filter(|(p, _)| *p == self.pos)
+            .map_or_else(|| mesh.to_game_vec(self.position_cm()), |(_, p)| p)
+    }
+
+    /// The ground flag `PlayerExternalVelocity::update` reads (`rs::isOnGround`, 0x440e20): the
+    /// collider's contact of the last update.
+    fn external_velocity_on_ground(&self) -> bool {
+        self.is_on_ground_by(self.units_per_frame())
+    }
+
+    /// `PlayerExternalVelocity::reset` 0x441268.
+    fn reset_external_velocity(&mut self) {
+        self.external_keeper.reset();
+        self.external_velocity = Vec3::ZERO;
+        self.area_velocity = Vec3::ZERO;
+    }
+
+    /// The `AirCurrent` sensor phase of one frame: every current whose sphere overlaps one of the
+    /// player's Foot/Body/Head spheres sends `ByugoBlow` (`attackSensor` 0x212e40), and the player's
+    /// receiver (0x4289d8) feeds the force keeper. A dead or bound player resets the external
+    /// velocity instead (0x4289e8..0x428a34; the Demo, Hack and Abyss nerves have no counterpart
+    /// that could coincide with a current here).
+    pub fn receive_air_currents(&mut self, mesh: &crate::geometry::TriangleMesh) {
+        if mesh.air_currents.is_empty() {
+            return;
+        }
+        let at = self.stage_position(mesh);
+        let (up, _) = self.pose_axes();
+        let mut sent = Vec::new();
+        for source in &mesh.air_currents {
+            for (offset, radius) in BLOWN_SENSORS {
+                let Some(force) = source.blow_at(at + up * offset, radius) else {
+                    continue;
+                };
+                sent.push(format!("{}:{}", source.id, carry::hex_vec(force)));
+                if self.is_dead() || self.bound_to.is_some() {
+                    self.reset_external_velocity();
+                } else {
+                    self.external_keeper.receive(force);
+                }
+            }
+        }
+        self.wind_source = format!(
+            "wind={};windsent={}",
+            mesh.air_currents
+                .iter()
+                .map(|c| c.diagnostic())
+                .collect::<Vec<_>>()
+                .join("|"),
+            sent.join("|")
+        );
+    }
+
+    /// The `mExternalVelocity` half of `PlayerExternalVelocity::update`: the force the frame's
+    /// messages collected enters the velocity, which keeps a drag share of itself.
+    pub(super) fn update_external_velocity(&mut self, scene: &Course) {
+        let sources = scene
+            .mesh
+            .as_ref()
+            .is_some_and(|m| !m.air_currents.is_empty());
+        if !sources
+            && self.external_velocity == Vec3::ZERO
+            && self.external_keeper.force() == Vec3::ZERO
+        {
+            return;
+        }
+        let drag = if self.external_velocity_on_ground() {
+            GROUND_DRAG
+        } else {
+            AIR_DRAG
+        };
+        let force = self.external_keeper.force();
+        self.external_keeper.reset();
+        self.external_keeper.applied = force;
+        self.external_velocity = self.external_velocity * drag + force * SENSITIVITY;
+        if vector_lib::length(self.external_velocity) < 0.1 {
+            self.external_velocity = Vec3::ZERO;
+        }
+        self.wind_update = format!(
+            "windforce={};windvelocity={};windground={}",
+            carry::hex_vec(force),
+            carry::hex_vec(self.external_velocity),
+            u8::from(drag == GROUND_DRAG)
+        );
+    }
+
+    /// `mTotalVelocity` (0x440ff8..0x441028): the saved ground force, the external velocity and
+    /// the area velocity added in that order.
+    pub(super) fn total_external_velocity(&self) -> Vec3 {
+        (self.ground_inertia.last + self.external_velocity) + self.area_velocity
+    }
+
     pub(super) fn update_area_velocity(&mut self, scene: &Course) {
         self.area_source.clear();
         let Some(mesh) = &scene.mesh else { return };
         if mesh.force_areas.is_empty() {
             return;
         }
-        let drag = if self.is_on_ground_by(self.units_per_frame()) {
-            0.95
+        let drag = if self.external_velocity_on_ground() {
+            GROUND_DRAG
         } else {
-            0.955
+            AIR_DRAG
         };
         self.area_velocity *= drag;
         let previous = self.area_velocity;

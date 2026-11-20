@@ -659,13 +659,14 @@ pub(crate) fn update_static_clipping(player: &mut Player, course: &Course, view:
     player.look.set_invalid_sensors(invalid);
 }
 
-fn tick_geysers(course: &mut Course, player: &Player) {
+fn tick_geysers(course: &mut Course, player: &mut Player) {
     if let Some(mesh) = &mut course.mesh
         && (mesh.pukupuku.is_some()
             || !mesh.geysers.is_empty()
             || !mesh.grab_ceil_bars.is_empty()
             || !mesh.key_move_parts.is_empty()
-            || !mesh.rotate_parts.is_empty())
+            || !mesh.rotate_parts.is_empty()
+            || !mesh.air_currents.is_empty())
     {
         let mesh = Arc::make_mut(mesh);
         if let Some(source) = &mut mesh.pukupuku {
@@ -682,6 +683,10 @@ fn tick_geysers(course: &mut Course, player: &Player) {
             part.tick();
         }
         mesh.tick_conveyors();
+        // The wind sources update with the actors; their attack sensors run after every actor of
+        // the frame has moved, so the player's final pose is the one they read.
+        mesh.tick_air_currents();
+        player.receive_air_currents(mesh);
         mesh.update_key_move_collision();
         let feet = mesh.to_game_vec(player.position_cm());
         for bar in &mut mesh.grab_ceil_bars {
@@ -1024,10 +1029,17 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
             orders.camera_view = camera.view(0).map(View::rows);
             update_static_clipping(&mut player, &course, camera.view(0));
             player.step(&orders, &course);
-            tick_geysers(&mut course, &player);
+            tick_geysers(&mut course, &mut player);
         }
         let kept = player.inertia_kept_by_teleport();
+        // The wind actors ran through the relaxing; they are not what the recording seeded.
+        let relaxed_currents = course.mesh.as_ref().map(|m| m.air_currents.clone());
         course.mesh = seeded;
+        if let (Some(mesh), Some(currents)) = (&mut course.mesh, relaxed_currents)
+            && !currents.is_empty()
+        {
+            Arc::make_mut(mesh).air_currents = currents;
+        }
         player = placed_player(script, &options, &course)?;
         player.keep_inertia_through_teleport(kept);
     }
@@ -1075,7 +1087,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         info.game_frame = i as i64;
         info.frame = i as i64 - preroll as i64;
         recorder.record(&info, &mut player);
-        tick_geysers(&mut course, &player);
+        tick_geysers(&mut course, &mut player);
     }
     recorder.start_rows(script.preroll.is_some());
     let mut rows = Vec::with_capacity(script.frame_count());
@@ -1330,7 +1342,7 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         {
             previous_moving_scene = Some(course.clone());
         }
-        tick_geysers(&mut course, &player);
+        tick_geysers(&mut course, &mut player);
         previous = span.buttons.clone();
     }
     Ok(Trace {

@@ -142,6 +142,8 @@ pub struct TriangleMesh {
     pub rotate_parts: Vec<crate::movement::rotate_parts::RotatePart>,
     /// Hosts of the driven step parts held in `rotate_parts` (`ConveyerMapParts`).
     pub conveyors: Vec<crate::movement::conveyor_parts::ConveyorHost>,
+    /// Placed `AirCurrent` wind sources (the export's `air_currents`), absolute stage centimetres.
+    pub air_currents: Vec<crate::movement::air_current::AirCurrent>,
     pub pukupuku: Option<crate::movement::pukupuku::Pukupuku>,
     pub pukupuku_look: Option<crate::movement::pukupuku::Pukupuku>,
     disabled_parts: Vec<usize>,
@@ -816,6 +818,30 @@ impl TriangleMesh {
                     &keys,
                 ));
         }
+        for source in root["air_currents"].as_array().into_iter().flatten() {
+            if source["class"] != "AirCurrent" {
+                return Err("unsupported air current class".into());
+            }
+            let triple =
+                |key: &str| floats::<3>(source.get(key)).ok_or(format!("air current {key}"));
+            let whole = |key: &str| {
+                source[key]
+                    .as_i64()
+                    .and_then(|v| i32::try_from(v).ok())
+                    .ok_or(format!("air current {key}"))
+            };
+            mesh.air_currents
+                .push(crate::movement::air_current::AirCurrent::new(
+                    source["id"].as_str().ok_or("air current id")?.into(),
+                    Vec3::from_array(triple("translate")?),
+                    triple("rotate")?,
+                    triple("scale")?[2],
+                    whole("wait_frame")?,
+                    whole("blow_frame")?,
+                    whole("delay_frame")?,
+                    source["force_calc"].as_bool().ok_or("air current force")?,
+                ));
+        }
         mesh.moving_triangles = mesh
             .triangles
             .iter()
@@ -832,6 +858,13 @@ impl TriangleMesh {
             })
             .collect();
         Ok(mesh)
+    }
+
+    /// One update of every `AirCurrent` actor.
+    pub fn tick_air_currents(&mut self) {
+        for source in &mut self.air_currents {
+            source.tick();
+        }
     }
 
     /// `ConveyerMapParts::exeMove` of every conveyor: the steps follow the advanced offset.
