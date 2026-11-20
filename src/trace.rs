@@ -1477,18 +1477,6 @@ impl TraceFile {
                         .collect();
                     let frame = row.get("frame").ok_or("part frame")?.clone();
                     if first.as_ref().is_some_and(|f| f != &frame) {
-                        // A conveyor's second sample tells whether its first one was taken after
-                        // the host's update of its own frame (the same offset twice).
-                        if extension == "conveyors.csv"
-                            && let Some(seed) = trace
-                                .press_seed
-                                .iter_mut()
-                                .rev()
-                                .find(|r| r.get("id") == row.get("id"))
-                            && let Some(next) = row.get("offset_bits")
-                        {
-                            seed.insert("second_offset_bits".into(), next.clone());
-                        }
                         break;
                     }
                     first = Some(frame);

@@ -41,9 +41,6 @@ pub struct ConveyorHost {
     /// synchronised with its actor while it is valid (`invalidateCollisionParts` freezes both of its
     /// matrices), so a hidden step keeps the last pair it had.
     valid: Vec<bool>,
-    /// The recorded first sample followed the host update of its own frame (the next sample
-    /// repeats its offset): the first replayed update is that one and does not run again.
-    held: bool,
 }
 
 /// `al::wrapValue(value, max)`: `fmodf(value + max, max) + 0`.
@@ -103,7 +100,6 @@ impl ConveyorHost {
             offset: wrap_value(interval * start_rate, interval),
             lagged: Vec::new(),
             valid: Vec::new(),
-            held: false,
         }
     }
 
@@ -151,26 +147,21 @@ impl ConveyorHost {
     /// `ConveyerMapParts::exeMove`: the offset advances, every step actor is placed by its
     /// coordinate, and the collision parts take the positions of the update before.
     pub fn tick(&mut self, parts: &mut [RotatePart], disabled: &mut Vec<usize>) {
-        let held = std::mem::take(&mut self.held);
         let previous_offset = self.offset;
-        if !held {
-            self.offset = wrap_value(self.offset + 1.0 * self.speed, self.max_coord);
-        }
+        self.offset = wrap_value(self.offset + 1.0 * self.speed, self.max_coord);
         for (i, step) in self.steps.iter().enumerate() {
             let (position, exists) = self.step_pose(self.offset, i);
-            if !held {
-                if self.valid[i] {
-                    parts[*step].drive(self.lagged[i]);
-                }
-                // `ConveyerStep::setTransByCoord` 0x9130bc: a step whose coordinate went back (the
-                // wrap of a forward belt) calls `resetPosition`, whose `resetAllCollisionMtx`
-                // 0x8d7ee8 makes both collision matrices the new pose.
-                if self.step_coord(self.offset, i) < self.step_coord(previous_offset, i) {
-                    parts[*step].reset(position);
-                }
-                self.lagged[i] = position;
-                self.valid[i] = exists;
+            if self.valid[i] {
+                parts[*step].drive(self.lagged[i]);
             }
+            // `ConveyerStep::setTransByCoord` 0x9130bc: a step whose coordinate went back (the
+            // wrap of a forward belt) calls `resetPosition`, whose `resetAllCollisionMtx`
+            // 0x8d7ee8 makes both collision matrices the new pose.
+            if self.step_coord(self.offset, i) < self.step_coord(previous_offset, i) {
+                parts[*step].reset(position);
+            }
+            self.lagged[i] = position;
+            self.valid[i] = exists;
             if !exists {
                 disabled.push(parts[*step].part);
             }
@@ -213,7 +204,6 @@ impl ConveyorHost {
         }
         let offset = u32::from_str_radix(get("offset_bits")?, 16).map_err(|_| "conveyor offset")?;
         self.offset = f32::from_bits(offset);
-        self.held = row.get("second_offset_bits").map(String::as_str) == Some(get("offset_bits")?);
         if !self.offset.is_finite() || self.offset < 0.0 || self.offset >= self.max_coord {
             return Err("conveyor offset out of range".into());
         }

@@ -157,9 +157,6 @@ class Evidence:
             return
         first = host_rows[frames[0]]
         source = Source(p, floats(first['offset_bits'], 1)[0])
-        second = host_rows[frames[1]]
-        # A first sample taken after the host update of its own frame repeats its offset in the next one.
-        held = second['offset_bits'] == first['offset_bits']
         last = source.previous_offset(source.offset)
         before = source.previous_offset(last)
         # collision position history per step: actor positions of the last and the second last update
@@ -172,7 +169,7 @@ class Evidence:
         pointers = {}
         surfaces, rides = set(), set()
         for k, f in enumerate(frames):
-            if k > 0 and not (k == 1 and held):
+            if k > 0:
                 source.tick()
                 for i in range(source.count):
                     coord, position, exists = source.step(source.offset, i)

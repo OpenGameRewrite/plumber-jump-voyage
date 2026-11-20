@@ -1891,15 +1891,14 @@ visuals, so this fixture establishes movement fidelity rather than stage parity.
 `int(totalMoveDistance / PartsInterval) + 1` and every `exeMove` (nerve Move) advances `mOffsetCoord`
 by `MoveSpeed` (`wrapValue` over `PartsInterval * stepCount`) and places step `i` at the coordinate
 `PartsInterval * i + offset` along the `KeyMoveNext` key chain (`ConveyerKeyKeeper::calcPosAndQuat`).
-A step past the total distance loses its collision and keeps its last matrices until it wraps.
+A step past the total distance loses its collision and keeps its last matrices until it wraps (`setTransByCoord` 0x9130bc then calls `resetPosition`: both matrices become the new pose, `resetAllCollisionMtx` 0x8d7ee8).
 Mario is carried by the generic moving-part contact, like the Press pillars and the turntable.
 
 `tools/export-conveyor-parts.py <geometry.json> --romfs <romfs> --id <placement>` replaces the
 single exported object of such a placement by its steps (ids `<id>/<n>`), for unrotated, linear,
 unswitched keys along the local Z axis. The replay holds each step as a driven `RotatePart`
 (`src/movement/conveyor_parts.rs`); only the offset of the first recorded sample comes from the recording
-(`game.conveyors.csv`, its second sample says whether the first one was taken after the host update of
-its frame). A step's collision matrix follows its actor one host update later, and only while the part
+(`game.conveyors.csv`). A step's collision matrix follows its actor one host update later, and only while the part
 is valid. `tools/conveyor_parts.py` re-simulates the host, the steps and their collision matrices in
 single precision from the placement and gates the environment rule to the one vetted site
 (SandWorldPyramid001Stage scenario 1, obj243: five 800 cm steps, speed 2, 3600 cm of path); the
