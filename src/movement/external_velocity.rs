@@ -54,7 +54,8 @@ impl ForceKeeper {
 /// `PlayerActorHakoniwa::receiveMsg` 0x428810 answers false for the PlayerAttack sensors (Carry,
 /// HipDropKnockDown: `isSensorPlayerAttack`, 0x428844). Name, offset up from the actor and radius
 /// are the PlayerActorHakoniwa InitSensor entries.
-const BLOWN_SENSORS: [(f32, f32); 3] = [(40., 40.), (75., 50.), (110., 40.)];
+const BLOWN_SENSORS: [(&str, f32, f32); 3] =
+    [("Foot", 40., 40.), ("Body", 75., 50.), ("Head", 110., 40.)];
 
 #[derive(Clone, Debug)]
 pub struct ForceArea {
@@ -161,13 +162,16 @@ impl Player {
         }
         let at = self.stage_position(mesh);
         let (up, _) = self.pose_axes();
+        let mut sensors = Vec::new();
         let mut sent = Vec::new();
         for source in &mesh.air_currents {
-            for (offset, radius) in BLOWN_SENSORS {
-                let Some(force) = source.blow_at(at + up * offset, radius) else {
+            for (name, offset, radius) in BLOWN_SENSORS {
+                let centre = at + up * offset;
+                sensors.push(format!("{name}:{}", carry::hex_vec(centre)));
+                let Some(force) = source.blow_at(centre, radius) else {
                     continue;
                 };
-                sent.push(format!("{}:{}", source.id, carry::hex_vec(force)));
+                sent.push(format!("{}:{name}:{}", source.id, carry::hex_vec(force)));
                 if self.is_dead() || self.bound_to.is_some() {
                     self.reset_external_velocity();
                 } else {
@@ -176,12 +180,18 @@ impl Player {
             }
         }
         self.wind_source = format!(
-            "wind={};windsent={}",
+            "wind={};windpose={};windsensors={};windsent={}",
             mesh.air_currents
                 .iter()
                 .map(|c| c.diagnostic())
                 .collect::<Vec<_>>()
                 .join("|"),
+            mesh.air_currents
+                .iter()
+                .map(|c| c.pose_diagnostic())
+                .collect::<Vec<_>>()
+                .join("|"),
+            sensors.join("|"),
             sent.join("|")
         );
     }
@@ -273,6 +283,65 @@ impl Player {
 
 pub(super) fn self_check() {
     waterfall_membership_and_accumulation();
+    keeper_keeps_extrema_from_zero();
+    sensors_feed_the_keeper_and_the_update_applies_it();
+}
+
+/// `ExternalForceKeeper::receiveMsg` (0x551e40): componentwise extrema starting from zero, the force is
+/// their sum, so opposite forces of one frame add up and a negative-only frame keeps its minimum.
+#[cfg_attr(test, test)]
+fn keeper_keeps_extrema_from_zero() {
+    let mut keeper = ForceKeeper::default();
+    assert_eq!(keeper.force(), Vec3::ZERO);
+    keeper.receive(Vec3::new(0., 3., 1.));
+    keeper.receive(Vec3::new(0., 1., -2.));
+    keeper.receive(Vec3::new(0., 2., -1.));
+    assert_eq!(keeper.force(), Vec3::new(0., 3., -1.));
+    keeper.reset();
+    keeper.receive(Vec3::new(0., -4., 0.));
+    assert_eq!(keeper.force(), Vec3::new(0., -4., 0.));
+}
+
+/// A player standing in a blowing current: the sphere test feeds the keeper from his three blown
+/// sensors, the next update takes `v * drag + force * 0.275`, and the keeper starts empty again.
+#[cfg_attr(test, test)]
+fn sensors_feed_the_keeper_and_the_update_applies_it() {
+    use crate::movement::air_current::AirCurrent;
+    // A current at the origin pointing up (-90 degrees about X), blowing at full power (step 38 of Blow).
+    let mut current = AirCurrent::new("t".into(), Vec3::ZERO, [-90., 0., 0.], 1., 30, -1, 0, false);
+    for _ in 0..60 {
+        current.tick();
+    }
+    let mut mesh = crate::geometry::TriangleMesh::default();
+    mesh.air_currents.push(current);
+    let mut player = Player {
+        pos: Vec3::ZERO,
+        ..Player::default()
+    };
+    player.receive_air_currents(&mesh);
+    // Foot, Body and Head are on the axis, inside the taper: each sends the full 12.
+    for sensor in ["Foot", "Body", "Head"] {
+        assert!(
+            player.wind_source.contains(&format!("t:{sensor}:")),
+            "{}",
+            player.wind_source
+        );
+    }
+    let force = player.external_keeper.force();
+    assert!((force.y - 12.).abs() < 1e-4 && force.x.abs() < 1e-4 && force.z.abs() < 1e-4);
+    let course = Course {
+        mesh: Some(std::sync::Arc::new(mesh)),
+        ..Course::default()
+    };
+    player.update_external_velocity(&course);
+    assert!((player.external_velocity.y - 12. * SENSITIVITY).abs() < 1e-4);
+    assert_eq!(player.external_keeper.force(), Vec3::ZERO);
+    assert!((player.external_keeper.applied.y - 12.).abs() < 1e-4);
+    // Nothing more arrives: the velocity keeps its drag share (air or ground) of itself.
+    let before = player.external_velocity.y;
+    player.update_external_velocity(&course);
+    let kept = player.external_velocity.y / before;
+    assert!((kept - AIR_DRAG).abs() < 1e-6 || (kept - GROUND_DRAG).abs() < 1e-6);
 }
 
 #[cfg_attr(test, test)]

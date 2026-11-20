@@ -129,15 +129,16 @@ fn local_point(trans: Vec3, q: Quat, point: Vec3) -> Vec3 {
     )
 }
 
-/// `sead::Mathf::clamp` as `al::lerpValue` uses it.
+/// `sead::Mathf::clamp` as `al::lerpValue` uses it: a value that is not above `high` (a NaN included)
+/// is returned as it is.
 fn clamp_rate(value: f32, low: f32, high: f32) -> f32 {
-    let mut result = high;
     if value < low {
-        result = low;
-    } else if !(value > high) {
-        result = value;
+        low
+    } else if value.partial_cmp(&high) == Some(std::cmp::Ordering::Greater) {
+        high
+    } else {
+        value
     }
-    result
 }
 
 /// `al::lerpValue(a, b, t, clampA, clampB)` (MathUtil.cpp): `a` mapped from [b, t] onto
@@ -285,6 +286,23 @@ impl AirCurrent {
         }
         let force = self.force_at(sensor_centre, power);
         (!vector_lib::is_near_zero(force, SEND_THRESHOLD)).then_some(force)
+    }
+
+    /// The pose the source evaluates its force in: translation and rotation as f32 bits.
+    pub fn pose_diagnostic(&self) -> String {
+        let bits = |values: &[f32]| {
+            values
+                .iter()
+                .map(|v| format!("{:08x}", v.to_bits()))
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        format!(
+            "{}:{}:{}",
+            self.id,
+            bits(&self.translate.to_array()),
+            bits(&self.quat.to_array())
+        )
     }
 
     pub fn diagnostic(&self) -> String {

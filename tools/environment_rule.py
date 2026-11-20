@@ -42,6 +42,7 @@ from cap_sources import Evidence as CapSourceEvidence
 from cap_trampoline import Evidence as TrampolineEvidence
 from collections import OrderedDict
 from dimension import Evidence as DimensionEvidence
+from air_current import Evidence as WindEvidence
 
 # ---- what the probe logs --------------------------------------------------------------------------
 
@@ -221,7 +222,7 @@ class Verdict:
 class Judge:
     """Judges the frames of one run. See the module text for the rule."""
 
-    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, conveyors=None, conveyor_steps=None, conveyor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, cap_samples=None, cap_collider=None, cap_sources=None, cap_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None):
+    def __init__(self, game_rows, rewrite_rows, listed, geometry=None, start=None, preroll=None, start_triangle=None, geysers=None, geyser_seed=None, geyser_messages=None, grabceil_bars=None, grabceil_seed=None, grabceil_messages=None, rocket_flowers=None, rocket_watcher=None, rocket_seed=None, press_parts=None, press_mario=None, ceiling_check=None, pukupuku=None, force_areas=None, rotors=None, rotor_messages=None, conveyors=None, conveyor_steps=None, conveyor_messages=None, rolling=None, carry_objects=None, carry_mario=None, carry_messages=None, trampolines=None, spin_player=None, spin_messages=None, cap_samples=None, cap_collider=None, cap_sources=None, cap_messages=None, dimensions=None, dimension_sensors=None, dimension_events=None, winds=None, wind_calls=None):
         self.rows = game_rows
         self.preroll = preroll or {}
         self.listed = listed
@@ -289,6 +290,9 @@ class Judge:
         self._conveyor_hosts = {r['host'] for r in (geometry or {}).get('conveyor_parts', [])} if conveyors else set()
         from external_force import Evidence as ForceEvidence
         self._force = ForceEvidence(geometry, force_areas, press_mario, rewrite_rows, game_rows, preroll or {})
+        self._wind = WindEvidence(geometry, winds, wind_calls, press_mario, rewrite_rows, game_rows, preroll or {})
+        for f, why in self._wind.refusals().items():
+            v.refuse(f, "AirCurrent wind lacks independently reproduced source evidence: " + why)
         force_frames = {int(r['frame']) for r in (force_areas or []) if r.get('kind') == 'call' and int(r['frame']) >= 0}
         if force_frames:
             if force_frames <= self._force.frames:
@@ -591,6 +595,11 @@ class Judge:
                 continue
             if self._trampoline.contact(f, c):
                 v.accept(f, "exported CapTrampoline", "stage/scenario-bound obj1088 or obj1043, exact source sensors/counters, independent native source and ordered spin/Reflect dispatch")
+                continue
+            if self._wind.contact(f, c):
+                v.accept(f, "exported AirCurrent obj265 wind",
+                         "stage/zone/placement-bound source, sensor pair and ByugoBlow message; force, nerve, answers "
+                         "and external velocity independently evaluated from the executable's source")
                 continue
             if self._stone.contact(f, c):
                 v.accept(f, "exported KickStone carry/release",
@@ -912,6 +921,8 @@ def self_check():
     check_rocket()
     from coin_chameleon import self_check as check_coins
     check_coins()
+    from air_current import self_check as check_wind
+    check_wind()
     from kick_stone import self_check as check_stone
     check_stone()
     _check_candlestands()

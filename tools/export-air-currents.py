@@ -38,6 +38,7 @@ def air_current(obj, zone_placement):
         'id': obj['Id'],
         'class': 'AirCurrent',
         'zone': zone_placement['Id'],
+        'zone_name': zone_placement['UnitConfigName'],
         'translate': translate,
         'rotate': [f32(obj['Rotate'][a]) for a in 'XYZ'],
         'scale': [f32(obj['Scale'][a]) for a in 'XYZ'],
