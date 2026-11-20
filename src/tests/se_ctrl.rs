@@ -103,6 +103,29 @@ fn fast_fall_and_roll() {
         ctrl.update(&falling(-30.)),
         [SeEvent::FallWhoosh { frames: 1 }]
     );
+    // An external force silences the loop and restarts its count (`PlayerExternalVelocity::isExistForce`).
+    let pushed = SeFrame {
+        vertical_speed: -35.,
+        external_force: true,
+        ..SeFrame::default()
+    };
+    let mut ctrl = SeCtrl::default();
+    for _ in 0..3 {
+        assert!(ctrl.update(&pushed).is_empty());
+    }
+    assert_eq!(
+        ctrl.update(&falling(-35.)),
+        [SeEvent::FallWhoosh { frames: 1 }]
+    );
+    assert_eq!(
+        ctrl.update(&falling(-35.)),
+        [SeEvent::FallWhoosh { frames: 2 }]
+    );
+    assert!(ctrl.update(&pushed).is_empty());
+    assert_eq!(
+        ctrl.update(&falling(-35.)),
+        [SeEvent::FallWhoosh { frames: 1 }]
+    );
     let rolling = |frame| SeFrame {
         rolling: Some(frame),
         ..SeFrame::default()

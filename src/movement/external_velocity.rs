@@ -144,6 +144,19 @@ impl Player {
         self.is_on_ground_by(self.units_per_frame())
     }
 
+    /// `PlayerExternalVelocity::isExistForce` 0x4412a8: the area velocity, the force the last update took
+    /// from the keeper or the external velocity is not near zero (tolerance 0.001).
+    pub(super) fn external_force_exists(&self) -> bool {
+        const NEAR_ZERO: f32 = 0.001;
+        [
+            self.area_velocity,
+            self.external_keeper.applied,
+            self.external_velocity,
+        ]
+        .iter()
+        .any(|v| !vector_lib::is_near_zero(*v, NEAR_ZERO))
+    }
+
     /// `PlayerExternalVelocity::reset` 0x441268.
     fn reset_external_velocity(&mut self) {
         self.external_keeper.reset();
@@ -284,6 +297,7 @@ impl Player {
 pub(super) fn self_check() {
     waterfall_membership_and_accumulation();
     keeper_keeps_extrema_from_zero();
+    external_force_is_any_of_three_accumulators();
     sensors_feed_the_keeper_and_the_update_applies_it();
 }
 
@@ -300,6 +314,24 @@ fn keeper_keeps_extrema_from_zero() {
     keeper.reset();
     keeper.receive(Vec3::new(0., -4., 0.));
     assert_eq!(keeper.force(), Vec3::new(0., -4., 0.));
+}
+
+/// `PlayerExternalVelocity::isExistForce` (0x4412a8) tests the area velocity, the last force and the
+/// external velocity against the 0.001 tolerance.
+#[cfg_attr(test, test)]
+fn external_force_is_any_of_three_accumulators() {
+    let mut player = Player::default();
+    assert!(!player.external_force_exists());
+    player.external_velocity = Vec3::Y * 0.0005;
+    assert!(!player.external_force_exists());
+    player.external_velocity = Vec3::Y * 0.002;
+    assert!(player.external_force_exists());
+    player.external_velocity = Vec3::ZERO;
+    player.external_keeper.applied = Vec3::X;
+    assert!(player.external_force_exists());
+    player.external_keeper.applied = Vec3::ZERO;
+    player.area_velocity = Vec3::Z;
+    assert!(player.external_force_exists());
 }
 
 /// A player standing in a blowing current: the sphere test feeds the keeper from his three blown

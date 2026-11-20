@@ -30,6 +30,7 @@ impl Player {
             } else {
                 self.units_per_frame().y
             },
+            external_force: self.external_force_exists(),
             in_water: scene
                 .water_areas()
                 .is_water(scene.in_water_frame(self.position_cm())),

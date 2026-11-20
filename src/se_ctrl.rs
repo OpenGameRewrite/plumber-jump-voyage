@@ -14,7 +14,8 @@
 //!   cycle) pulls the next one half that far toward it.
 //! - **Rolling** starts `Roll` each time the rolling clip passes its sixth frame.
 //! - **Falling fast** holds `FallWhoosh_loop` every frame the vertical speed is
-//!   30 units a frame down or more, counting the frames it has held.
+//!   30 units a frame down or more, counting the frames it has held, unless an external
+//!   force acts, the player is dead or in water (`PlayerSeCtrl::update` 0x463064, 0x4640f4..0x464128).
 //! - **The water around the camera**: a sound when the camera dips into the water or comes
 //!   out of it, and an ambience held every frame the camera and the player are both under.
 //! - **The swim stroke** (`SwimStand`) sounds when its clip begins or loops (its frame went
@@ -58,6 +59,9 @@ pub struct SeFrame {
     pub vertical_speed: f32,
     /// The player is in a water area (`al::isInWater`), where the fall is silent.
     pub in_water: bool,
+    /// An external force acts (`PlayerExternalVelocity::isExistForce` 0x4412a8: the area velocity, the
+    /// last external force or the external velocity is not near zero), which silences the fall as well.
+    pub external_force: bool,
     /// Frame of the rolling clip, while it plays.
     pub rolling: Option<f32>,
     /// The frame the animator shows now (`PlayerAnimator::getAnimFrame`).
@@ -218,7 +222,7 @@ impl SeCtrl {
     }
 
     fn whoosh(&mut self, frame: &SeFrame, events: &mut Vec<SeEvent>) {
-        if frame.in_water || frame.vertical_speed > -WHOOSH_SPEED {
+        if frame.in_water || frame.external_force || frame.vertical_speed > -WHOOSH_SPEED {
             self.falling = 0;
             return;
         }
