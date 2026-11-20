@@ -3479,6 +3479,7 @@ impl Player {
                 .rotate_parts
                 .iter()
                 .find(|s| Some(s.part) == self.ground_part)
+            && source.axis != rotate_parts::DRIVEN
         {
             self.rotating_ground = true;
             self.ground_frame = Some((mesh.parts[source.part].base, source.previous.inverse));

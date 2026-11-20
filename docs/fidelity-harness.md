@@ -1875,3 +1875,30 @@ snapshot residuals at the hidden pivot-to-run transition (frame 409) and an
 equivalent quaternion sign (frame 418); these remain reported. Native screenshots
 also expose the placeholder floor occluding the rider and the absent Sand/pillar
 visuals, so this fixture establishes movement fidelity rather than stage parity.
+
+## ConveyerMapParts (conveyor belt) steps
+
+`al::ConveyerMapParts` is not a floor type. Its init builds one `ConveyerStep` collision part per
+`int(totalMoveDistance / PartsInterval) + 1` and every `exeMove` (nerve Move) advances `mOffsetCoord`
+by `MoveSpeed` (`wrapValue` over `PartsInterval * stepCount`) and places step `i` at the coordinate
+`PartsInterval * i + offset` along the `KeyMoveNext` key chain (`ConveyerKeyKeeper::calcPosAndQuat`).
+A step past the total distance loses its collision and keeps its last matrices until it wraps.
+Mario is carried by the generic moving-part contact, like the Press pillars and the turntable.
+
+`tools/export-conveyor-parts.py <geometry.json> --romfs <romfs> --id <placement>` replaces the
+single exported object of such a placement by its steps (ids `<id>/<n>`), for unrotated, linear,
+unswitched keys along the local Z axis. The replay holds each step as a driven `RotatePart`
+(`src/movement/conveyor_parts.rs`); only the offset of the first recorded sample comes from the recording
+(`game.conveyors.csv`, its second sample says whether the first one was taken after the host update of
+its frame). A step's collision matrix follows its actor one host update later, and only while the part
+is valid. `tools/conveyor_parts.py` re-simulates the host, the steps and their collision matrices in
+single precision from the placement and gates the environment rule to the one vetted site
+(SandWorldPyramid001Stage scenario 1, obj243: five 800 cm steps, speed 2, 3600 cm of path); the
+`conveyor-ride-walk` recording stands on a step, walks against the belt into the next step's
+block and jumps. A wall the sweep of a moving part pushes does not cut the run's velocity.
+
+The probe's stage override leaves the save's current world in place; a sub stage such as the pyramid
+then asks for world-dependent archives (`CoinCollectEmpty2D_<letter>`) of the wrong kingdom, and a default
+entry inside a 2D area runs the 2D to 3D change in the first update after the teleport, which moves the
+player. The local probe therefore sets the current world from `WorldList::tryFindWorldIndexByStageName`
+for a sub stage and places the player twice (the second time 60 updates after the first).
