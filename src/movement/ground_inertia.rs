@@ -9,6 +9,8 @@ pub(super) struct GroundInertia {
     /// calcJumpInertia samples the actor, independently of the saved contact.
     pub jump_force: Vec3,
 }
+/// The inertia state a teleport keeps (see `Player::inertia_kept_by_teleport`).
+pub struct KeptInertia(GroundInertia);
 impl GroundInertia {
     fn update(&mut self, grounded: bool, force: Vec3) {
         self.last = Vec3::ZERO;
@@ -57,6 +59,15 @@ impl Player {
             .map_or(Vec3::ZERO, |m| self.collider.moving_ground_force(m));
         self.ground_inertia
             .update(self.is_on_ground_by(self.units_per_frame()), force);
+    }
+    /// What a teleport leaves of the previous standing: the probe's placement resets the collision
+    /// and the cap dynamics (`rs::resetCollision` 0x565ce8, `rs::resetMarioDynamics` 0x56b680) and
+    /// nothing of `PlayerExternalVelocity`, so the saved ground force survives it.
+    pub fn inertia_kept_by_teleport(&self) -> KeptInertia {
+        KeptInertia(self.ground_inertia.clone())
+    }
+    pub fn keep_inertia_through_teleport(&mut self, kept: KeptInertia) {
+        self.ground_inertia = kept.0;
     }
     pub(super) fn feedback_ground_inertia(&mut self, front_only: bool) {
         let (_, front) = self.pose_axes();

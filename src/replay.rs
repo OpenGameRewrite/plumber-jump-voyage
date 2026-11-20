@@ -74,6 +74,10 @@ pub struct Script {
     /// Explicit preroll also opts into carrying interpolation across frame zero.
     /// Absent in legacy scripts, whose ten-frame trace convention stays unchanged.
     pub preroll: Option<u32>,
+    /// Idle updates between the first placement and the second one (`relax N`): the probe's
+    /// `PH_RELAX`, which waits out a 2D to 3D dimension change of the entry before it places the
+    /// player again for the recording. Zero places the player once.
+    pub relax: u32,
     pub spans: Vec<Span>,
     pub shots: Vec<u32>,
 }
@@ -140,6 +144,14 @@ impl Script {
                     script.preroll = Some(frames.parse().map_err(|_| {
                         at("preroll needs a nonnegative 32-bit integer frame count")
                     })?);
+                }
+                "relax" => {
+                    let [_, frames] = words[..] else {
+                        return Err(at("relax needs one nonnegative frame count"));
+                    };
+                    script.relax = frames
+                        .parse()
+                        .map_err(|_| at("relax needs a nonnegative 32-bit integer frame count"))?;
                 }
                 "shot" => {
                     for w in &words[1..] {
@@ -837,6 +849,78 @@ pub(crate) fn placement_is_moon(
     placement["is_moon"].as_bool()
 }
 
+/// The player as the probe's teleport leaves it (`rs::resetCollision`, velocity and nerve reset), at the
+/// script's start of the stage in `course`.
+fn placed_player(script: &Script, options: &Options, course: &Course) -> Result<Player, String> {
+    let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
+    if let Some(moon) = placement_is_moon(
+        script,
+        options.camera.or(options.lockstep),
+        options.geometry.as_deref(),
+    ) {
+        player.init_placement(moon);
+    }
+    player.prepare_recorded_teleport();
+    if let Some(mesh) = course.mesh.as_deref() {
+        player.init_flower_seed(mesh);
+    }
+    let recorded = options.camera.or(options.lockstep);
+    if let (Some(game), Some(mesh)) = (recorded, &options.geometry) {
+        let spawn = game.metadata["spawn_abs"].as_array();
+        let selected_id = game.metadata["restart_point_id"].as_str();
+        let point = mesh.restart_points.iter().find(|point| {
+            if let Some(id) = selected_id {
+                return point["id"].as_str() == Some(id);
+            }
+            let position = point["position"].as_array();
+            point["kind"].as_str() == Some("stage")
+                && spawn
+                    .zip(position)
+                    .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
+        });
+        // The scene may have selected RestartArea's linked PlayerStartObj
+        // during entry, before the recording teleported Mario. Like checkpoint
+        // selection, this saved selection belongs to the scene, not Press.
+        let point = if selected_id.is_none() {
+            mesh.restart_points
+                .iter()
+                .find(|p| {
+                    p["kind"] == "restart_area"
+                        && spawn
+                            .zip(p["position"].as_array())
+                            .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
+                })
+                .or(point)
+        } else {
+            point
+        };
+        if let Some(point) = point {
+            let p = point["position"]
+                .as_array()
+                .ok_or("restart position missing")?;
+            let absolute = Vec3::new(
+                p[0].as_f64().ok_or("restart x")? as f32,
+                p[1].as_f64().ok_or("restart y")? as f32,
+                p[2].as_f64().ok_or("restart z")? as f32,
+            );
+            let yaw = point["rotate"][1]
+                .as_f64()
+                .ok_or("restart rotation missing")? as f32;
+            player.death.restart_pose = Some((mesh.relative_vec(absolute) * 0.01, yaw));
+        }
+        player.death.external_reload = true;
+    }
+    // Over no floor within reach of the collider's arrows (40 below the feet): the player is
+    // in the air.
+    if course
+        .ground(player.pos)
+        .is_none_or(|floor| player.pos.y - floor > AIR_START_HEIGHT)
+    {
+        player.start_in_air();
+    }
+    Ok(player)
+}
+
 pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
     let camera = CameraTrack::new(script, options.camera)?;
     let bindings = Settings::default().bindings;
@@ -913,71 +997,39 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         seed_pukupuku(mesh, script, options.camera.or(options.lockstep))?;
         seed_key_move_parts(mesh, script, options.camera.or(options.lockstep))?;
     }
-    let mut player = Player::spawn_facing(Vec3::ZERO, script.start_yaw_deg);
-    if let Some(moon) = placement_is_moon(
-        script,
-        options.camera.or(options.lockstep),
-        options.geometry.as_deref(),
-    ) {
-        player.init_placement(moon);
-    }
-    player.prepare_recorded_teleport();
-    if let Some(mesh) = course.mesh.as_deref() {
-        player.init_flower_seed(mesh);
-    }
+    let mut player = placed_player(script, &options, &course)?;
     let recorded = options.camera.or(options.lockstep);
-    if let (Some(game), Some(mesh)) = (recorded, &options.geometry) {
-        let spawn = game.metadata["spawn_abs"].as_array();
-        let selected_id = game.metadata["restart_point_id"].as_str();
-        let point = mesh.restart_points.iter().find(|point| {
-            if let Some(id) = selected_id {
-                return point["id"].as_str() == Some(id);
-            }
-            let position = point["position"].as_array();
-            point["kind"].as_str() == Some("stage")
-                && spawn
-                    .zip(position)
-                    .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
-        });
-        // The scene may have selected RestartArea's linked PlayerStartObj
-        // during entry, before the recording teleported Mario. Like checkpoint
-        // selection, this saved selection belongs to the scene, not Press.
-        let point = if selected_id.is_none() {
-            mesh.restart_points
-                .iter()
-                .find(|p| {
-                    p["kind"] == "restart_area"
-                        && spawn
-                            .zip(p["position"].as_array())
-                            .is_some_and(|(a, b)| a[0] == b[0] && a[2] == b[2])
-                })
-                .or(point)
-        } else {
-            point
+    if script.relax > 0 {
+        // The probe placed the player, let the stage run, then placed it again (`PH_RELAX`: the
+        // entry's 2D to 3D dimension change moves the player in the first update). The second
+        // placement does not reset `PlayerExternalVelocity`, so what the standing left in it
+        // (the saved ground force of the belt) goes on into the recorded start. The relaxing
+        // runs on the stage as seeded and leaves it as seeded: only that inertia is kept.
+        let seeded = course.mesh.clone();
+        let idle = Span {
+            frames: 0,
+            stick: Vec2::ZERO,
+            buttons: Vec::new(),
         };
-        if let Some(point) = point {
-            let p = point["position"]
-                .as_array()
-                .ok_or("restart position missing")?;
-            let absolute = Vec3::new(
-                p[0].as_f64().ok_or("restart x")? as f32,
-                p[1].as_f64().ok_or("restart y")? as f32,
-                p[2].as_f64().ok_or("restart z")? as f32,
+        for _ in 0..script.relax {
+            let (mut orders, _) = orders_for(
+                &idle,
+                &[],
+                camera.yaw_deg(0),
+                camera.aim_deg(0),
+                camera.aim_gain(0),
+                &bindings,
             );
-            let yaw = point["rotate"][1]
-                .as_f64()
-                .ok_or("restart rotation missing")? as f32;
-            player.death.restart_pose = Some((mesh.relative_vec(absolute) * 0.01, yaw));
+            orders.view = camera.view_rows(0);
+            orders.camera_view = camera.view(0).map(View::rows);
+            update_static_clipping(&mut player, &course, camera.view(0));
+            player.step(&orders, &course);
+            tick_geysers(&mut course, &player);
         }
-        player.death.external_reload = true;
-    }
-    // Over no floor within reach of the collider's arrows (40 below the feet): the player is
-    // in the air.
-    if course
-        .ground(player.pos)
-        .is_none_or(|floor| player.pos.y - floor > AIR_START_HEIGHT)
-    {
-        player.start_in_air();
+        let kept = player.inertia_kept_by_teleport();
+        course.mesh = seeded;
+        player = placed_player(script, &options, &course)?;
+        player.keep_inertia_through_teleport(kept);
     }
     let floor = options
         .camera

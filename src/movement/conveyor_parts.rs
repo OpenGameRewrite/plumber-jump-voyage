@@ -68,7 +68,8 @@ impl ConveyorHost {
             .iter()
             .map(|key| {
                 let relative = *key - trans;
-                let distance = relative.x * direction.x + relative.y * direction.y + relative.z * direction.z;
+                let distance =
+                    relative.x * direction.x + relative.y * direction.y + relative.z * direction.z;
                 // al::verticalizeVec: setScaleAdd(-dot, vertical, vec)
                 let dot = distance;
                 let vertical = direction * -dot + relative;
@@ -138,14 +139,20 @@ impl ConveyorHost {
     /// Where step `index` stands for `offset`, and whether its collision exists
     /// (`ConveyerStep::setTransByCoord`: beyond the total distance the part is invalidated).
     fn step_pose(&self, offset: f32, index: usize) -> (Vec3, bool) {
-        let coord = wrap_value(self.interval * index as f32 + offset, self.max_coord);
+        let coord = self.step_coord(offset, index);
         (self.position_at(coord), coord <= self.total)
+    }
+
+    /// `ConveyerStep::setTransByCoord`: `wrapValue(PartsInterval * i + offset, mMaxCoord)`.
+    fn step_coord(&self, offset: f32, index: usize) -> f32 {
+        wrap_value(self.interval * index as f32 + offset, self.max_coord)
     }
 
     /// `ConveyerMapParts::exeMove`: the offset advances, every step actor is placed by its
     /// coordinate, and the collision parts take the positions of the update before.
     pub fn tick(&mut self, parts: &mut [RotatePart], disabled: &mut Vec<usize>) {
         let held = std::mem::take(&mut self.held);
+        let previous_offset = self.offset;
         if !held {
             self.offset = wrap_value(self.offset + 1.0 * self.speed, self.max_coord);
         }
@@ -154,6 +161,12 @@ impl ConveyorHost {
             if !held {
                 if self.valid[i] {
                     parts[*step].drive(self.lagged[i]);
+                }
+                // `ConveyerStep::setTransByCoord` 0x9130bc: a step whose coordinate went back (the
+                // wrap of a forward belt) calls `resetPosition`, whose `resetAllCollisionMtx`
+                // 0x8d7ee8 makes both collision matrices the new pose.
+                if self.step_coord(self.offset, i) < self.step_coord(previous_offset, i) {
+                    parts[*step].reset(position);
                 }
                 self.lagged[i] = position;
                 self.valid[i] = exists;
@@ -165,7 +178,11 @@ impl ConveyorHost {
     }
 
     /// Only the independently observed initial offset is an input to replay; the placement
-    /// arguments are checked against what the recorded host reports.
+    /// arguments are checked against what the recorded host reports. The first sample's message
+    /// buffer also holds what the host received while the probe placed the player (before the
+    /// replayed window), so its dropped count is not a seed condition: the only message the host
+    /// acts on is `isMsgFloorTouch` (`ConveyerMapParts::receiveMsg` 0x912b94), which feeds the ride
+    /// counters that `exeMove` 0x912cb4 reads only with `IsRideOnlyMove` (required to be 0 here).
     pub fn seed(
         &mut self,
         row: &HashMap<String, String>,
@@ -182,9 +199,15 @@ impl ConveyorHost {
             || get("key_total_bits")? != bits(self.total)
             || get("steps")? != self.steps.len().to_string()
             || get("keys")? != self.keys.len().to_string()
-            || ["dead", "clipped", "SwitchStart_valid", "ride_only", "registry_dropped", "message_dropped"]
-                .iter()
-                .any(|k| get(k) != Ok("0"))
+            || [
+                "dead",
+                "clipped",
+                "SwitchStart_valid",
+                "ride_only",
+                "registry_dropped",
+            ]
+            .iter()
+            .any(|k| get(k) != Ok("0"))
         {
             return Err("unsupported conveyor seed".into());
         }

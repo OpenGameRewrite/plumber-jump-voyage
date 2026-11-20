@@ -303,7 +303,11 @@ impl TriangleMesh {
             }
         });
         self.conveyors.retain(|c| ids.contains(&c.id));
-        let hosts: Vec<String> = self.conveyors.iter().map(|c| format!("{}/", c.id)).collect();
+        let hosts: Vec<String> = self
+            .conveyors
+            .iter()
+            .map(|c| format!("{}/", c.id))
+            .collect();
         self.rotate_parts.retain(|s| {
             if ids.contains(&s.id)
                 || s.axis == crate::movement::rotate_parts::DRIVEN

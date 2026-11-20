@@ -238,6 +238,7 @@ pub mod cap_trampoline;
 pub mod carry;
 #[path = "movement/console_libm.rs"]
 pub(crate) mod console_libm;
+pub mod conveyor_parts;
 mod damage;
 mod damage_fire;
 mod damage_life;
@@ -256,7 +257,6 @@ mod grab_ceil_find;
 mod ground;
 mod ground_inertia;
 mod grow_seed;
-pub mod conveyor_parts;
 pub mod key_move_parts;
 pub mod kick_stone;
 mod on_ground;

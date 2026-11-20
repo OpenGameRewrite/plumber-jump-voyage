@@ -148,6 +148,10 @@ class Evidence:
             return
         if frames[0] != -30:
             return
+        # The first sample's message buffer also holds what the host received while the probe placed the
+        # player (before the first replayed update), so only later samples must have lost none. The host acts on
+        # one message, isMsgFloorTouch (ConveyerMapParts::receiveMsg 0x912b94), which only feeds the ride
+        # counters that exeMove 0x912cb4 reads when IsRideOnlyMove is set (ride_only is required to be 0).
         # Messages a floor-standing player sends the host: PlayerTouch, PlayerFloorTouch, AskSafetyPoint, PlayerJumpTakeOffFloor.
         if any(r['answer'] not in ('0', '1') or r['message_vt'] not in ('1de9b18', '1de93e8', '1deb878', '1d9dad8') for r in messages if r['id'] == p['id']):
             return
@@ -172,20 +176,23 @@ class Evidence:
                 source.tick()
                 for i in range(source.count):
                     coord, position, exists = source.step(source.offset, i)
-                    if coord < coords[i]:
-                        return  # a wrap (resetPosition of the step) is not modelled
-                    coords[i] = coord
                     # the collision part is synchronised with its actor only while it is valid
                     if valid[i]:
                         history[i] = [history[i][1], actor[i]]
                         executions[i] += 1
+                    # A wrap (setTransByCoord 0x9130bc, newCoord < mCurrentCoord going forwards) calls
+                    # resetPosition -> resetAllCollisionMtx 0x8d7ee8: both collision matrices become the new pose.
+                    if coord < coords[i]:
+                        history[i] = [position, position]
+                    coords[i] = coord
                     actor[i] = position
                     valid[i] = exists
             r = host_rows[f]
             if generation is None:
                 generation = r['generation']
             if (r['generation'] != generation or r['phase'] != 'Move' or r['n_vt'] != '1dedf48'
-                    or any(r[key] != '0' for key in ('dead', 'clipped', 'SwitchStart_valid', 'ride_only', 'registry_dropped', 'message_dropped'))
+                    or any(r[key] != '0' for key in ('dead', 'clipped', 'SwitchStart_valid', 'ride_only', 'registry_dropped'))
+                    or (k > 0 and r['message_dropped'] != '0')
                     or floats(r['offset_bits'], 1)[0] != source.offset
                     or floats(r['speed_bits'], 1)[0] != source.speed or floats(r['interval_bits'], 1)[0] != source.interval
                     or floats(r['max_coord_bits'], 1)[0] != source.max_coord or floats(r['key_total_bits'], 1)[0] != source.total

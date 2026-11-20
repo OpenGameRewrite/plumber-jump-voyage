@@ -462,6 +462,7 @@ start x y z yaw_deg     # game units (cm); yaw 0 faces +Z, 90 faces +X
 start spawn yaw_deg     # the game's default spawn; only the facing matters here
 camera yaw_deg          # optional: camera yaw for the whole run
 preroll N               # optional: nonnegative idle frame count (default 10)
+relax N                 # optional: idle updates before the player is placed a second time (default 0)
 shot 30 90              # optional: frames to capture in a rendered replay
 <frames> <lx> <ly> <buttons>
 ```
@@ -505,6 +506,14 @@ byte-for-byte repeatable.
 headless and rendered replays. It does not add scripted rows: the first input
 row remains frame 0, and `--bits` numbers the idle steps `-N` through `-1`.
 Zero skips those steps. The count must fit an unsigned 32-bit integer.
+`relax N` replays the probe's `PH_RELAX`: when the stage's default entry lies in a 2D area the
+first update after the placement runs the 2D to 3D dimension change, which moves the player, so the
+probe lets N updates pass (60 in the recordings) and places the player again. The replay does the
+same on the stage as seeded and keeps only what the second placement does not reset: the saved
+ground force of `PlayerExternalVelocity` (`rs::resetCollision` 0x565ce8 and `rs::resetMarioDynamics`
+0x56b680 touch the collider and the cap dynamics). On a moving belt that force is the belt's speed,
+so the first airborne updates of the recorded start are still carried by it. The probe relaxes by
+itself; the directive only tells the replay.
 `game.preroll.csv` is observation data for diagnostics and environment judging;
 the replay computes its own preroll and never injects those samples.
 
@@ -1901,4 +1910,4 @@ The probe's stage override leaves the save's current world in place; a sub stage
 then asks for world-dependent archives (`CoinCollectEmpty2D_<letter>`) of the wrong kingdom, and a default
 entry inside a 2D area runs the 2D to 3D change in the first update after the teleport, which moves the
 player. The local probe therefore sets the current world from `WorldList::tryFindWorldIndexByStageName`
-for a sub stage and places the player twice (the second time 60 updates after the first).
+for a sub stage and places the player twice (the second time 60 updates after the first; the scenario states it as `relax 60`).

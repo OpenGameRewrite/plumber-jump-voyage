@@ -89,6 +89,11 @@ impl RotatePart {
         self.position = position;
         self.executions += 1;
     }
+    /// A driven part whose actor was reset to `position`: both collision matrices become that pose.
+    pub fn reset(&mut self, position: Vec3) {
+        self.position = position;
+        self.previous = self.frame();
+    }
     /// A driven part at a recorded sample: the previous and the current collision position.
     pub fn place(&mut self, previous: Vec3, current: Vec3) {
         self.position = previous;
