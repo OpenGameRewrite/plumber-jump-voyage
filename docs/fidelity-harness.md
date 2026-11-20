@@ -1904,7 +1904,7 @@ is valid. `tools/conveyor_parts.py` re-simulates the host, the steps and their c
 single precision from the placement and gates the environment rule to the one vetted site
 (SandWorldPyramid001Stage scenario 1, obj243: five 800 cm steps, speed 2, 3600 cm of path); the
 `conveyor-ride-walk` recording stands on a step, walks against the belt into the next step's
-block and jumps. A wall the sweep of a moving part pushes does not cut the run's velocity.
+block and jumps.
 
 The probe's stage override leaves the save's current world in place; a sub stage such as the pyramid
 then asks for world-dependent archives (`CoinCollectEmpty2D_<letter>`) of the wrong kingdom, and a default

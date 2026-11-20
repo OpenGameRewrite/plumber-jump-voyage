@@ -834,21 +834,6 @@ impl TriangleMesh {
         Ok(mesh)
     }
 
-    /// Whether a triangle belongs to a collision part that moved on the last update.
-    pub fn is_moving_part_triangle(&self, triangle: u32) -> bool {
-        let Some(local) = self.triangles.get(triangle as usize).and_then(|t| t.local) else {
-            return false;
-        };
-        let part = local.part as usize;
-        self.key_move_parts
-            .iter()
-            .any(|s| s.part == part && s.motion != Vec3::ZERO)
-            || self
-                .rotate_parts
-                .iter()
-                .any(|s| s.part == part && s.executions > 0)
-    }
-
     /// `ConveyerMapParts::exeMove` of every conveyor: the steps follow the advanced offset.
     pub fn tick_conveyors(&mut self) {
         for host in &mut self.conveyors {

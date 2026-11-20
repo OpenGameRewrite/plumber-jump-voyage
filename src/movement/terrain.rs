@@ -590,15 +590,7 @@ impl Player {
                 // The air states keep their velocity against a wall (the wall
                 // slide starts from it, and the jump's own control has nothing
                 // that takes it off); the collider's push alone holds the body.
-                // A wall the sweep of a moving part pushes (`callbackFromParts`) is kept out by that
-                // sweep: the conveyor run (recorded, the pillar of a ConveyerStep) keeps its
-                // intended velocity and brakes by itself while the part holds the body back.
-                let moving_wall = mesh.is_moving_part_triangle(wall.triangle);
-                if into > 0.
-                    && !moving_wall
-                    && !self.keeps_velocity_at_walls()
-                    && !self.run_follows_floor()
-                {
+                if into > 0. && !self.keeps_velocity_at_walls() && !self.run_follows_floor() {
                     self.v += normal * into;
                 }
             }
