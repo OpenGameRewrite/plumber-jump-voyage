@@ -5585,7 +5585,9 @@ impl Player {
     }
     /// `PlayerStateJump::isEnableHipDropStart` (0x472368): the active spin-flower and
     /// ground-spin jump nerves, including their DownFall children, refuse the ordinary pound.
-    /// JumpSpinFlowerDownFall (0x1d7e560) has no corresponding move in this controller yet.
+    /// The flower's own crouch transition is still missing: in the game a crouch press in
+    /// `exeJumpSpinFlower` (isTriggerHipDrop 0x44c7ac) enters JumpSpinFlowerDownFall
+    /// (0x1d7e560), which this controller does not model yet.
     fn hip_drop_start_enabled(&self) -> bool {
         !matches!(
             self.mode,

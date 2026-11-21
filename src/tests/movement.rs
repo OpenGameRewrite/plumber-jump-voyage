@@ -2358,8 +2358,8 @@ fn original_simulation_trace() {
     // refusal at 0x48d62c, the rolling_throw source and real-stage lock-on.
     #[cfg(target_os = "windows")]
     assert_eq!(
-        hash, 0xb8fe2dc21ac2e6d2,
-        "simulation differs from the ground spin tilt revision (ground SpinCap turns apply calcTilt and slerpUpFront)"
+        hash, 0x4a55bede464bbbcf,
+        "simulation differs from the airborne cap priority revision (air throw before pound, isEnableHipDropStart and live head slide trigger)"
     );
     #[cfg(not(target_os = "windows"))]
     assert_ne!(hash, 0);
