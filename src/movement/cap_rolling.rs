@@ -11,8 +11,10 @@
 //! brakes at a constant rate over the brake time and stays where it stops.
 //!
 //! Only the ground throw is here: the up throw (`DoubleUp`) comes from a swing of the motion
-//! controls, and the wall reaction of the rolling nerves (`tryCollideWallReactionRollingGround`)
-//! is not ported.
+//! controls. Both rolling nerves ask `tryCollideReflectReaction` first (0x4048e0, 0x405428), which
+//! sends the cap into its rebound on a sign board. The wall reaction of the rolling nerves
+//! (`tryCollideWallReactionRollingGround`, 0x404968) is not ported: it needs a wall sensor that
+//! accepts `CapTouchWall`, and no sensor in the rewrite answers it.
 use super::pose_math::{
     atan2f, cosf, cross, dot, normalize, rotate_by_quat, sinf, squared_length,
     try_normalize_or_zero,

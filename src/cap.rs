@@ -14,8 +14,10 @@
 //! steering of a throw in progress and the throws of the motion controls (`DoubleUp`,
 //! `ThrowAppend`, `Rethrow`) have no counterpart yet.
 //! The ordinary head-on wall stop, SignBoardNormal reflection and zero-velocity Rebound
-//! are ported (0x401914, 0x406c0c). `redirect()` remains an invented flick
-//! shortcut; this round deliberately leaves it unchanged.
+//! are ported (0x401914, 0x406c0c). The reflection is asked by the throw, brake, spiral and
+//! rolling nerves (0x401840, 0x403088, 0x403ae8, 0x4048e0, 0x405428); the stay nerve's call
+//! (0x405c54) sits in a hover step the port does not model yet. `redirect()` remains an
+//! invented flick shortcut; this round deliberately leaves it unchanged.
 //!
 //! The cap is a separate actor that updates before the player in the same
 //! frame. It runs its current nerve once per frame and then its collider moves
@@ -1030,8 +1032,8 @@ impl Cap {
         let next = match self.nerve {
             CapNerve::Throw => self.throw(&mut events, world),
             CapNerve::ThrowBrake => self.throw_brake(&mut events, world),
-            CapNerve::ThrowRolling => self.throw_rolling(),
-            CapNerve::ThrowRollingBrake => self.throw_rolling_brake(),
+            CapNerve::ThrowRolling => self.throw_rolling(world, &mut events),
+            CapNerve::ThrowRollingBrake => self.throw_rolling_brake(world, &mut events),
             CapNerve::ThrowSpiral => {
                 self.throw_spiral(world.player / UNIT, world.mesh, &mut events)
             }
@@ -1354,11 +1356,15 @@ impl Cap {
     }
     /// `HackCap::exeThrowRolling`: roll along the surface at the throw's speed for the steps the
     /// distance allows, then brake.
-    fn throw_rolling(&mut self) -> Option<CapNerve> {
+    fn throw_rolling(&mut self, world: &CapWorld, events: &mut Vec<CapEvent>) -> Option<CapNerve> {
         let plan = self.rolling?.plan;
         if self.step == 0 {
             // `tryStartActionIfNotPlaying`.
             self.try_play("FlyingWaitRolling");
+        }
+        // exeThrowRolling 0x4048e0 asks `tryCollideReflectReaction` before `rollingGround`.
+        if let Some(next) = self.reflect_collision(world.mesh, events) {
+            return Some(next);
         }
         self.roll_on_ground();
         self.velocity = cap_rolling::keep_along(self.velocity, self.front);
@@ -1366,8 +1372,16 @@ impl Cap {
     }
     /// `HackCap::exeThrowRollingBrake`: keep rolling, slowing by a fixed amount a step; the cap
     /// stays where it stops.
-    fn throw_rolling_brake(&mut self) -> Option<CapNerve> {
+    fn throw_rolling_brake(
+        &mut self,
+        world: &CapWorld,
+        events: &mut Vec<CapEvent>,
+    ) -> Option<CapNerve> {
         let plan = self.rolling?.plan;
+        // exeThrowRollingBrake 0x405428 asks `tryCollideReflectReaction` before `rollingGround`.
+        if let Some(next) = self.reflect_collision(world.mesh, events) {
+            return Some(next);
+        }
         self.roll_on_ground();
         let brake = self.front * plan.brake_step;
         self.velocity = Vec3::new(
@@ -1447,6 +1461,11 @@ impl Cap {
             param::THROW_HEIGHT * self.up.y + feet.y,
             param::THROW_HEIGHT * self.up.z + feet.z,
         );
+        // exeThrowSpiral 0x403ae8 asks `tryCollideReflectReaction` right after the point it
+        // circles and before the terrain helper; an accepted reflection leaves the nerve.
+        if let Some(next) = self.reflect_collision(mesh, events) {
+            return Some(next);
+        }
         let previous_up = self.up;
         self.follow_terrain(mesh, events);
         self.curve_front = cap_spiral::align_curve_front(self.curve_front, previous_up, self.up);

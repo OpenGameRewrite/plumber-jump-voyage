@@ -19,6 +19,7 @@ pub(super) fn run() {
     the_spiral_circles_the_player();
     the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis();
     the_throw_down_rolls_along_the_floor();
+    the_spiral_and_rolling_nerves_reflect_off_a_sign_board();
     the_helper_makes_the_front_a_unit_vector_in_its_easing_only();
     the_near_zero_tests_are_strict();
     the_collision_turn_follows_the_binarys_gates();
@@ -383,6 +384,94 @@ fn the_spiral_calls_the_terrain_helper_and_circles_about_its_up_axis() {
     // The easing starts at the third step of the helper (a share of the way that grows from the
     // second): the up axis is no longer the one the throw began with.
     assert!(cap.up.dot(Vec3::Y) > tilted.dot(Vec3::Y));
+}
+
+/// `tryCollideReflectReaction` (0x401914) is asked by exeThrowSpiral (0x403ae8), exeThrowRolling
+/// (0x4048e0) and exeThrowRollingBrake (0x405428) as well as by the plain throw nerves: a cap
+/// whose collider touched a sign board's collision part goes into its rebound in every one of
+/// them, and keeps flying when what it touched is any other part.
+#[cfg_attr(test, test)]
+fn the_spiral_and_rolling_nerves_reflect_off_a_sign_board() {
+    use crate::collider::Contact;
+    let part = serde_json::json!([{"id": "sign0", "model": "SignBoardNormal"}]);
+    let source = serde_json::json!({
+        "placement": {
+            "UnitConfigName": "SignBoardNormal", "IsLinkDest": false, "Links": {}, "Id": "sign0",
+            "Translate": {"X": 0.0, "Y": 0.0, "Z": 120.0},
+        },
+        "initial_phase": "WaitPending",
+        "collision": {"Sensor": "Collision"},
+    });
+    let wall = [[
+        Vec3::new(-500., -500., 50.),
+        Vec3::new(0., 500., 50.),
+        Vec3::new(500., -500., 50.),
+    ]];
+    let mut sign_mesh = TriangleMesh::from_corners(&wall);
+    sign_mesh.signboards.push(
+        crate::movement::sign_board::SignBoard::load(&source, part.as_array().unwrap()).unwrap(),
+    );
+    let plain_mesh = TriangleMesh::from_corners(&wall);
+    let touched = || Contact {
+        normal: -Vec3::Z,
+        position: Vec3::new(0., 70., 50.),
+        triangle: 0,
+        location: Location::Face,
+    };
+    let launch = |kind| Launch {
+        front: Vec3::Z,
+        kind,
+        left: false,
+        air: false,
+        continuous: false,
+        spiral_side: if kind == Throw::Spin { 1. } else { 0. },
+        up: Vec3::Y,
+    };
+    for (kind, nerve) in [
+        (Throw::Spin, CapNerve::ThrowSpiral),
+        (Throw::Down, CapNerve::ThrowRolling),
+    ] {
+        let run = |mesh: &TriangleMesh| {
+            let mut cap = Cap::start(launch(kind), Vec3::ZERO, 1);
+            assert_eq!(cap.nerve, nerve);
+            cap.collider.wall = Some(touched());
+            let world = CapWorld {
+                player: Vec3::ZERO,
+                hold: false,
+                mesh: Some(mesh),
+                water: None,
+                targets: &[],
+                cap_hits: &[],
+            };
+            let events = cap.update(&world);
+            (cap.nerve, events)
+        };
+        let (next, events) = run(&sign_mesh);
+        assert_eq!(next, CapNerve::Rebound, "{nerve:?}");
+        assert!(events.contains(&CapEvent::Reflected(0)), "{nerve:?}");
+        let (next, events) = run(&plain_mesh);
+        assert_ne!(next, CapNerve::Rebound, "{nerve:?}");
+        assert!(!events.contains(&CapEvent::Reflected(0)), "{nerve:?}");
+    }
+    // The rolling brake: the same question before `rollingGround`.
+    let mut brake = Cap::start(launch(Throw::Down), Vec3::ZERO, 1);
+    let world = CapWorld {
+        player: Vec3::ZERO,
+        hold: false,
+        mesh: Some(&sign_mesh),
+        water: None,
+        targets: &[],
+        cap_hits: &[],
+    };
+    while brake.nerve != CapNerve::ThrowRollingBrake {
+        brake.update(&CapWorld {
+            mesh: None,
+            ..world
+        });
+    }
+    brake.collider.wall = Some(touched());
+    assert!(brake.update(&world).contains(&CapEvent::Reflected(0)));
+    assert_eq!(brake.nerve, CapNerve::Rebound);
 }
 
 /// The catch is the contact of the cap's `Catch` sensor (100) with the player's

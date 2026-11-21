@@ -17,8 +17,12 @@
 //! the helper eased (`align_curve_front`); the circle's axis and the point it circles are the
 //! cap's up axis (`+0x24c`), which is the world's up unless the throw began on a tilted floor.
 //!
-//! Not ported: the wall reaction of the spiral (`tryCollideWallReactionSpiral`, which sends the
-//! cap into its rebound nerve) and the five `SpiralTail` hit sensors (`validateHitSensor` on the
+//! The nerve asks `tryCollideReflectReaction` (0x403ae8) before the terrain helper: a sign board
+//! the cap touches sends it into its rebound.
+//!
+//! Not ported: the wall reaction of the spiral (`tryCollideWallReactionSpiral` 0x40416c, which
+//! sends the cap into its rebound nerve when the wall's sensor accepts `CapTouchWall`; no sensor
+//! in the rewrite answers it) and the five `SpiralTail` hit sensors (`validateHitSensor` on the
 //! tenth step, then each follows the cap's recent positions: the sensors have no counterpart in
 //! the rewrite's contact model, so what the tail hits is not produced).
 use super::joint_math::ease_out;
