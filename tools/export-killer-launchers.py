@@ -90,9 +90,9 @@ def main():
             'id': obj['Id'],
             'class': 'KillerLauncher',
             'matrix': pose[obj['Id']]['matrix'],
-            'wait_frame': int(obj.get('WaitFrame', 120)),
-            'alive_frame': int(obj.get('AliveFrame', 300)),
-            'delay_frame': int(obj.get('DelayFrame', -1)),
+            'wait_frame': int(obj.get('WaitFrame', 120)),  # init fallback at 0x147ff8
+            'alive_frame': int(obj.get('AliveFrame', 300)),  # init fallback at 0x14801c
+            'delay_frame': int(obj.get('DelayFrame', -1)),  # init fallback at 0x14805c
             'switch': start[0]['Id'],
         })
     used = {launcher['switch'] for launcher in launchers}

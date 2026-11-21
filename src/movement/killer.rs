@@ -1,13 +1,13 @@
 //! Placed `KillerLauncher` actors and the `Killer`s (Bullet Bills) they fire.
 //!
-//! Mario's head looks at the nearest enemy in reach, so a Killer flying by is a look target
-//! (`look_at.rs`). The recordings that need it (the Sand lift runs) never touch a Killer; what
-//! they need is where it is and when it exists. Both follow from the placements:
+//! Mario's head looks at the nearest enemy in reach (`look_at.rs`). In the clean Sand lift runs
+//! he looks at flying Killers, whose body sensors appear as `キラー/Body/9` in the recording.
+//! Their positions and lifetimes follow from the placements:
 //!
 //! * A `SwitchKeepOnArea` placed with a `SwitchAreaOn` link keeps its stage switch on while the
 //!   player is inside the area (`al::SwitchKeepOnAreaGroup::update` 0x807b04). Several areas
-//!   may drive one switch: the group writes it its final value, on while any of them holds the
-//!   player, so a switch never flickers inside one update.
+//!   may drive one switch. Its final value is on while any of them holds the player. The watcher
+//!   samples that final value on the next update.
 //! * A launcher with a `SwitchStart` link starts stopped. The switch turning on starts it
 //!   (`KillerLauncher::startLaunch` 0x148138), the switch turning off ends it (`endLaunch`
 //!   0x14819c). A started launcher waits `DelayFrame` steps (`exeDelay` 0x148338), stands by
@@ -587,9 +587,9 @@ fn launcher_timeline() {
 }
 
 /// Two areas drive one switch (the Sand stage's `obj168`: `obj891` and `obj932`) and the player
-/// stays only in the second. `SwitchKeepOnAreaGroup::update` writes the switch its final value,
-/// so the first area's "off" never reaches the watcher: the launcher stands by and launches
-/// rather than restarting its delay every frame.
+/// stays only in the second. The watcher samples after both areas have been evaluated, so the
+/// launcher stays on long enough to stand by and fire. Delivering each area's write immediately
+/// would switch the launcher off and restart its delay every frame.
 #[cfg_attr(test, test)]
 fn shared_switch_keeps_the_launcher_running() {
     let areas = [test_area(0., "obj890"), test_area(5000., "obj890")];
@@ -642,6 +642,13 @@ impl super::Player {
     /// switch areas of that frame already see him at the placement; the first recorded frame is
     /// the next one. A launcher whose area holds the placement therefore starts one frame
     /// sooner than if the area first saw him in the first recorded frame.
+    ///
+    /// In ExecuteOrder (0x1ddff78), the entries between player movement (30, 0x1de0338) and
+    /// enemies (37, 0x1de0418) are the player model (31, 0x1de0358), shadow post-processing
+    /// (32, 0x1de0378), player decorations (33–34, 0x1de0398 and 0x1de03b8), and the weapon
+    /// and display caps (35–36, 0x1de03d8 and 0x1de03f8). The probe takes no model sample on
+    /// this frame and the cap is worn at lift placement. None of these entries advances a
+    /// Killer or launcher, or writes its switch. Enemy and area updates use the teleported feet.
     pub fn run_placement_frame_tail(&mut self, scene: &super::Course) {
         self.init_killers(scene);
         self.tick_killers(scene);
