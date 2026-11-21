@@ -5,6 +5,11 @@ workflow lets you play with outfits, movement animations and sound effects from
 your own Super Mario Odyssey files. Nothing extracted is uploaded or included
 in this repository.
 
+The outfit converter also exports the worn head's `IsPreventHead` flag to the local
+manifest, so protective heads suppress the soot decoration channel. Re-run the normal
+outfit conversion command to refresh older manifests (cached models are reused).
+Manifests without `prevent_head_pain` use false, as do heads without the original key.
+
 ## What you need
 
 - Your own base NSP, optionally the update, and your local `prod.keys` and

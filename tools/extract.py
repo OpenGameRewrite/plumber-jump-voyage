@@ -265,7 +265,7 @@ def glb_json(path):
             raise ValueError('Export a self-contained GLB with embedded textures/buffers')
     return model
 
-def install_exports(exports, output, scale, yaw):
+def install_exports(exports, output, scale, yaw, head_flags=None):
     if not math.isfinite(scale) or not 0 < scale < 100 or not math.isfinite(yaw):
         raise ValueError('Invalid scale/yaw')
     files = sorted(exports.glob('*.glb'))
@@ -292,6 +292,7 @@ def install_exports(exports, output, scale, yaw):
         name=re.sub(r'([a-z0-9])([A-Z])',r'\1 \2',name).replace('_',' ') or 'Classic plumber'
         name={'Dot3d':'8-bit'}.get(name,name)
         outfits.append({'name':name, 'file':'local/' + file.name, 'scale':scale,'yaw':yaw,'animations':mapping})
+        if head_flags is not None:outfits[-1]['prevent_head_pain']=head_flags[file.stem]
         if source:outfits[-1]['animation_file']='local/'+source
         expressions=model.get('extras',{}).get('expressions')
         if expressions and expressions!=shared:outfits[-1]['expressions']=expressions

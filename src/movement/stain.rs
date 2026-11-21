@@ -66,8 +66,7 @@ impl Soot {
             // skipped when it is set, 0x4664d8 `cbnz` -> 0x466504). [V] The classic head
             // (`MarioHead.szs`, `InitCostumeInfoHead.byml`: `IsEnableBigEar`, `IsFullFace`) has
             // no `IsPreventHead`, so `createHeadCostumeInfo` (0x43e798) leaves it false and the
-            // gate is open. [I] No table of the other head costumes' flags is carried (see
-            // `Player::head_prevents_pain`).
+            // gate is open. Other heads' flags come from the local outfit exporter and manifest.
             if !prevent_head {
                 self.decoration = (self.decoration + increment).min(self.decoration.max(1.));
             }
@@ -108,9 +107,9 @@ impl Player {
     }
     /// `PlayerCostumeInfo::isPreventHeadPain` (0x43e5a4) of the worn head costume: its
     /// `InitCostumeInfoHead.byml` `IsPreventHead`. The classic head has no such key, which reads
-    /// false (0x43e798); the other heads' flags are not carried, so the classic value stands.
+    /// false (0x43e798). The installed wardrobe carries the locally exported flag.
     fn head_prevents_pain(&self) -> bool {
-        false
+        self.prevent_head_pain
     }
 }
 
@@ -153,12 +152,17 @@ mod tests {
     #[cfg_attr(test, test)]
     pub(super) fn a_head_that_prevents_pain_keeps_the_decoration_channel_closed() {
         for (prevent_head, expected) in [(false, true), (true, false)] {
-            let mut soot = Soot::default();
-            soot.record_damage_fire();
-            soot.update(true, false, false, prevent_head);
-            assert!(soot.body > 0. && soot.cap > 0.);
+            let mut player = Player {
+                prevent_head_pain: prevent_head,
+                ..default()
+            };
+            player.reset();
+            assert_eq!(player.head_prevents_pain(), prevent_head);
+            player.soot.record_damage_fire();
+            player.update_soot(&Course::default());
+            assert!(player.soot.body > 0. && player.soot.cap > 0.);
             assert_eq!(
-                soot.decoration > 0.,
+                player.soot.decoration > 0.,
                 expected,
                 "prevent_head {prevent_head}"
             );

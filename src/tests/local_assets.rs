@@ -16,6 +16,7 @@ fn outfit_validation_and_expressions() {
         yaw: 0.,
         animations: default(),
         cap_file: None,
+        prevent_head_pain: false,
         animation_file: None,
         expressions: default(),
     };
@@ -115,7 +116,24 @@ fn outfit() -> Outfit {
         yaw: 0.,
         animations: default(),
         cap_file: None,
+        prevent_head_pain: false,
         animation_file: None,
         expressions: default(),
+    }
+}
+
+#[test]
+fn the_wardrobe_reads_the_heads_flag_and_defaults_old_manifests_to_false() {
+    let classic = r#"{"name":"classic","file":"local/classic.glb"}"#;
+    let protected = r#"{"name":"protected","file":"local/protected.glb","prevent_head_pain":true}"#;
+    let wardrobe = Wardrobe {
+        outfits: vec![
+            serde_json::from_str(classic).unwrap(),
+            serde_json::from_str(protected).unwrap(),
+        ],
+        status: String::new(),
+    };
+    for (slot, expected) in [(0, false), (3, false), (4, true), (5, false)] {
+        assert_eq!(wardrobe.head_prevents_pain(slot), expected);
     }
 }

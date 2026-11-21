@@ -6,6 +6,7 @@ import struct
 import subprocess
 import sys
 import shutil
+import tempfile
 import extract
 import importlib.util
 
@@ -55,6 +56,14 @@ def byml(data):
 
 def archive(path):return dict(extract.sarc(extract.yaz0(path.read_bytes())))
 
+def head_name(name,objects):
+    return name+'Head' if (objects/(name+'Head')).is_dir() else 'MarioHead'
+
+def head_prevents_pain(files):
+    # [V] createHeadCostumeInfo (0x43e798) reads IsPreventHead, default false.
+    raw=files.get('InitCostumeInfoHead.byml')
+    return byml(raw).get('IsPreventHead',False) if raw else False
+
 def self_check():
     # One real dictionary node with a string and signed integer, in both byte orders.
     for endian,magic in (('<',b'YB'),('>',b'BY')):
@@ -66,6 +75,29 @@ def self_check():
         raw+=(0).to_bytes(3,'little' if endian=='<' else 'big')+b'\xa0'+struct.pack(endian+'I',0)
         raw+=(1).to_bytes(3,'little' if endian=='<' else 'big')+b'\xd1'+struct.pack(endian+'i',-7)
         assert byml(raw)=={'name':'explorer','value':-7}
+        head_keys=table([b'IsPreventHead'])
+        header=magic+struct.pack(endian+'HIII',3,16,0,16+len(head_keys))
+        for flag in (False,True):
+            head=header+head_keys+b'\xc1'+(1).to_bytes(3,'little' if endian=='<' else 'big')
+            head+=bytes(3)+b'\xd0'+struct.pack(endian+'I',flag)
+            assert head_prevents_pain({'InitCostumeInfoHead.byml':head})==flag
+        empty=header+head_keys+b'\xc1'+bytes(3)
+        assert not head_prevents_pain({'InitCostumeInfoHead.byml':empty})
+    assert not head_prevents_pain({})
+    # Exercise the existing installer path with synthetic GLBs, never game data.
+    with tempfile.TemporaryDirectory() as tmp:
+        folder=Path(tmp);exports=folder/'exports';exports.mkdir()
+        output=folder/'installed'
+        model=json.dumps({'meshes':[{}],'scenes':[{}]}).encode()
+        model+=b' '*(-len(model)%4)
+        glb=struct.pack('<4sIIII',b'glTF',2,20+len(model),len(model),0x4e4f534a)+model
+        for name in ('Classic','Protected'):(exports/(name+'.glb')).write_bytes(glb)
+        extract.install_exports(exports,output,1.,0.,{'Classic':False,'Protected':True})
+        manifest=json.loads((output/'manifest.json').read_text())
+        assert [o['prevent_head_pain'] for o in manifest['outfits']]==[False,True]
+        objects=folder/'objects';(objects/'ProtectedHead').mkdir(parents=True)
+        assert head_name('Protected',objects)=='ProtectedHead'
+        assert head_name('Classic',objects)=='MarioHead'
     try:byml(b'bad')
     except ValueError:pass
     else:raise AssertionError('Invalid metadata accepted')
@@ -121,7 +153,7 @@ def main():
     def body_parts(name,files):
         """The separate meshes (head, hands, hat) the body outfit is assembled from."""
         parts={}
-        head=name+'Head' if (objects/(name+'Head')).is_dir() else 'MarioHead'
+        head=head_name(name,objects)
         parts[head]=placement(files,'Head')
         for item in byml(files['InitSubActor.byml']).get('CreatorList',[]):
             if item.get('ClassName')=='PartsModel' and item.get('ModelName'):
@@ -261,7 +293,11 @@ def main():
         if result.returncode:raise ValueError('Cap eyes conversion failed; see '+str(eyes.with_suffix('.log')))
         packer.pack(eyes.with_suffix('.gltf'))
     extract.place(eyes,cap_output/eyes.name)
-    extract.install_exports(exports,extract.ROOT/'assets/local',0.01,3.141592653589793)
+    # Match the head actually assembled by body_parts, including its MarioHead fallback.
+    # Refresh every installed export's flag, even when only some GLBs were converted this run.
+    head_flags={file.stem:head_prevents_pain(archive(a.romfs/'ObjectData'/
+        (head_name(file.stem,objects)+'.szs'))) for file in exports.glob('*.glb')}
+    extract.install_exports(exports,extract.ROOT/'assets/local',0.01,3.141592653589793,head_flags)
     if not a.keep_intermediates:
         # The packed GLBs hold everything; the converter's working files are large.
         freed=0

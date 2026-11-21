@@ -11,7 +11,8 @@
 //! brakes at a constant rate over the brake time and stays where it stops.
 //!
 //! Only the ground throw is here: the up throw (`DoubleUp`) comes from a swing of the motion
-//! controls. Both rolling nerves ask `tryCollideReflectReaction` first (0x4048e0, 0x405428), which
+//! controls. Both rolling nerves (entries 0x404888, 0x4053d0) ask `tryCollideReflectReaction`
+//! at call sites 0x4048e0 and 0x405428 before rollingGround (joint/water omissions: cap.rs), which
 //! sends the cap into its rebound on a sign board. The wall reaction of the rolling nerves
 //! (`tryCollideWallReactionRollingGround`, 0x404968) is not ported: it needs a wall sensor that
 //! accepts `CapTouchWall`, and no sensor in the rewrite answers it.

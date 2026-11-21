@@ -14,6 +14,10 @@ pub struct Outfit {
     pub animations: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub cap_file: Option<String>,
+    /// [V] The worn head's InitCostumeInfoHead.byml IsPreventHead (0x43e798).
+    /// Older manifests and heads without the key retain the game's false default.
+    #[serde(default)]
+    pub prevent_head_pain: bool,
     /// Another installed file whose clips this outfit plays (they are shared by
     /// bone path instead of being copied into every outfit).
     #[serde(default)]
@@ -89,6 +93,11 @@ pub struct Wardrobe {
     pub status: String,
 }
 impl Wardrobe {
+    pub fn head_prevents_pain(&self, slot: usize) -> bool {
+        slot.checked_sub(3)
+            .and_then(|index| self.outfits.get(index))
+            .is_some_and(|outfit| outfit.prevent_head_pain)
+    }
     /// Display order: local outfits first when present, then the explorers.
     pub fn slot(&self, row: usize) -> usize {
         let n = self.outfits.len();

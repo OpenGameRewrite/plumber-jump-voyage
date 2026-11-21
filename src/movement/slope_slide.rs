@@ -138,8 +138,12 @@ impl Player {
     /// `PlayerStateSlope::isEnableCancelSandSink` allows it (0x481328, 0x423610..0x42362c),
     /// `PlayerJudgeStartRolling` (+0x470), then the jump (collided ground and
     /// `rs::judgeAndResetReturnTrue` of `PlayerJudgePreInputJump`, +0x4a0, 0x423660..0x423680). The
-    /// water entry (+0x410) and the fall-through area (+0x430) that follow are the actor's
-    /// general judges here (`judge_in_water`; the stage has no `InvalidateInputFall` area). The
+    /// water entry (+0x410) is handled by the actor's general `judge_in_water` sweep here.
+    /// [V] The last judge (+0x430, 0x4236c8..0x4236d0) checks InvalidateInputFallArea only
+    /// without ground contact (0x459c14 -> 0x42d670); on true it disables input through the
+    /// PlayerInput fields +0x94/+0x98 and selects Fall (0x4236d4..0x4236f8, table 0x1d78910).
+    /// OPEN: nine local geometry files contain the volume, but geometry.rs does not load it;
+    /// neither this judge nor that input invalidation/Fall transition is represented yet. The
     /// jump the executable asks is the one recorded refused on the forced slide in
     /// `slope-slide-forced-jump`.
     fn slope_slide_judges(&mut self, o: &Orders) {
@@ -152,7 +156,9 @@ impl Player {
         }
         // `PlayerJudgeStartRolling::judge` (decomp, `PlayerJudgeStartRolling.cpp`): nothing in
         // the hands, not the 2D model, a collided ground that does not force the slide, then
-        // `PlayerInput::isTriggerRolling` (crouch held and the action trigger).
+        // `PlayerInput::isTriggerRolling`: crouch plus action, or a motion swing, or the
+        // force-rolling floor argument. The floor case ran above; the swing branch remains
+        // unrepresented by the input policy (R17).
         if !self.is_carry()
             && !self.model_2d()
             && self.is_collided_ground()
@@ -164,6 +170,9 @@ impl Player {
             self.start_roll(RollStart::Normal);
             return;
         }
+        // [V] exeSlope 0x423650..0x42365c: actor vtable +0xf8 is getPlayerCollision
+        // (0x42241c, returns this+0x170), passed straight to isCollidedGround (0x423660).
+        // It has no side effects; is_collided_ground below already uses that collision state.
         if self.is_collided_ground() && self.pre_input_jump_judges() {
             self.ground_jump(o);
         }

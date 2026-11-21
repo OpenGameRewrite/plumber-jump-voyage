@@ -1336,6 +1336,8 @@ pub struct Player {
     /// Upper-body overlay clip while throwing on the run.
     pub sub_anim: Option<Anim>,
     pub soot: Soot,
+    /// Worn head metadata, supplied by the installed wardrobe before simulation.
+    pub prevent_head_pain: bool,
     pub death: death::Death,
     entrance_camera: entrance_camera::EntranceCamera,
     recovery: recovery_dead::Recovery,
@@ -1668,6 +1670,7 @@ impl Default for Player {
             },
             sub_anim: None,
             soot: Soot::default(),
+            prevent_head_pain: false,
             death: death::Death::default(),
             entrance_camera: entrance_camera::EntranceCamera::default(),
             recovery: recovery_dead::Recovery::default(),
@@ -2058,6 +2061,8 @@ fn simulate(
     mut orders: ResMut<Orders>,
     course: Res<Course>,
     menu: Res<crate::ui::Menu>,
+    settings: Res<crate::input::Settings>,
+    wardrobe: Res<crate::local_assets::Wardrobe>,
     mut fx: MessageWriter<Fx>,
 ) {
     if menu.open {
@@ -2065,6 +2070,7 @@ fn simulate(
         return;
     }
     for mut p in &mut players {
+        p.prevent_head_pain = wardrobe.head_prevents_pain(settings.outfit);
         p.step(&orders, &course);
         fx.write_batch(p.events.drain(..));
     }
@@ -3056,8 +3062,10 @@ impl Player {
     pub fn reset(&mut self) {
         let checkpoint = self.checkpoint;
         let assist = self.recovery.assist;
+        let prevent_head_pain = self.prevent_head_pain;
         *self = Self::default();
         self.recovery.assist = assist;
+        self.prevent_head_pain = prevent_head_pain;
         self.pos = checkpoint;
         self.checkpoint = checkpoint;
     }
@@ -6051,9 +6059,12 @@ impl Player {
         // the player is not running on the water's surface (0x48242c..0x482474: the counter's
         // value above zero, else `rs::isJudge` of the surface-run judge, then
         // `isLessStep(SpinBrakeFrame)`); otherwise the control steers from the first step, as
-        // it does for every step from `SpinBrakeFrame` on. The control was `appear`ed with the
-        // state (0x481a78 -> 0x416a7c: brake counter and turn controller reset), so a control
-        // that steers from step 0 starts from that reset.
+        // it does for every step from `SpinBrakeFrame` on. [V] The ground state's appear calls
+        // control.appear (0x481a74..0x481a78 -> 0x416a7c); its tail initializes the brake counter
+        // and resets the turn controller (0x416b78..0x416b84 -> 0x419ba8).
+        // [I] We defer that reset to the first controlled step at step 0; the original does
+        // not reset here in updateSpinGroundNerve (0x482690..0x4827a4). Equivalence assumes
+        // no intervening control update or change to the velocity/facing used for the reset.
         let controlled = self.force_run.is_active() || self.surface_run.result;
         if step < t::SPIN_BRAKE_FRAMES && !controlled {
             self.spin_cap_inertia();

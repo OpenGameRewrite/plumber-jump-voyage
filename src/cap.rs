@@ -15,9 +15,11 @@
 //! `ThrowAppend`, `Rethrow`) have no counterpart yet.
 //! The ordinary head-on wall stop, SignBoardNormal reflection and zero-velocity Rebound
 //! are ported (0x401914, 0x406c0c). The reflection is asked by the throw, brake, spiral and
-//! rolling nerves (0x401840, 0x403088, 0x403ae8, 0x4048e0, 0x405428); the stay nerve's call
+//! rolling nerves (call sites 0x401840, 0x403088, 0x403ae8, 0x4048e0, 0x405428); the stay nerve's call
 //! (0x405c54) sits in a hover step the port does not model yet. `redirect()` remains an
 //! invented flick shortcut; this round deliberately leaves it unchanged.
+//! ThrowTornado (reflect call site 0x404438) has no nerve here: its motion-control throw
+//! remains outside the represented input policy (R17).
 //!
 //! The cap is a separate actor that updates before the player in the same
 //! frame. It runs its current nerve once per frame and then its collider moves
@@ -1362,7 +1364,11 @@ impl Cap {
             // `tryStartActionIfNotPlaying`.
             self.try_play("FlyingWaitRolling");
         }
-        // exeThrowRolling 0x4048e0 asks `tryCollideReflectReaction` before `rollingGround`.
+        // [V] exeThrowRolling (entry 0x404888) reflects at call site 0x4048e0, before
+        // rollingGround. OPEN: its preceding updateThrowJoint has no nerve-side counterpart;
+        // changeThrowParamInWater is only modelled for the ordinary throw here. Its rolling
+        // variant, including nerve exits, is not ported. Equivalence of these omissions to
+        // the dry reflection inputs is [I], not a complete port of the nerve's call order.
         if let Some(next) = self.reflect_collision(world.mesh, events) {
             return Some(next);
         }
@@ -1378,7 +1384,9 @@ impl Cap {
         events: &mut Vec<CapEvent>,
     ) -> Option<CapNerve> {
         let plan = self.rolling?.plan;
-        // exeThrowRollingBrake 0x405428 asks `tryCollideReflectReaction` before `rollingGround`.
+        // [V] exeThrowRollingBrake (entry 0x4053d0) reflects at call site 0x405428.
+        // OPEN: updateThrowJoint and changeThrowParamInWater precede it in the exe (the
+        // latter can leave the nerve); both omissions are as in throw_rolling above.
         if let Some(next) = self.reflect_collision(world.mesh, events) {
             return Some(next);
         }
@@ -1461,8 +1469,11 @@ impl Cap {
             param::THROW_HEIGHT * self.up.y + feet.y,
             param::THROW_HEIGHT * self.up.z + feet.z,
         );
-        // exeThrowSpiral 0x403ae8 asks `tryCollideReflectReaction` right after the point it
-        // circles and before the terrain helper; an accepted reflection leaves the nerve.
+        // [V] exeThrowSpiral (entry 0x403a1c) reflects at call site 0x403ae8, after reading
+        // the pivot and before the terrain helper. OPEN: updateThrowJoint and updateWaterArea
+        // precede the reflect in the exe but are not represented here for this nerve. The
+        // water helper exists for the ordinary throw/stay/return, not as a per-frame sweep.
+        // Equivalence of these omissions to the dry reflection inputs remains [I].
         if let Some(next) = self.reflect_collision(mesh, events) {
             return Some(next);
         }

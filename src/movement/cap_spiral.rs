@@ -17,7 +17,7 @@
 //! the helper eased (`align_curve_front`); the circle's axis and the point it circles are the
 //! cap's up axis (`+0x24c`), which is the world's up unless the throw began on a tilted floor.
 //!
-//! The nerve asks `tryCollideReflectReaction` (0x403ae8) before the terrain helper: a sign board
+//! The nerve (entry 0x403a1c) asks `tryCollideReflectReaction` at call site 0x403ae8 before the terrain helper: a sign board
 //! the cap touches sends it into its rebound.
 //!
 //! Not ported: the wall reaction of the spiral (`tryCollideWallReactionSpiral` 0x40416c, which

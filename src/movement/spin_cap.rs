@@ -153,4 +153,30 @@ mod tests {
             assert_eq!(p.v.x, steer.velocity.x, "forced run {forced}");
         }
     }
+
+    /// [I] Step 0 stands in for the original appear's reset. A previous spin must not leave
+    /// brake/turn history in the new controlled spin (appear chain 0x481a78 -> 0x416a7c).
+    #[test]
+    fn the_first_controlled_spin_step_resets_the_previous_controls_history() {
+        for forced in [true, false] {
+            let mut fresh = spinner();
+            let mut reused = spinner();
+            reused.spin_ground_move.brake_counter = 123;
+            reused.spin_ground_move.turn.resume(0.8, Vec3::Z);
+            for player in [&mut fresh, &mut reused] {
+                if forced {
+                    player.force_run.setup(5, 38.);
+                } else {
+                    player.surface_run.result = true;
+                }
+                player.spin_ground(&Orders::default(), 0, &Course::default());
+            }
+            assert_eq!(reused.spin_ground_move.brake_counter, 0);
+            assert_eq!(reused.v, fresh.v);
+            assert_eq!(
+                format!("{:?}", reused.spin_ground_move.turn),
+                format!("{:?}", fresh.spin_ground_move.turn),
+            );
+        }
+    }
 }
