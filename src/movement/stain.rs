@@ -31,7 +31,7 @@ impl Soot {
         self.pending = Some((true, 1.));
     }
 
-    fn update(&mut self, cap_on: bool, in_water: bool, wet: bool) {
+    fn update(&mut self, cap_on: bool, in_water: bool, wet: bool, prevent_head: bool) {
         self.smoke_called = false;
         if in_water || wet {
             // recordInWater / recordInWet: cancel the non-ice request and hold. Only the
@@ -60,9 +60,17 @@ impl Soot {
             } else {
                 0.
             };
-            // Guess (U07): the classic model leaves the decoration gate open. Keep its level
-            // independently, rather than silently treating it as the body's material target.
-            self.decoration = (self.decoration + increment).min(self.decoration.max(1.));
+            // The decoration channel is gated by the head costume's `IsPreventHead` (the stain
+            // keeper's byte +0x51, which `PlayerModelChangerHakoniwa`'s constructor fills from
+            // `PlayerCostumeInfo::isPreventHeadPain`, 0x45dd70 -> 0x43e5a4; the increment is
+            // skipped when it is set, 0x4664d8 `cbnz` -> 0x466504). [V] The classic head
+            // (`MarioHead.szs`, `InitCostumeInfoHead.byml`: `IsEnableBigEar`, `IsFullFace`) has
+            // no `IsPreventHead`, so `createHeadCostumeInfo` (0x43e798) leaves it false and the
+            // gate is open. [I] No table of the other head costumes' flags is carried (see
+            // `Player::head_prevents_pain`).
+            if !prevent_head {
+                self.decoration = (self.decoration + increment).min(self.decoration.max(1.));
+            }
             self.hold = 300;
             if self.body >= 0.75 {
                 self.smoking = true;
@@ -91,13 +99,24 @@ impl Soot {
 impl Player {
     pub(super) fn update_soot(&mut self, scene: &Course) {
         let in_water = self.mode == Move::Swim || scene.wet(self.pos + Vec3::Y * 0.8);
-        self.soot
-            .update(self.cap.is_none(), in_water, self.wet.is_wet());
+        self.soot.update(
+            self.cap.is_none(),
+            in_water,
+            self.wet.is_wet(),
+            self.head_prevents_pain(),
+        );
+    }
+    /// `PlayerCostumeInfo::isPreventHeadPain` (0x43e5a4) of the worn head costume: its
+    /// `InitCostumeInfoHead.byml` `IsPreventHead`. The classic head has no such key, which reads
+    /// false (0x43e798); the other heads' flags are not carried, so the classic value stands.
+    fn head_prevents_pain(&self) -> bool {
+        false
     }
 }
 
 pub(super) fn self_check() {
     tests::request_threshold_death_hold_and_water_are_distinct();
+    tests::a_head_that_prevents_pain_keeps_the_decoration_channel_closed();
 }
 mod tests {
     use super::*;
@@ -106,26 +125,43 @@ mod tests {
         let mut s = Soot::default();
         for _ in 0..150 {
             s.record_damage_fire();
-            s.update(true, false, false);
+            s.update(true, false, false, false);
         }
         assert!(!s.smoking); // f32 accumulation is still below 0.75.
         s.record_damage_fire();
-        s.update(true, false, false);
+        s.update(true, false, false, false);
         assert!(s.smoking && s.smoke_called);
         s.record_damage_fire_dead();
-        s.update(true, false, false);
+        s.update(true, false, false, false);
         assert_eq!((s.body, s.cap, s.hold), (1., 1., 300));
-        s.update(false, false, false);
+        s.update(false, false, false, false);
         assert_eq!((s.cap, s.hold), (0., 299));
-        s.update(true, true, false);
+        s.update(true, true, false, false);
         assert_eq!(s.body, 0.98 - 1. / 300.);
         assert_eq!(s.hold, 0);
         let before = s.body;
         s.record_black_smoke();
-        s.update(true, false, true);
+        s.update(true, false, true, false);
         assert_eq!(s.body, before - 1. / 300.);
         s.record_black_smoke();
-        s.update(true, false, false);
+        s.update(true, false, false, false);
         assert_eq!(s.body, (before - 1. / 300.) + 0.02);
+    }
+
+    /// A head costume with `IsPreventHead` keeps the decoration channel closed while the body
+    /// and cap stain (0x4664d8); the classic head does not.
+    #[cfg_attr(test, test)]
+    pub(super) fn a_head_that_prevents_pain_keeps_the_decoration_channel_closed() {
+        for (prevent_head, expected) in [(false, true), (true, false)] {
+            let mut soot = Soot::default();
+            soot.record_damage_fire();
+            soot.update(true, false, false, prevent_head);
+            assert!(soot.body > 0. && soot.cap > 0.);
+            assert_eq!(
+                soot.decoration > 0.,
+                expected,
+                "prevent_head {prevent_head}"
+            );
+        }
     }
 }
