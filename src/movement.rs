@@ -6046,10 +6046,19 @@ impl Player {
         // the speed the player has (and so moves off at once when the stick
         // is held, a plain `max / frames` per frame, see `GroundMove::plain`).
         // The floor pulls with the ground control's gravity throughout.
-        if step < t::SPIN_BRAKE_FRAMES {
+        //
+        // The braking steps belong to the inertia only while the force-run counter is down and
+        // the player is not running on the water's surface (0x48242c..0x482474: the counter's
+        // value above zero, else `rs::isJudge` of the surface-run judge, then
+        // `isLessStep(SpinBrakeFrame)`); otherwise the control steers from the first step, as
+        // it does for every step from `SpinBrakeFrame` on. The control was `appear`ed with the
+        // state (0x481a78 -> 0x416a7c: brake counter and turn controller reset), so a control
+        // that steers from step 0 starts from that reset.
+        let controlled = self.force_run.is_active() || self.surface_run.result;
+        if step < t::SPIN_BRAKE_FRAMES && !controlled {
             self.spin_cap_inertia();
         } else {
-            if step == t::SPIN_BRAKE_FRAMES {
+            if step == t::SPIN_BRAKE_FRAMES || step == 0 {
                 self.spin_ground_move.reset(self.v, self.facing, Vec3::Y);
             }
             let (actor_up, actor_front) = self.pose_axes();

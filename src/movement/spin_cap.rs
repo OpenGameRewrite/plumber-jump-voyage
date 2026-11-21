@@ -10,9 +10,13 @@
 //! unless it points against it (`PlayerActionFunction::isOppositeDir`, a hundred degrees or more
 //! away); the actor's front turns by the same rotation.
 //!
-//! Not ported: the nerve's other branch, the ground move control in these steps while the
-//! force-run counter is up or the player runs on the water surface (`PlayerCounterForceRun`,
-//! `PlayerJudgeWaterSurfaceRun`), and the ice floor's own handling (`isOnGroundSkateCode`).
+//! The inertia belongs to the braking steps only while the force-run counter is down and the
+//! player is not running on the water's surface (`PlayerCounterForceRun`,
+//! `PlayerJudgeWaterSurfaceRun`; 0x48242c..0x482474); otherwise the state's ground move control
+//! steers from the first step (`spin_ground`). Not ported: the ice floor's own handling
+//! (`isOnGroundSkateCode`, the hit reactions and the first-step velocity at 0x482278..0x4823f8)
+//! and, on the water's surface, the nerve's `al::approachWaterSurfaceRate` after the control
+//! (0x4827a8..0x482804, from `PlayerConst`'s SwimRunSurface constants).
 use super::pose_math::{
     DEGREES_TO_RADIANS, along_vector_normal_h, cross, dot, make_quat_rotation_limit, normalize,
     rotate_by_quat, try_normalize_or_zero,
@@ -89,6 +93,64 @@ impl Player {
                 t::HILL_POSE_DEGREE_MAX,
             );
             self.set_pose(stored);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spinner() -> Player {
+        Player {
+            mode: Move::Throw,
+            grounded: true,
+            ground_contact: 2,
+            v: Vec3::new(10., -0.5, 0.),
+            facing: Vec3::X,
+            ..default()
+        }
+    }
+
+    /// The braking steps of the ground spin run `moveInertiaTurn` unless the force-run counter is
+    /// up or the player runs on the water's surface (0x48242c..0x482474); then the state's ground
+    /// control steers from the first step.
+    #[test]
+    fn a_forced_run_or_a_surface_run_steers_the_braking_steps_with_the_ground_control() {
+        let o = Orders::default();
+        let scene = Course::default();
+        let mut inertia = spinner();
+        inertia.spin_ground(&o, 3, &scene);
+        // The control: no stick, the plain ground control brakes by its frames, not by 0.95.
+        let mut expected = spinner();
+        expected
+            .spin_ground_move
+            .reset(expected.v, expected.facing, Vec3::Y);
+        let (actor_up, actor_front) = expected.pose_axes();
+        let steer = expected.spin_ground_move.update(&SteerInput {
+            skate: expected.on_ground_skate(),
+            up: Vec3::Y,
+            wall: None,
+            velocity: expected.v,
+            actor_front,
+            actor_up,
+            stick: expected.ground_stick(),
+            max_speed: t::NORMAL_MAX,
+            accel_frames: t::ACCEL_FRAMES as i32,
+        });
+        assert_ne!(
+            steer.velocity.x, inertia.v.x,
+            "the fixture tells the two apart"
+        );
+        for forced in [true, false] {
+            let mut p = spinner();
+            if forced {
+                p.force_run.setup(5, 38.);
+            } else {
+                p.surface_run.result = true;
+            }
+            p.spin_ground(&o, 3, &scene);
+            assert_eq!(p.v.x, steer.velocity.x, "forced run {forced}");
         }
     }
 }
