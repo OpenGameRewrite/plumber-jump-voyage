@@ -245,6 +245,11 @@ pub(super) fn run() {
     pound_jump_window();
     dive_from_pound();
     air_throw_with_crouch_held_is_the_cap_throw();
+    simultaneous_air_crouch_and_throw_choose_the_cap_throw();
+    an_active_cap_throw_is_not_restarted_by_air_actions();
+    spin_jump_nerves_refuse_the_ordinary_pound();
+    a_throw_while_carrying_during_the_pound_does_not_dive();
+    the_pound_dive_needs_a_live_airborne_trigger();
     dive_roll_landing();
     forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump();
     the_touchdown_step_turns_the_facing_through_the_turn_controller();
@@ -880,6 +885,146 @@ fn air_throw_with_crouch_held_is_the_cap_throw() {
         &floor,
     );
     assert_eq!(p.mode, Move::Throw);
+}
+
+#[cfg_attr(test, test)]
+fn simultaneous_air_crouch_and_throw_choose_the_cap_throw() {
+    let floor = floor();
+    for mode in [Move::Jump, Move::Fall, Move::Backflip, Move::SpinJump] {
+        let mut p = Player {
+            mode,
+            grounded: false,
+            pos: Vec3::Y * 40.,
+            ..default()
+        };
+        p.step(
+            &Orders {
+                crouch: true,
+                crouch_pressed: true,
+                throw_pressed: true,
+                ..default()
+            },
+            &floor,
+        );
+        assert_eq!(p.mode, Move::Throw, "{mode:?}");
+        p.step(&Orders::default(), &floor);
+        assert_eq!(p.mode, Move::Throw, "{mode:?}: following frame");
+        assert!(!p.events.contains(&Fx::PoundStart));
+        assert!(!p.events.contains(&Fx::Dive));
+    }
+}
+
+#[cfg_attr(test, test)]
+fn an_active_cap_throw_is_not_restarted_by_air_actions() {
+    for mode in [Move::Throw, Move::Fall] {
+        let mut p = Player {
+            mode,
+            spin_fall: true,
+            pre_throw: t::PRE_INPUT_THROW,
+            frame: 12,
+            ..default()
+        };
+        assert_eq!(p.actor_name(), "SpinCap");
+        assert!(!p.air_actions(&Orders::default()));
+        assert_eq!(p.frame, 12);
+        assert_eq!(p.pre_throw, t::PRE_INPUT_THROW);
+    }
+}
+
+#[cfg_attr(test, test)]
+fn spin_jump_nerves_refuse_the_ordinary_pound() {
+    let press = Orders {
+        crouch: true,
+        crouch_pressed: true,
+        ..default()
+    };
+    for mode in [
+        Move::SpinJump,
+        Move::SpinDrop,
+        Move::SpinFlower,
+        Move::Jump,
+        Move::Fall,
+    ] {
+        let mut p = Player {
+            mode,
+            grounded: false,
+            ground_height: air_move::tune::HIP_DROP_HEIGHT,
+            ..default()
+        };
+        let enabled = matches!(mode, Move::Jump | Move::Fall);
+        assert_eq!(p.hip_drop_start_enabled(), enabled, "{mode:?}");
+        assert_eq!(p.air_actions(&press), enabled, "{mode:?}");
+        assert_eq!(p.mode, if enabled { Move::GroundPound } else { mode });
+    }
+}
+
+#[cfg_attr(test, test)]
+fn a_throw_while_carrying_during_the_pound_does_not_dive() {
+    let floor = floor();
+    for clip in ["HipDropStart", "HipDrop"] {
+        let mut p = Player {
+            grounded: false,
+            pos: Vec3::Y * 40.,
+            ..default()
+        };
+        p.go(Move::GroundPound, clip);
+        p.carry.held = true;
+        p.step(
+            &Orders {
+                throw_pressed: true,
+                ..default()
+            },
+            &floor,
+        );
+        assert_eq!(p.mode, Move::GroundPound, "{clip}");
+        assert!(!p.events.contains(&Fx::Dive));
+        assert!(p.events.contains(&Fx::CarryThrow));
+        p.step(&Orders::default(), &floor);
+        assert_eq!(p.mode, Move::GroundPound);
+    }
+}
+
+#[cfg_attr(test, test)]
+fn the_pound_dive_needs_a_live_airborne_trigger() {
+    let floor = floor();
+    for clip in ["HipDropStart", "HipDrop"] {
+        let mut p = Player {
+            grounded: false,
+            pos: Vec3::Y * 40.,
+            ..default()
+        };
+        p.go(Move::GroundPound, clip);
+        p.pre_throw = t::PRE_INPUT_THROW;
+        p.step(&Orders::default(), &floor);
+        assert!(p.pre_throw > 0);
+        assert_eq!(p.mode, Move::GroundPound, "{clip}: buffered throw");
+        p.step(
+            &Orders {
+                throw_pressed: true,
+                ..default()
+            },
+            &floor,
+        );
+        assert_eq!(p.mode, Move::Dive, "{clip}: live trigger");
+    }
+    // Touchdown is handled by the landing child, which cannot start a head slide.
+    let mut p = Player::default();
+    p.go(Move::PoundLand, "HipDropLand");
+    p.step(
+        &Orders {
+            throw_pressed: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!(p.mode, Move::PoundLand);
+    // A continuing Start/Fall child also refuses it while rs::isOnGround is true.
+    p.mode = Move::GroundPound;
+    p.hip_drop(&Orders {
+        throw_pressed: true,
+        ..default()
+    });
+    assert_eq!(p.mode, Move::GroundPound);
 }
 
 #[cfg_attr(test, test)]

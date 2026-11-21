@@ -1392,7 +1392,7 @@ pub struct Player {
     pop_catch: Option<i32>,
     /// No longer read: it gated the dry airborne dive, which the executable does not have (see
     /// `air_actions`). Kept only because the `counters` trace cell lists it; dropping it needs a
-    /// a change of the `counters` cell in every rewrite trace.
+    /// change of the `counters` cell in every rewrite trace.
     dive_possible: bool,
     gravity: f32,
     jump_extend: bool,
@@ -5576,7 +5576,21 @@ impl Player {
         let push = self.push();
         self.air.update(&mut self.v, push, o.jump_held, &steer);
         self.turn_in_air(push);
+        // The jump child handles the spin drop before the actor's cap-throw judge
+        // (0x473494..0x4734ac, then 0x424174). A successful throw may still replace it.
+        if self.mode == Move::SpinJump && o.crouch_pressed {
+            self.start_spin_drop();
+        }
         self.air_actions(o);
+    }
+    /// `PlayerStateJump::isEnableHipDropStart` (0x472368): the active spin-flower and
+    /// ground-spin jump nerves, including their DownFall children, refuse the ordinary pound.
+    /// JumpSpinFlowerDownFall (0x1d7e560) has no corresponding move in this controller yet.
+    fn hip_drop_start_enabled(&self) -> bool {
+        !matches!(
+            self.mode,
+            Move::SpinJump | Move::SpinDrop | Move::SpinFlower
+        )
     }
     /// Airborne transitions shared by every free-flight state.
     fn air_actions(&mut self, o: &Orders) -> bool {
@@ -5588,22 +5602,24 @@ impl Player {
         // cap throw whether or not crouch is held: `tryActionCapSpinAttackImpl` (0x4294cc, called
         // by `exeJump` 0x424174, `exeFall` 0x425254 and `tryChangeNerveFromAir` 0x423e50) and
         // `PlayerJudgePreInputCapThrow::update/judge` (0x45a95c/0x45ab14) read no crouch input.
-        if o.crouch_pressed && !matches!(self.mode, Move::Throw) {
-            if self.mode == Move::SpinJump {
-                self.start_spin_drop();
-                return true;
-            }
-            // The pound needs room above the ground (`PlayerJudgeStartHipDrop`).
-            if self.ground_height >= air_move::tune::HIP_DROP_HEIGHT {
-                self.start_hip_drop();
-                return true;
-            }
-        }
-        if (self.pre_throw > 0 || o.up_throw || o.down_throw || o.spin_throw) && self.cap.is_none()
+        // The cap throw precedes the pound judge (0x424174/0x424228, 0x425254/0x4254bc,
+        // 0x423e50/0x423e74). The shared helper skips the throw in SpinCap itself
+        // (base+0x30 = 0x1d78940, 0x423e44): Throw and its SpinCap/Fall continuation.
+        if self.actor_name() != "SpinCap"
+            && (self.pre_throw > 0 || o.up_throw || o.down_throw || o.spin_throw)
+            && self.cap.is_none()
         {
             self.pre_throw = 0;
             let kind = self.throw_kind(o);
             self.start_throw(kind);
+            return true;
+        }
+        // The pound needs room above the ground (`PlayerJudgeStartHipDrop`).
+        if o.crouch_pressed
+            && self.hip_drop_start_enabled()
+            && self.ground_height >= air_move::tune::HIP_DROP_HEIGHT
+        {
+            self.start_hip_drop();
             return true;
         }
         false
@@ -5631,8 +5647,11 @@ impl Player {
         ));
     }
     fn hip_drop(&mut self, o: &Orders) {
-        // A throw during the pound turns it into a dive.
-        if self.pre_throw > 0 || o.throw_pressed {
+        // Only the active Start/Fall children reach this function; Land has its own handler
+        // (`isEnableHeadSliding`, 0x470298). exeHipDrop (0x424e44..0x424e90) also requires
+        // no carry and no ground. isTriggerHeadSliding (0x44c7e8) reads this frame's action
+        // trigger (or a hand swing), not the cap throw judge's pre-input buffer.
+        if !self.is_carry() && !self.is_on_ground_by(self.v) && o.throw_pressed {
             self.pre_throw = 0;
             self.dive();
             return;
