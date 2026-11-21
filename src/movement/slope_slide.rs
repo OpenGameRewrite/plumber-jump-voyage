@@ -123,24 +123,42 @@ impl Player {
         }
     }
 
-    /// `exeSlope`: the state's step, then the judges the actor asks. The jump is the one the
-    /// executable asks (`isCollidedGround` and `PlayerJudgePreInputJump`, recorded refused on
-    /// the forced slide in `slope-slide-forced-jump`). GUESS: the roll's start below, which
-    /// stands in for the actor's roll judges (`PlayerJudgeForceRolling` and the others come
-    /// first in the executable); no recording covers it.
+    /// `exeSlope` (0x4235b0): the state's step, whose end hands the actor to `setNerveOnGround`
+    /// (0x4235e4), then the judges the actor asks.
     pub(super) fn slope_slide(&mut self, o: &Orders, scene: &Course) {
         if self.slope_slide_step() {
             self.set_nerve_on_ground(o, scene); // exeSlope 0x4235e4.
             return;
         }
+        self.slope_slide_judges(o);
+    }
+
+    /// The judges `exeSlope` asks after the state's step, in its order (0x4235ec..0x4236c8):
+    /// `PlayerJudgeForceRolling` (+0x400, starts through 0x4229d0), the sand sink (+0x450) while
+    /// `PlayerStateSlope::isEnableCancelSandSink` allows it (0x481328, 0x423610..0x42362c),
+    /// `PlayerJudgeStartRolling` (+0x470), then the jump (collided ground and
+    /// `rs::judgeAndResetReturnTrue` of `PlayerJudgePreInputJump`, +0x4a0, 0x423660..0x423680). The
+    /// water entry (+0x410) and the fall-through area (+0x430) that follow are the actor's
+    /// general judges here (`judge_in_water`; the stage has no `InvalidateInputFall` area). The
+    /// jump the executable asks is the one recorded refused on the forced slide in
+    /// `slope-slide-forced-jump`.
+    fn slope_slide_judges(&mut self, o: &Orders) {
         if self.try_force_rolling() {
             return;
         }
-        // (The ground roll's start is refused on a floor that forces the slide.)
-        if o.crouch
-            && o.throw_pressed
+        if self.sand_slope_cancel() && self.judge_sand_sink() {
+            self.appear_sand_sink();
+            return;
+        }
+        // `PlayerJudgeStartRolling::judge` (decomp, `PlayerJudgeStartRolling.cpp`): nothing in
+        // the hands, not the 2D model, a collided ground that does not force the slide, then
+        // `PlayerInput::isTriggerRolling` (crouch held and the action trigger).
+        if !self.is_carry()
+            && !self.model_2d()
             && self.is_collided_ground()
             && !self.on_ground_force_slide_code(self.v)
+            && o.crouch
+            && o.throw_pressed
         {
             self.pre_throw = 0;
             self.start_roll(RollStart::Normal);
@@ -216,5 +234,90 @@ impl Player {
             };
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sliding() -> Player {
+        let mut p = Player {
+            mode: Move::SlopeSlide,
+            grounded: true,
+            ground_contact: 2,
+            v: Vec3::new(6., -3., 0.),
+            ..default()
+        };
+        p.slide.force_counter = 16;
+        p
+    }
+
+    /// exeSlope asks the sand sink (0x423610..0x42362c, while `isEnableCancelSandSink` holds, more
+    /// than 15 counted steps) before the roll and the jump (0x423654..0x423680): a press of
+    /// either on the frame the slide reaches sand sinks the player instead.
+    #[test]
+    fn the_sand_sink_is_asked_before_the_roll_and_the_jump() {
+        let press = Orders {
+            crouch: true,
+            throw_pressed: true,
+            ..default()
+        };
+        let mut p = sliding();
+        p.sand.depth = 1.;
+        p.pre_jump = 4;
+        p.slope_slide_judges(&press);
+        assert_eq!(p.mode, Move::SandWait);
+        assert_eq!(
+            p.pre_jump, 4,
+            "the sink took the frame, the jump was not asked"
+        );
+
+        // At 15 counted steps the cancel is not allowed yet: the roll goes first, then the jump.
+        let mut p = sliding();
+        p.slide.force_counter = 15;
+        p.sand.depth = 1.;
+        p.pre_throw = 3;
+        p.slope_slide_judges(&press);
+        assert_eq!(p.mode, Move::Roll);
+        assert_eq!(p.pre_throw, 0);
+        let mut p = sliding();
+        p.slide.force_counter = 15;
+        p.sand.depth = 1.;
+        p.pre_jump = 4;
+        p.slope_slide_judges(&Orders::default());
+        assert!(
+            !matches!(p.mode, Move::SlopeSlide | Move::SandWait),
+            "{:?}",
+            p.mode
+        );
+        assert_eq!(p.pre_jump, 0);
+    }
+
+    /// `PlayerJudgeStartRolling::judge` refuses a carrying player and the 2D model.
+    #[test]
+    fn the_roll_judge_refuses_a_carried_object_and_the_2d_model() {
+        let press = Orders {
+            crouch: true,
+            throw_pressed: true,
+            ..default()
+        };
+        let mut p = sliding();
+        p.slope_slide_judges(&press);
+        assert_eq!(
+            p.mode,
+            Move::Roll,
+            "the control: crouch and the trigger roll"
+        );
+
+        let mut p = sliding();
+        p.carry.held = true;
+        p.slope_slide_judges(&press);
+        assert_eq!(p.mode, Move::SlopeSlide);
+
+        let mut p = sliding();
+        p.dimension.is_2d = true;
+        p.slope_slide_judges(&press);
+        assert_eq!(p.mode, Move::SlopeSlide);
     }
 }
