@@ -1390,6 +1390,9 @@ pub struct Player {
     cap_catch_restart: bool,
     /// Frames of the cap's catch restarted by the pop (`HackCap::startCatch`, clip `JumpCapCatch`).
     pop_catch: Option<i32>,
+    /// No longer read: it gated the dry airborne dive, which the executable does not have (see
+    /// `air_actions`). Kept only because the `counters` trace cell lists it; dropping it needs a
+    /// a change of the `counters` cell in every rewrite trace.
     dive_possible: bool,
     gravity: f32,
     jump_extend: bool,
@@ -5580,11 +5583,11 @@ impl Player {
         if self.try_cap_catch_pop(o) {
             return true;
         }
-        if (self.pre_throw > 0 || o.throw_pressed) && o.crouch && self.dive_possible {
-            self.pre_throw = 0;
-            self.dive();
-            return true;
-        }
+        // There is no dry dive: the only `setNerve(HeadSliding)` is `exeHipDrop`'s (0x424e8c), so
+        // the head slide starts from the pound alone (`hip_drop`). A throw press in the air is the
+        // cap throw whether or not crouch is held: `tryActionCapSpinAttackImpl` (0x4294cc, called
+        // by `exeJump` 0x424174, `exeFall` 0x425254 and `tryChangeNerveFromAir` 0x423e50) and
+        // `PlayerJudgePreInputCapThrow::update/judge` (0x45a95c/0x45ab14) read no crouch input.
         if o.crouch_pressed && !matches!(self.mode, Move::Throw) {
             if self.mode == Move::SpinJump {
                 self.start_spin_drop();
@@ -5596,8 +5599,7 @@ impl Player {
                 return true;
             }
         }
-        if (self.pre_throw > 0 && !o.crouch || o.up_throw || o.down_throw || o.spin_throw)
-            && self.cap.is_none()
+        if (self.pre_throw > 0 || o.up_throw || o.down_throw || o.spin_throw) && self.cap.is_none()
         {
             self.pre_throw = 0;
             let kind = self.throw_kind(o);
@@ -6573,8 +6575,6 @@ impl Player {
                 }
                 p.max_air_speed = p.speed_h().clamp(t::JUMP_MOVE_MIN, t::JUMP_MOVE_MAX);
                 p.jump_extend = false;
-                // Guesses: the new jump may be left with a dive and the air
-                // throw is available again.
                 p.dive_possible = true;
             },
         );

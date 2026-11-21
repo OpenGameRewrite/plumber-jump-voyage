@@ -244,6 +244,7 @@ pub(super) fn run() {
     ground_pound();
     pound_jump_window();
     dive_from_pound();
+    air_throw_with_crouch_held_is_the_cap_throw();
     dive_roll_landing();
     forced_roll_keeps_the_landing_velocity_and_ignores_release_and_jump();
     the_touchdown_step_turns_the_facing_through_the_turn_controller();
@@ -858,6 +859,27 @@ fn dive_from_pound() {
     // The state's first step starts the clip and stops the slide.
     p.step(&Orders::default(), &floor);
     assert!(p.speed_h() < 1e-3);
+}
+
+/// The head slide only exists after the pound (`exeHipDrop` 0x424e8c is the only writer of the
+/// HeadSliding nerve): a throw pressed in the air with crouch already held and no pound started
+/// is the ordinary cap throw (`tryActionCapSpinAttackImpl` 0x4294cc reads no crouch input).
+#[cfg_attr(test, test)]
+fn air_throw_with_crouch_held_is_the_cap_throw() {
+    let floor = floor();
+    let mut p = Player::default();
+    p.pos.y = 40.;
+    p.grounded = false;
+    p.mode = Move::Fall;
+    p.step(
+        &Orders {
+            crouch: true,
+            throw_pressed: true,
+            ..default()
+        },
+        &floor,
+    );
+    assert_eq!(p.mode, Move::Throw);
 }
 
 #[cfg_attr(test, test)]
