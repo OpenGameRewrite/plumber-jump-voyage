@@ -1051,6 +1051,9 @@ pub fn replay(script: &Script, options: Options) -> Result<Trace, String> {
         .or(options.lockstep)
         .and_then(TraceFile::floor_material);
     seed_rocket_flowers(&mut player, script, recorded)?;
+    // The probe placed the player in the middle of a frame: the stage's actors that run after
+    // him have already seen him at the start.
+    player.run_placement_frame_tail(&course);
     if let Some(mesh) = &course.mesh {
         player.trampolines = mesh.trampolines.clone();
         player.signboards = mesh.signboards.clone();

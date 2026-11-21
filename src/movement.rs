@@ -3586,7 +3586,7 @@ impl Player {
         // frame starts now.
         // The cap updates before the player does, within the same frame.
         if advance_sources {
-            self.tick_killers(scene);
+            self.init_killers(scene);
             self.tick_rocket_flowers(scene);
         }
         self.update_cap(&o, scene);
@@ -3706,6 +3706,11 @@ impl Player {
         }
         // The camera updates after the actors of the frame.
         self.entrance_camera.update(self.position_cm(), o.recenter);
+        if advance_sources {
+            // The enemies, the stage-switch watchers and the switch areas follow the player
+            // (`al::ExecuteDirector` entries 37 and 65, then `SwitchAreaDirector::update`).
+            self.tick_killers(scene);
+        }
     }
     /// Changes of state the surroundings force, decided before the state runs: the ground
     /// reached last step. (Water is asked after the state's own step, see `judge_in_water`.)
@@ -4083,8 +4088,7 @@ impl Player {
                     .invalidate_sensor(sensors.len() - killer_sensors + i);
             }
         }
-        self.look
-            .step_with_moving(&actor, enabled, &sensors, sensors.len() - killer_sensors);
+        self.look.step(&actor, enabled, &sensors);
         self.run_state_frame();
         self.update_joint_controls();
     }

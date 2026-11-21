@@ -131,9 +131,6 @@ pub struct LookAt {
     /// The head joint's position after the previous model calculation (cm), which the keeper
     /// reads when it chooses.
     head: Option<Vec3>,
-    /// The sensors' positions when the previous frame ended, for the sensors that move by
-    /// themselves (see [`Self::step_with_moving`]).
-    previous_positions: Vec<Vec3>,
 }
 
 /// What a recorded row says of the look-at, for a lockstep replay that starts every frame from
@@ -162,7 +159,6 @@ impl Default for LookAt {
             invalid_sensors: Vec::new(),
             disregarded: Vec::new(),
             head: None,
-            previous_positions: Vec::new(),
         }
     }
 }
@@ -302,19 +298,6 @@ impl LookAt {
     /// `actor` is the player's pose matrix (cm, its last column the position), `enabled` what
     /// `look_enabled` says of the state.
     pub fn step(&mut self, actor: &Mat34, enabled: bool, sensors: &[LookSensor]) {
-        self.step_with_moving(actor, enabled, sensors, sensors.len());
-    }
-
-    /// [`Self::step`] for a list whose sensors from index `moving` on belong to actors that move
-    /// every frame: which of them the eye overlaps was decided when the previous frame ended
-    /// (the sensor director pairs the sensors there), so it reads where they were then.
-    pub fn step_with_moving(
-        &mut self,
-        actor: &Mat34,
-        enabled: bool,
-        sensors: &[LookSensor],
-        moving: usize,
-    ) {
         let feet = translation(actor);
         let head = self.head_position(feet);
         // The holder (`attackSensor`) runs in the sensor phase, before the player's own movement:
@@ -331,15 +314,7 @@ impl LookAt {
                 continue;
             }
             let reach = EYE_RADIUS + sensor.radius;
-            let paired_at = if index >= moving {
-                self.previous_positions
-                    .get(index)
-                    .copied()
-                    .unwrap_or(sensor.position)
-            } else {
-                sensor.position
-            };
-            if squared_distance(paired_at, overlap_from) >= reach * reach {
+            if squared_distance(sensor.position, overlap_from) >= reach * reach {
                 continue;
             }
             let nearer = self.candidate.is_none_or(|held| {
@@ -350,7 +325,6 @@ impl LookAt {
                 self.candidate = Some(index);
             }
         }
-        self.previous_positions = sensors.iter().map(|sensor| sensor.position).collect();
         // The keeper then reads the candidate the sensor phase of this frame left.
         self.active = enabled;
         if enabled && let Some(candidate) = self.candidate {
