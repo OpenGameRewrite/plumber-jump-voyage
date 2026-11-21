@@ -580,7 +580,7 @@ class Report:
 def exported_look_hosts(game_path, geometry_path):
     """Hosts of the look-at sensors the replay's stage export carries, or None without a matching export.
 
-    A replay knows other actors only through that export (static placements). The game's holder may
+    A replay knows other actors only through that export. The game's holder may
     also pick a host the export cannot place: an NPC that patrols, a pipe's bind sensor. Which one it
     picks there is the other actor's business, not Mario's.
     """
@@ -600,6 +600,8 @@ def exported_look_hosts(game_path, geometry_path):
                  for key in ("cap_trampolines", "signboards", "cap_switches") for source in geometry.get(key, []))
     if geometry.get("pukupuku", {}).get("id") == "obj473":
         hosts.add(geometry["pukupuku"]["host"])
+    if geometry.get("killer_launchers"):
+        hosts.add("キラー")  # src/movement/killer.rs, Player::killer_look_sensors
     return hosts
 
 
