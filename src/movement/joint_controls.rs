@@ -112,6 +112,8 @@ pub struct JointState {
     /// What the frame began with: the actor was in the run state, and the collider had just
     /// found the ground (`rs::isJustLand`, which the states read while they decide).
     was_running: bool,
+    /// The actor was in the standing (Wait) state when the frame began.
+    was_waiting: bool,
     just_landed: bool,
     /// The actor pose's up axis when the frame began. A state that starts in the frame (the
     /// jump's `appear`) reads the pose before the run's end-of-step pose update.
@@ -231,6 +233,7 @@ impl Player {
     /// The start of a frame.
     pub(super) fn note_frame_start_for_joints(&mut self) {
         self.joints.was_running = self.actor_name() == "Run";
+        self.joints.was_waiting = self.actor_name() == "Wait";
         self.joints.frame_start_pose_up = self.pose_axes().0;
         self.joints.just_landed = self.is_just_land();
         self.joints.run_arrival_velocity = None;
@@ -305,6 +308,22 @@ impl Player {
     pub(super) fn run_state_frame(&mut self) {
         if self.actor_name() == "Run" && !self.joints.was_running {
             self.run_state_appear();
+        }
+        self.wait_state_kill();
+    }
+
+    /// `PlayerStateWait::kill` (0x48cf50) writes byte 2 of the centre dynamics' parameter
+    /// (`strb 1, [param + 2]`, 0x48cf68) as the actor leaves the standing state. The keeper
+    /// reads it as the quick fade (`updateCenterBalance` 0x454538..0x454548: the blend then
+    /// converges by 0.2 instead of the slow step), so a sway the standing state still
+    /// carries ends in the frame the next state starts. An impulse of the same frame still
+    /// wins (`updateCenterBalance` tests it first, 0x454384).
+    /// [V] bones21 probe, `force-waterfall-airpass` row 0: the actor leaves Wait for Run,
+    /// `Run::appear` raises no impulse (`rs::isJustLand` false, collider count 26), the keeper
+    /// gets only byte 2 and the sway (blend 0.2) ends at zero in that frame.
+    fn wait_state_kill(&mut self) {
+        if self.joints.was_waiting && self.actor_name() != "Wait" {
+            self.joints.center.fade_quickly = true;
         }
     }
 
@@ -465,6 +484,7 @@ pub(super) fn self_check() {
     lockstep_rechoice_keeps_the_completed_joint_update();
     platform_power_sways_the_body_only_when_it_changes();
     landing_on_moving_ground_adds_its_motion_to_the_impulse();
+    leaving_the_standing_state_asks_the_keeper_for_the_quick_fade();
 }
 
 #[cfg_attr(test, test)]
@@ -534,4 +554,25 @@ fn landing_on_moving_ground_adds_its_motion_to_the_impulse() {
     player.ground_contact = 2;
     player.start_center_joint_control(Vec3::ZERO, false);
     assert_eq!(player.joints.center.impulse_vector, Vec3::ZERO);
+}
+
+#[cfg_attr(test, test)]
+fn leaving_the_standing_state_asks_the_keeper_for_the_quick_fade() {
+    let mut player = standing_on_ground();
+    player.go(Move::Idle, "Wait");
+    assert_eq!(player.actor_name(), "Wait");
+    player.note_frame_start_for_joints();
+    // Still in the standing state at the end of the frame: no request.
+    player.run_state_frame();
+    assert!(!player.joints.center.fade_quickly);
+    // `PlayerStateWait::kill` (0x48cf50) writes byte 2 when the actor leaves it.
+    player.note_frame_start_for_joints();
+    player.go(Move::Jump, "Jump");
+    player.run_state_frame();
+    assert!(player.joints.center.fade_quickly);
+    // The request is a one-frame flag: the keeper reads it and clears it.
+    player.joints.center = CenterInput::default();
+    player.note_frame_start_for_joints();
+    player.run_state_frame();
+    assert!(!player.joints.center.fade_quickly);
 }
