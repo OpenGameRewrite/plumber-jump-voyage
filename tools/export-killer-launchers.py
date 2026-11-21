@@ -15,6 +15,10 @@ with a `SwitchStart` link whose switch is driven by at least one `SwitchKeepOnAr
 driver would never start in the replay, and is left out. The poses are the geometry export's own
 (`objects` and `areas` carry the matrices), so no rotation arithmetic is repeated here.
 The recorded actor CSVs are never an input.
+
+`IsNoCap` must be true (every launcher of the Sand stage sets it): the rewrite models the Killer without
+the cap capture, and the flag only changes that and the Killer's effects (see the header of
+`src/movement/killer.rs`), not its flight. A launcher that leaves it false is refused, not exported.
 """
 import argparse
 import importlib.util
@@ -63,6 +67,14 @@ def main():
 
     launchers = []
     for obj in scene.get('ObjectList', []):
+        # Only the plain launcher is accepted, on purpose. `KillerLauncher::init` (0x147e5c) picks the
+        # Killer's kind from the actor's class name: `KillerLauncherMagnum` sets the byte at launcher
+        # +0x12d (0x147ec0), copied to Killer +0x136 (0x147f84), and that kind indexes the Killer's
+        # flight constants (the acceleration, damping, turn and distance tables from 0x1886940) and
+        # the fly threshold of `Killer::exeLaunch` (25 plain at 0x146860, 40 Magnum at 0x146864,
+        # selected at 0x146868). The rewrite ports kind 0 only, so every other
+        # `UnitConfigName` (the Magnum launcher and the "Dot" variants) is skipped here, never exported
+        # with the plain constants.
         if obj['UnitConfigName'] != 'KillerLauncher' or obj['Id'] not in pose:
             continue
         links = obj.get('Links', {})
@@ -71,6 +83,9 @@ def main():
             continue
         if set(links) - {'SwitchStart', 'ViewGroup'} or obj.get('IsSuddenlyLaunchFirst'):
             raise ValueError(f"{obj['Id']}: this launcher configuration is not implemented")
+        # `IsNoCap` (read at 0x147ed8, copied to Killer +0x137 at 0x147f90) is modelled as true.
+        if obj.get('IsNoCap') is not True:
+            raise ValueError(f"{obj['Id']}: IsNoCap must be true, the cap capture is not implemented")
         launchers.append({
             'id': obj['Id'],
             'class': 'KillerLauncher',
