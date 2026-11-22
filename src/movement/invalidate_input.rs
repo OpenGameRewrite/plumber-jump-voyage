@@ -189,6 +189,18 @@ mod tests {
         assert!(p.tilt > 0.);
     }
 
+    /// The slide asks last, after its own step and the sweeps, and the roll right after its step.
+    #[test]
+    fn the_slide_and_the_roll_fall_from_the_volume_in_their_own_steps() {
+        let course = course_with_volume();
+        for mode in [Move::SlopeSlide, Move::Roll] {
+            let mut p = airborne(mode, 2.);
+            p.step(&Orders::default(), &course);
+            assert_eq!(p.mode, Move::Fall, "{mode:?}");
+            assert_eq!(p.input_invalidation.counter, 1, "{mode:?}");
+        }
+    }
+
     /// Outside the volume, or standing on ground, nothing happens.
     #[test]
     fn the_judge_needs_the_volume_and_no_ground() {
