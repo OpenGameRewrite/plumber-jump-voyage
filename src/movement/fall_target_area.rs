@@ -214,6 +214,18 @@ mod tests {
         assert_eq!(v, Vec3::new(-(4. + 0.1), 0., 0.));
     }
 
+    /// Five times the speed does not fit in 18 cm: the speed is damped although four times fits.
+    #[test]
+    fn the_far_test_uses_five_times_the_speed() {
+        let v = steered(
+            Vec3::new(-4., 0., 0.),
+            Vec3::new(18., 0., 0.),
+            &axis_y(),
+            14.,
+        );
+        assert_eq!(v, Vec3::new(-(4. * 0.75 + 0.1), 0., 0.));
+    }
+
     /// 10 cm from the axis the same speed is damped to three quarters before the 0.1.
     #[test]
     fn a_near_actor_is_damped() {
