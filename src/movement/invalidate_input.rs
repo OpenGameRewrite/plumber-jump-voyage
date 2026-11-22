@@ -105,7 +105,6 @@ impl Player {
     pub(super) fn renew_fall_input_invalidation(&mut self) {
         if self.actor_name() == "Fall"
             && !self.nerve.deferred
-            && !self.is_collided_ground()
             && self.input_invalidation.fall_target
         {
             self.input_invalidation.counter = 1;
@@ -268,6 +267,21 @@ mod tests {
         assert!(p.judge_invalidate_input_fall_in_air());
         assert_eq!(p.actor_name(), "Fall");
         assert_eq!(p.input_invalidation.counter, 1);
+    }
+
+    /// The gate itself tests the retained pointer, not ground contact (0x425630).
+    /// Landing normally leaves Fall earlier; a contact without a transition cannot clear it.
+    #[test]
+    fn the_fall_gate_uses_the_latched_target_until_an_earlier_transition() {
+        let mut p = airborne(Move::Fall, 2.);
+        p.input_invalidation.fall_target = true;
+        p.grounded = true;
+        p.renew_fall_input_invalidation();
+        assert_eq!(p.input_invalidation.counter, 1);
+        p.go(Move::Idle, "Wait");
+        p.input_invalidation.counter = 0;
+        p.renew_fall_input_invalidation();
+        assert_eq!(p.input_invalidation.counter, 0);
     }
 
     /// The slide asks last, after its own step and the sweeps, and the roll right after its step.
