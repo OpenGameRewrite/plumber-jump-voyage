@@ -38,8 +38,8 @@
 //! `exeFall` still updates its child first (0x425240), before it asks SandSink (+0x450, 0x42539c)
 //! or lands (0x425410): both touchdown branches of `change_from_surroundings` (the sand one and
 //! `land`) therefore steer first, with `update_fall_target_at_touchdown`. The water judge
-//! (+0x410, 0x4255fc) sits after the landing return in the actor's `exeFall`, so a touchdown
-//! step never reaches it. [I] The port holds the position and velocity of that point of the
+//! (+0x410, 0x4255fc) is skipped by an accepted landing; a contact that fails the run-angle
+//! gate (0x4253e0..0x4253e4) continues through the judges to it. [I] The port holds the position and velocity of that point of the
 //! step, which is where the executable reads them, except for the other port states that move
 //! the actor between `change` and the end of the step, and the stage position cached at the top
 //! of the step (the executable reads the current translation at 0x46b134).

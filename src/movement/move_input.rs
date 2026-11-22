@@ -4,8 +4,9 @@
 //!
 //! Single precision in the executable's operation order (`calcMoveInputImpl` 0x44b44c, the axes
 //! 0x44f864), checked bit for bit against the executable's code run in a local interpreter
-//! (`PJV_MOVE_INPUT_CASES`, see `tests/move_input.rs`). Not ported: the 2D areas, the held-3D
-//! input, the area snap and the separate play ports.
+//! (`PJV_MOVE_INPUT_CASES`, see `tests/move_input.rs`). The bounded 2D path and area snap live
+//! in `input_2d.rs` / `dimension.rs`. Still open: held-3D input (0x44ef98, its cached stick,
+//! axes and up produced by updateInput3D 0x44b13c) and separate-play input.
 use super::pose_math::{
     NEGATED_GRAVITY, along_vector_normal_h, cross, dot, normalize, squared_length,
     try_normalize_or_zero,

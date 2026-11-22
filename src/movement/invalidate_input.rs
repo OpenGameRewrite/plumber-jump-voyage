@@ -895,4 +895,53 @@ mod tests {
         );
         assert_eq!(latched.v, reference.v);
     }
+
+    /// [V] exeFall 0x4253e0 rejects a steep touchdown; 0x4255fc still asks water.
+    #[test]
+    fn a_fall_touchdown_outside_the_run_angle_reaches_the_water_judge() {
+        for (normal, lands) in [(Vec3::Y, true), (Vec3::new(0., 0.25, 0.96824586), false)] {
+            let mut p = touchdown_on("Ground", volume());
+            p.input_invalidation.fall = FallTarget::default();
+            p.mesh_ground = Some(normal);
+            let child_ran = p.change_from_surroundings(&Course::default(), &Orders::default());
+            assert_eq!(child_ran, !lands);
+            if lands {
+                assert_eq!(p.mode, Move::Idle);
+            } else {
+                assert_eq!(p.mode, Move::Fall);
+                assert_eq!(p.v.y, -10. - p.gravity, "the air child ran once");
+            }
+            let scene = Course {
+                water: crate::water::WaterAreas::demo_box(0., 0., 2000., 2000., 1000., 2000.),
+                ..default()
+            };
+            p.judge_in_water(&scene);
+            assert_eq!(p.mode, if lands { Move::Idle } else { Move::Swim });
+        }
+    }
+
+    #[test]
+    fn a_rejected_fall_landing_runs_its_air_child_only_once() {
+        let mut p = touchdown_on("Ground", volume());
+        p.input_invalidation.fall = FallTarget::default();
+        p.mesh_ground = Some(Vec3::new(0., 0.25, 0.96824586));
+        p.step(&Orders::default(), &Course::default());
+        assert_eq!(p.mode, Move::Fall);
+        assert_eq!(p.v.y, -10. - p.gravity);
+    }
+
+    /// SpinCap/Fall (0x483098) is another child, sharing only the port's Move::Fall.
+    /// The actor exeFall gate at 0x4253e0 must not change its existing landing path.
+    #[test]
+    fn the_actor_fall_landing_gate_does_not_apply_to_spin_cap_fall() {
+        for continuing in [false, true] {
+            let mut p = touchdown_on("Ground", volume());
+            p.input_invalidation.fall = FallTarget::default();
+            p.spin_fall = true;
+            p.ground_contact = if continuing { 2 } else { 1 };
+            p.mesh_ground = Some(Vec3::new(0., 0.25, 0.96824586));
+            assert_eq!(p.actor_name(), "SpinCap");
+            assert!(!p.change_from_surroundings(&Course::default(), &Orders::default()));
+        }
+    }
 }

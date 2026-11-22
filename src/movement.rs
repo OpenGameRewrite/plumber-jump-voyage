@@ -3672,10 +3672,12 @@ impl Player {
         {
             self.pull = t::GRAVITY;
         }
-        self.change_from_surroundings(scene, &o);
+        let fall_child_ran = self.change_from_surroundings(scene, &o);
         // A state chosen above leaves its own first step to the next frame.
         if !self.nerve.deferred {
-            self.run_state(&o, scene);
+            if !fall_child_ran {
+                self.run_state(&o, scene);
+            }
             self.judge_sand_entry();
             self.judge_wall_push(scene);
             self.judge_fall();
@@ -3759,7 +3761,8 @@ impl Player {
     }
     /// Changes of state the surroundings force, decided before the state runs: the ground
     /// reached last step. (Water is asked after the state's own step, see `judge_in_water`.)
-    fn change_from_surroundings(&mut self, _scene: &Course, o: &Orders) {
+    /// True when Fall's air child ran but its landing angle failed: the actor judges still run.
+    fn change_from_surroundings(&mut self, _scene: &Course, o: &Orders) -> bool {
         if std::mem::take(&mut self.nerve.touchdown) {
             if self.judge_sand_sink() {
                 // The actor's `exeFall` updates its child first (0x425240: the steering at
@@ -3790,10 +3793,11 @@ impl Player {
                 if self.mode == Move::GrabCeil {
                     self.grab_ceil_step(o, _scene);
                 } else {
-                    self.land(o, _scene);
+                    return self.land(o, _scene);
                 }
             }
         }
+        false
     }
     /// `PlayerJudgeSpeedCheckFall::update`, once a step before the nerve runs
     /// (it reads the contact the last step ended with): the steps without
@@ -6697,7 +6701,8 @@ impl Player {
     }
 
     // ---- Landing and collision ------------------------------------------------
-    fn land(&mut self, o: &Orders, scene: &Course) {
+    /// True only when Fall's child ran and the landing was rejected (0x4253e4).
+    fn land(&mut self, o: &Orders, scene: &Course) -> bool {
         // `run_state` is skipped on this step, but the actor's `exeFall` still updates its child
         // first (0x425240), and the child begins with `updateFallTargetArea` (0x46b3b4): a
         // latched target steers the full velocity, vertical speed included, that the landing and
@@ -6708,6 +6713,9 @@ impl Player {
             None
         };
         let incoming_y = steered_y.unwrap_or(self.touchdown_speed);
+        // The child's full velocity reaches setNerveOnGround (0x425410) and the
+        // chosen state's appear; keep its Y for the arrival impulse as well.
+        self.touchdown_speed = incoming_y;
         if self.model_2d()
             && matches!(
                 self.mode,
@@ -6718,13 +6726,16 @@ impl Player {
             // startHitReactionLandIfLanding 0x56a3ec also rejects that model.
             self.v.y = incoming_y;
             self.jump_air(o);
+            if self.actor_name() == "Fall" && !self.is_land_ground_run_angle() {
+                return true;
+            }
             if self.actor_name() == "Jump" {
                 self.count_jump_combo();
             }
             self.air_for = None;
             self.land_frames = 0;
             self.set_nerve_on_ground(o, scene);
-            return;
+            return false;
         }
         if self.mode == Move::Fall && !self.is_just_land() {
             // A continuing floor contact enters Wait directly; only a fresh
@@ -6733,8 +6744,11 @@ impl Player {
                 self.v.y = y;
             }
             self.jump_air(o);
+            if self.actor_name() == "Fall" && !self.is_land_ground_run_angle() {
+                return true;
+            }
             self.set_nerve_on_ground(o, scene); // exeFall 0x425410.
-            return;
+            return false;
         }
         if self.mode == Move::WallSlide {
             self.leave_wall_slide();
@@ -6789,7 +6803,14 @@ impl Player {
         let forced = forced_slide || self.try_force_rolling();
         self.ground_move = ground_move;
         if forced {
-            return;
+            return false;
+        }
+        // [V] exeFall 0x4253e0..0x4253e4: a contact outside the run angle
+        // continues at 0x4254b8, eventually reaching the water judge (0x4255fc).
+        // Its child has already run: keep that velocity and run the remaining
+        // actor judges once, without executing the air child a second time.
+        if self.actor_name() == "Fall" && !self.is_land_ground_run_angle() {
+            return true;
         }
         self.v = before;
         if self.actor_name() == "Jump" {
@@ -6853,7 +6874,7 @@ impl Player {
                         p.wet.record_heavy_land_puddle();
                     }
                 });
-                return;
+                return false;
             }
             // Holding crouch turns the momentum into a real roll; otherwise a
             // dive lands in its forward roll and stands up.
@@ -6861,14 +6882,14 @@ impl Player {
             Move::RollJump if rolls => self.roll_land_from_jump(),
             // The roll raises its own landing reaction when it has flown long
             // enough (`PlayerStateRolling::control`).
-            Move::Roll => return,
+            Move::Roll => return false,
             Move::SlopeSlide => {}
             Move::BurnJump
             | Move::BurnBounce
             | Move::FireRun
             | Move::FireFall
             | Move::FireDead
-            | Move::Dead => return,
+            | Move::Dead => return false,
             _ => {
                 // `PlayerActorHakoniwa::setNerveOnGround` asks its judges in
                 // this order: the buffered jump, `PlayerJudgeStartRun` (which
@@ -6879,7 +6900,7 @@ impl Player {
                 use on_ground::GroundNerve;
                 let choice = self.ground_nerve(o, scene);
                 if matches!(choice, GroundNerve::Changed) {
-                    return;
+                    return false;
                 }
                 if matches!(choice, GroundNerve::Jump) {
                     self.ground_jump(o);
@@ -6901,7 +6922,7 @@ impl Player {
                     self.start_squat();
                 } else {
                     self.appear_ground_wait(arrival);
-                    return;
+                    return false;
                 }
             }
         }
@@ -6911,6 +6932,7 @@ impl Player {
                 hard: self.hard_land,
             });
         }
+        false
     }
     /// PlayerStateWait::appear (0x48c824..0x48c968): ForceLand before
     /// JustLand; shared consumers retain the established Land entry/pose.

@@ -306,6 +306,22 @@ pub fn quat_to_axes(q: Quat) -> Axes {
     ]
 }
 
+/// [V] `al::calcQuatSide` (0x9270fc), including its product-before-doubling order.
+/// This uses 1 in the diagonal, even when the supplied quaternion is not unit length.
+pub fn quat_side(q: Quat) -> Vec3 {
+    let yy = q.y * q.y;
+    let zz = q.z * q.z;
+    let xy = q.y * q.x;
+    let zw = q.z * q.w;
+    let zx = q.z * q.x;
+    let yw = q.y * q.w;
+    Vec3::new(
+        (yy * -2. + 1.) - (zz + zz),
+        (xy + xy) + (zw + zw),
+        (zx + zx) - (yw + yw),
+    )
+}
+
 /// `al::calcQuatUp(Vector3f*, const Quat&)`: the second column of the quaternion's rotation,
 /// straight from the quaternion (`slerpUpFront` reads the blended one this way).
 pub fn quat_up(q: Quat) -> Vec3 {

@@ -1,4 +1,4 @@
-//! PlayerRecoverySafetyPoint and the 3D PlayerStateRecoveryDead nerves.
+//! PlayerRecoverySafetyPoint and PlayerStateRecoveryDead nerves, including 2D lock steering.
 //! Recovery's scalar arch is decoded from 0x479a1c..0x479b60; no fitted parabola.
 use super::vector_lib::{length, verticalize_vec};
 use super::*;
@@ -27,6 +27,9 @@ pub(super) struct Recovery {
     pose: Quat,
     axis: Vec3,
     root: Vec3,
+    dimension: dimension::DimensionKeeper,
+    side: Vec3,
+    lock: Vec3,
 }
 impl Recovery {
     pub fn valid(&self) -> bool {
@@ -108,7 +111,7 @@ impl Player {
         self.frame = 0;
         self.nerve.choose_silently(false);
     }
-    fn recovery_travel_setup(&mut self) {
+    fn recovery_travel_setup(&mut self, scene: &Course) {
         let safety = self.recovery.safety.expect("valid recovery point");
         let start = self.position_cm();
         let up = Vec3::Y;
@@ -142,9 +145,25 @@ impl Player {
         };
         let pose = self.actor_pose();
         let rotate_end = (duration as f32 * 0.9 - 10.).max(0.).floor() as u32;
-        // Only 3D with the actor's gravity world-down exists in this controller (2D and
-        // arbitrary gravity need their dimension controller).
         let axis = -pose.side();
+        // [V] 0x479c04..0x479ca0 queries the recovery state's own dimension keeper
+        // at the destination, not the actor's current area. Outside 2D the destination
+        // direction stays the actor side; an opposed lock is flipped toward that side.
+        if self.model_2d() {
+            self.recovery.side = pose.side();
+            self.recovery.lock = pose.side();
+            if let Some(mesh) = &scene.mesh {
+                let destination = mesh.to_game_vec(safety.position - safety.gravity * 100.);
+                self.recovery.dimension.update(&mesh.dimension, destination);
+                if self.recovery.dimension.is_2d {
+                    self.recovery.lock =
+                        self.recovery.dimension.lock(&mesh.dimension, destination).0;
+                    if pose_math::dot(self.recovery.side, self.recovery.lock) < 0. {
+                        self.recovery.lock = -self.recovery.lock;
+                    }
+                }
+            }
+        }
         self.recovery.start = start;
         self.recovery.up = up;
         self.recovery.horizontal = horizontal;
@@ -152,11 +171,18 @@ impl Player {
         self.recovery.linear = linear;
         self.recovery.duration = duration;
         self.recovery.rotate_end = rotate_end;
-        self.recovery.rotation =
-            (rotate_end / 30) as f32 * 360. + spin_degrees(pose.up(), -safety.gravity, axis);
+        self.recovery.rotation = (rotate_end / 30) as f32 * 360.
+            + spin_degrees_with_lock(
+                pose.up(),
+                -safety.gravity,
+                axis,
+                self.recovery.side,
+                self.recovery.lock,
+            );
         self.recovery.pose = pose.calc_quat();
         self.recovery.axis = axis;
-        self.recovery.root = pose.up() * 80.;
+        // 0x479bbc..0x479bf8: the 2D model rotates about a 60 cm root (3D: 80).
+        self.recovery.root = pose.up() * if self.model_2d() { 60. } else { 80. };
         self.collider = PlayerCollider::default();
     }
     pub(super) fn recovery_step(&mut self, o: &Orders, _scene: &Course) {
@@ -182,7 +208,27 @@ impl Player {
                 if self.frame == 0 {
                     self.start_clip("TractorBubbleWait");
                     self.events.push(Fx::RecoveryWait);
-                    self.recovery_travel_setup();
+                    self.recovery_travel_setup(_scene);
+                }
+                if self.model_2d() {
+                    // [V] 0x479f80..0x47a028: turn the stored side during the first
+                    // half of the rotation interval; then derive the new spin axis.
+                    let r = &mut self.recovery;
+                    let end = 10 + ((r.rotate_end as i32 - 10) / 2).max(1) as u32;
+                    let q = pose_math::make_quat_rotation_rate(
+                        r.side,
+                        r.lock,
+                        rate(self.frame, 10, end),
+                    );
+                    let side = pose_math::normalize(pose_math::rotate_by_quat(r.side, q));
+                    r.pose = pose_math::turn_quat(
+                        r.pose,
+                        pose_math::rotate_by_quat(Vec3::X, r.pose),
+                        side,
+                        std::f32::consts::PI,
+                    );
+                    // calcQuatSide (0x9270fc), not a raw q * X * conjugate(q).
+                    r.axis = -pose_math::quat_side(r.pose);
                 }
                 let r = &self.recovery;
                 let progress = ease_in_out(ease_in_out(rate(self.frame, 0, r.duration)));
@@ -246,10 +292,15 @@ const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
 /// 2D lock direction, written only for a 2D player (0x479c04..0x479ca0); the constructor zeroes
 /// them (0x4795f4..0x4795f8), and the rotation between two zero vectors is the identity
 /// (`getAxisAngleFromTwoVec` finds no axis). The 3D player of this controller therefore compares
-/// its own up with the safety up. Not ported: the 2D player's lock direction.
+/// its own up with the safety up.
 fn spin_degrees(up: Vec3, target_up: Vec3, axis: Vec3) -> f32 {
+    spin_degrees_with_lock(up, target_up, axis, Vec3::ZERO, Vec3::ZERO)
+}
+fn spin_degrees_with_lock(up: Vec3, target_up: Vec3, axis: Vec3, side: Vec3, lock: Vec3) -> f32 {
     if pose_math::is_parallel_direction(target_up, axis, 0.01) {
-        return if pose_math::dot(up, target_up) < 0. {
+        let rotation = pose_math::make_quat_rotation_rate(side, lock, 1.);
+        let turned_up = pose_math::rotate_by_quat(up, rotation);
+        return if pose_math::dot(turned_up, target_up) < 0. {
             180.
         } else {
             0.
@@ -296,9 +347,93 @@ pub(super) fn self_check() {
     checks::rotation_oracle();
     checks::a_safety_up_along_the_spin_axis_turns_by_half_a_revolution_when_opposed();
     checks::lockstep_keeps_inner_recovery_clock();
+    checks::recovery_2d_queries_the_destination_and_turns_the_stored_side();
+    checks::recovery_2d_parallel_spin_uses_the_lock_rotated_up();
+    checks::recovery_quaternion_side_uses_the_source_formula();
 }
 mod checks {
     use super::*;
+
+    #[cfg_attr(test, test)]
+    pub(super) fn recovery_quaternion_side_uses_the_source_formula() {
+        let q = Quat::from_xyzw(0.25, 0.5, 0.25, 0.5);
+        assert_eq!(pose_math::quat_side(q), Vec3::new(0.375, 0.5, -0.375));
+        assert_ne!(
+            pose_math::quat_side(q),
+            pose_math::rotate_by_quat(Vec3::X, q)
+        );
+    }
+
+    fn destination_scene(matrix: [f32; 12]) -> Course {
+        let mut scene = crate::replay::flat_floor();
+        scene.mesh = Some(std::sync::Arc::new(TriangleMesh::default()));
+        let mesh = std::sync::Arc::make_mut(scene.mesh.as_mut().unwrap());
+        mesh.dimension.movement.push(dimension::MoveArea {
+            id: "recovery destination".into(),
+            volume: crate::water::Area {
+                shape: crate::water::Shape::CubeBase,
+                matrix,
+                scale: Vec3::ONE,
+                priority: 0,
+                ignore: false,
+            },
+            surface_distance: 0.,
+            gravity_offset: 0.,
+            radial_gravity_outward: false,
+        });
+        scene
+    }
+
+    /// [V] 0x479c04..0x479ca0 samples the destination keeper and flips its lock
+    /// toward actor side; 0x479f80..0x47a028 progressively reorients that side.
+    #[cfg_attr(test, test)]
+    pub(super) fn recovery_2d_queries_the_destination_and_turns_the_stored_side() {
+        let scene = destination_scene([0.6, 0., 0.8, 0., 0., 1., 0., 0., -0.8, 0., 0.6, 0.]);
+        let mut p = Player {
+            mode: Move::RecoveryTravel,
+            pos: Vec3::new(20., 0., 0.),
+            ..Default::default()
+        };
+        p.set_pose(Quat::IDENTITY);
+        p.dimension.is_2d = true;
+        p.set_safety_point(Vec3::new(0., -100., 0.), Vec3::Y, Vec3::NEG_Y);
+        p.recovery_travel_setup(&scene);
+        assert_eq!(p.recovery.side, Vec3::X);
+        assert_eq!(p.recovery.lock, Vec3::new(0.8, 0., 0.6));
+        assert_eq!(p.recovery.root, Vec3::Y * 60.);
+        let initial = p.recovery.pose;
+        p.frame = 10;
+        p.recovery_step(&Orders::default(), &scene);
+        assert_eq!(p.recovery.pose, initial);
+        p.frame = 10 + (p.recovery.rotate_end - 10) / 2;
+        p.recovery_step(&Orders::default(), &scene);
+        let side = pose_math::quat_side(p.recovery.pose);
+        assert!(
+            side.z > 0.5,
+            "the stored pose turns toward the destination lock"
+        );
+        assert_eq!(p.recovery.axis, -side);
+        // A destination with no 2D area leaves side/lock equal even for a 2D actor.
+        p.recovery_travel_setup(&crate::replay::flat_floor());
+        assert_eq!(p.recovery.lock, p.recovery.side);
+    }
+
+    /// [V] 0x479d4c..0x479e58 rotates up by side -> lock before testing its sign.
+    #[cfg_attr(test, test)]
+    pub(super) fn recovery_2d_parallel_spin_uses_the_lock_rotated_up() {
+        let scene = destination_scene([1., 0., 0., 0., 0., 0., 1., 0., 0., -1., 0., 0.]);
+        let mut p = Player::default();
+        p.set_pose(Quat::IDENTITY);
+        p.dimension.is_2d = true;
+        p.set_safety_point(Vec3::X * 100., Vec3::NEG_X, Vec3::X);
+        p.recovery_travel_setup(&scene);
+        assert_eq!(p.recovery.lock, Vec3::NEG_Y);
+        assert_eq!(
+            p.recovery.rotation,
+            (p.recovery.rotate_end / 30) as f32 * 360. + 180.
+        );
+        assert_eq!(spin_degrees(Vec3::Y, Vec3::NEG_X, Vec3::NEG_X), 0.);
+    }
 
     /// The branch at 0x479d4c: a safety up along the spin axis turns the bubble by half a
     /// revolution exactly when the actor's up points against it (0x479e48..0x479e58).
@@ -425,6 +560,15 @@ mod checks {
             };
             let scalar = |key: &str| case[key].as_f64().unwrap() as f32;
             let (got, expected): (Vec<f32>, Vec<f32>) = match case["f"].as_str().unwrap() {
+                "quat_side" => {
+                    let q = values("q");
+                    (
+                        pose_math::quat_side(Quat::from_xyzw(q[0], q[1], q[2], q[3]))
+                            .to_array()
+                            .to_vec(),
+                        values("out"),
+                    )
+                }
                 "rotate_quat" => {
                     let q = values("q");
                     let pose = rotate_pose(

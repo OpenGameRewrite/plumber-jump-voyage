@@ -23,6 +23,38 @@ use super::vector_lib::verticalize_vec;
 use super::*;
 use crate::skeleton_pose::{Joint, JointCalc, Matrices};
 
+/// [V] Fall's child (0x46b3b4) steers before setNerveOnGround (0x425410).
+/// The selected state's appear reads that velocity, including its steered Y.
+#[cfg_attr(test, test)]
+fn a_tilted_fall_target_reaches_the_landing_arrival_velocity() {
+    use super::fall_target_area::{FallTarget, TargetArea, steered};
+    let target = TargetArea {
+        axis: Vec3::new(0.6, 0.8, 0.),
+        center: Vec3::ZERO,
+    };
+    let mut p = Player {
+        mode: Move::Fall,
+        grounded: true,
+        ground_contact: 1,
+        pos: Vec3::new(7., 0., 0.),
+        v: Vec3::new(-4., 0., 0.),
+        touchdown_speed: -10.,
+        ..default()
+    };
+    p.input_invalidation.position = p.position_cm();
+    p.input_invalidation.fall = FallTarget {
+        area: Some(target),
+        max_speed: 14.,
+    };
+    let velocity = steered(p.v.with_y(p.touchdown_speed), p.position_cm(), &target, 14.);
+    assert_ne!(velocity.y, p.touchdown_speed);
+    p.arm_fall_control();
+    p.land(&Orders::default(), &Course::default());
+    assert_eq!(p.touchdown_speed, velocity.y);
+    let arrival = p.joints.run_arrival_velocity.expect("landing arrival");
+    assert_eq!(arrival.y, (velocity.y - p.gravity).max(-t::FALL_MAX));
+}
+
 /// `PlayerConst::getIKBlendFrameRun`, `getIKBlendRateRunMin` and `getIKBlendRateRunMax`
 /// (built-in defaults: Mario has no player-constant file).
 const IK_BLEND_FRAMES_RUN: i32 = 60;
@@ -486,6 +518,7 @@ impl JointCalc for Controls<'_> {
 }
 
 pub(super) fn self_check() {
+    a_tilted_fall_target_reaches_the_landing_arrival_velocity();
     lockstep_rechoice_keeps_the_completed_joint_update();
     platform_power_sways_the_body_only_when_it_changes();
     landing_on_moving_ground_adds_its_motion_to_the_impulse();

@@ -9,8 +9,8 @@
 //!
 //! Positions are in the stage's own coordinates (cm, single precision), every operation one
 //! single-precision operation in the executable's order. Not ported: the fluid surfaces of the
-//! nature director (apart from OceanWave's flat-height fallback below), the cylinder arrow
-//! test (0x807458 -> 0x92cc5c), areas that follow a moving part, and area validation switches.
+//! nature director (apart from OceanWave's flat-height fallback below), areas that follow a
+//! moving part, and area validation switches. Cylinder arrows: 0x807458 -> 0x92cc5c.
 //! Sphere arrows correctly report no hit: the original's 0x806d10 returns false.
 use bevy::prelude::*;
 
@@ -151,8 +151,16 @@ impl Area {
     /// surface and the outward normal of the face it meets. A start inside the cube finds the
     /// face it leaves through, one outside the face it enters by; the faces are tried in the
     /// executable's order (height, x, z) and the first whose point lies inside the others'
-    /// bounds wins. Cylinders and spheres report nothing.
+    /// bounds wins. Cylinder arrows use the segment-cylinder helper; spheres report nothing.
     pub fn arrow(&self, from: Vec3, to: Vec3) -> Option<(Vec3, Vec3)> {
+        if matches!(
+            self.shape,
+            Shape::CylinderBase | Shape::CylinderCenter | Shape::CylinderTop
+        ) {
+            let (point, normal) =
+                cylinder_arrow(self.local(from)?, self.local(to)?, self.shape.span().0)?;
+            return Some((self.world_pos(point), self.world_dir(normal)));
+        }
         if !matches!(
             self.shape,
             Shape::CubeBase | Shape::CubeCenter | Shape::CubeTop
@@ -209,6 +217,124 @@ impl Area {
         }
         None
     }
+}
+
+/// [V] checkHitSegmentCylinder 0x92cc5c, specialized to the area's unit Y axis,
+/// radius 500 and height 500 (caller 0x8074d4..0x807524). Keep its endpoint
+/// classification, cap priority and side-root selection, including its unbounded
+/// lateral ray result.
+fn cylinder_arrow(a: Vec3, b: Vec3, bottom: f32) -> Option<(Vec3, Vec3)> {
+    use crate::movement::pose_math::{cross, dot, normalize, squared_length};
+    let base = Vec3::new(0., bottom, 0.);
+    let axis = Vec3::Y;
+    let radial = |p: Vec3| {
+        let d = p - base;
+        d - axis * dot(axis, d)
+    };
+    let inside = |p: Vec3| {
+        let d = p - base;
+        let along = axis * dot(axis, d);
+        let height = dot(axis, along);
+        (0. ..=500.).contains(&height) && squared_length(d - along).sqrt() <= 500.
+    };
+    let starts_inside = inside(a);
+    if starts_inside && inside(b) {
+        return None;
+    }
+    let delta = b - a;
+    let length_squared = squared_length(delta);
+    // Original try-normalize cutoff at 0x92ce58 (not a collision tolerance).
+    if length_squared < f32::from_bits(0x358637be) {
+        return None;
+    }
+    let length = length_squared.sqrt();
+    let dir = normalize(delta);
+    let mut entry = -1.;
+    let mut exit = 100_000.;
+    let mut entry_normal = Vec3::ZERO;
+    let mut exit_normal = Vec3::ZERO;
+    let denominator = (-axis.x * dir.x - axis.y * dir.y) - axis.z * dir.z;
+    // Source isNearZero cutoff at 0x187fc80, shared by the two cap tests.
+    let near_zero = f32::from_bits(0x3a83126f);
+    if denominator.abs() >= near_zero {
+        let offset = base - a;
+        let distance =
+            ((offset.y * -axis.y + offset.x * -axis.x) + offset.z * -axis.z) / denominator;
+        if denominator < 0. {
+            if distance > entry {
+                entry = distance;
+                entry_normal = -axis;
+            }
+        } else if distance < exit {
+            exit = distance;
+            exit_normal = -axis;
+        }
+    }
+    let denominator = dot(dir, axis);
+    if denominator.abs() >= near_zero {
+        let offset = base + axis * 500. - a;
+        let distance = ((axis.y * offset.y + axis.x * offset.x) + axis.z * offset.z) / denominator;
+        if denominator < 0. {
+            if distance > entry {
+                entry = distance;
+                entry_normal = axis;
+            }
+        } else if distance < exit {
+            exit = distance;
+            exit_normal = axis;
+        }
+    }
+    let (distance, normal) = if starts_inside {
+        (exit, exit_normal)
+    } else {
+        (entry, entry_normal)
+    };
+    if distance > 0. && distance <= length {
+        let point = dir * distance + a;
+        if squared_length(radial(point)).sqrt() < 500. {
+            return Some((point, normal));
+        }
+    }
+    // 0x92d1cc..0x92d4dc: solve in the two axes across the cylinder axis.
+    let across = Vec3::new(
+        dir.z * axis.y - dir.y * axis.z,
+        dir.x * axis.z - dir.z * axis.x,
+        dir.y * axis.x - dir.x * axis.y,
+    );
+    if squared_length(across) < f32::from_bits(0x358637be) {
+        return None;
+    }
+    let across = normalize(across);
+    let forward = normalize(cross(across, axis));
+    let x = dot(dir, forward);
+    let z = dot(dir, across);
+    let coefficient = z * z + x * x;
+    if coefficient.abs() < near_zero {
+        return None;
+    }
+    let offset = a - base;
+    let px = dot(offset, forward);
+    let pz = dot(offset, across);
+    let mixed = x * px + z * pz;
+    let linear = mixed + mixed;
+    let constant = (px * px + pz * pz) - 500. * 500.;
+    let discriminant = linear * linear + (coefficient * -4.) * constant;
+    if discriminant <= 0. {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    let first = (-linear - root) / (coefficient + coefficient);
+    let second = (root - linear) / (coefficient + coefficient);
+    if first < 0. && second < 0. {
+        return None;
+    }
+    let distance = if first < 0. || second < first && second > 0. {
+        second
+    } else {
+        first
+    };
+    let point = a + dir * distance;
+    Some((point, radial(point)))
 }
 
 /// What `al::WaterSurfaceFinder` holds: the answer of the player's last query.
