@@ -13,10 +13,11 @@
 //! The inertia belongs to the braking steps only while the force-run counter is down and the
 //! player is not running on the water's surface (`PlayerCounterForceRun`,
 //! `PlayerJudgeWaterSurfaceRun`; 0x48242c..0x482474); otherwise the state's ground move control
-//! steers from the first step (`spin_ground`). Not ported: the ice floor's own handling
-//! (`isOnGroundSkateCode`, the hit reactions and the first-step velocity at 0x482278..0x4823f8)
-//! and, on the water's surface, the nerve's `al::approachWaterSurfaceRate` after the control
-//! (0x4827a8..0x482804, from `PlayerConst`'s SwimRunSurface constants).
+//! steers from the first step (`spin_ground`). An ice floor (`isOnGroundSkateCode`) takes the
+//! control's branch at once, and its first step lays the velocity on the throw direction
+//! (`spin_on_ice_first_step`, 0x482278..0x4823f8); on the water's surface the nerve's
+//! `al::approachWaterSurfaceRate` follows every step (`approach_water_surface`, 0x4827a8..0x482804).
+//! Not played: the ice's hit reaction effect.
 use super::pose_math::{
     DEGREES_TO_RADIANS, along_vector_normal_h, cross, dot, make_quat_rotation_limit, normalize,
     rotate_by_quat, try_normalize_or_zero,
@@ -94,6 +95,40 @@ impl Player {
             );
             self.set_pose(stored);
         }
+    }
+}
+
+impl Player {
+    /// The first step of `updateSpinGroundNerve` on an ice floor (0x482270..0x4823f8,
+    /// `rs::isOnGroundSkateCode`): the velocity along the floor is laid on the throw direction.
+    /// With `along` its part along the throw direction and `speed` its length, the part that is
+    /// not along the direction, `behind = speed - |along|`, joins it: a velocity that points
+    /// forward (or sideways) keeps its whole speed; one that points back keeps `along` when
+    /// that is the larger part and else turns into `behind`. The hit reaction the executable
+    /// starts there (the ice spin reaction, the weak one under a quarter of `NormalMaxSpeed` or
+    /// within fifteen degrees of the direction) is an effect and is not played.
+    pub(super) fn spin_on_ice_first_step(&mut self) {
+        if !self.on_ground_skate() {
+            return;
+        }
+        let Some(front) = self.throwing.dir else {
+            return;
+        };
+        let up = if self.is_collided_ground() {
+            self.collided_ground_normal()
+        } else {
+            self.actor_pose().up()
+        };
+        let (_, horizontal) = separate_parallel_vertical(up, self.v);
+        let speed = super::vector_lib::length(horizontal);
+        let along = dot(front, horizontal);
+        let behind = speed - along.abs();
+        let kept = if along < 0. {
+            if along.abs() > behind { along } else { behind }
+        } else {
+            along + behind
+        };
+        self.v = Vec3::new(kept * front.x, kept * front.y, kept * front.z);
     }
 }
 
@@ -178,5 +213,105 @@ mod tests {
                 format!("{:?}", fresh.spin_ground_move.turn),
             );
         }
+    }
+    fn on_ice(v: Vec3) -> Player {
+        let mut p = Player {
+            v,
+            throwing: ThrowControl {
+                dir: Some(Vec3::X),
+                ..default()
+            },
+            ..spinner()
+        };
+        p.touched.floor = Some(crate::geometry::CollisionCodes {
+            floor: "Skate".into(),
+            ..default()
+        });
+        p
+    }
+
+    /// 0x482270..0x4823f8: on an ice floor the first step lays the velocity along the floor on the
+    /// throw direction. Forward or sideways velocity keeps its whole speed there; a velocity
+    /// pointing back keeps `along` when that is the larger part, else the part across it.
+    #[test]
+    fn the_ice_first_step_lays_the_velocity_on_the_throw_direction() {
+        // Along the direction: all of it.
+        let mut p = on_ice(Vec3::new(8., -0.5, 0.));
+        p.spin_on_ice_first_step();
+        assert_eq!(p.v, Vec3::new(8., 0., 0.));
+        // Across it: the whole speed turns onto the direction.
+        let mut p = on_ice(Vec3::new(0., -0.5, 6.));
+        p.spin_on_ice_first_step();
+        assert_eq!(p.v, Vec3::new(6., 0., 0.));
+        // Mostly backward (|along| > speed - |along|): the backward speed stays.
+        let mut p = on_ice(Vec3::new(-8., -0.5, 2.));
+        let kept = -8.;
+        p.spin_on_ice_first_step();
+        assert_eq!(p.v, Vec3::new(kept, 0., 0.));
+        // Mostly sideways with a little backward: the speed beyond the backward part goes forward.
+        let mut p = on_ice(Vec3::new(-1., -0.5, 6.));
+        let speed = (1_f32 * 1. + 6. * 6.).sqrt();
+        p.spin_on_ice_first_step();
+        assert_eq!(p.v, Vec3::new(speed - 1., 0., 0.));
+        // Off the ice nothing happens.
+        let mut p = on_ice(Vec3::new(-1., -0.5, 6.));
+        p.touched.floor = None;
+        p.spin_on_ice_first_step();
+        assert_eq!(p.v, Vec3::new(-1., -0.5, 6.));
+    }
+
+    /// 0x48240c: the ice takes the control's branch before the inertia is asked, and sets the
+    /// control up on every first step; leaving the ice sets it up once more (0x482690).
+    #[test]
+    fn the_ice_steers_with_the_control_and_the_setup_flag_follows_it() {
+        let o = Orders::default();
+        let scene = Course::default();
+        let mut p = on_ice(Vec3::new(9., -0.5, 0.));
+        p.spin_ground_move.brake_counter = 77;
+        p.spin_ground(&o, 3, &scene);
+        assert!(p.spin_skate_setup, "the setup set the flag");
+        assert_eq!(
+            p.spin_ground_move.brake_counter, 0,
+            "the control was set up"
+        );
+        // A later step on the ice only updates the control; a clear flag sets it up again.
+        assert!(!spin_control_setup(true, true, 4));
+        assert!(spin_control_setup(true, false, 4));
+        assert!(spin_control_setup(true, true, 0));
+        // Off the ice: the flag the ice left, and SpinBrakeFrame, set it up; other steps do not.
+        assert!(spin_control_setup(false, true, 5));
+        assert!(spin_control_setup(false, false, t::SPIN_BRAKE_FRAMES));
+        assert!(!spin_control_setup(false, false, t::SPIN_BRAKE_FRAMES + 1));
+        // Off the ice and in the braking frames the inertia returns and the flag waits; the first
+        // controlled step clears it.
+        p.touched.floor = None;
+        p.spin_ground(&o, 5, &scene);
+        assert!(p.spin_skate_setup);
+        p.spin_ground(&o, t::SPIN_BRAKE_FRAMES, &scene);
+        assert!(!p.spin_skate_setup);
+    }
+
+    /// 0x4827a8..0x482804: while the surface-run judge holds, every ground step ends with
+    /// `al::approachWaterSurfaceRate` at the constant rate: the vertical speed gains the
+    /// distance to the surface times the rate, limited to the approach limit.
+    #[test]
+    fn the_surface_run_approaches_the_surface_after_the_control() {
+        let o = Orders::default();
+        let scene = Course::default();
+        let mut p = spinner();
+        p.surface_run.result = true;
+        p.water_finder.found = true;
+        p.water_finder.distance = 4.;
+        p.spin_ground(&o, 3, &scene);
+        assert_eq!(p.v.y, (-GRAVITY_MOVE + 4. * 0.5).clamp(-5., 5.));
+        p.water_finder.distance = 40.;
+        p.spin_ground(&o, 4, &scene);
+        assert_eq!(p.v.y, 5., "limited");
+        // Without the judge the water does not matter.
+        let mut dry = spinner();
+        dry.water_finder.found = true;
+        dry.water_finder.distance = 4.;
+        dry.spin_ground(&o, 3, &scene);
+        assert_eq!(dry.v.y, -GRAVITY_MOVE);
     }
 }

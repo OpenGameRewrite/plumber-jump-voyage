@@ -1526,6 +1526,9 @@ pub struct Player {
     /// The spin throw's own ground control, which steers once the spin's
     /// braking frames are over (`PlayerStateSpinCap::updateSpinGroundNerve`).
     spin_ground_move: GroundMove,
+    /// `PlayerStateSpinCap` +0x88: the ground control was set up for an ice floor and is set up
+    /// again when the spin leaves it (`updateSpinGroundNerve` 0x48240c, 0x482690).
+    spin_skate_setup: bool,
     pivot: PivotTurn,
     /// Which nerve of the run state is executing.
     run_nerve: RunNerve,
@@ -1771,6 +1774,7 @@ impl Default for Player {
             ground_source: String::new(),
             ground: GroundMove::default(),
             spin_ground_move: GroundMove::plain(),
+            spin_skate_setup: false,
             pivot: PivotTurn::default(),
             run_nerve: RunNerve::Run,
             run_steps: 0,
@@ -2151,6 +2155,17 @@ fn fall_takeoff(constants: &PlayerConstants, vertical_speed: f32) -> air_move::T
 /// What `PlayerStateSpinCap::updateSpinAirNerve` asks of the air control on
 /// its first step: speed limit and base speed `SpinAirSpeedMax`, lift
 /// `SpinAirJumpPower`, gravity `GravitySpinAir`, no extension, the stick free.
+/// Whether `updateSpinGroundNerve` sets its ground control up on this controlled step. On an
+/// ice floor (`skate`) it does on the first step and whenever the flag at +0x88 is clear
+/// (0x48240c..0x482428); off the ice it does when the flag is set (the spin left the ice,
+/// 0x482690..0x4826b8) and at `SpinBrakeFrame` (`isStep`, 0x482694..0x4826b4).
+fn spin_control_setup(skate: bool, flag: bool, step: u32) -> bool {
+    if skate {
+        !flag || step == 0
+    } else {
+        flag || step == t::SPIN_BRAKE_FRAMES
+    }
+}
 fn spin_air_takeoff() -> air_move::Takeoff {
     air_move::Takeoff {
         speed_limit: t::SPIN_AIR_SPEED_MAX,
@@ -5916,6 +5931,7 @@ impl Player {
             }
         }
         self.throwing.dir = None;
+        self.spin_skate_setup = false;
         self.change(Move::Throw, name, move |p| {
             // First step of the state (`updateSpinGroundNerve` and
             // `updateSpinAirNerve`): the actor turns to the throw direction.
@@ -5928,6 +5944,9 @@ impl Player {
                 p.start_spin_air_model_pose();
             } else {
                 p.face_throw_direction();
+                if !air {
+                    p.spin_on_ice_first_step();
+                }
             }
             // Both spin starts clear an upper-body animation still attached
             // (`isUpperBodyAnimAttached`, `clearUpperBodyAnim`): a catch's.
@@ -6085,11 +6104,20 @@ impl Player {
         // [I] We defer that reset to the first controlled step at step 0; the original does
         // not reset here in updateSpinGroundNerve (0x482690..0x4827a4). Equivalence assumes
         // no intervening control update or change to the velocity/facing used for the reset.
-        let controlled = self.force_run.is_active() || self.surface_run.result;
+        // [V] An ice floor (`rs::isOnGroundSkateCode`, 0x482404) takes the control's branch before
+        // the inertia is asked (0x48240c): the control is set up on the first step, and again on
+        // any step that finds the flag at +0x88 clear; the flag is set by that setup. Off the ice
+        // the flag set by it makes the next controlled step set the control up once more and
+        // clears it (0x482690..0x4826b8); without the flag the setup is the one at
+        // `SpinBrakeFrame`.
+        let skate = self.on_ground_skate();
+        let controlled = skate || self.force_run.is_active() || self.surface_run.result;
         if step < t::SPIN_BRAKE_FRAMES && !controlled {
             self.spin_cap_inertia();
         } else {
-            if step == t::SPIN_BRAKE_FRAMES || step == 0 {
+            let setup = spin_control_setup(skate, self.spin_skate_setup, step);
+            self.spin_skate_setup = skate;
+            if setup || step == 0 {
                 self.spin_ground_move.reset(self.v, self.facing, Vec3::Y);
             }
             let (actor_up, actor_front) = self.pose_axes();
@@ -6114,6 +6142,12 @@ impl Player {
         }
         self.v.y = -GRAVITY_MOVE;
         self.pull = GRAVITY_MOVE;
+        // 0x4827a8..0x482804: after the control (or the inertia) of every step the water-surface
+        // run judge keeps the spin on the surface, with the constants of the force-run variant
+        // and no speed-lerped rate.
+        if self.surface_run.result {
+            self.approach_water_surface(scene, surface_run::SWIM_RUN_SURFACE_APPROACH_RATE);
+        }
         // The tail of `updateSpinGroundNerve`: within three frames of the clip's end the state
         // keeps asking for the inverse kinematics until it is chosen again.
         if clip::throw(self.anim.name) as f32 - self.anim.frame <= 3. {

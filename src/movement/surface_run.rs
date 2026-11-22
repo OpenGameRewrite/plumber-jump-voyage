@@ -27,7 +27,7 @@ impl Player {
         if !self.surface_run.result {
             return;
         }
-        let mut rate = 0.5;
+        let mut rate = SWIM_RUN_SURFACE_APPROACH_RATE;
         if !self.force_run.is_active() {
             use joint_math::{calc_rate01, ease_out, lerp_value};
             let speed = self.speed_h();
@@ -36,13 +36,31 @@ impl Player {
             let scale = lerp_value(0.995, 1., brake);
             self.v.x *= scale;
             self.v.z *= scale;
-            rate = lerp_value(0.06, 0.5, approach);
+            rate = lerp_value(0.06, SWIM_RUN_SURFACE_APPROACH_RATE, approach);
         }
-        self.v.y = (self.v.y + (self.water_finder.distance - 0.) * rate).clamp(-5., 5.);
+        self.approach_water_surface(scene, rate);
+    }
+
+    /// `al::approachWaterSurfaceRate` (0x958718 -> 0x958738) with `PlayerConst`'s
+    /// `SwimRunSurfaceBaseHeight` / `ApproachLimit` (slots 0xdf8, 0xe08; the defaults of
+    /// `PlayerConst.cpp`): the vertical speed grows by the distance to the surface times the
+    /// rate and is limited, then the finder's displacement moves the actor.
+    pub(super) fn approach_water_surface(&mut self, scene: &Course, rate: f32) {
+        self.v.y = (self.v.y + (self.water_finder.distance - SWIM_RUN_SURFACE_BASE_HEIGHT) * rate)
+            .clamp(
+                -SWIM_RUN_SURFACE_APPROACH_LIMIT,
+                SWIM_RUN_SURFACE_APPROACH_LIMIT,
+            );
         // The area-only finder has zero +0x28 displacement (no fluid fallback).
         self.move_trans(scene, Vec3::ZERO);
     }
 }
+
+/// `PlayerConst` defaults (`PlayerConst.cpp`): `SwimRunSurfaceBaseHeight`, `ApproachRate`,
+/// `ApproachLimit`.
+const SWIM_RUN_SURFACE_BASE_HEIGHT: f32 = 0.;
+pub(super) const SWIM_RUN_SURFACE_APPROACH_RATE: f32 = 0.5;
+const SWIM_RUN_SURFACE_APPROACH_LIMIT: f32 = 5.;
 
 pub(super) fn self_check() {
     checks::run();
