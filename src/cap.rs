@@ -1708,6 +1708,13 @@ impl Cap {
             self.play(stay(self.left));
         }
         self.update_water_area(world, events);
+        // exeThrowStay 0x405c54: after the nerve's state, the lava update and the joint, the
+        // reflect question comes first (then the wall-reaction chain, 0x40618c). [V] Only the
+        // frame-out gate in front of it (+0x5e8, set by `updateFrameOutLayout` while the cap's
+        // screen position lies outside the display) is not modelled: [I] the cap is in view.
+        if let Some(next) = self.reflect_collision(world.mesh, events) {
+            return Some(next);
+        }
         events.push(CapEvent::Staying);
         if hold && !self.stay_reaction_done {
             self.stay_reaction_done = true;

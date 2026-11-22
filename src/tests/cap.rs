@@ -472,6 +472,20 @@ fn the_spiral_and_rolling_nerves_reflect_off_a_sign_board() {
     brake.collider.wall = Some(touched());
     assert!(brake.update(&world).contains(&CapEvent::Reflected(0)));
     assert_eq!(brake.nerve, CapNerve::Rebound);
+    // The stay nerve asks it too (`exeThrowStay` 0x405c54), before its hover bookkeeping.
+    for (mesh, rebounds) in [(&sign_mesh, true), (&plain_mesh, false)] {
+        let mut stay = Cap::start(launch(Throw::Forward), Vec3::ZERO, 1);
+        stay.nerve = CapNerve::ThrowStay;
+        stay.step = 3;
+        stay.collider.wall = Some(touched());
+        let events = stay.update(&CapWorld {
+            mesh: Some(mesh),
+            ..world
+        });
+        assert_eq!(stay.nerve == CapNerve::Rebound, rebounds);
+        assert_eq!(events.contains(&CapEvent::Reflected(0)), rebounds);
+        assert_eq!(events.contains(&CapEvent::Staying), !rebounds);
+    }
 }
 
 /// The catch is the contact of the cap's `Catch` sensor (100) with the player's
