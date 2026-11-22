@@ -159,6 +159,7 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fall_target_area::steered;
     use super::super::wall_air::WallContact;
     use super::*;
     use bevy::prelude::{Vec2, default};
@@ -558,5 +559,236 @@ mod tests {
             assert!(p.judge_invalidate_input_fall_in_air(), "{mode:?}");
             assert_eq!(p.mode, Move::Fall);
         }
+    }
+
+    /// A latched Fall that has just touched ground, the step before `change_from_surroundings`
+    /// runs it: the collider has cleared `v.y` and kept the speed that reached the floor.
+    fn touchdown_on(floor: &str, area: TargetArea) -> Player {
+        let mut p = Player {
+            mode: Move::Fall,
+            pos: Vec3::new(7., 0., 0.),
+            v: Vec3::new(-4., 0., 0.),
+            grounded: true,
+            ground_contact: 1,
+            touchdown_speed: -10.,
+            ..default()
+        };
+        p.nerve.touchdown = true;
+        p.touched.floor = Some(crate::geometry::CollisionCodes {
+            floor: floor.to_owned(),
+            ..default()
+        });
+        p.input_invalidation.fall = FallTarget {
+            area: Some(area),
+            max_speed: 14.,
+        };
+        p.arm_fall_control();
+        p.locate_invalidate_input_area(&course_with_volume());
+        p
+    }
+
+    fn touched_down(floor: &str, area: TargetArea) -> Player {
+        let mut p = touchdown_on(floor, area);
+        p.change_from_surroundings(&course_with_volume(), &Orders::default());
+        p
+    }
+
+    /// The child of `exeFall` steers and updates its air control (0x46b3b4, 0x46b4a0) before the
+    /// actor asks SandSink (0x42539c), so a latched Fall that lands in sand has been steered
+    /// exactly as the one that lands on an ordinary floor.
+    #[test]
+    fn a_latched_fall_landing_in_sand_is_steered_before_the_sand_judge() {
+        let sand = touched_down("SandSink", volume());
+        let floor = touched_down("Ground", volume());
+        assert_eq!(sand.mode, Move::SandWait);
+        assert_eq!(floor.mode, Move::Idle);
+        assert_eq!(floor.v.x, -(4. + 0.1));
+        assert_eq!(sand.v.x, floor.v.x);
+        // Without a latched area the sand landing keeps the incoming speed.
+        let mut unlatched = touchdown_on("SandSink", volume());
+        unlatched.input_invalidation.fall = FallTarget::default();
+        unlatched.change_from_surroundings(&course_with_volume(), &Orders::default());
+        assert_eq!(unlatched.v.x, -4.);
+    }
+
+    /// The steering reads the whole actor velocity, vertical speed included: on a tilted axis the
+    /// incoming `vy` of -10 changes the speed along the axis. Steering the grounded zero gives
+    /// the other value.
+    #[test]
+    fn a_touchdown_steers_the_velocity_that_reached_the_ground() {
+        let tilted = TargetArea {
+            axis: Vec3::new(0.6, 0.8, 0.),
+            center: Vec3::ZERO,
+        };
+        let expected = steered(
+            Vec3::new(-4., -10., 0.),
+            touchdown_on("Ground", tilted).input_invalidation.position,
+            &tilted,
+            14.,
+        );
+        let grounded = steered(
+            Vec3::new(-4., 0., 0.),
+            touchdown_on("Ground", tilted).input_invalidation.position,
+            &tilted,
+            14.,
+        );
+        assert_ne!(expected.x, grounded.x);
+        let mut landing = touchdown_on("Ground", tilted);
+        let vy = landing.update_fall_target_at_touchdown();
+        assert_eq!(landing.v.x, expected.x);
+        assert_eq!(landing.v.z, expected.z);
+        assert_eq!(vy, Some(expected.y));
+        assert_ne!(
+            expected.y, -10.,
+            "the tilted steering changes the vertical speed"
+        );
+        assert_eq!(
+            landing.v.y, 0.,
+            "the grounded representation keeps its own vertical speed"
+        );
+        // The same through the sand branch.
+        let sand = touched_down("SandSink", tilted);
+        assert_eq!(sand.mode, Move::SandWait);
+        assert_eq!(sand.v.x, expected.x);
+    }
+
+    /// A Fall that reaches the forced-slide plane `y = -0.3x` (real triangle collider) on the
+    /// step after the first, before its touchdown step: `change_from_surroundings` runs next.
+    fn fall_about_to_land_on_a_slide() -> (Player, Course) {
+        let corner = |x: f32, z: f32| Vec3::new(x, -0.3 * x, z);
+        let (a, b) = (corner(-1000., -1000.), corner(-1000., 1000.));
+        let (c, d) = (corner(1000., -1000.), corner(1000., 1000.));
+        let course = Course {
+            mesh: Some(Arc::new(crate::geometry::TriangleMesh::from_coded_corners(
+                &[([a, b, c], 0), ([c, b, d], 0)],
+                vec![crate::geometry::CollisionCodes {
+                    floor: "Slide".into(),
+                    ..default()
+                }],
+            ))),
+            ..default()
+        };
+        let mut p = Player::default();
+        p.go(Move::Fall, "Fall");
+        p.pos = Vec3::Y * 0.2;
+        p.grounded = false;
+        p.ground_contact = 0;
+        p.facing = Vec3::X;
+        p.v = Vec3::new(24., -30., 0.);
+        let takeoff = super::super::fall_takeoff(p.constants, p.v.y);
+        p.air.setup(&mut p.v, p.facing, &takeoff);
+        p.air_for = Some(Move::Fall);
+        p.step(&Orders::default(), &course);
+        assert_eq!(p.mode, Move::Fall);
+        assert!(p.nerve.touchdown && p.is_just_land());
+        (p, course)
+    }
+
+    /// The vertical speed the steering leaves is what the air update and the forced slide read
+    /// after it (`airborne_velocity` in `land`), not the speed that reached the ground. The
+    /// reference lands a Fall that carries the steered velocity already, with no area latched:
+    /// both landings must hand the slide the same velocity.
+    #[test]
+    fn the_slide_after_a_steered_touchdown_reads_the_steered_vertical_speed() {
+        let tilted = TargetArea {
+            axis: Vec3::new(0.6, 0.8, 0.),
+            center: Vec3::new(0., 0., 300.),
+        };
+        let (mut steered_landing, course) = fall_about_to_land_on_a_slide();
+        steered_landing.input_invalidation.fall = FallTarget {
+            area: Some(tilted),
+            max_speed: 30.,
+        };
+        steered_landing.locate_invalidate_input_area(&course);
+        let incoming = steered_landing.v.with_y(steered_landing.touchdown_speed);
+        let expected = steered(
+            incoming,
+            steered_landing.input_invalidation.position,
+            &tilted,
+            30.,
+        );
+        assert_ne!(
+            expected.y, incoming.y,
+            "the fixture's steering changes the vertical speed"
+        );
+        steered_landing.step(&Orders::default(), &course);
+        assert_eq!(steered_landing.mode, Move::SlopeSlide);
+
+        let (mut reference, course) = fall_about_to_land_on_a_slide();
+        reference.set_h(expected);
+        reference.touchdown_speed = expected.y;
+        reference.step(&Orders::default(), &course);
+        assert_eq!(reference.mode, Move::SlopeSlide);
+        assert_eq!(steered_landing.v, reference.v);
+        // The unsteered vertical speed would have given the slide another velocity.
+        let (mut wrong, course) = fall_about_to_land_on_a_slide();
+        wrong.set_h(expected);
+        wrong.step(&Orders::default(), &course);
+        assert_ne!(wrong.v, reference.v);
+    }
+
+    /// A Fall restored from a recording never ran `appear`: its ceiling is the one `appear`
+    /// computes from the restored speed (14 for 4 cm/frame), not the unset zero, so the first
+    /// steering inside the volume keeps the speed.
+    #[test]
+    fn a_restored_fall_steers_with_the_ceiling_appear_would_store() {
+        let course = course_with_volume();
+        let mut p = Player::default();
+        p.inject(&super::super::Snapshot {
+            mode: Some(Move::Fall),
+            state_frames: Some(3),
+            pos: Vec3::new(1., 2., 0.),
+            v: Vec3::new(-4., -3., 0.),
+            facing: Vec3::Z,
+            ..default()
+        });
+        assert_eq!(p.input_invalidation.fall.max_speed, 14.);
+        p.step(&Orders::default(), &course);
+        assert!(p.fall_target_latched());
+        assert_eq!(p.input_invalidation.fall.max_speed, 14.);
+        assert_eq!(p.v.x, -(4. + 0.1));
+    }
+
+    /// Injecting again while the player is already in Fall (every lockstep frame) keeps the
+    /// ceiling and the area its own `appear` and judge stored.
+    #[test]
+    fn a_restore_inside_a_fall_keeps_the_stored_state() {
+        let snapshot = super::super::Snapshot {
+            mode: Some(Move::Fall),
+            state_frames: Some(3),
+            pos: Vec3::new(1., 2., 0.),
+            v: Vec3::new(-4., -3., 0.),
+            facing: Vec3::Z,
+            ..default()
+        };
+        let mut p = Player::default();
+        p.inject(&snapshot);
+        p.input_invalidation.fall = FallTarget {
+            area: Some(volume()),
+            max_speed: 21.,
+        };
+        p.inject(&snapshot);
+        assert_eq!(p.input_invalidation.fall.max_speed, 21.);
+        assert!(p.fall_target_latched());
+    }
+
+    /// Frame order of the two direct calls: `appear` steers in the step that chose Fall (the
+    /// state controller runs it right after the choosing `exeJump`), the child's first
+    /// `exeFall` steers once in the next step. The choosing step does not steer twice.
+    #[test]
+    fn appear_steers_in_the_choosing_step_and_the_child_in_the_next() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Jump, 2.);
+        p.pos.x = 1.;
+        p.v = Vec3::new(-10., -3., 0.);
+        p.step(&Orders::default(), &course);
+        assert_eq!(p.actor_name(), "Fall");
+        assert_eq!(p.v.x, -(10. + 0.1), "one steering, from appear");
+        p.step(&Orders::default(), &course);
+        assert_eq!(
+            p.v.x,
+            -(10. + 0.1 + 0.1),
+            "one more, from the child's first update"
+        );
     }
 }

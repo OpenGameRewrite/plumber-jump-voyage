@@ -2652,6 +2652,8 @@ impl Player {
             self.damage = Damage::default();
             self.soot = Soot::default();
         }
+        // A Fall the player was already in keeps the state its own `appear` stored.
+        let was_in_fall = self.actor_name() == "Fall";
         self.nerve.clear();
         self.pos = s.pos;
         self.snapshot_injected = true;
@@ -2773,6 +2775,9 @@ impl Player {
         }
         self.spin_fall = s.spin_fall;
         self.nerve.actor = self.actor_name();
+        if self.actor_name() == "Fall" && !was_in_fall {
+            self.restore_fall_target();
+        }
         self.jump_extend = matches!(self.mode, Move::Jump | Move::DoubleJump)
             && self.frame < t::EXTEND_FRAMES
             && self.v.y > 0.;
@@ -3757,6 +3762,15 @@ impl Player {
     fn change_from_surroundings(&mut self, _scene: &Course, o: &Orders) {
         if std::mem::take(&mut self.nerve.touchdown) {
             if self.judge_sand_sink() {
+                // The actor's `exeFall` updates its child first (0x425240: the steering at
+                // 0x46b3b4, the air control at 0x46b4a0) and asks SandSink after (0x42539c).
+                if self.mode == Move::Fall
+                    && let Some(steered_y) = self.update_fall_target_at_touchdown()
+                {
+                    // The contact has cleared this branch's vertical speed: carry only the
+                    // change the steering made to the speed it read.
+                    self.v.y += steered_y - self.touchdown_speed;
+                }
                 if self.mode.uses_air_control() && self.air_for == Some(self.mode) {
                     let push = self.push();
                     self.air.update(
@@ -6684,12 +6698,16 @@ impl Player {
 
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders, scene: &Course) {
-        if self.mode == Move::Fall {
-            // `run_state` is skipped on this step, but the actor's `exeFall` still updates its
-            // child first (0x425240), and the child's first call is `updateFallTargetArea`
-            // (0x46b3b4): a latched target steers the velocity the landing reads.
-            self.update_fall_target_area();
-        }
+        // `run_state` is skipped on this step, but the actor's `exeFall` still updates its child
+        // first (0x425240), and the child begins with `updateFallTargetArea` (0x46b3b4): a
+        // latched target steers the full velocity, vertical speed included, that the landing and
+        // the air update read.
+        let steered_y = if self.mode == Move::Fall {
+            self.update_fall_target_at_touchdown()
+        } else {
+            None
+        };
+        let incoming_y = steered_y.unwrap_or(self.touchdown_speed);
         if self.model_2d()
             && matches!(
                 self.mode,
@@ -6698,7 +6716,7 @@ impl Player {
         {
             // Wait::appear 0x48c93c..0x48c968 skips Land for a 2D model.
             // startHitReactionLandIfLanding 0x56a3ec also rejects that model.
-            self.v.y = self.touchdown_speed;
+            self.v.y = incoming_y;
             self.jump_air(o);
             if self.actor_name() == "Jump" {
                 self.count_jump_combo();
@@ -6711,6 +6729,9 @@ impl Player {
         if self.mode == Move::Fall && !self.is_just_land() {
             // A continuing floor contact enters Wait directly; only a fresh
             // landing chooses the Land child (PlayerStateWait::appear).
+            if let Some(y) = steered_y {
+                self.v.y = y;
+            }
             self.jump_air(o);
             self.set_nerve_on_ground(o, scene); // exeFall 0x425410.
             return;
@@ -6722,7 +6743,7 @@ impl Player {
             // Fall's first execution still sets up its air control when the
             // preceding collision already found ground (0x46b3ec..0x46b4a0).
             // The original actor retains its incoming vertical velocity.
-            self.v.y = self.touchdown_speed;
+            self.v.y = incoming_y;
             self.arm_fall_control();
         }
         // The child still updates on touchdown: exeJump 0x4240a4 -> air update 0x4729c4
@@ -6732,7 +6753,7 @@ impl Player {
             && self.air_for == Some(self.mode);
         let mut airborne_velocity = None;
         if air_step_ran {
-            let mut v = self.v.with_y(self.touchdown_speed);
+            let mut v = self.v.with_y(incoming_y);
             let steer = air_move::Steering {
                 front: t::JUMP_ACCEL_FRONT,
                 back: t::JUMP_ACCEL_BACK,

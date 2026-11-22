@@ -1,6 +1,7 @@
 //! The area `PlayerStateFallHakoniwa` latches and steers toward: `appear` 0x46afb8 and
-//! `updateFallTargetArea` 0x46b0bc, which `appear` and the child's `exeFall` (0x46b394, call at
-//! 0x46b3b4) both run before the air control.
+//! `updateFallTargetArea` 0x46b0bc. [V] Exactly two direct calls reach `updateFallTargetArea`:
+//! `appear` (call at 0x46b088) and the child's `exeFall` (0x46b394, call at 0x46b3b4, before the
+//! first-step air setup and the air control).
 //!
 //! The latch itself (state +0x70, cleared by `appear`, set from the state's own
 //! `PlayerJudgeInvalidateInputFall` the first time it holds, never released while the state
@@ -25,13 +26,23 @@
 //! constants 0.75, 5 and 0.1 are literals of `updateFallTargetArea` (0x46b238, 0x46b22c,
 //! 0x46b270), not `PlayerConst` values.
 //!
-//! Calls in the port: `appear_fall_target` from `change` (the step that chose Fall:
-//! `NerveKeeper::update` runs `tryChangeNerve` again after `execute`, so `appear` follows the
-//! actor's `exeXxx` at once, [V] decomp `NerveKeeper.cpp`), `update_fall_target_area` at the top
-//! of every Fall state step (`run_state`) and at the top of `land`, whose touchdown step skips
-//! `run_state` but still runs the child's `exeFall` (0x425240). [I] The port holds the position
-//! and velocity of that point of the step, which is where the executable reads them, except for
-//! the other port states that move the actor between `change` and the end of the step.
+//! Frame order [V]. When the actor picks Fall in the middle of an execution, `NerveKeeper::update`
+//! (decomp `NerveKeeper.cpp`) calls `tryChangeNerve` again and the state controller runs `appear`
+//! then, in the same frame, right after that `exeXxx`. `appear` is therefore the first steering.
+//! The child's `exeFall` has not run yet: its first execution (the second call, 0x46b3b4) is part
+//! of the actor's next Fall update, the following frame.
+//!
+//! Calls in the port: `appear_fall_target` from `change` (the frame that chose Fall), then
+//! `update_fall_target_area` at the top of every Fall state step (`run_state`), the first one
+//! being the frame after the choice. A touchdown step skips `run_state` but the actor's
+//! `exeFall` still updates its child first (0x425240), before it asks SandSink (+0x450, 0x42539c)
+//! or lands (0x425410): both touchdown branches of `change_from_surroundings` (the sand one and
+//! `land`) therefore steer first, with `update_fall_target_at_touchdown`. The water judge
+//! (+0x410, 0x4255fc) sits after the landing return in the actor's `exeFall`, so a touchdown
+//! step never reaches it. [I] The port holds the position and velocity of that point of the
+//! step, which is where the executable reads them, except for the other port states that move
+//! the actor between `change` and the end of the step, and the stage position cached at the top
+//! of the step (the executable reads the current translation at 0x46b134).
 use super::pose_math::{dot, try_normalize_or_zero};
 use super::vector_lib::{length, separate_parallel_vertical, verticalize_vec};
 use super::{Player, t};
@@ -87,7 +98,7 @@ pub(super) fn speed_ceiling(speed_h: f32) -> f32 {
 
 /// The velocity `updateFallTargetArea` leaves (0x46b0f8..0x46b2e4) for an actor at `position`
 /// (centimetres) moving with `velocity`.
-fn steered(velocity: Vec3, position: Vec3, area: &TargetArea, max_speed: f32) -> Vec3 {
+pub(super) fn steered(velocity: Vec3, position: Vec3, area: &TargetArea, max_speed: f32) -> Vec3 {
     let offset = verticalize_vec(
         area.axis,
         Vec3::new(
@@ -155,21 +166,59 @@ impl Player {
     /// first it finds; once one is held, the velocity is steered toward its axis every call,
     /// inside the volume or not. SpinCap's fall child is another state and has none.
     pub(super) fn update_fall_target_area(&mut self) {
+        if let Some(velocity) = self.fall_target_steering(self.v) {
+            self.v = velocity;
+        }
+    }
+
+    /// The child's `exeFall` on a touchdown step (call at 0x46b3b4, run by the actor's
+    /// `exeFall` at 0x425240 before SandSink at 0x42539c and the landing at 0x425410). The
+    /// collider has already stopped the fall (`terrain.rs` clears `v.y` at contact and keeps the
+    /// speed that reached the ground in `touchdown_speed`), but the executable steers the full
+    /// actor velocity, vertical speed included (0x46b1b0..0x46b2e4 read and write all three
+    /// components). So the steering acts on the velocity with the incoming vertical speed and
+    /// writes its horizontal part back. Returns the vertical speed it leaves, `None` when no area
+    /// is latched (the velocity is untouched): the caller carries that speed into the air update
+    /// that follows, as the executable's velocity does.
+    pub(super) fn update_fall_target_at_touchdown(&mut self) -> Option<f32> {
+        let incoming = self.v.with_y(self.touchdown_speed);
+        let velocity = self.fall_target_steering(incoming)?;
+        self.set_h(velocity);
+        Some(velocity.y)
+    }
+
+    /// `updateFallTargetArea` on `velocity`: latches the area, and returns the steered velocity
+    /// once one is held.
+    fn fall_target_steering(&mut self, velocity: Vec3) -> Option<Vec3> {
         if self.actor_name() != "Fall" {
             self.input_invalidation.fall = FallTarget::default();
-            return;
+            return None;
         }
         if self.input_invalidation.fall.area.is_none() && !self.is_collided_ground() {
             self.input_invalidation.fall.area = self.input_invalidation.in_area;
         }
-        if let Some(area) = self.input_invalidation.fall.area {
-            self.v = steered(
-                self.v,
-                self.input_invalidation.position,
-                &area,
-                self.input_invalidation.fall.max_speed,
-            );
-        }
+        let area = self.input_invalidation.fall.area?;
+        Some(steered(
+            velocity,
+            self.input_invalidation.position,
+            &area,
+            self.input_invalidation.fall.max_speed,
+        ))
+    }
+
+    /// A Fall restored from a recording (`Player::inject`) when the player was not in Fall: the
+    /// state's `appear` ran frames earlier, with a speed the snapshot does not hold, and stored
+    /// the ceiling (+0x78) the steering reads. Zero is outside what `appear` can store (14..30),
+    /// so the ceiling is the one `appear` computes from the speed the restored actor has.
+    /// [I] The entry speed is hidden state; the area (+0x70) starts empty because the snapshot
+    /// does not say whether the original had latched one, and the next Fall update asks the
+    /// judge as it does for any Fall that has not latched yet. The restored velocity already
+    /// holds `appear`'s own steering, so none is applied here.
+    pub(super) fn restore_fall_target(&mut self) {
+        self.input_invalidation.fall = FallTarget {
+            area: None,
+            max_speed: speed_ceiling(self.speed_h()),
+        };
     }
 
     /// State +0x70 of the Fall state holds an area: the gate of the actor's `exeFall` reads it.
