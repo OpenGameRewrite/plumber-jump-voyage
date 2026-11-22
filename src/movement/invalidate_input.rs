@@ -791,4 +791,108 @@ mod tests {
             "one more, from the child's first update"
         );
     }
+
+    /// A latched tilted-axis Fall landing and its reference: the same fall, no area latched,
+    /// that already carries the velocity the steering gives. `carry` hands the reference that
+    /// velocity (`expected`, with the incoming vertical speed) in the form its branch reads.
+    /// The steering must leave the same world as the reference, whatever branch lands.
+    fn steered_landing_matches_a_reference(
+        floor: &str,
+        prepare: impl Fn(&mut Player),
+        carry: impl Fn(&mut Player, Vec3),
+    ) -> (Player, Player) {
+        let tilted = TargetArea {
+            axis: Vec3::new(0.6, 0.8, 0.),
+            center: Vec3::ZERO,
+        };
+        let course = course_with_volume();
+        let mut latched = touchdown_on(floor, tilted);
+        prepare(&mut latched);
+        let incoming = latched.v.with_y(latched.touchdown_speed);
+        let expected = steered(incoming, latched.input_invalidation.position, &tilted, 14.);
+        assert_ne!(
+            expected.y, incoming.y,
+            "the fixture's steering changes the vertical speed"
+        );
+        let mut reference = touchdown_on(floor, tilted);
+        prepare(&mut reference);
+        reference.input_invalidation.fall = FallTarget::default();
+        reference.set_h(expected);
+        carry(&mut reference, expected);
+        latched.change_from_surroundings(&course, &Orders::default());
+        reference.change_from_surroundings(&course, &Orders::default());
+        (latched, reference)
+    }
+
+    /// The sand branch carries the steering's change of vertical speed (the contact cleared the
+    /// rest) into the sand state, whose appear lays the velocity along the ground it landed on
+    /// (`sand_ground_appear`). A fresh landing turns the velocity from the vertical, which drops
+    /// its vertical part; a contact that goes on (the Fall's steep-face contact) turns it from the
+    /// floor's own normal, and there the steered vertical speed stays visible.
+    #[test]
+    fn the_sand_branch_carries_the_steered_vertical_speed() {
+        let slope = |p: &mut Player| {
+            p.mesh_ground = Some(Vec3::new(0., 0.8, 0.6));
+            p.ground_contact = 2;
+        };
+        let (latched, reference) =
+            steered_landing_matches_a_reference("SandSink", slope, |p, expected| {
+                p.v.y += expected.y - p.touchdown_speed
+            });
+        assert_eq!(latched.mode, Move::SandWait);
+        assert_eq!(latched.mode, reference.mode);
+        assert_eq!(latched.v, reference.v);
+        let mut dropped = touchdown_on(
+            "SandSink",
+            TargetArea {
+                axis: Vec3::new(0.6, 0.8, 0.),
+                center: Vec3::ZERO,
+            },
+        );
+        slope(&mut dropped);
+        dropped.input_invalidation.fall = FallTarget::default();
+        dropped.change_from_surroundings(&course_with_volume(), &Orders::default());
+        assert_ne!(
+            dropped.v.y, latched.v.y,
+            "the vertical change shows in the sand state"
+        );
+    }
+
+    /// A Fall whose first execution is the landing sets its air control up from the steered
+    /// velocity (0x46b3ec..0x46b4a0 follow the steering at 0x46b3b4).
+    #[test]
+    fn the_first_step_air_setup_reads_the_steered_vertical_speed() {
+        let (latched, reference) = steered_landing_matches_a_reference(
+            "Ground",
+            |p| p.air_for = None,
+            |p, expected| p.touchdown_speed = expected.y,
+        );
+        assert_eq!(latched.v, reference.v);
+        assert_eq!(latched.mode, reference.mode);
+    }
+
+    /// The 2D landing, which skips the Land child, keeps the steered vertical speed.
+    #[test]
+    fn the_2d_landing_keeps_the_steered_vertical_speed() {
+        let (latched, reference) = steered_landing_matches_a_reference(
+            "Ground",
+            |p| p.dimension.is_2d = true,
+            |p, expected| p.touchdown_speed = expected.y,
+        );
+        assert_eq!(latched.v, reference.v);
+    }
+
+    /// A contact that goes on (no fresh landing) steers too, and keeps the steered speed.
+    #[test]
+    fn a_continuing_contact_keeps_the_steered_vertical_speed() {
+        let (latched, reference) = steered_landing_matches_a_reference(
+            "Ground",
+            |p| p.ground_contact = 2,
+            |p, expected| {
+                p.touchdown_speed = expected.y;
+                p.v.y = expected.y;
+            },
+        );
+        assert_eq!(latched.v, reference.v);
+    }
 }
