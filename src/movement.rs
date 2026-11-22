@@ -249,6 +249,7 @@ pub mod dimension;
 pub mod dokan;
 mod entrance_camera;
 pub mod external_velocity;
+mod fall_target_area;
 mod force_run;
 #[path = "movement/grab_ceil.rs"]
 pub mod grab_ceil;
@@ -3109,7 +3110,7 @@ impl Player {
         self.clear_fall_input_target();
         self.mode = mode;
         if mode == Move::Fall {
-            self.update_fall_input_target();
+            self.appear_fall_target();
         }
         self.frame = 0;
         if mode == Move::Idle {
@@ -3839,7 +3840,7 @@ impl Player {
     }
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
-        self.update_fall_input_target();
+        self.update_fall_target_area();
         if matches!(self.actor_name(), "Wait" | "Run") {
             self.ground_inertia.request = 1;
         }
@@ -6683,6 +6684,12 @@ impl Player {
 
     // ---- Landing and collision ------------------------------------------------
     fn land(&mut self, o: &Orders, scene: &Course) {
+        if self.mode == Move::Fall {
+            // `run_state` is skipped on this step, but the actor's `exeFall` still updates its
+            // child first (0x425240), and the child's first call is `updateFallTargetArea`
+            // (0x46b3b4): a latched target steers the velocity the landing reads.
+            self.update_fall_target_area();
+        }
         if self.model_2d()
             && matches!(
                 self.mode,

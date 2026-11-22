@@ -16,12 +16,29 @@
 //! reading +0x98 and answers zero/false when it is set (0x44c3bc, 0x44c6ec, 0x44c728 ...). So the
 //! judge's write silences the input for the update that follows. Fall owns a second judge
 //! (state +0x48, constructed at 0x46af20): `appear` clears its target pointer (+0x70) and
-//! `updateFallTargetArea` (0x46b0bc) latches the first area found until the state ends.
+//! `updateFallTargetArea` (0x46b0bc) latches the first area found until the state ends
+//! (`fall_target_area.rs` also steers the velocity toward it).
 //! `exeFall` updates that state first (0x425240 -> 0x46b3b4), then renews the input silence
 //! after its water judge (0x425630..0x425654). Leaving the volume does not release the latch.
 //! Landing or another earlier transition bypasses this gate; the last counter write still
 //! silences the following input update. The order is [V]: input update 0x41dec8, base movement
 //! 0x41e020 -> LiveActor 0x90d8b0 -> actor nerve -> child state -> actor gate.
+//!
+//! The same test of the state's bytes +0x6c and +0x70 guards the wall judge: with either set the
+//! actor's `exeFall` skips `PlayerJudgeWallKeep` (+0x4f8, 0x42556c..0x425580), so a latched
+//! Fall that touches a wall stays Fall and silent (`Player::judge_wall_keep`). The gate's
+//! other effect is to return before the tail of `exeFall` (0x425658..0x4256d0): the 2D hovering
+//! jump (`rs::isPlayer2D`, `HackCap::isEnableSpinAttack`, the actor's
+//! `HackCapJudgePreInputHoveringJump` at +0x4b8, then the Jump nerve with kind 0x12). That judge
+//! has no port at all, latched or not, so there is nothing to skip.
+//!
+//! [I] Unmodelled: byte +0x6c, the trigger-7 silence. `appear` copies `ECollisionTrigger` 7
+//! into it (0x46afe8..0x46affc), and the only writer of trigger 7 is `initAfterPlacement`
+//! (0x41dd10, the scene-start branch that finds no ground below); `sendCollisionMsg` clears the
+//! triggers at its top (0x4274c0), after the first movement. The replay places the actor from a
+//! recorded state instead of running that scene start, so a Fall that appears on the first
+//! movement after placement does not get the whole-fall silence (and the wall-judge skip) that
+//! +0x6c would give it. The silence a volume gives (+0x70) is modelled.
 //!
 //! The nerves that ask it (every read of the actor field +0x430 in `PlayerActorHakoniwa`):
 //!
@@ -45,9 +62,9 @@
 //! reads the input after the `setNerve` that follows, so only the next update's silence is
 //! modelled. [I] `exeWallAir`'s first air step asks the slide chain (judge last) in the
 //! executable; the port's wall jump asks it first through the air helper.
+use super::fall_target_area::{FallTarget, TargetArea};
 use super::{Course, Move, Player};
 use crate::input::Orders;
-use crate::water::WaterAreas;
 use bevy::prelude::Vec3;
 
 /// `PlayerInput` +0x94 / +0x98 and the judge's area answer for this step.
@@ -57,15 +74,12 @@ pub(super) struct InputInvalidation {
     counter: i32,
     /// `PlayerJudgeInvalidateInputFall`'s area pointer is set: the actor's position lies in an
     /// `InvalidateInputFallArea` (the collider's ground contact is asked separately).
-    in_area: bool,
-    /// Fall state +0x70: once found, the target survives leaving the volume, until Fall ends.
-    fall_target: bool,
-}
-
-/// `al::tryFindAreaObj` by name: any placement holding the point (the answer is only used as
-/// found / not found).
-pub(super) fn holds(areas: &WaterAreas, position: Vec3) -> bool {
-    areas.volume_at(position).is_some()
+    pub(super) in_area: Option<TargetArea>,
+    /// The actor's position in the stage's frame (centimetres) that answer was given at.
+    pub(super) position: Vec3,
+    /// The Fall state's +0x70 and +0x78: once found, the target survives leaving the volume,
+    /// until Fall ends.
+    pub(super) fall: FallTarget,
 }
 
 impl Player {
@@ -84,43 +98,37 @@ impl Player {
     /// The area half of `PlayerJudgeInvalidateInputFall::update`, answered at the position the
     /// nerves of this step run from.
     pub(super) fn locate_invalidate_input_area(&mut self, scene: &Course) {
-        self.input_invalidation.in_area = scene
-            .mesh
-            .as_ref()
-            .is_some_and(|mesh| holds(&mesh.invalidate_input_fall, self.stage_position(mesh)));
-    }
-
-    /// The area-pointer part of `updateFallTargetArea`, before Fall's air control (0x46b3b4).
-    /// SpinCap/Fall has a different child and asks the actor's judge through the air helper.
-    pub(super) fn update_fall_input_target(&mut self) {
-        if self.actor_name() == "Fall" {
-            self.input_invalidation.fall_target |=
-                !self.is_collided_ground() && self.input_invalidation.in_area;
-        } else {
-            self.input_invalidation.fall_target = false;
-        }
+        let located = scene.mesh.as_ref().map(|mesh| {
+            let position = self.stage_position(mesh);
+            // `al::tryFindAreaObj` by name: any placement holding the point.
+            let area = mesh.invalidate_input_fall.volume_at(position);
+            (position, area.map(TargetArea::of))
+        });
+        let (position, area) = located.unwrap_or_default();
+        self.input_invalidation.position = position;
+        self.input_invalidation.in_area = area;
     }
 
     /// Actor Fall's gate follows the water judge, and is bypassed by earlier transitions.
     pub(super) fn renew_fall_input_invalidation(&mut self) {
-        if self.actor_name() == "Fall"
-            && !self.nerve.deferred
-            && self.input_invalidation.fall_target
-        {
+        if !self.nerve.deferred && self.fall_target_latched() {
             self.input_invalidation.counter = 1;
         }
     }
 
     /// `PlayerStateFallHakoniwa::appear` clears +0x70 before its first area query (0x46b084).
     pub(super) fn clear_fall_input_target(&mut self) {
-        self.input_invalidation.fall_target = false;
+        self.input_invalidation.fall.area = None;
     }
 
     /// `rs::updateJudgeAndResult` of the actor's `PlayerJudgeInvalidateInputFall` (+0x430) and the
     /// two writes and the `setNerve(Fall)` every asking nerve makes when it holds. True when the
     /// actor chose the Fall nerve.
     pub(super) fn judge_invalidate_input_fall(&mut self) -> bool {
-        if self.nerve.deferred || self.is_collided_ground() || !self.input_invalidation.in_area {
+        if self.nerve.deferred
+            || self.is_collided_ground()
+            || self.input_invalidation.in_area.is_none()
+        {
             return false;
         }
         self.input_invalidation.counter = 1;
@@ -151,22 +159,41 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
+    use super::super::wall_air::WallContact;
     use super::*;
     use bevy::prelude::{Vec2, default};
     use std::sync::Arc;
 
+    /// The test volume as the Fall state latches it: standing up from the origin.
+    fn volume() -> TargetArea {
+        TargetArea {
+            axis: Vec3::Y,
+            center: Vec3::ZERO,
+        }
+    }
+
     /// A stage with no collision and one `InvalidateInputFallArea` (`AreaCylinder`, unit scale:
-    /// a cylinder of 500 cm radius standing on the origin, 500 cm tall).
-    fn course_with_volume() -> Course {
-        let text = r#"{"attributes":[{}],"objects":[],"triangles":[],
-            "areas":[{"name":"InvalidateInputFallArea","shape":"AreaCylinder","priority":-1,
-                "matrix":[1,0,0,0, 0,1,0,0, 0,0,1,0],"scale":[1,1,1],"args":{},"links":[]}]}"#;
+    /// a cylinder of 500 cm radius standing on the origin, 500 cm tall), and perhaps a pool
+    /// (`WaterArea`, `AreaCubeTop`: its surface at 1000 cm, 2000 cm deep, 10000 cm wide).
+    fn course_of(pool: bool) -> Course {
+        let water = r#",{"name":"WaterArea","shape":"AreaCubeTop","priority":-1,
+                "matrix":[1,0,0,0, 0,1,0,1000, 0,0,1,0],"scale":[10,2,10],"args":{},"links":[]}"#;
+        let text = format!(
+            r#"{{"attributes":[{{}}],"objects":[],"triangles":[],
+            "areas":[{{"name":"InvalidateInputFallArea","shape":"AreaCylinder","priority":-1,
+                "matrix":[1,0,0,0, 0,1,0,0, 0,0,1,0],"scale":[1,1,1],"args":{{}},"links":[]}}{}]}}"#,
+            if pool { water } else { "" }
+        );
         Course {
             mesh: Some(Arc::new(
-                crate::geometry::TriangleMesh::from_json(text, Vec3::ZERO).unwrap(),
+                crate::geometry::TriangleMesh::from_json(&text, Vec3::ZERO).unwrap(),
             )),
             ..default()
         }
+    }
+
+    fn course_with_volume() -> Course {
+        course_of(false)
     }
 
     fn airborne(mode: Move, height_m: f32) -> Player {
@@ -194,12 +221,10 @@ mod tests {
     #[test]
     fn the_export_loads_the_volume() {
         let mesh = course_with_volume().mesh.unwrap();
-        assert!(holds(&mesh.invalidate_input_fall, Vec3::new(0., 200., 0.)));
-        assert!(!holds(&mesh.invalidate_input_fall, Vec3::new(0., 600., 0.)));
-        assert!(!holds(
-            &mesh.invalidate_input_fall,
-            Vec3::new(700., 200., 0.)
-        ));
+        let holds = |position| mesh.invalidate_input_fall.volume_at(position).is_some();
+        assert!(holds(Vec3::new(0., 200., 0.)));
+        assert!(!holds(Vec3::new(0., 600., 0.)));
+        assert!(!holds(Vec3::new(700., 200., 0.)));
     }
 
     /// The actor judge silences the next input update; Fall then renews it on every step.
@@ -232,7 +257,7 @@ mod tests {
         first.jump = false;
         p.step(&first, &course);
         assert!(p.tilt > 0., "first input update precedes the Fall gate");
-        assert!(p.input_invalidation.fall_target);
+        assert!(p.fall_target_latched());
         for _ in 0..3 {
             p.step(&pressed(), &course);
             assert_eq!(p.pre_jump, 0);
@@ -240,7 +265,7 @@ mod tests {
         }
         p.pos.x = 7.;
         p.step(&pressed(), &course);
-        assert!(!p.input_invalidation.in_area);
+        assert!(p.input_invalidation.in_area.is_none());
         assert_eq!(p.pre_jump, 0);
         assert_eq!(p.input_invalidation.counter, 1);
         // Use the normal collision scene for the landing; do not manufacture a state exit.
@@ -262,7 +287,7 @@ mod tests {
     fn the_spin_cap_fall_asks_the_actor_judge_and_enters_plain_fall() {
         let mut p = airborne(Move::Fall, 2.);
         p.spin_fall = true;
-        p.input_invalidation.in_area = true;
+        p.input_invalidation.in_area = Some(volume());
         assert_eq!(p.actor_name(), "SpinCap");
         assert!(p.judge_invalidate_input_fall_in_air());
         assert_eq!(p.actor_name(), "Fall");
@@ -274,7 +299,7 @@ mod tests {
     #[test]
     fn the_fall_gate_uses_the_latched_target_until_an_earlier_transition() {
         let mut p = airborne(Move::Fall, 2.);
-        p.input_invalidation.fall_target = true;
+        p.input_invalidation.fall.area = Some(volume());
         p.grounded = true;
         p.renew_fall_input_invalidation();
         assert_eq!(p.input_invalidation.counter, 1);
@@ -296,6 +321,196 @@ mod tests {
         }
     }
 
+    /// A falling player pressed against a face he looks at: `PlayerJudgeWallKeep` holds for him
+    /// (the control case), and `exeFall` asks it only while the state holds no target area.
+    fn against_a_wall(latched: bool) -> Player {
+        let mut p = Player {
+            mode: Move::Fall,
+            pos: Vec3::new(0., 300., 0.),
+            v: Vec3::new(0., -5., 0.),
+            facing: Vec3::NEG_Z,
+            ground_height: 1000.,
+            grounded: false,
+            ..default()
+        };
+        p.touched.wall_contact = Some(WallContact {
+            normal: Vec3::Z,
+            position: Vec3::ZERO,
+            at_face: true,
+        });
+        p.input_invalidation.fall.area = latched.then(volume);
+        p
+    }
+
+    /// 0x42556c..0x425580: with the state's target set the wall judge is not asked, so the fall
+    /// stays Fall and the gate that follows keeps the input silent (0x425630..0x425654).
+    #[test]
+    fn a_latched_fall_against_a_wall_keeps_fall_and_the_silence() {
+        let scene = Course::default();
+        let mut free = against_a_wall(false);
+        free.judge_wall_keep(&scene);
+        free.renew_fall_input_invalidation();
+        assert_eq!(
+            free.mode,
+            Move::WallSlide,
+            "the judge holds without a target"
+        );
+        assert!(free.nerve.deferred);
+        assert_eq!(free.input_invalidation.counter, 0);
+
+        let mut latched = against_a_wall(true);
+        latched.judge_wall_keep(&scene);
+        latched.renew_fall_input_invalidation();
+        assert_eq!(latched.mode, Move::Fall);
+        assert!(!latched.nerve.deferred);
+        assert_eq!(latched.input_invalidation.counter, 1);
+    }
+
+    /// The skip belongs to the plain Fall nerve: the spin-cap's fall child has no such state.
+    #[test]
+    fn the_spin_cap_fall_still_asks_the_wall_judge() {
+        let mut p = against_a_wall(true);
+        p.spin_fall = true;
+        assert_eq!(p.actor_name(), "SpinCap");
+        p.judge_wall_keep(&Course::default());
+        assert_eq!(p.mode, Move::WallSlide);
+    }
+
+    /// A ground-free Fall outside every volume latches nothing and hears the player.
+    #[test]
+    fn a_fall_outside_the_volume_does_not_latch() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Fall, 6.);
+        for _ in 0..2 {
+            p.step(&pressed(), &course);
+            assert!(!p.fall_target_latched());
+            assert_eq!(p.input_invalidation.counter, 0);
+        }
+        assert!(p.tilt > 0., "the stick is heard outside the volume");
+
+        // Inside the volume but touching the ground: the state's judge refuses as well.
+        let mut grounded = airborne(Move::Fall, 2.);
+        grounded.grounded = true;
+        grounded.locate_invalidate_input_area(&course);
+        grounded.update_fall_target_area();
+        assert!(!grounded.fall_target_latched());
+    }
+
+    /// `appear` (0x46b084) forgets the area of an earlier fall: the new one asks again, here at
+    /// a position outside the volume.
+    #[test]
+    fn a_new_fall_forgets_the_old_latch() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Fall, 6.);
+        p.input_invalidation.fall.area = Some(volume());
+        p.locate_invalidate_input_area(&course);
+        p.go(Move::Fall, "Fall");
+        assert!(!p.fall_target_latched());
+    }
+
+    /// `appear` asks the area in the step that chose Fall, so the latch stands even when the
+    /// first step of the state begins outside the volume.
+    #[test]
+    fn a_fall_entered_in_the_volume_latches_at_entry() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Jump, 2.);
+        p.locate_invalidate_input_area(&course);
+        p.go(Move::Fall, "Fall");
+        assert!(p.fall_target_latched(), "latched by appear");
+        p.pos.x = 7.;
+        // The first update still hears the pad: the gate renews the silence after it.
+        let mut first = pressed();
+        first.jump = false;
+        p.step(&first, &course);
+        assert!(p.input_invalidation.in_area.is_none());
+        assert!(p.fall_target_latched());
+        assert_eq!(p.input_invalidation.counter, 1);
+        p.step(&pressed(), &course);
+        assert_eq!(p.pre_jump, 0);
+        assert_eq!(p.tilt, 0.);
+    }
+
+    /// `exeFall` returns on the water branch (0x425600) before the gate (0x425630): a latched
+    /// fall that enters the water in a step is not silenced for the swim's first update.
+    #[test]
+    fn a_latched_fall_entering_water_is_not_silenced() {
+        let course = course_of(true);
+        let mut p = airborne(Move::Fall, 2.);
+        p.input_invalidation.fall.area = Some(volume());
+        p.step(&pressed(), &course);
+        assert_eq!(p.mode, Move::Swim);
+        assert_eq!(p.input_invalidation.counter, 0);
+    }
+
+    /// The latched area steers every call, in the volume or not; a state without one does not.
+    #[test]
+    fn a_latched_fall_is_steered_toward_the_axis_outside_the_volume_too() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Fall, 2.);
+        p.pos.x = 7.;
+        p.v = Vec3::new(-4., -3., 0.);
+        p.locate_invalidate_input_area(&course);
+        assert!(p.input_invalidation.in_area.is_none());
+        p.update_fall_target_area();
+        assert_eq!(p.v, Vec3::new(-4., -3., 0.), "no area, no steering");
+
+        p.input_invalidation.fall = FallTarget {
+            area: Some(volume()),
+            max_speed: 14.,
+        };
+        p.update_fall_target_area();
+        assert_eq!(p.v, Vec3::new(-(4. + 0.1), -3., 0.));
+    }
+
+    /// `appear` stores the ceiling and steers once; the pull cannot take the speed past it.
+    #[test]
+    fn appear_steers_at_once_with_the_ceiling_it_stores() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Jump, 2.);
+        p.pos.x = 1.;
+        p.v = Vec3::new(-10., -3., 0.);
+        p.locate_invalidate_input_area(&course);
+        p.go(Move::Fall, "Fall");
+        assert_eq!(p.input_invalidation.fall.max_speed, 14.);
+        assert_eq!(p.v, Vec3::new(-(10. + 0.1), -3., 0.));
+
+        // Faster than the ceiling's floor: the ceiling is the speed itself.
+        let mut fast = airborne(Move::Jump, 2.);
+        fast.pos.x = 1.;
+        fast.v = Vec3::new(-16., -3., 0.);
+        fast.locate_invalidate_input_area(&course);
+        fast.go(Move::Fall, "Fall");
+        assert_eq!(fast.input_invalidation.fall.max_speed, 16.);
+        assert_eq!(fast.v.x, -16.);
+    }
+
+    /// The steering runs in the landing step too (the child of `exeFall` updates first, 0x425240),
+    /// before the air update the landing reads.
+    #[test]
+    fn a_latched_fall_is_steered_on_its_landing_step() {
+        let course = course_with_volume();
+        let land = |latched: bool| {
+            let mut p = airborne(Move::Fall, 2.);
+            p.pos.x = 7.;
+            p.v = Vec3::new(-4., -1., 0.);
+            p.grounded = true;
+            p.input_invalidation.fall = FallTarget {
+                area: latched.then(volume),
+                max_speed: 14.,
+            };
+            p.air_for = Some(Move::Fall);
+            p.locate_invalidate_input_area(&course);
+            p.land(&Orders::default(), &course);
+            p.v
+        };
+        assert!(
+            land(true).x < land(false).x,
+            "{:?} {:?}",
+            land(true),
+            land(false)
+        );
+    }
+
     /// Outside the volume, or standing on ground, nothing happens.
     #[test]
     fn the_judge_needs_the_volume_and_no_ground() {
@@ -307,7 +522,7 @@ mod tests {
 
         let mut grounded = airborne(Move::Jump, 2.);
         grounded.grounded = true;
-        grounded.input_invalidation.in_area = true;
+        grounded.input_invalidation.in_area = Some(volume());
         assert!(!grounded.judge_invalidate_input_fall());
         assert_eq!(grounded.input_invalidation.counter, 0);
     }
@@ -318,17 +533,17 @@ mod tests {
     fn the_nerves_that_ask_and_the_one_that_does_not() {
         for mode in [Move::SlopeSlide, Move::WallSlide] {
             let mut p = airborne(mode, 2.);
-            p.input_invalidation.in_area = true;
+            p.input_invalidation.in_area = Some(volume());
             p.judge_invalidate_input_fall_after_sweeps();
             assert_eq!(p.mode, Move::Fall, "{mode:?}");
         }
         let mut idle = airborne(Move::Idle, 2.);
-        idle.input_invalidation.in_area = true;
+        idle.input_invalidation.in_area = Some(volume());
         idle.judge_invalidate_input_fall_after_sweeps();
         assert_eq!(idle.mode, Move::Idle);
 
         let mut fall = airborne(Move::Fall, 2.);
-        fall.input_invalidation.in_area = true;
+        fall.input_invalidation.in_area = Some(volume());
         assert!(!fall.judge_invalidate_input_fall_in_air());
         assert_eq!(fall.input_invalidation.counter, 0);
 
@@ -339,7 +554,7 @@ mod tests {
             Move::SpinJump,
         ] {
             let mut p = airborne(mode, 2.);
-            p.input_invalidation.in_area = true;
+            p.input_invalidation.in_area = Some(volume());
             assert!(p.judge_invalidate_input_fall_in_air(), "{mode:?}");
             assert_eq!(p.mode, Move::Fall);
         }

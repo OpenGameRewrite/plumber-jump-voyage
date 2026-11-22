@@ -220,8 +220,13 @@ impl Player {
 
     /// The actor's wall judge, asked after the state's own step: when the
     /// player is falling against a wall he faces, the slide starts.
+    ///
+    /// `exeFall` does not ask it while the Fall state holds a target area (state +0x70, or the
+    /// trigger-7 byte +0x6c the port does not model): the gate at 0x42556c..0x425580 jumps over
+    /// the judge at actor +0x4f8 to the wall-catch check, so a latched fall keeps its state and
+    /// its input silence against a wall.
     pub(super) fn judge_wall_keep(&mut self, scene: &Course) {
-        if self.nerve.deferred || !self.wall_keep_applies() {
+        if self.nerve.deferred || !self.wall_keep_applies() || self.fall_target_latched() {
             return;
         }
         if self.wall_keep_judged(scene) {
