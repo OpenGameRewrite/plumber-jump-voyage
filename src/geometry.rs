@@ -120,6 +120,8 @@ pub struct TriangleMesh {
     pub recovery: crate::water::WaterAreas,
     pub recovery_ban: crate::water::WaterAreas,
     pub recovery_invalidate: crate::water::WaterAreas,
+    /// `InvalidateInputFallArea` (`PlayerJudgeInvalidateInputFall`, `invalidate_input.rs`).
+    pub invalidate_input_fall: crate::water::WaterAreas,
     pub safety_hosts: Vec<bool>,
     pub temperature: Vec<(crate::water::WaterAreas, i32)>,
     /// Original PlayerList / checkpoint restart placements, absolute centimetres.
@@ -403,6 +405,10 @@ impl TriangleMesh {
             recovery_invalidate: crate::water::WaterAreas::from_export_named(
                 &root["areas"],
                 "InvalidateRecoveryPosArea",
+            ),
+            invalidate_input_fall: crate::water::WaterAreas::from_export_named(
+                &root["areas"],
+                "InvalidateInputFallArea",
             ),
             safety_hosts: root["objects"]
                 .as_array()

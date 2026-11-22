@@ -271,6 +271,23 @@ impl Orders {
         self.recenter |= edge[act::RECENTER];
         self.reset |= edge[act::RESET];
     }
+    /// What `PlayerInput` answers while its disabled byte (+0x98) is set: no stick and no
+    /// button, held or pressed. The camera's own input (`forward`, `view`, `camera_yaw`,
+    /// `look`, `recenter`) and the debug `reset` are not the player's.
+    pub fn silence_player_input(&mut self) {
+        self.direction = Vec2::ZERO;
+        self.stick = Vec2::ZERO;
+        self.jump = false;
+        self.jump_held = false;
+        self.crouch = false;
+        self.crouch_pressed = false;
+        self.throw_pressed = false;
+        self.throw_held = false;
+        self.homing = false;
+        self.up_throw = false;
+        self.down_throw = false;
+        self.spin_throw = false;
+    }
     pub fn clear_edges(&mut self) {
         self.jump = false;
         self.crouch_pressed = false;

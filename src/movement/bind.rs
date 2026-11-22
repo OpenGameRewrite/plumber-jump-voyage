@@ -255,6 +255,9 @@ impl Player {
         self.v.y = self.v.y.max(-t::FALL_MAX);
         if self.grounded {
             self.set_nerve_on_ground(o, scene); // exeBind 0x426da8.
+        } else {
+            // exeBind 0x426dac, in the branch of an end in the air.
+            self.judge_invalidate_input_fall();
         }
     }
 

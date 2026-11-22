@@ -139,13 +139,12 @@ impl Player {
     /// `PlayerJudgeStartRolling` (+0x470), then the jump (collided ground and
     /// `rs::judgeAndResetReturnTrue` of `PlayerJudgePreInputJump`, +0x4a0, 0x423660..0x423680). The
     /// water entry (+0x410) is handled by the actor's general `judge_in_water` sweep here.
-    /// [V] The last judge (+0x430, 0x4236c8..0x4236d0) checks InvalidateInputFallArea only
-    /// without ground contact (0x459c14 -> 0x42d670); on true it disables input through the
-    /// PlayerInput fields +0x94/+0x98 and selects Fall (0x4236d4..0x4236f8, table 0x1d78910).
-    /// OPEN: nine local geometry files contain the volume, but geometry.rs does not load it;
-    /// neither this judge nor that input invalidation/Fall transition is represented yet. The
-    /// jump the executable asks is the one recorded refused on the forced slide in
-    /// `slope-slide-forced-jump`.
+    /// [V] The last judge (+0x430, 0x4236c8..0x4236d0) is `PlayerJudgeInvalidateInputFall`: no
+    /// ground contact and the position in an `InvalidateInputFallArea` (0x459c14 -> 0x42d670)
+    /// silences the input and selects Fall (0x4236d4..0x4236f8, table 0x1d78910); it follows the
+    /// general water sweep, so `judge_invalidate_input_fall_after_sweeps` asks it (see
+    /// `invalidate_input.rs`). The jump the executable asks is the one recorded refused on the
+    /// forced slide in `slope-slide-forced-jump`.
     fn slope_slide_judges(&mut self, o: &Orders) {
         if self.try_force_rolling() {
             return;

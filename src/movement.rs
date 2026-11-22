@@ -258,6 +258,7 @@ mod grab_ceil_find;
 mod ground;
 mod ground_inertia;
 mod grow_seed;
+mod invalidate_input;
 pub mod key_move_parts;
 pub mod kick_stone;
 pub mod killer;
@@ -1503,6 +1504,8 @@ pub struct Player {
     view: Option<move_input::ViewRows>,
     camera_view: Option<move_input::ViewRows>,
     snap_move_axis: Option<Vec3>,
+    /// `PlayerInput`'s invalidation counter and the judge's area answer (`invalidate_input.rs`).
+    input_invalidation: invalidate_input::InputInvalidation,
     /// The frame (base matrix, inverse) of the collision part the last collision found ground on,
     /// when the stage's export has it: `rs::waitGround` carries the pose along it.
     ground_frame: Option<([f32; 12], [f32; 12])>,
@@ -1753,6 +1756,7 @@ impl Default for Player {
             view: None,
             camera_view: None,
             snap_move_axis: None,
+            input_invalidation: invalidate_input::InputInvalidation::default(),
             ground_frame: None,
             ground_part: None,
             rotating_ground: false,
@@ -3561,6 +3565,9 @@ impl Player {
             )
         });
         let mut o = o.clone();
+        // `PlayerInput::update` 0x44aacc opens the actor's movement (0x41dec8).
+        self.update_input_invalidation(&mut o);
+        self.locate_invalidate_input_area(scene);
         self.snap_move_axis = scene.mesh.as_ref().and_then(|mesh| {
             mesh.snap_move
                 .iter()
@@ -3653,6 +3660,7 @@ impl Player {
             self.judge_wall_keep(scene);
             self.judge_in_water(scene);
             self.judge_rolling_wall_hit_down();
+            self.judge_invalidate_input_fall_after_sweeps();
         }
         self.restore_after_spin_cap(acting);
         self.update_sand_affect(scene);
@@ -3853,8 +3861,15 @@ impl Player {
             Move::Throw => self.throw_state(o, scene),
             Move::GroundPound => self.hip_drop(o),
             Move::PoundLand => self.hip_drop_land(o, scene),
-            Move::Roll => self.roll(o),
-            Move::RollEnd => self.roll_stand_up_step(o, scene),
+            Move::Roll => {
+                self.roll(o);
+                // exeRolling 0x4237dc: after the forced slope slide, before the sand sink.
+                self.judge_invalidate_input_fall();
+            }
+            Move::RollEnd => {
+                self.roll_stand_up_step(o, scene);
+                self.judge_invalidate_input_fall();
+            }
             Move::RollJump => self.roll_jump_step(o),
             Move::Dive => self.head_sliding(o, scene),
             Move::SlopeSlide => self.slope_slide(o, scene),
@@ -5604,6 +5619,11 @@ impl Player {
     }
     /// Airborne transitions shared by every free-flight state.
     fn air_actions(&mut self, o: &Orders) -> bool {
+        // `exeJump` 0x424144 and `tryChangeNerveFromAir` 0x423dec ask the invalidate-input judge
+        // before the cap throw and the pound.
+        if self.judge_invalidate_input_fall_in_air() {
+            return true;
+        }
         if self.try_cap_catch_pop(o) {
             return true;
         }

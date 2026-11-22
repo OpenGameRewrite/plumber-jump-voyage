@@ -131,7 +131,7 @@ impl ForceArea {
 
 impl Player {
     /// The player's absolute stage position, the way the area and the wind sources read it.
-    fn stage_position(&self, mesh: &crate::geometry::TriangleMesh) -> Vec3 {
+    pub(super) fn stage_position(&self, mesh: &crate::geometry::TriangleMesh) -> Vec3 {
         self.stage_translation
             .filter(|(p, _)| *p == self.pos)
             .map_or_else(|| mesh.to_game_vec(self.position_cm()), |(_, p)| p)
