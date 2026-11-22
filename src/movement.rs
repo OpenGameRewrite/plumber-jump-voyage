@@ -3106,7 +3106,11 @@ impl Player {
         clip: &'static str,
         work: impl FnOnce(&mut Player) + Send + Sync + 'static,
     ) {
+        self.clear_fall_input_target();
         self.mode = mode;
+        if mode == Move::Fall {
+            self.update_fall_input_target();
+        }
         self.frame = 0;
         if mode == Move::Idle {
             self.wait_state_appears_on_platform();
@@ -3676,6 +3680,7 @@ impl Player {
             self.judge_in_water(scene);
             self.judge_rolling_wall_hit_down();
             self.judge_invalidate_input_fall_after_sweeps();
+            self.renew_fall_input_invalidation();
         }
         self.restore_after_spin_cap(acting);
         self.update_sand_affect(scene);
@@ -3834,6 +3839,7 @@ impl Player {
     }
     /// Run the nerve of the current state for this frame.
     fn run_state(&mut self, o: &Orders, scene: &Course) {
+        self.update_fall_input_target();
         if matches!(self.actor_name(), "Wait" | "Run") {
             self.ground_inertia.request = 1;
         }

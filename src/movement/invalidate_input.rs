@@ -14,9 +14,14 @@
 //! counter at +0x94 converges one step toward zero (`al::converge(counter, 0, 1)`). Nearly every
 //! `PlayerInput` query (255 functions; the stick getters, every trigger and hold) starts by
 //! reading +0x98 and answers zero/false when it is set (0x44c3bc, 0x44c6ec, 0x44c728 ...). So the
-//! judge's write silences the input for the update that follows, i.e. the Fall nerve's first
-//! step, and the input is back on the step after that. The Fall nerve itself never asks this
-//! judge (`exeFall` 0x425228 has no read of +0x430 and does not call `tryChangeNerveFromAir`).
+//! judge's write silences the input for the update that follows. Fall owns a second judge
+//! (state +0x48, constructed at 0x46af20): `appear` clears its target pointer (+0x70) and
+//! `updateFallTargetArea` (0x46b0bc) latches the first area found until the state ends.
+//! `exeFall` updates that state first (0x425240 -> 0x46b3b4), then renews the input silence
+//! after its water judge (0x425630..0x425654). Leaving the volume does not release the latch.
+//! Landing or another earlier transition bypasses this gate; the last counter write still
+//! silences the following input update. The order is [V]: input update 0x41dec8, base movement
+//! 0x41e020 -> LiveActor 0x90d8b0 -> actor nerve -> child state -> actor gate.
 //!
 //! The nerves that ask it (every read of the actor field +0x430 in `PlayerActorHakoniwa`):
 //!
@@ -53,6 +58,8 @@ pub(super) struct InputInvalidation {
     /// `PlayerJudgeInvalidateInputFall`'s area pointer is set: the actor's position lies in an
     /// `InvalidateInputFallArea` (the collider's ground contact is asked separately).
     in_area: bool,
+    /// Fall state +0x70: once found, the target survives leaving the volume, until Fall ends.
+    fall_target: bool,
 }
 
 /// `al::tryFindAreaObj` by name: any placement holding the point (the answer is only used as
@@ -83,6 +90,33 @@ impl Player {
             .is_some_and(|mesh| holds(&mesh.invalidate_input_fall, self.stage_position(mesh)));
     }
 
+    /// The area-pointer part of `updateFallTargetArea`, before Fall's air control (0x46b3b4).
+    /// SpinCap/Fall has a different child and asks the actor's judge through the air helper.
+    pub(super) fn update_fall_input_target(&mut self) {
+        if self.actor_name() == "Fall" {
+            self.input_invalidation.fall_target |=
+                !self.is_collided_ground() && self.input_invalidation.in_area;
+        } else {
+            self.input_invalidation.fall_target = false;
+        }
+    }
+
+    /// Actor Fall's gate follows the water judge, and is bypassed by earlier transitions.
+    pub(super) fn renew_fall_input_invalidation(&mut self) {
+        if self.actor_name() == "Fall"
+            && !self.nerve.deferred
+            && !self.is_collided_ground()
+            && self.input_invalidation.fall_target
+        {
+            self.input_invalidation.counter = 1;
+        }
+    }
+
+    /// `PlayerStateFallHakoniwa::appear` clears +0x70 before its first area query (0x46b084).
+    pub(super) fn clear_fall_input_target(&mut self) {
+        self.input_invalidation.fall_target = false;
+    }
+
     /// `rs::updateJudgeAndResult` of the actor's `PlayerJudgeInvalidateInputFall` (+0x430) and the
     /// two writes and the `setNerve(Fall)` every asking nerve makes when it holds. True when the
     /// actor chose the Fall nerve.
@@ -94,6 +128,7 @@ impl Player {
         if self.mode == Move::WallSlide {
             self.leave_wall_slide();
         }
+        self.spin_fall = false;
         self.go(Move::Fall, "Fall");
         true
     }
@@ -108,7 +143,7 @@ impl Player {
 
     /// The air chain shared by the jump, long jump, wall jump, grab-ceil, pole and spin-cap-fall
     /// nerves (`exeJump` 0x424144, `tryChangeNerveFromAir` 0x423dec): everything but the plain
-    /// Fall nerve, which never asks it.
+    /// Fall nerve, which owns a separate judge and latches its answer.
     pub(super) fn judge_invalidate_input_fall_in_air(&mut self) -> bool {
         (self.mode != Move::Fall || self.actor_name() == "SpinCap")
             && self.judge_invalidate_input_fall()
@@ -168,11 +203,9 @@ mod tests {
         ));
     }
 
-    /// A jump without ground in the volume selects Fall (0x424144..0x4242a4) and silences the
-    /// input for one update (`PlayerInput::update`: disabled while the counter is positive);
-    /// the update after it hears the pad again.
+    /// The actor judge silences the next input update; Fall then renews it on every step.
     #[test]
-    fn a_jump_in_the_volume_falls_and_the_input_is_silent_for_one_update() {
+    fn a_jump_in_the_volume_falls_and_the_input_stays_silent() {
         let course = course_with_volume();
         let mut p = airborne(Move::Jump, 2.);
         p.step(&Orders::default(), &course);
@@ -182,11 +215,59 @@ mod tests {
         p.step(&pressed(), &course);
         assert_eq!(p.pre_jump, 0, "the jump press was not heard");
         assert_eq!(p.tilt, 0., "the stick was not heard");
-        assert_eq!(p.input_invalidation.counter, 0);
+        assert_eq!(p.input_invalidation.counter, 1);
 
         p.step(&pressed(), &course);
-        assert!(p.pre_jump > 0, "the input is back after one update");
-        assert!(p.tilt > 0.);
+        assert_eq!(p.pre_jump, 0);
+        assert_eq!(p.tilt, 0.);
+        assert_eq!(p.input_invalidation.counter, 1);
+    }
+
+    /// The state's target is sticky (0x46b0d8); exiting the volume is not an exit from Fall.
+    /// A landing bypasses the gate, leaving only the last write's single update of silence.
+    #[test]
+    fn a_fall_latches_the_volume_until_landing_then_releases_input() {
+        let course = course_with_volume();
+        let mut p = airborne(Move::Fall, 2.);
+        let mut first = pressed();
+        first.jump = false;
+        p.step(&first, &course);
+        assert!(p.tilt > 0., "first input update precedes the Fall gate");
+        assert!(p.input_invalidation.fall_target);
+        for _ in 0..3 {
+            p.step(&pressed(), &course);
+            assert_eq!(p.pre_jump, 0);
+            assert_eq!(p.tilt, 0.);
+        }
+        p.pos.x = 7.;
+        p.step(&pressed(), &course);
+        assert!(!p.input_invalidation.in_area);
+        assert_eq!(p.pre_jump, 0);
+        assert_eq!(p.input_invalidation.counter, 1);
+        // Use the normal collision scene for the landing; do not manufacture a state exit.
+        let floor = crate::replay::flat_floor();
+        p.pos = Vec3::new(0., 0.01, 0.);
+        p.v = Vec3::new(0., -10., 0.);
+        for _ in 0..3 {
+            p.step(&Orders::default(), &floor);
+        }
+        assert!(p.grounded);
+        assert_ne!(p.actor_name(), "Fall");
+        p.step(&pressed(), &floor);
+        assert!(p.tilt > 0., "the landed actor hears the stick again");
+    }
+
+    /// `exeSpinCap` 0x423a60 calls the air helper for its Fall child. This must select the
+    /// actor's Fall, not leave the player under the SpinCap/Fall name.
+    #[test]
+    fn the_spin_cap_fall_asks_the_actor_judge_and_enters_plain_fall() {
+        let mut p = airborne(Move::Fall, 2.);
+        p.spin_fall = true;
+        p.input_invalidation.in_area = true;
+        assert_eq!(p.actor_name(), "SpinCap");
+        assert!(p.judge_invalidate_input_fall_in_air());
+        assert_eq!(p.actor_name(), "Fall");
+        assert_eq!(p.input_invalidation.counter, 1);
     }
 
     /// The slide asks last, after its own step and the sweeps, and the roll right after its step.

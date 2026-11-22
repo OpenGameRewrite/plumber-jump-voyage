@@ -9,9 +9,9 @@
 //!
 //! Positions are in the stage's own coordinates (cm, single precision), every operation one
 //! single-precision operation in the executable's order. Not ported: the fluid surfaces of the
-//! nature director (`FluidSurfaceHolder::calcIsInFluid`, a second source of water for points in no
-//! area), the arrow test of the cylinder and sphere shapes (their areas hold points but never
-//! report a surface), areas that follow a moving part, and the switch that validates an area.
+//! nature director (apart from OceanWave's flat-height fallback below), the cylinder arrow
+//! test (0x807458 -> 0x92cc5c), areas that follow a moving part, and area validation switches.
+//! Sphere arrows correctly report no hit: the original's 0x806d10 returns false.
 use bevy::prelude::*;
 
 /// The shapes of `al::AreaShapeFactory`.

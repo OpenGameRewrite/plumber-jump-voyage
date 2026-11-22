@@ -230,6 +230,19 @@ mod tests {
         p
     }
 
+    /// The queued first step must call the ice helper after resolving the throw direction.
+    /// Testing the helper alone would miss a disconnected call in `start_throw`.
+    #[test]
+    fn the_spin_start_runs_the_ice_velocity_conversion() {
+        let mut p = on_ice(Vec3::new(0., -0.5, 6.));
+        p.start_throw(Throw::Forward);
+        assert_eq!(p.throwing.dir, None, "direction waits for the first step");
+        let acting = p.acting_nerve();
+        p.begin_step(acting);
+        assert_eq!(p.throwing.dir, Some(Vec3::X));
+        assert_eq!(p.v, Vec3::new(6., 0., 0.));
+    }
+
     /// 0x482270..0x4823f8: on an ice floor the first step lays the velocity along the floor on the
     /// throw direction. Forward or sideways velocity keeps its whole speed there; a velocity
     /// pointing back keeps `along` when that is the larger part, else the part across it.

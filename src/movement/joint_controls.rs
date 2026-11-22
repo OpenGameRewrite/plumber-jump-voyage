@@ -4,7 +4,12 @@
 //!
 //! Registered in the original, in this order: the swim pose, the ground pose, the cap throw, the
 //! head's look-at, the pole climb pose and the grab pose; the wall catch's hip spring comes
-//! after them. The grab pose (the arms' reach, the shoulder turns) is not ported yet.
+//! after them. The grab pose (the arms' reach, the shoulder turns) remains source-located:
+//! constructor 0x4510c4, callback 0x451324, arm solver 0x451768, update 0x451c70;
+//! keeper calls 0x4552b4/0x4555dc. Its callback reads raw arm matrices (0x94ff5c) and
+//! rewrites the two arm links (0x94fea4). Mapping those reads to the matrices already bent
+//! by earlier controllers has not been established. This is an open implementation item,
+//! not evidence that a recording or unmodelled receiver actor is required.
 use super::cap_throw::CapThrow;
 use super::ground_pose::{CenterInput, GroundInputs, GroundPose};
 use super::hip_spring::{GrabDynamics, HipSpring};
